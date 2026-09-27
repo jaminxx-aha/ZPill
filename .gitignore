@@ -5,6 +5,7 @@ build/
 .flutter-plugins
 .flutter-plugins-dependencies
 *.iml
+flutter_*.log
 
 # 平台工程(flutter create 生成后生效)
 android/.gradle/

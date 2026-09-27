@@ -32,8 +32,15 @@ final class PlatformServices {
   static late final BleScanner ble;
   static late final UsbHostChannel usb;
 
-  /// main() 中调用;测试时可覆盖为 Fake(集成测试注入点)。
+  static bool _bootstrapped = false;
+
+  /// main() 中调用(幂等;测试直接 pumpWidget 时不经 main,由
+  /// AppServices 兜底触发);测试时可覆盖为 Fake(集成测试注入点)。
   static void bootstrap() {
+    if (_bootstrapped) {
+      return;
+    }
+    _bootstrapped = true;
     network = MethodChannelNetworkMonitor();
     gallery = MethodChannelGallerySaver();
     background = MethodChannelBackgroundScheduler();
