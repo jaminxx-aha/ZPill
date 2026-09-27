@@ -26,6 +26,11 @@ import 'package:flutter/services.dart';
 /// 尼康 USB Vendor ID(USB-IF 分配,三端过滤都用它)。
 const int kNikonUsbVendorId = 0x04B0;
 
+/// Nikon Zf 的 Product ID(2026-09-27 真机实测;USB 2.0 High-Speed 480Mbps,
+/// STI 接口 0:bulk IN 0x81 / bulk OUT 0x02 / interrupt IN 0x83 —— 端点
+/// 以描述符枚举为准,勿在 native 写死)。
+const int kNikonZfUsbProductId = 0x0453;
+
 /// 枚举出的 USB 设备。
 final class UsbDeviceHandle {
   const UsbDeviceHandle({

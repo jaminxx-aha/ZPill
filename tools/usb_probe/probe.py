@@ -13,6 +13,10 @@
         tools/usb_probe/.venv/bin/python tools/usb_probe/probe.py
     追加对象枚举:
         ... probe.py --handles
+    核对对象格式码(NEF 真码以此为准):
+        ... probe.py --objinfo 4
+    拿事件抓到的 handle 直接问(解开「递归枚举列不出照片」):
+        ... probe.py --peek 0x0A1A571E,0x291A571E
 
 只读探针:仅 OpenSession / GetDeviceInfo / GetObjectHandles,
 不发送任何写操作(不拍片、不删文件、不改设置)。
@@ -36,18 +40,53 @@ NIKON_VID = 0x04B0
 # PTP/USB 容器类型(bulk:命令 1/数据 2/响应 3;interrupt:事件 4)
 CMD, DATA, RESP, EVENT = 1, 2, 3, 4
 HDR = 12  # bulk 容器头:len u32 + type u16 + code u16 + txid u32
-EVENT_HDR = 10  # 事件头:len u16 + type u16 + eventCode u16 + txid u32
+EVENT_HDR = 12  # 事件头:len u32 + type u16 + eventCode u16 + txid u32(与 bulk 头同构;libgphoto2 PTPUSBEventContainer)
 
 # 操作码 / 响应码(与 lib/core/ptp/operation_codes.dart 对齐)
 GET_DEVICE_INFO = 0x1001
 OPEN_SESSION = 0x1002
+CLOSE_SESSION = 0x1003
+GET_STORAGE_IDS = 0x1004
+GET_STORAGE_INFO = 0x1005
 GET_OBJECT_HANDLES = 0x1007
+GET_OBJECT_INFO = 0x1008
 OK = 0x2001
+SESSION_ALREADY_OPEN = 0x201E
 
-# GetObjectHandles 参数(全部存储 / 全部格式 / 全部对象)
+# GetObjectHandles 参数(全部存储 / 全部格式;父对象:0=仅根层,ALL=递归)
 STORAGE_ALL = 0xFFFFFFFF
 FORMAT_ALL = 0
+PARENT_ROOT = 0x00000000
 PARENT_ALL = 0xFFFFFFFF
+
+# 候选码清单 —— 名称已按 libgphoto2 ptp.h 校正,再逐个对照 Zf 实际返回打 ✓/✗。
+# (zcamera 参考项目的码表已证伪:AfDrive 实为 0x90C1、DeviceReady 实为 0x90C8、
+#  ObjectAdded 实为 0x4002、GetPartialObject 实为 0x101B,勿再引用。)
+NIKON_OC_CANDIDATES = {
+    0x1009: "GetObject(标准,整文件)",
+    0x1014: "GetDevicePropDesc(标准,可作心跳探针)",
+    0x1019: "MoveObject(标准,移动对象 —— 预期 ✗)",
+    0x101B: "GetPartialObject(标准,32 位偏移分块读 —— 断点续传根基)",
+    0x90C0: "InitiateCaptureRecInSdram",
+    0x90C1: "AfDrive(自动对焦)",
+    0x90C7: "GetEvent(旧名 CheckEvent;尼康事件轮询,data-in)",
+    0x90C8: "DeviceReady(忙等探针)",
+    0x9201: "StartLiveView", 0x9202: "EndLiveView", 0x9203: "GetLiveViewImg",
+    0x9400: "GetPartialObjectHiSpeed(尼康高速分块读)",
+    0x9421: "GetObjectSize(64 位对象大小)",
+    0x9431: "GetPartialObjectEx(64 位偏移+长度 —— Z 系断点续传主力)",
+}
+NIKON_EVENT_CANDIDATES = {
+    0x4002: "ObjectAdded(标准)", 0x400D: "CaptureComplete(标准)",
+    0xC101: "Nikon_ObjectAddedInSDRAM", 0xC102: "Nikon_CaptureCompleteRecInSdram",
+    0xC125: "?(gphoto 未收录,待真机事件核对)", 0xC700: "?(gphoto 未收录)",
+}
+NIKON_PROP_CANDIDATES = {
+    0x5001: "BatteryLevel", 0x5005: "WhiteBalance", 0x5007: "FNumber",
+    0x500D: "ExposureTime", 0x500F: "ExposureIndex(ISO)",
+    0x5010: "ExposureBiasCompensation", 0x5013: "StillCaptureMode",
+    0xD406: "?(gphoto 未收录)", 0xD407: "?(gphoto 未收录)",
+}
 
 
 # ── 小端编码助手(全字段小端,同 PTP-IP 纪律) ────────────────────────
@@ -96,6 +135,43 @@ def read_container(dev, ep_in: int, timeout: int = 5000) -> bytes:
     return blob
 
 
+def xact(dev, ep_out, ep_in, txid, opcode, params=()):
+    """一次完整事务:发命令容器 → 可选读数据容器 → 读响应容器。
+
+    返回 (txid, data_blob|None, 响应码)。数据容器只在相机先发数据时读
+    (GetDeviceInfo/GetObjectHandles 这类 DataIn 操作);对纯响应操作,
+    相机直接回响应容器,这里靠响应容器 type 区分(3=响应,2=数据)。
+    """
+    dev.write(ep_out, cmd_container(opcode, txid, params), 5000)
+    blob = read_container(dev, ep_in)
+    _len, rtype, rcode, _rtxid = parse_head(blob)
+    if rtype == DATA:
+        data_blob = blob
+        resp = read_container(dev, ep_in)
+        _l2, _t2, rcode, _x2 = parse_head(resp)
+        return txid, data_blob, rcode
+    return txid, None, rcode
+
+
+def ensure_session(dev, ep_out, ep_in, txid, session_id=1):
+    """OpenSession;若上次探针异常退出留下未关会话(0x201E),先 Close 再开。"""
+    txid, _data, rcode = xact(dev, ep_out, ep_in, txid, OPEN_SESSION, [session_id])
+    if rcode == SESSION_ALREADY_OPEN:
+        print(f"[4] OpenSession <- 0x201E(会话未关,上次探针遗留)→ CloseSession 恢复")
+        txid += 1
+        txid, _data, rcode = xact(dev, ep_out, ep_in, txid, CLOSE_SESSION)
+        print(f"    CloseSession <- 0x{rcode:04X}")
+        txid += 1
+        txid, _data, rcode = xact(dev, ep_out, ep_in, txid, OPEN_SESSION, [session_id])
+    return txid, rcode
+
+
+def close_session(dev, ep_out, ep_in, txid):
+    txid, _data, rcode = xact(dev, ep_out, ep_in, txid, CLOSE_SESSION)
+    print(f"[7] CloseSession <- 0x{rcode:04X}(探针退出,不留悬挂会话)")
+    return txid
+
+
 # ── 描述符 / 端点 ─────────────────────────────────────────────────────
 
 def dump_descriptors(dev) -> None:
@@ -114,9 +190,9 @@ def dump_descriptors(dev) -> None:
             direction = "IN" if ep.bEndpointAddress & 0x80 else "OUT"
             etype = {
                 usb.util.ENDPOINT_TYPE_BULK: "bulk",
-                usb.util.ENDPOINT_TYPE_INTERRUPT: "interrupt",
+                usb.util.ENDPOINT_TYPE_INTR: "interrupt",
                 usb.util.ENDPOINT_TYPE_ISO: "iso",
-                usb.util.ENDPOINT_TYPE_CONTROL: "control",
+                usb.util.ENDPOINT_TYPE_CTRL: "control",
             }[usb.util.endpoint_type(ep.bmAttributes)]
             print(f"    ep 0x{ep.bEndpointAddress:02X} {direction} {etype} {ep.wMaxPacketSize}B")
 
@@ -140,7 +216,7 @@ def find_sti_endpoints(dev):
         bulk_in = match(usb.util.ENDPOINT_IN, usb.util.ENDPOINT_TYPE_BULK)
         if bulk_in is None or bulk_out is None:
             continue
-        intr_in = match(usb.util.ENDPOINT_IN, usb.util.ENDPOINT_TYPE_INTERRUPT)
+        intr_in = match(usb.util.ENDPOINT_IN, usb.util.ENDPOINT_TYPE_INTR)
         if intr_in is None:
             print("[!] 该接口无 interrupt IN 端点(事件通道缺失,记录)")
         return itf.bInterfaceNumber, bulk_out.bEndpointAddress, bulk_in.bEndpointAddress, (
@@ -167,6 +243,18 @@ def read_u16_array(buf: bytes, off: int):
     return vals, off + 2 * n
 
 
+def check_candidates(info: dict) -> None:
+    """把候选码清单与相机实际支持的码表对照,输出 ✓/✗ 供回填常量。"""
+    print("    候选码核对(以相机返回为准):")
+    for section, table in [("operationsSupported", NIKON_OC_CANDIDATES),
+                           ("eventsSupported", NIKON_EVENT_CANDIDATES),
+                           ("devicePropsSupported", NIKON_PROP_CANDIDATES)]:
+        actual = set(info[section])
+        for code, name in table.items():
+            mark = "✓" if code in actual else "✗"
+            print(f"      {mark} 0x{code:04X} {name}")
+
+
 def dump_device_info(payload: bytes) -> None:
     r = {}
     off = 0
@@ -191,8 +279,48 @@ def dump_device_info(payload: bytes) -> None:
           + " ".join(f"0x{x:04X}" for x in r["eventsSupported"]))
     print(f"    支持的图像格式({len(r['imageFormats'])}): "
           + " ".join(f"0x{x:04X}" for x in r["imageFormats"]))
+    check_candidates(r)
     print("    ↑ 回填对照:操作/事件码 → lib/core/ptp/operation_codes.dart;"
           "NEF 的 ObjectFormatCode → object_format.dart")
+
+
+# ObjectFormatCode 备注(2026-09-27 真机落定:NEF 报 0x3000,靠扩展名区分)
+FMT_NAMES = {
+    0x3000: "Undefined(Zf 的 NEF 实测即此码)", 0x3001: "Association(文件夹)",
+    0x3002: "Script", 0x3008: "WAV", 0x300D: "MOV(QuickTime)", 0x3801: "EXIF/JPEG",
+    0x380D: "TIFF", 0xB200: "疑 HEIF(gphoto 未收录,未拍样张)", 0xB982: "MP4(MTP)",
+}
+
+
+def dump_storage_info(sid: int, payload: bytes) -> None:
+    """GetStorageInfo 数据集(ISO 15740):解开双卷之谜。"""
+    (stype, fstype, access) = struct.unpack_from("<HHH", payload, 0)
+    (max_cap, free) = struct.unpack_from("<QQ", payload, 6)
+    (free_imgs,) = struct.unpack_from("<I", payload, 22)
+    desc, off = read_ptp_str(payload, 26)
+    volume, _off = read_ptp_str(payload, off)  # StorageDescription 后还有 VolumeLabel
+    # 码表对齐 libgphoto2:StorageType 0x0004=可移动 RAM(SD 卡)、FSType 0x0003=DCF
+    tmap = {0: "未定义", 1: "固定ROM", 2: "可移除ROM", 3: "固定RAM", 4: "可移动RAM"}
+    fmap = {0: "未定义", 1: "通用平面", 2: "通用层级", 3: "DCF"}
+    amap = {0: "读写", 1: "只读", 2: "只读可删"}
+    print(f"    0x{sid:08X} 卷标「{volume}」{desc}  "
+          f"{tmap.get(stype, hex(stype))}/{fmap.get(fstype, hex(fstype))}"
+          f"/{amap.get(access, hex(access))}"
+          f"  容量 {max_cap / 1_073_741_824:.0f}GB 剩余 {free / 1_073_741_824:.1f}GB"
+          f"  可存 {free_imgs} 张")
+
+
+def dump_object_info(handle: int, payload: bytes) -> None:
+    """GetObjectInfo 数据集(ISO 15740):重点是 ObjectFormatCode 与父子关系。"""
+    (storage_id, fmt, _prot, size, _tf, _ts, _tw, _th,
+     w, h, _depth, parent, _assoc, _ad, _seq) = struct.unpack_from(
+        "<IHHIHIIIIIIIHII", payload, 0)
+    name, off = read_ptp_str(payload, 52)
+    captured, off = read_ptp_str(payload, off)
+    size_h = f"{size / 1_048_576:.1f}MB" if size >= 1_048_576 else f"{size}B"
+    print(f"    0x{handle:08X} {name}  fmt=0x{fmt:04X}({FMT_NAMES.get(fmt, '?')})"
+          f"  {size_h}  {w}x{h}  存储 0x{storage_id:08X} 父 0x{parent:08X}"
+          f"  拍摄时间 {captured}")
 
 
 def hexdump(b: bytes, limit: int = 512) -> str:
@@ -209,6 +337,13 @@ def hexdump(b: bytes, limit: int = 512) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser(description="PTP/USB 真机验证(尼康 Z 系列,只读)")
     ap.add_argument("--handles", action="store_true", help="追加 GetObjectHandles 计数")
+    ap.add_argument("--objinfo", type=int, metavar="个", default=0,
+                    help="对前 N 个对象调 GetObjectInfo(只读),核对 ObjectFormatCode")
+    ap.add_argument("--events", type=int, metavar="秒", default=0,
+                    help="监听 interrupt IN 事件 N 秒(期间在相机上按快门/转波轮)")
+    ap.add_argument("--peek", type=lambda s: [int(x, 16) for x in s.split(",")],
+                    metavar="hex[,hex…]", default=[],
+                    help="直接对这些 handle 调 GetObjectInfo(如事件里抓到的 0x0A1A571E)")
     args = ap.parse_args()
 
     backend = make_backend()
@@ -235,6 +370,12 @@ def main() -> int:
         pass
 
     print("[1] 设备描述符:")
+    # dev.speed 是 libusb 枚举值:1=Low(1.5M) 2=Full(12M) 3=High(480M) 4=Super(5G)
+    # Full Speed + bulk 64B 包长 ≈ 实际 ~1MB/s;High Speed 应为 512B。
+    # 若见 Full Speed:换线/换口复测,仍 Full 则该机身就是全速,直接影响主线决策。
+    speed_map = {1: "Low 1.5Mbps", 2: "Full 12Mbps", 3: "High 480Mbps", 4: "Super 5Gbps"}
+    print(f"  总线速率: {speed_map.get(getattr(dev, 'speed', 0), '?')} "
+          f"(libusb enum={getattr(dev, 'speed', '?')})")
     dump_descriptors(dev)
 
     itf_no, ep_out, ep_in, ep_intr = find_sti_endpoints(dev)
@@ -245,11 +386,8 @@ def main() -> int:
     txid = 0
 
     # 步骤 3:GetDeviceInfo(唯一可在 OpenSession 前调用的操作)
-    dev.write(ep_out, cmd_container(GET_DEVICE_INFO, txid), 5000)
-    data_blob = read_container(dev, ep_in)
+    txid, data_blob, rcode = xact(dev, ep_out, ep_in, txid, GET_DEVICE_INFO)
     dlen, dtype, dcode, dtxid = parse_head(data_blob)
-    resp_blob = read_container(dev, ep_in)
-    rlen, rtype, rcode, _rtxid = parse_head(resp_blob)
     print(f"[3] GetDeviceInfo <- 数据容器 {dlen}B(type={dtype}) 响应 0x{rcode:04X} txid={dtxid}")
     if dtype != DATA or rcode != OK:
         print("    意外:数据/响应不符 —— 原始字节发回分析")
@@ -259,42 +397,138 @@ def main() -> int:
     print("    原始数据容器(备案):")
     print(hexdump(data_blob))
 
-    # 步骤 4:OpenSession(sessionId=1)
+    # 步骤 4:OpenSession(sessionId=1;含 0x201E 悬挂会话恢复)
     txid += 1
-    dev.write(ep_out, cmd_container(OPEN_SESSION, txid, [1]), 5000)
-    resp_blob = read_container(dev, ep_in)
-    _rlen, rtype, rcode, rtxid = parse_head(resp_blob)
-    print(f"[4] OpenSession <- type={rtype} 响应 0x{rcode:04X} txid={rtxid}")
+    txid, rcode = ensure_session(dev, ep_out, ep_in, txid)
+    print(f"[4] OpenSession <- 响应 0x{rcode:04X}")
     if rcode != OK:
         print("    OpenSession 失败:检查相机是否弹出连接确认(部分机身需在相机上确认)")
         return 1
 
-    # 步骤 5(可选):GetObjectHandles 计数
-    if args.handles:
-        txid += 1
-        dev.write(ep_out, cmd_container(
-            GET_OBJECT_HANDLES, txid, [STORAGE_ALL, FORMAT_ALL, PARENT_ALL]), 5000)
-        data_blob = read_container(dev, ep_in)
-        resp_blob = read_container(dev, ep_in)
-        _rlen, rtype, rcode, _rtxid = parse_head(resp_blob)
-        (count,) = struct.unpack_from("<I", data_blob, HDR)
-        handles = struct.unpack_from(f"<{min(count, 8)}I", data_blob, HDR + 4) if count else ()
-        print(f"[5] GetObjectHandles <- 0x{rcode:04X} 共 {count} 个对象"
-              + (f",前 {len(handles)} 个 handle: " + " ".join(f"0x{h:08X}" for h in handles)
-                 if handles else ""))
+    # 步骤 5(可选):存储与对象多姿势枚举。Zf 实测疑点:parent=ALL 的
+    # 「递归」只回根层文件夹,拍的照片藏在文件夹查询里;--peek 可拿事件里
+    # 抓到的 handle 直接点名。--objinfo N 对发现的前 N 个对象调 GetObjectInfo。
+    def list_objects(cur_txid, params, label):
+        cur_txid, blob, rc = xact(dev, ep_out, ep_in, cur_txid, GET_OBJECT_HANDLES, params)
+        (cnt,) = struct.unpack_from("<I", blob, HDR)
+        hs = list(struct.unpack_from(f"<{cnt}I", blob, HDR + 4)) if cnt else []
+        print(f"    {label} <- 0x{rc:04X} 共 {cnt} 个: "
+              + " ".join(f"0x{h:08X}" for h in hs[:12]) + (" …" if cnt > 12 else ""))
+        return cur_txid, hs
 
-    # 步骤 6:interrupt IN 试读(验证事件容器 u16 长度布局)
-    if ep_intr is not None:
-        try:
-            ev = bytes(dev.read(ep_intr, 64, 200))
-            print(f"[6] 事件原始字节({len(ev)}B): {ev.hex(' ')}")
+    handles: tuple = ()          # 递归姿势的结果,作 [6b] 对照基准
+    discovered: list[int] = []   # 全部姿势去重后的对象
+    if args.handles or args.objinfo or args.peek:
+        txid += 1
+        txid, data_blob, rcode = xact(dev, ep_out, ep_in, txid, GET_STORAGE_IDS)
+        (n_stor,) = struct.unpack_from("<I", data_blob, HDR)
+        sids = struct.unpack_from(f"<{n_stor}I", data_blob, HDR + 4) if n_stor else ()
+        print(f"[5] GetStorageIDs <- 0x{rcode:04X} 共 {n_stor} 个: "
+              + " ".join(f"0x{s:08X}" for s in sids))
+        for s in sids:
+            txid += 1
+            txid, data_blob, rcode = xact(dev, ep_out, ep_in, txid, GET_STORAGE_INFO, [s])
+            if rcode == OK:
+                dump_storage_info(s, data_blob[HDR:])
+                print(f"      原始字节(核对对齐): {data_blob[HDR:HDR + 34].hex(' ')}")
+        print("[5] GetObjectHandles 多姿势枚举:")
+        txid, hs = list_objects(txid, [STORAGE_ALL, FORMAT_ALL, PARENT_ALL],
+                                "全存储×递归(parent=ALL)")
+        handles = tuple(hs)
+        discovered += hs
+        txid, hs = list_objects(txid, [STORAGE_ALL, FORMAT_ALL, PARENT_ROOT],
+                                "全存储×仅根层(parent=0)")
+        discovered += [h for h in hs if h not in discovered]
+        for s in sids:
+            txid, hs = list_objects(txid, [s, FORMAT_ALL, PARENT_ALL], f"存储 0x{s:08X}×递归")
+            discovered += [h for h in hs if h not in discovered]
+        for h in list(handles)[:8]:  # 根层文件夹逐个问内容(照片应在此现身)
+            txid, hs = list_objects(txid, [STORAGE_ALL, FORMAT_ALL, h],
+                                    f"文件夹 0x{h:08X} 之内")
+            discovered += [h2 for h2 in hs if h2 not in discovered]
+        print(f"    合计发现 {len(discovered)} 个不同对象")
+        if args.peek:
+            missing = [h for h in args.peek if h not in discovered]
+            print(f"    --peek 的 handle 在枚举结果中现身: "
+                  f"{len(args.peek) - len(missing)}/{len(args.peek)}"
+                  + (";" + " ".join(f"0x{h:08X} 未现身" for h in missing) if missing else ""))
+
+    # --peek 的 handle 最优先(事件里抓到的新照片就在这),枚举发现紧随其后
+    info_targets = list(dict.fromkeys(list(args.peek) + discovered))
+    info_targets = info_targets[:max(args.objinfo, len(args.peek))]
+    if info_targets:
+        print(f"[5b] GetObjectInfo×{len(info_targets)}(只读,格式码以此为准):")
+    for h in info_targets:
+        txid += 1
+        txid, data_blob, rcode = xact(dev, ep_out, ep_in, txid, GET_OBJECT_INFO, [h])
+        if rcode == OK:
+            dump_object_info(h, data_blob[HDR:])
+        else:
+            print(f"    handle 0x{h:08X}: GetObjectInfo <- 0x{rcode:04X}")
+
+    # 步骤 6(可选,--events N):监听 interrupt IN 抓真实事件容器。
+    # 此时在相机上做任意操作(半按快门/拍一张/转波轮),事件会推到 0x83。
+    # 读法:按包(wMaxPacketSize=8)逐段收,再按 u32 长度字段补齐 —— 若一口气
+    # 读 64B,整 8 字节倍数的事件(12B 头+1 参数=16B)会等不到短包而超时丢包。
+    if args.events and ep_intr is not None:
+        print(f"[6] 监听 interrupt IN {args.events} 秒 —— 现在在相机上按快门/转波轮…")
+        import time as _time
+        deadline = _time.monotonic() + args.events
+        n = 0
+        while _time.monotonic() < deadline:
+            try:
+                chunk = bytes(dev.read(ep_intr, 8, 500))
+            except usb.core.USBError:
+                continue  # 超时:窗口内无事发生
+            if not chunk:
+                continue  # ZLP:仅包界标志,无数据
+            ev = chunk
+            try:
+                (elen,) = struct.unpack_from("<I", ev, 0)
+                sane = EVENT_HDR <= elen <= 64
+            except struct.error:
+                sane = False
+            if not sane:
+                print(f"    疑非事件起始字节({len(ev)}B): {ev.hex(' ')}")
+                continue
+            try:
+                while len(ev) < elen:
+                    ev += bytes(dev.read(ep_intr, 8, 200))
+            except usb.core.USBError:
+                pass  # 补齐途中超时:半截事件也原样上报
+            n += 1
+            print(f"    事件 #{n} 原始字节({len(ev)}B): {ev.hex(' ')}")
             if len(ev) >= EVENT_HDR:
-                elen, etype, ecode, etxid = struct.unpack_from("<HHHI", ev)
-                print(f"    按 u16 长度布局解析:len={elen} type={etype} "
-                      f"eventCode=0x{ecode:04X} txid={etxid}")
-                print("    ↑ 与 containers.dart 的 decodeUsbEvent 对照,不一致则回填修正")
-        except usb.core.USBError:
-            print("[6] 200ms 内无事件(正常,只读探针不触发事件)")
+                elen, etype, ecode, etxid = struct.unpack_from("<IHHI", ev)
+                print(f"      len={elen} type={etype} eventCode=0x{ecode:04X} txid={etxid}"
+                      + ("(=0xFFFFFFFF,异步事件无关联事务)" if etxid == 0xFFFFFFFF else ""))
+        if n == 0:
+            print("    (窗口内无事件;试试 --events 期间按快门)")
+
+    # 步骤 6b(--objinfo/--peek 且开了事件窗口):重枚举各姿势,核对窗口期间新拍的对象
+    if (args.objinfo or args.peek) and args.events:
+        refound: list[int] = []
+        for params, label in [([STORAGE_ALL, FORMAT_ALL, PARENT_ALL], "全存储×递归"),
+                              ([STORAGE_ALL, FORMAT_ALL, PARENT_ROOT], "仅根层")]:
+            txid, hs = list_objects(txid, params, f"  重枚举 {label}")
+            refound += [h for h in hs if h not in discovered]
+        for h in list(handles)[:8]:
+            txid, hs = list_objects(txid, [STORAGE_ALL, FORMAT_ALL, h],
+                                    f"  重枚举 文件夹 0x{h:08X} 内")
+            refound += [h2 for h2 in hs if h2 not in discovered]
+        refound = list(dict.fromkeys(refound))
+        print(f"[6b] 事件窗口后重枚举:新增 {len(refound)} 个")
+        for h in refound[:max(args.objinfo, 4)]:
+            txid += 1
+            txid, data_blob, rcode = xact(dev, ep_out, ep_in, txid, GET_OBJECT_INFO, [h])
+            if rcode == OK:
+                dump_object_info(h, data_blob[HDR:])
+            else:
+                print(f"    handle 0x{h:08X}: GetObjectInfo <- 0x{rcode:04X}")
+
+    # 收尾:关会话(不留悬挂状态,下次探针无需恢复)
+    txid += 1
+    close_session(dev, ep_out, ep_in, txid)
 
     # TODO(P0-usb): 相机以 STALL 表达"忙"时的 CLEAR_HALT + 重试(探针暂未实现,
     #   USBError(EPIPE) 时原样上报);大文件 GetObject 的分块读;错误注入对拍。

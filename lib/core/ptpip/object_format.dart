@@ -28,16 +28,17 @@ abstract final class ObjectFormatCode {
   static const int png = 0x380B;
   static const int tiff = 0x380D;
 
-  // TODO(P0): 尼康 NEF —— 真机 GetObjectInfo 通常报尼康扩展码 0xB101,
-  // 部分机身报 undefined/TIFF;以真机响应为准订正。
-  static const int nikonNef = 0xB101;
+  // ── MTP 扩展(0xB9xx) ──
+  static const int mp4 = 0xB982; // Zf 实测在册(MTP 标准码)
 
-  // TODO(P0): MP4 —— 相机常将其报为 quickTime/undefined,
-  // 浏览层按扩展名兜底,此处码值以真机核对。
+  // 2026-09-27 Zf 真机落定(GetObjectInfo 实测):NEF 报 0x3000(Undefined),
+  // 尼康不给专用码 —— 浏览层必须按 .nef 扩展名兜底识别。0xB200 在 Zf 格式
+  // 表在册但未拍样张,疑为 HEIF;0xB101 是 Canon/Sony 的码,勿用。
 }
 
 /// 格式码 → 分类。无法识别的码走 [ObjectKind.other],
-/// 由浏览层用文件扩展名二次兜底(.nef/.mp4/.mov)。
+/// 由浏览层用文件扩展名二次兜底(.nef/.mp4/.mov);
+/// .nef 兜底是必需设计:NEF 的格式码就是 0x3000(真机实测)。
 ObjectKind kindForFormatCode(int formatCode) {
   switch (formatCode) {
     case ObjectFormatCode.association:
@@ -49,12 +50,12 @@ ObjectKind kindForFormatCode(int formatCode) {
     case ObjectFormatCode.png:
     case ObjectFormatCode.bmp:
     case ObjectFormatCode.gif:
-    case ObjectFormatCode.nikonNef:
       return ObjectKind.image;
     case ObjectFormatCode.quickTime:
     case ObjectFormatCode.mpeg:
     case ObjectFormatCode.avi:
     case ObjectFormatCode.asf:
+    case ObjectFormatCode.mp4:
       return ObjectKind.video;
     default:
       return ObjectKind.other;
@@ -73,12 +74,12 @@ String? mimeForFormatCode(int formatCode) {
       return 'image/tiff';
     case ObjectFormatCode.png:
       return 'image/png';
-    case ObjectFormatCode.nikonNef:
-      return 'image/x-nikon-nef';
     case ObjectFormatCode.quickTime:
       return 'video/quicktime';
     case ObjectFormatCode.mpeg:
       return 'video/mpeg';
+    case ObjectFormatCode.mp4:
+      return 'video/mp4';
     default:
       return null; // undefined 等:由扩展名兜底
   }

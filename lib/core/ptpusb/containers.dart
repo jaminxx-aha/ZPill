@@ -12,13 +12,14 @@
 /// 后续          命令/响应: 0..5 个 u32 参数;数据: payload
 /// ```
 ///
-/// 事件容器(interrupt IN,**头是 10 字节且长度字段是 u16**,与 bulk 不同):
+/// 事件容器(interrupt IN,头 12 字节,与 bulk 容器同构 —— **长度字段是 u32**;
+/// 依据 USB STI 规范与 libgphoto2 PTPUSBEventContainer,2026-09-27 订正):
 /// ```
-/// usLength        u16
+/// dwLength        u32   容器总长(含自身 4 字节)
 /// usType          u16   4=事件
 /// usEventCode     u16
 /// dwTransactionID u32
-/// 后续            0..N 个 u32 参数
+/// 后续            0..3 个 u32 参数
 /// ```
 ///
 /// 传输层契约:本文件只接受"单个完整容器"的字节;跨 USB 传输包的
@@ -44,8 +45,9 @@ abstract final class UsbContainerType {
 /// bulk 容器头长度:dwLength(u32) + usType(u16) + usCode(u16) + dwTransactionID(u32)。
 const int kUsbContainerHeaderLength = 12;
 
-/// 事件容器头长度:usLength(u16) + usType(u16) + usEventCode(u16) + dwTransactionID(u32)。
-const int kUsbEventHeaderLength = 10;
+/// 事件容器头长度:dwLength(u32) + usType(u16) + usEventCode(u16) + dwTransactionID(u32),
+/// 与 bulk 容器头同构。
+const int kUsbEventHeaderLength = 12;
 
 /// PTP/USB 容器(密封基类;[decodeUsbContainer]/[decodeUsbEvent] 的产物)。
 sealed class UsbPtpContainer {
@@ -172,7 +174,7 @@ Uint8List encodeUsbEvent({
   List<int> params = const [],
 }) {
   final w = ByteWriter()
-    ..u16(kUsbEventHeaderLength + 4 * params.length)
+    ..u32(kUsbEventHeaderLength + 4 * params.length)
     ..u16(UsbContainerType.event)
     ..u16(eventCode)
     ..u32(transactionId);
@@ -229,9 +231,10 @@ UsbEventContainer decodeUsbEvent(Uint8List bytes) {
     throw FormatException('事件容器不足头部长度:仅 ${bytes.length} 字节');
   }
   final r = ByteReader(bytes);
-  final length = r.u16();
-  // TODO(P0): usLength 是否把自身 2 字节计入,以 tools/usb_probe 真机
-  // 抓到的原始字节为准订正;当前按"计入"(与 bulk 容器 dwLength 语义一致)实现。
+  final length = r.u32();
+  // 长度字段为 u32 且含头(与 bulk 容器 dwLength 语义一致)。
+  // 2026-09-27 Zf 真机终验:21 个事件全部 16 字节(len=16=12 头+1 参数),
+  // type=4,异步事件 txid 恒为 0xFFFFFFFF(无关联事务)。
   if (length != bytes.length) {
     throw FormatException('事件长度字段 $length ≠ 实际字节 ${bytes.length}');
   }

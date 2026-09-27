@@ -163,18 +163,18 @@ void main() {
     });
   });
 
-  group('事件容器(interrupt IN,头 10 字节 + u16 长度)', () {
+  group('事件容器(interrupt IN,头 12 字节 + u32 长度)', () {
     test('ObjectAdded:编码布局手算核对', () {
       final b = encodeUsbEvent(
         eventCode: PtpEventCode.objectAdded,
         transactionId: 0,
         params: [5],
       );
-      // len=14(u16!) | type=4 | eventCode=0x4001 | txid=0 | handle=5
+      // len=16(u32) | type=4 | eventCode=0x4002 | txid=0 | handle=5
       expect(b, [
-        0x0E, 0x00, //
+        0x10, 0x00, 0x00, 0x00, //
         0x04, 0x00, //
-        0x01, 0x40, //
+        0x02, 0x40, //
         0x00, 0x00, 0x00, 0x00, //
         0x05, 0x00, 0x00, 0x00, //
       ]);
@@ -202,7 +202,7 @@ void main() {
 
     test('类型不为 4 抛 FormatException', () {
       final b = encodeUsbEvent(eventCode: PtpEventCode.objectAdded, transactionId: 0);
-      b[2] = 0x03; // 篡改 type 字段
+      b[4] = 0x03; // 篡改 type 字段(u32 长度之后)
       expect(() => decodeUsbEvent(b), throwsFormatException);
     });
 
