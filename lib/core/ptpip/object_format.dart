@@ -62,6 +62,37 @@ ObjectKind kindForFormatCode(int formatCode) {
   }
 }
 
+/// 扩展名兜底分类(浏览层二次兜底):NEF 的格式码就是 0x3000(真机实测),
+/// 只能靠文件名识别;MP4/MOV 的 MTP 码同理兜底。
+ObjectKind kindForFilename(String filename) {
+  final dot = filename.lastIndexOf('.');
+  if (dot < 0 || dot + 1 >= filename.length) {
+    return ObjectKind.other;
+  }
+  switch (filename.substring(dot + 1).toLowerCase()) {
+    case 'jpg':
+    case 'jpeg':
+    case 'jpe':
+    case 'nef':
+    case 'nrw':
+    case 'tif':
+    case 'tiff':
+    case 'png':
+    case 'bmp':
+    case 'gif':
+    case 'heic':
+      return ObjectKind.image;
+    case 'mp4':
+    case 'mov':
+    case 'avi':
+    case 'mts':
+    case 'm4v':
+      return ObjectKind.video;
+    default:
+      return ObjectKind.other;
+  }
+}
+
 /// 保存到系统相册时的 MIME 映射(TODO.md §四 P1)。
 /// NEF 无标准 MIME,用通用二进制流,相册目录按图片处理。
 String? mimeForFormatCode(int formatCode) {

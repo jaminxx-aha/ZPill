@@ -3,6 +3,7 @@ library;
 
 import '../ptpip/object_format.dart';
 import '../ptpip/object_info.dart';
+import '../ptp/ptp_session.dart';
 import 'object_entry.dart';
 
 abstract interface class ObjectRepository {
@@ -18,7 +19,11 @@ abstract interface class ObjectRepository {
 
   /// PtpObjectInfo → ObjectEntry(解析 PTP 日期串、格式码分类、扩展名兜底)。
   static ObjectEntry toEntry(PtpObjectInfo info) {
-    final kind = kindForFormatCode(info.objectFormat);
+    var kind = kindForFormatCode(info.objectFormat);
+    if (kind == ObjectKind.other) {
+      // NEF 的格式码就是 0x3000(真机实测),必须按扩展名二次兜底。
+      kind = kindForFilename(info.filename);
+    }
     return ObjectEntry(
       handle: info.handle,
       name: info.filename,
@@ -45,15 +50,92 @@ abstract interface class ObjectRepository {
   }
 }
 
-/// TODO(P1): 基于 PtpIpSession 的实现(列表 + 详情组合,含进度上报)。
+/// 基于 [PtpSession] 的实现:一次 GetObjectHandles 全量 + 逐个 GetObjectInfo,
+/// 内存建 parent→children 树,listFolder 只查缓存。
+///
+/// Zf 真机语义(2026-09-27 实测):parent=0 才是全量枚举(602 个对象,
+/// 0xFFFFFFFF 只回根层),故全量走 [GetObjectHandlesParams.parentRoot]。
+/// 代价:首次 ~602 次往返(数秒);Nikon 0x9434 GetObjectsMetaData
+/// 批量优化留后续。
+///
+/// 缓存失效:会话关闭/重连后必须 [reset](AppServices 订阅连接状态驱动),
+/// 否则句柄可能已过期。
 final class ObjectRepositoryImpl implements ObjectRepository {
-  @override
-  Future<List<ObjectEntry>> listFolder({int parentHandle = 0}) =>
-      throw UnimplementedError();
+  ObjectRepositoryImpl({required this.session});
+
+  final PtpSession session;
+
+  Map<int, ObjectEntry> _byHandle = const {};
+  Map<int, List<ObjectEntry>> _children = const {};
+  bool _loaded = false;
+
+  /// 缓存是否已建立(全量枚举完成)。
+  bool get isLoaded => _loaded;
 
   @override
-  Future<ObjectEntry> entryFor(int handle) => throw UnimplementedError();
+  Future<List<ObjectEntry>> listFolder({int parentHandle = 0}) async {
+    if (!_loaded) {
+      await _loadAll();
+    }
+    return List.of(_children[parentHandle] ?? const []);
+  }
 
   @override
-  Future<String> thumbPathFor(int handle) => throw UnimplementedError();
+  Future<ObjectEntry> entryFor(int handle) async {
+    if (!_loaded) {
+      await _loadAll();
+    }
+    final entry = _byHandle[handle];
+    if (entry == null) {
+      throw StateError('对象 0x${handle.toRadixString(16)} 不在缓存(会话已重置?)');
+    }
+    return entry;
+  }
+
+  @override
+  Future<String> thumbPathFor(int handle) => throw UnimplementedError(); // P2
+
+  /// 丢弃缓存(断开/失败后由连接状态监听调用;重连后首次 listFolder 重枚举)。
+  void reset() {
+    _byHandle = const {};
+    _children = const {};
+    _loaded = false;
+  }
+
+  /// 全量枚举:GetObjectHandles(Zf 语义 parent=0)→ 逐个 GetObjectInfo →
+  /// 建 parent→children 树 + handle 索引。
+  Future<void> _loadAll() async {
+    // Zf 把 0 与 0xFFFFFFFF 的语义做反了:parent 必须传 0 才是全量。
+    final handles = await session.getObjectHandles();
+    final byHandle = <int, ObjectEntry>{};
+    final children = <int, List<ObjectEntry>>{};
+    for (final handle in handles) {
+      final info = await session.getObjectInfo(handle);
+      final entry = ObjectRepository.toEntry(info);
+      byHandle[handle] = entry;
+      children.putIfAbsent(info.parentHandle ?? 0, () => []).add(entry);
+    }
+    for (final list in children.values) {
+      list.sort(compareEntries);
+    }
+    _byHandle = byHandle;
+    _children = children;
+    _loaded = true;
+  }
+
+  /// 同层排序:文件夹在前,照片按拍摄时间倒序(新的在前),无时间按名。
+  static int compareEntries(ObjectEntry a, ObjectEntry b) {
+    if (a.isFolder != b.isFolder) {
+      return a.isFolder ? -1 : 1;
+    }
+    final at = a.capturedAt;
+    final bt = b.capturedAt;
+    if (at != null && bt != null && at != bt) {
+      return bt.compareTo(at);
+    }
+    if ((at == null) != (bt == null)) {
+      return at == null ? 1 : -1;
+    }
+    return a.name.compareTo(b.name);
+  }
 }
