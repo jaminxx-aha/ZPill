@@ -77,6 +77,7 @@ abstract final class PtpResponseCode {
   static const int invalidTransactionId = 0x2004;
   static const int operationNotSupported = 0x2005;
   static const int parameterNotSupported = 0x2006;
+  static const int sessionAlreadyOpen = 0x201E; // probe ensure_session 真机验证:上次会话残留时的 OpenSession 响应
 
   // TODO(P1): 按需补充(存储不可用 / 对象不存在等),
   // 以 ISO 15740 §13.4 响应码表为准,禁止臆造。

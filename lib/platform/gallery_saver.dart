@@ -10,6 +10,10 @@ import 'package:flutter/services.dart';
 import '../core/ptpip/object_format.dart';
 
 abstract interface class GallerySaver {
+  /// 临时目录(下载落盘用,零新依赖、不引 path_provider):
+  /// 传输引擎边收边写到这里,导入相册后删除。
+  Future<String> tempDir();
+
   /// 导入已完成下载的临时文件,返回系统侧内容 Uri(iOS/ohos 亦统一为
   /// 字符串形式返回)。[kind] 决定相册目录与 MIME(JPEG/NEF/TIFF/MP4/MOV 映射,
   /// 见 core/ptpip/object_format.dart)。
@@ -20,7 +24,8 @@ abstract interface class GallerySaver {
   });
 }
 
-/// 经 `nikonbridge/gallery` channel:方法 `import`(参数 path/kind/filename)。
+/// 经 `nikonbridge/gallery` channel:方法 `tempDir`/`import`
+/// (import 参数 path/kind/filename)。
 ///
 /// TODO(P1): native 实现。
 /// - Android:NEF 用 IS_PENDING + RELATIVE_PATH 提交流;大文件避免二次拷贝
@@ -30,9 +35,19 @@ final class MethodChannelGallerySaver implements GallerySaver {
   static const MethodChannel channel = MethodChannel('nikonbridge/gallery');
 
   @override
+  Future<String> tempDir() async {
+    final dir = await channel.invokeMethod<String>('tempDir');
+    if (dir == null || dir.isEmpty) {
+      throw StateError('gallery channel 未返回临时目录');
+    }
+    return dir;
+  }
+
+  @override
   Future<Uri> importFile(
     String tempPath, {
     required ObjectKind kind,
     required String filename,
-  }) => throw UnimplementedError();
+  }) =>
+      throw UnimplementedError();
 }

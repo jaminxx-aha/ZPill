@@ -1,7 +1,7 @@
 /// USB 主机侧通道(TODO.md USB 主线,2026-09-27 定为优先连接方式)。
 ///
-/// 把 native 的 USB 主机原语收口为 MethodChannel 契约;Dart 侧的
-/// PTP/USB 容器(core/ptpusb/containers.dart)经由本通道收发字节:
+/// 把 native 的 USB 主机原语收口为 MethodChannel 契约;本文件实现
+/// core/ptpusb/usb_transport.dart 的 [UsbBytePipe](**字节管道**,v2 契约):
 ///
 /// | channel            | Android(Kotlin)   | iOS(Swift)                | ohos(ArkTS) |
 /// |--------------------|--------------------|-----------------------------|---------------|
@@ -15,13 +15,19 @@
 /// STALL 后的 CLEAR_HALT。
 ///
 /// 铁律(TODO.md 实现注意事项):
-/// - bulkIn 的**重组责任在 native**:先读 12 字节头、按长度字段补齐,
-///   返回给 Dart 的永远是单个完整容器(见 containers.dart 契约)。
+/// - **native 不做容器重组**(v2 契约):bulkRead 是单次读、短读合法,
+///   容器头解析/按长度补齐在 Dart 的 UsbPtpTransport;
+///   为什么:GetObject 的 25.6MB NEF 是**单个数据容器**,native 整容器
+///   重组 = 整文件过通道驻留内存,内存炸弹。
 /// - 相机以 STALL 表达"暂无数据/忙"是正常流控,native 须 CLEAR_HALT
 ///   后重试,不得当作错误上抛。
 library;
 
+import 'dart:async';
+
 import 'package:flutter/services.dart';
+
+import '../../core/ptpusb/usb_transport.dart';
 
 /// 尼康 USB Vendor ID(USB-IF 分配,三端过滤都用它)。
 const int kNikonUsbVendorId = 0x04B0;
@@ -47,54 +53,85 @@ final class UsbDeviceHandle {
   final String identifier;
 }
 
-abstract interface class UsbHostChannel {
+/// USB 主机通道:UsbBytePipe(收发字节)+ 设备生命周期。
+abstract interface class UsbHostChannel implements UsbBytePipe {
   /// 枚举相机(VID=0x04B0);未插入或无权限返回空表。
-  /// Android 需先弹系统授权框,ohos 需 USB 声明权限。
+  /// Android 需先弹系统授权框,ohos 需 requestRight 授权。
   Future<List<UsbDeviceHandle>> listCameras();
 
   /// 打开并独占 Still Image 接口(claim bulk IN/OUT + interrupt IN)。
   Future<void> open(UsbDeviceHandle device);
 
-  /// bulk OUT 写(命令容器 / 数据出容器)。
-  Future<void> bulkOut(Uint8List bytes);
-
-  /// bulk IN 读一个完整容器(native 负责按长度字段重组)。
-  Future<Uint8List> bulkIn();
-
-  /// interrupt IN 事件流,每条为一个完整事件容器字节
-  /// (Dart 侧经 decodeUsbEvent 解析)。
-  Stream<Uint8List> get interruptEvents;
-
   Future<void> close();
 }
 
 /// 经 `nikonbridge/usb` channel:方法 `listCameras`/`open`/`bulkOut`/
-/// `bulkIn`/`close`;事件流走 EventChannel `nikonbridge/usb/events`。
+/// `bulkRead`/`close`;事件流走 EventChannel `nikonbridge/usb/events`。
 ///
-/// TODO(P0-usb): native 实现。
-/// - iOS:DriverKit dext(C++,IOUSBHostDevice/Interface)+ UserClient IPC,
-///   模板对齐 Xcode 26 的 DriverKit USB 模板;entitlement 申请先行。
+/// native 落点(Phase C 起):
+/// - ohos:usbManager(@ohos.usb)的 getDevices/requestRight/connectDevice/
+///   claimInterface/bulkTransfer —— 先行,见 ohos/entry/…/UsbHostPlugin.ets。
 /// - Android:UsbManager + usb_device_filter.xml(VID 0x04B0),
 ///   bulkTransfer + UsbRequest(interrupt 轮询用独立线程)。
-/// - ohos:usbManager(@ohos.usb)的 connectDevice/bulkTransfer。
+/// - iOS:DriverKit dext(C++,IOUSBHostDevice/Interface)+ UserClient IPC,
+///   entitlement 申请先行。
 final class MethodChannelUsbHost implements UsbHostChannel {
+  MethodChannelUsbHost();
+
   static const MethodChannel channel = MethodChannel('nikonbridge/usb');
+  static const EventChannel _events = EventChannel('nikonbridge/usb/events');
+
+  Stream<Uint8List>? _eventStream;
 
   @override
-  Future<List<UsbDeviceHandle>> listCameras() => throw UnimplementedError();
+  Future<List<UsbDeviceHandle>> listCameras() async {
+    final raw = await channel.invokeListMethod<Map<dynamic, dynamic>>('listCameras');
+    if (raw == null) return const [];
+    return [
+      for (final m in raw)
+        UsbDeviceHandle(
+          vendorId: m['vendorId'] as int,
+          productId: m['productId'] as int,
+          identifier: m['identifier'] as String,
+        ),
+    ];
+  }
 
   @override
-  Future<void> open(UsbDeviceHandle device) => throw UnimplementedError();
+  Future<void> open(UsbDeviceHandle device) =>
+      channel.invokeMethod('open', {'identifier': device.identifier});
 
   @override
-  Future<void> bulkOut(Uint8List bytes) => throw UnimplementedError();
+  Future<void> bulkOut(Uint8List bytes) =>
+      channel.invokeMethod('bulkOut', {'bytes': bytes});
 
   @override
-  Future<Uint8List> bulkIn() => throw UnimplementedError();
+  Future<Uint8List> bulkRead(int maxLen, {required int timeoutMs}) async {
+    try {
+      final bytes = await channel.invokeMethod<Uint8List>('bulkRead', {
+        'maxLen': maxLen,
+        'timeoutMs': timeoutMs,
+      });
+      return bytes ?? Uint8List(0);
+    } on PlatformException catch (e) {
+      // native 的窗口超时映射为 TimeoutException,对齐 UsbBytePipe 契约
+      // (UsbPtpTransport 按超时向上传播,不做静默重试)
+      if (e.code == 'usb_timeout') {
+        throw TimeoutException('bulkRead ${timeoutMs}ms 内未收到数据: ${e.message}');
+      }
+      rethrow;
+    }
+  }
 
   @override
-  Stream<Uint8List> get interruptEvents => throw UnimplementedError();
+  Stream<Uint8List> get interruptEvents {
+    // 惰性订阅:open() 之后 native 才开始转发 interrupt IN;
+    // 多次取值共享同一条广播流(EventChannel 语义)。
+    return _eventStream ??= _events
+        .receiveBroadcastStream()
+        .map((dynamic b) => b as Uint8List);
+  }
 
   @override
-  Future<void> close() => throw UnimplementedError();
+  Future<void> close() => channel.invokeMethod('close');
 }

@@ -23,8 +23,8 @@
 /// ```
 ///
 /// 传输层契约:本文件只接受"单个完整容器"的字节;跨 USB 传输包的
-/// 重组(先读头、按长度字段补齐)是传输层的责任,
-/// 见 platform/usb/usb_host.dart 的 bulkIn 契约。
+/// 重组(先读头、按长度字段补齐)在 core/ptpusb/usb_transport.dart,
+/// native 侧只做字节管道(单次读、短读合法),见 UsbBytePipe 契约。
 library;
 
 import 'dart:typed_data';

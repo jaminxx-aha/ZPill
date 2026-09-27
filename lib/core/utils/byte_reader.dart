@@ -53,4 +53,19 @@ final class ByteReader {
     }
     return String.fromCharCodes(units);
   }
+
+  /// 读 PTP STRING 数据集类型(ISO 15740):u8 字符数 + UTF-16LE 内容。
+  ///
+  /// 字符数 0xFF 表示「未提供」返回 null;结尾 NUL 终止符剥掉
+  /// (真机实测:Zf 的文件名/卷标都带 1 个 NUL,不剥会导致扩展名判断失效)。
+  String? ptpString() {
+    final n = u8();
+    if (n == 0xFF) return null;
+    if (n == 0) return '';
+    var s = utf16le(2 * n);
+    while (s.endsWith('\u0000')) {
+      s = s.substring(0, s.length - 1);
+    }
+    return s;
+  }
 }

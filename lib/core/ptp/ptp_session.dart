@@ -1,0 +1,242 @@
+/// 链路无关的 PTP 会话层(ISO 15740):OpenSession 生命周期 +
+/// 浏览/传输所需的操作封装。
+///
+/// 只面对 [PtpTransport](USB/PTP-IP 在此归一);PtpIpSession 的既有逻辑
+/// 后续统一收敛到本层,本轮先服务 USB 线。
+///
+/// 会话恢复策略照搬 tools/usb_probe 的 ensure_session(**真机验证**):
+/// 上次会话未正常关闭时,相机对 OpenSession 回 SessionAlreadyOpen
+/// (0x201E),此时发 CloseSession(响应可忽略)再重开即可。
+library;
+
+import 'dart:typed_data';
+
+import '../ptpip/object_info.dart';
+import '../utils/byte_reader.dart';
+import 'operation_codes.dart';
+import 'ptp_transport.dart';
+
+/// 相机返回非 OK 响应码时抛出;上层(UI/连接层)以此提示用户。
+final class PtpResponseException implements Exception {
+  const PtpResponseException({
+    required this.opcode,
+    required this.responseCode,
+    this.params = const [],
+  });
+
+  final int opcode;
+  final int responseCode;
+
+  /// 响应参数(通常为空)。
+  final List<int> params;
+
+  @override
+  String toString() {
+    final op = opcode.toRadixString(16).toUpperCase().padLeft(4, '0');
+    final rc = responseCode.toRadixString(16).toUpperCase().padLeft(4, '0');
+    final extra = params.isEmpty ? '' : ' params=$params';
+    return 'PtpResponseException: 操作 0x$op 收到响应 0x$rc$extra';
+  }
+}
+
+/// GetDeviceInfo(0x1001)数据集 —— 最小解析(仅浏览/连接所需字段,
+/// 数组完整收录:后续能力检查如 GetPartialObjectEx 在册与否要用)。
+///
+/// 布局按 ISO 15740 §9,经 Zf 真机 probe 校验(probe.py dump_device_info
+/// 同一解析):standardVersion u16 / vendorExtensionId u32 /
+/// vendorExtensionVersion u16 / desc STRING / functionalMode u16,
+/// 随后 5 组「u32 计数 + N 个 u16」(操作/事件/属性/捕获格式/图像格式),
+/// 最后 manufacturer / model / deviceVersion / serialNumber 四个 STRING。
+final class PtpDeviceInfo {
+  const PtpDeviceInfo({
+    required this.standardVersion,
+    required this.vendorExtensionId,
+    required this.functionalMode,
+    required this.operationsSupported,
+    required this.eventsSupported,
+    required this.devicePropsSupported,
+    required this.captureFormats,
+    required this.imageFormats,
+    required this.manufacturer,
+    required this.model,
+    required this.deviceVersion,
+    this.serialNumber,
+  });
+
+  final int standardVersion;
+  final int vendorExtensionId;
+  final int functionalMode;
+  final List<int> operationsSupported;
+  final List<int> eventsSupported;
+  final List<int> devicePropsSupported;
+  final List<int> captureFormats;
+  final List<int> imageFormats;
+  final String manufacturer;
+  final String model;
+  final String deviceVersion;
+  final String? serialNumber;
+
+  /// 操作是否在册(相机能力检查,如 GetPartialObjectEx 断点续传)。
+  bool supportsOperation(int opcode) => operationsSupported.contains(opcode);
+
+  static PtpDeviceInfo parse(Uint8List dataset) {
+    final r = ByteReader(dataset);
+    final standardVersion = r.u16();
+    final vendorExtensionId = r.u32();
+    r.u16(); // VendorExtensionVersion
+    r.ptpString(); // VendorExtensionDesc
+    final functionalMode = r.u16();
+    final operationsSupported = _u16Array(r);
+    final eventsSupported = _u16Array(r);
+    final devicePropsSupported = _u16Array(r);
+    final captureFormats = _u16Array(r);
+    final imageFormats = _u16Array(r);
+    return PtpDeviceInfo(
+      standardVersion: standardVersion,
+      vendorExtensionId: vendorExtensionId,
+      functionalMode: functionalMode,
+      operationsSupported: operationsSupported,
+      eventsSupported: eventsSupported,
+      devicePropsSupported: devicePropsSupported,
+      captureFormats: captureFormats,
+      imageFormats: imageFormats,
+      manufacturer: r.ptpString() ?? '',
+      model: r.ptpString() ?? '',
+      deviceVersion: r.ptpString() ?? '',
+      serialNumber: r.ptpString(),
+    );
+  }
+
+  /// PTP 数组数据集类型:u32 计数 + N 个 u16。
+  static List<int> _u16Array(ByteReader r) {
+    final n = r.u32();
+    return [for (var i = 0; i < n; i++) r.u16()];
+  }
+}
+
+/// PTP 会话:open/close 生命周期 + 浏览/下载操作封装。
+///
+/// 事务串行由相机侧保证(一次一个 execute);上层不得并发调用。
+final class PtpSession {
+  PtpSession({required this.transport});
+
+  final PtpTransport transport;
+
+  bool _sessionOpen = false;
+
+  /// 会话是否已打开(OpenSession 成功且未 CloseSession)。
+  bool get isSessionOpen => _sessionOpen;
+
+  PtpDeviceInfo? _deviceInfo;
+
+  /// GetDeviceInfo;会话内缓存([force] 强制刷新)。
+  /// 唯一可在 OpenSession 之前调用的操作。
+  Future<PtpDeviceInfo> getDeviceInfo({bool force = false}) async {
+    if (_deviceInfo != null && !force) return _deviceInfo!;
+    final result = await transport.execute(
+      const PtpRequest(opcode: PtpOperationCode.getDeviceInfo),
+    );
+    _ensureOk(result, PtpOperationCode.getDeviceInfo);
+    _deviceInfo = PtpDeviceInfo.parse(result.data!);
+    return _deviceInfo!;
+  }
+
+  /// OpenSession(带 0x201E 自动恢复,照搬 probe ensure_session)。
+  Future<void> open() async {
+    if (_sessionOpen) return;
+    final result = await transport.execute(
+      const PtpRequest(opcode: PtpOperationCode.openSession, params: [1]),
+    );
+    if (result.responseCode == PtpResponseCode.sessionAlreadyOpen) {
+      // 上次会话未关(拔线/崩溃残留):关掉重开。残留会话的
+      // CloseSession 可能报错(会话号不属于本连接),响应码与异常都不阻断重开。
+      try {
+        await transport.execute(
+          const PtpRequest(opcode: PtpOperationCode.closeSession),
+        );
+      } on Exception {
+        // 尽力而为,见上
+      }
+      final retry = await transport.execute(
+        const PtpRequest(opcode: PtpOperationCode.openSession, params: [1]),
+      );
+      _ensureOk(retry, PtpOperationCode.openSession);
+    } else {
+      _ensureOk(result, PtpOperationCode.openSession);
+    }
+    _sessionOpen = true;
+  }
+
+  /// CloseSession(幂等、尽力而为):相机已拔出时不因清理报错。
+  /// 设备级断开由连接层调 transport.close()。
+  Future<void> close() async {
+    if (!_sessionOpen) return;
+    _sessionOpen = false;
+    try {
+      await transport.execute(
+        const PtpRequest(opcode: PtpOperationCode.closeSession),
+      );
+    } on Exception {
+      // 链路已断:本地状态已清,足够
+    }
+  }
+
+  /// GetObjectHandles:u32 计数 + N 个 u32 handle。
+  ///
+  /// 参数默认值 = Zf 真机语义的全量枚举:**parent 必须传 0**
+  /// (GetObjectHandlesParams:Zf 把 0 与 0xFFFFFFFF 的语义做反了)。
+  Future<List<int>> getObjectHandles({
+    int storageId = GetObjectHandlesParams.storageAll,
+    int objectFormat = GetObjectHandlesParams.formatAll,
+    int parent = GetObjectHandlesParams.parentRoot,
+  }) async {
+    final result = await transport.execute(PtpRequest(
+      opcode: PtpOperationCode.getObjectHandles,
+      params: [storageId, objectFormat, parent],
+    ));
+    _ensureOk(result, PtpOperationCode.getObjectHandles);
+    final data = result.data!;
+    if (data.length % 4 != 0) {
+      throw FormatException('GetObjectHandles 数据集 ${data.length}B 非 4 对齐');
+    }
+    final r = ByteReader(data);
+    final count = r.u32();
+    return [for (var i = 0; i < count; i++) r.u32()];
+  }
+
+  /// GetObjectInfo:ObjectInfo 数据集与 PTP-IP 同构,复用 ptpip 解析。
+  Future<PtpObjectInfo> getObjectInfo(int handle) async {
+    final result = await transport.execute(PtpRequest(
+      opcode: PtpOperationCode.getObjectInfo,
+      params: [handle],
+    ));
+    _ensureOk(result, PtpOperationCode.getObjectInfo);
+    return PtpObjectInfo.parse(handle: handle, dataset: result.data!);
+  }
+
+  /// GetObject 流式下载:数据容器按块经 [onData] 回调(64KB 级),
+  /// **不整体驻留内存** —— 上层边收边写盘。
+  Future<void> getObject(
+    int handle, {
+    required void Function(Uint8List chunk) onData,
+  }) async {
+    final result = await transport.execute(
+      PtpRequest(opcode: PtpOperationCode.getObject, params: [handle]),
+      onData: onData,
+    );
+    _ensureOk(result, PtpOperationCode.getObject);
+  }
+
+  /// 异步事件流透传(ObjectAdded / CaptureComplete…)。
+  Stream<PtpEvent> get events => transport.events;
+
+  void _ensureOk(PtpResult result, int opcode) {
+    if (result.responseCode != PtpResponseCode.ok) {
+      throw PtpResponseException(
+        opcode: opcode,
+        responseCode: result.responseCode,
+        params: result.params,
+      );
+    }
+  }
+}
