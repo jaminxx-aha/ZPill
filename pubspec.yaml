@@ -1,0 +1,30 @@
+name: nikon_bridge
+description: 尼康相机无线传输工具 —— iOS / Android / HarmonyOS 三端通用。
+publish_to: "none"
+version: 0.1.0
+
+environment:
+  sdk: ^3.5.0
+
+# Flutter SDK:HarmonyOS 端使用 OpenHarmony-SIG 维护的 flutter_flutter fork
+# (见 README「环境准备」),iOS/Android 用官方 SDK,同一份 lib/ 代码。
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+
+  # ── 按里程碑引入,骨架期不预支 ─────────────────────────────────
+  # P1 后台下载(Android WorkManager 等价): workmanager
+  # P2 已配对相机持久化(Room 等价):        drift
+  # P2 设置(DataStore 等价):              shared_preferences
+  # P2 缩略图缓存:                          cached_network_image / extended_image
+  # P3 BLE(iOS/Android):                   flutter_blue_plus(ohos 需在 ArkTS 侧自写 channel)
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
