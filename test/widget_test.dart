@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_bridge/app.dart';
+import 'package:nikon_pill/app.dart';
 
 void main() {
   testWidgets('应用启动并渲染底部三 tab', (WidgetTester tester) async {
-    await tester.pumpWidget(const NikonBridgeApp());
+    await tester.pumpWidget(const NikonPillApp());
 
     // 底部导航三 tab(TODO.md §七):标签文本与页内 AppBar 标题可能重名,
     // 故断言 NavigationBar 的三个目的地而非全局唯一文本。

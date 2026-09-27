@@ -1,7 +1,7 @@
 /// 系统相册保存(TODO.md §四 P1)。
 ///
 /// 流程:传输引擎流式写盘到临时文件(边收边写)→ 本接口导入相册 → 删临时文件。
-/// 三端落点:Android MediaStore(Pictures/Movies/NikonBridge)、
+/// 三端落点:Android MediaStore(Pictures/Movies/NikonPill)、
 /// iOS PHPhotoLibrary、ohos photoAccessHelper。
 library;
 
@@ -24,7 +24,7 @@ abstract interface class GallerySaver {
   });
 }
 
-/// 经 `nikonbridge/gallery` channel:方法 `tempDir`/`import`
+/// 经 `nikonpill/gallery` channel:方法 `tempDir`/`import`
 /// (import 参数 path/kind/filename)。
 ///
 /// TODO(P1): native 实现。
@@ -32,7 +32,7 @@ abstract interface class GallerySaver {
 /// - iOS:PHAssetCreationRequest 追加文件后标记 origin,避免重复导入
 /// - ohos:photoAccessHelper 的安全控件授权策略需真机核对
 final class MethodChannelGallerySaver implements GallerySaver {
-  static const MethodChannel channel = MethodChannel('nikonbridge/gallery');
+  static const MethodChannel channel = MethodChannel('nikonpill/gallery');
 
   @override
   Future<String> tempDir() async {

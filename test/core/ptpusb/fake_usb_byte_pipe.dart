@@ -3,7 +3,7 @@ import 'dart:collection';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
-import 'package:nikon_bridge/core/ptpusb/usb_transport.dart';
+import 'package:nikon_pill/core/ptpusb/usb_transport.dart';
 
 /// 假字节管道:bulk IN 队列 + 单片余量,模拟 USB 短读序列。
 ///

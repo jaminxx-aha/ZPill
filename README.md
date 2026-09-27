@@ -1,4 +1,4 @@
-# NikonBridge
+# NikonPill
 
 尼康相机无线传输工具(iOS / Android / HarmonyOS 三端)。
 手动连接相机 WiFi 热点后,经 PTP-IP 协议(端口 15740)浏览与下载照片/视频。
@@ -38,14 +38,14 @@ docs/              # 架构文档
 
 ```bash
 # 官方 SDK(iOS/Android)
-flutter create --project-name nikon_bridge --platforms=android,ios .
+flutter create --project-name nikon_pill --platforms=android,ios .
 
 # HarmonyOS:切换到 SIG fork 的 flutter 后
-flutter create --project-name nikon_bridge --platforms=ohos .
+flutter create --project-name nikon_pill --platforms=ohos .
 ```
 
 生成后:权限声明(蓝牙/位置/WiFi 状态)按 [TODO.md §七](TODO.md) 落入各平台清单,
-`nikonbridge/*` 四个 MethodChannel 的 native 实现按 [lib/platform/services.dart](lib/platform/services.dart)
+`nikonpill/*` 四个 MethodChannel 的 native 实现按 [lib/platform/services.dart](lib/platform/services.dart)
 契约表补齐。
 
 ## 常用命令

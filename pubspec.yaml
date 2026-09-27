@@ -1,4 +1,4 @@
-name: nikon_bridge
+name: nikon_pill
 description: 尼康相机无线传输工具 —— iOS / Android / HarmonyOS 三端通用。
 publish_to: "none"
 version: 0.1.0

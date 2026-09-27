@@ -16,5 +16,5 @@ Future<void> main() async {
   // 应用级单例:USB 主线对象图(通道 → 传输 → 会话 → 仓库 → 控制器)。
   AppServices.bootstrap();
 
-  runApp(const NikonBridgeApp());
+  runApp(const NikonPillApp());
 }

@@ -5,12 +5,12 @@
         "name": "default",
         "type": "HarmonyOS",
         "material": {
-          "certpath": "/Users/REDACTED/.ohos/config/default_ohos_Uq_S3uIteV3HMhx-spKdKAtxvlWJEcBuTUbaME5ahS8=.cer",
+          "certpath": "/Users/REDACTED/.ohos/config/default_ohos_pFjiFWHaHscEFCzcKV5Atuesbz-sSZZ_XrJmE9GNmmE=.cer",
           "keyAlias": "debugKey",
           "keyPassword": "REDACTED",
-          "profile": "/Users/REDACTED/.ohos/config/default_ohos_Uq_S3uIteV3HMhx-spKdKAtxvlWJEcBuTUbaME5ahS8=.p7b",
+          "profile": "/Users/REDACTED/.ohos/config/default_ohos_pFjiFWHaHscEFCzcKV5Atuesbz-sSZZ_XrJmE9GNmmE=.p7b",
           "signAlg": "SHA256withECDSA",
-          "storeFile": "/Users/REDACTED/.ohos/config/default_ohos_Uq_S3uIteV3HMhx-spKdKAtxvlWJEcBuTUbaME5ahS8=.p12",
+          "storeFile": "/Users/REDACTED/.ohos/config/default_ohos_pFjiFWHaHscEFCzcKV5Atuesbz-sSZZ_XrJmE9GNmmE=.p12",
           "storePassword": "REDACTED"
         }
       }
@@ -21,6 +21,7 @@
         "signingConfig": "default",
         "compatibleSdkVersion": "5.1.0(18)",
         "runtimeOS": "HarmonyOS",
+        "targetSdkVersion": "6.1.1(24)"
       }
     ],
     "buildModeSet": [
