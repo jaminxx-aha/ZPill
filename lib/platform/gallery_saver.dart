@@ -27,7 +27,7 @@ abstract interface class GallerySaver {
 /// - iOS:PHAssetCreationRequest 追加文件后标记 origin,避免重复导入
 /// - ohos:photoAccessHelper 的安全控件授权策略需真机核对
 final class MethodChannelGallerySaver implements GallerySaver {
-  static const MethodChannel _channel = MethodChannel('nikonbridge/gallery');
+  static const MethodChannel channel = MethodChannel('nikonbridge/gallery');
 
   @override
   Future<Uri> importFile(

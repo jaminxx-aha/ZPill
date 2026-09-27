@@ -1,9 +1,14 @@
 # flutter_lints 规则集;协议层(core/)保持零告警。
+analyzer:
+  exclude:
+    - build/**
+    - ios/**
+  language:
+    # 协议/字节处理多,禁止隐式 dynamic
+    strict-raw-types: true
 include: package:flutter_lints/flutter.yaml
 
 linter:
   rules:
-    # 协议/字节处理多,禁止隐式 dynamic
-    strict-raw-types: true
     # socket 调用不允许静默吞 Future
     unawaited_futures: true

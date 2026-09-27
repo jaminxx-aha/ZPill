@@ -10,11 +10,11 @@ final class ByteWriter {
 
   void u8(int v) => _b.add(Uint8List(1)..[0] = v & 0xFF);
 
-  void u16(int v) => _b.add(_le(2)..setUint16(0, v, Endian.little));
+  void u16(int v) => _b.add(_bytes(2, (bd) => bd.setUint16(0, v, Endian.little)));
 
-  void u32(int v) => _b.add(_le(4)..setUint32(0, v, Endian.little));
+  void u32(int v) => _b.add(_bytes(4, (bd) => bd.setUint32(0, v, Endian.little)));
 
-  void u64(int v) => _b.add(_le(8)..setUint64(0, v, Endian.little));
+  void u64(int v) => _b.add(_bytes(8, (bd) => bd.setUint64(0, v, Endian.little)));
 
   void raw(List<int> bytes) => _b.add(bytes);
 
@@ -34,5 +34,9 @@ final class ByteWriter {
 
   Uint8List takeBytes() => _b.takeBytes();
 
-  ByteData _le(int size) => ByteData(size);
+  Uint8List _bytes(int size, void Function(ByteData bd) write) {
+    final b = Uint8List(size);
+    write(ByteData.sublistView(b));
+    return b;
+  }
 }

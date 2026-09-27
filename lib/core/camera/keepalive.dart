@@ -5,8 +5,6 @@
 /// "只计数不清零"的心跳等于定时断线。
 library;
 
-import 'dart:async';
-
 final class ProbeKeepalive {
   ProbeKeepalive({
     required this.ping,
@@ -24,11 +22,8 @@ final class ProbeKeepalive {
   final Duration interval;
   final int maxMissed;
 
-  Timer? _timer;
-  int _missed = 0;
-
   /// TODO(P2): start/stop —— Timer 周期调 [ping];
-  /// 成功清零 _missed,失败自增,达 [maxMissed] 调 [onDead] 并 stop。
+  /// 成功清零未响应计数,失败自增,达 [maxMissed] 调 [onDead] 并 stop。
   void start() => throw UnimplementedError();
 
   void stop() => throw UnimplementedError();

@@ -31,7 +31,7 @@ abstract interface class NetworkMonitor {
 /// TODO(P1): 实现 native 端。iOS 无法读 SSID:返回 gateway 探测结果即可,
 /// SSID 提示降级为「尝试直连 192.168.1.1」。
 final class MethodChannelNetworkMonitor implements NetworkMonitor {
-  static const MethodChannel _channel = MethodChannel('nikonbridge/network');
+  static const MethodChannel channel = MethodChannel('nikonbridge/network');
 
   @override
   Stream<WifiLinkInfo?> get link => throw UnimplementedError();

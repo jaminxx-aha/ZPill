@@ -29,7 +29,7 @@ abstract interface class BleScanner {
 /// TODO(P3): iOS/Android 可评估 flutter_blue_plus 直接实现;
 /// ohos 需在 ArkTS 侧写 channel 对接 @ohos.bluetooth.ble。
 final class MethodChannelBleScanner implements BleScanner {
-  static const MethodChannel _channel = MethodChannel('nikonbridge/ble');
+  static const MethodChannel channel = MethodChannel('nikonbridge/ble');
 
   @override
   Future<List<DiscoveredCamera>> scan({Duration timeout = const Duration(seconds: 10)}) =>

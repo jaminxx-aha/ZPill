@@ -6,16 +6,17 @@ import 'package:flutter/material.dart';
 import '../../data/settings_store.dart';
 
 class SettingsController extends ChangeNotifier {
-  SettingsController({SettingsStore? store}) : _store = store;
+  /// P2:注入持久化实现(shared_preferences,DataStore 等价)
+  SettingsController({this.store});
 
-  final SettingsStore? _store;
+  final SettingsStore? store;
   AppSettings settings = const AppSettings();
 
   // TODO(P2): 订阅 store.settings;autoTransfer 开关持久化
   Future<void> setAutoTransfer(bool value) async {
     settings = settings.copyWith(autoTransfer: value);
     notifyListeners();
-    // TODO(P2): await _store?.update(settings)
+    // TODO(P2): await store?.update(settings)
   }
 
   // TODO(P3): quality / batterySaver / customSavePath

@@ -11,7 +11,6 @@ library;
 
 import 'dart:typed_data';
 
-import '../utils/byte_reader.dart';
 import '../utils/byte_writer.dart';
 import 'packet.dart';
 
@@ -51,8 +50,7 @@ final class PtpIpCodecImpl implements PtpIpCodec {
 
   @override
   PtpIpPacket decode(PtpIpFrame frame) {
-    final r = ByteReader(frame.body);
-    // TODO(P0): 按 frame.type 分派解出具体包;
+    // TODO(P0): 按 frame.type 分派,经 ByteReader 小端解出具体包;
     // 每种包配字节级单测(test/core/ptpip/)。
     throw UnimplementedError('TODO(P0): 实现 type=${frame.type} 解码');
   }

@@ -12,10 +12,10 @@ import '../remote/remote_page.dart';
 import '../settings/settings_page.dart';
 
 class ConnectionController extends ChangeNotifier {
-  ConnectionController({CameraConnection? connection})
-      : _connection = connection; // TODO(P1): 注入 CameraConnectionImpl
+  /// P1:注入 CameraConnectionImpl(连接为全局单例状态,引入 DI 时收口)
+  ConnectionController({this.connection});
 
-  final CameraConnection? _connection;
+  final CameraConnection? connection;
   final ipController = TextEditingController(text: kDefaultCameraIp);
 
   CameraLinkState state = CameraLinkState.disconnected;
@@ -26,7 +26,7 @@ class ConnectionController extends ChangeNotifier {
   Future<void> connect() async {
     state = CameraLinkState.connecting;
     notifyListeners();
-    // TODO(P1): _connection?.connect(ip: ipController.text)
+    // TODO(P1): connection?.connect(ip: ipController.text)
     await Future<void>.delayed(Duration.zero);
     state = CameraLinkState.failed;
     notifyListeners();
@@ -80,7 +80,6 @@ class _ConnectionPageState extends State<ConnectionPage> {
       body: ListenableBuilder(
         listenable: controller,
         builder: (context, _) {
-          final c = context;
           return ListView(
             padding: const EdgeInsets.all(16),
             children: [
@@ -106,9 +105,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
                     ? controller.disconnect
                     : controller.connect,
                 child: Text(
-                  controller.state == CameraLinkState.connected ? '断开' : '连接',
-                  style: TextStyle(color: c.colorScheme.onPrimary),
-                ),
+                    controller.state == CameraLinkState.connected ? '断开' : '连接'),
               ),
               const SizedBox(height: 8),
               // TODO(P3): 遥控拍摄入口(连接成功后可用)

@@ -14,8 +14,10 @@ class RemotePage extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(title: const Text('遥控拍摄')),
       body: const Center(
-        child: Text('P3:快门释放 / 触点对焦 / 曝光设置\n(InitiateCapture 0x100E,Get/SetDevicePropValue 0x1015/0x1016)'),
-        textAlign: TextAlign.center,
+        child: Text(
+          'P3:快门释放 / 触点对焦 / 曝光设置\n(InitiateCapture 0x100E,Get/SetDevicePropValue 0x1015/0x1016)',
+          textAlign: TextAlign.center,
+        ),
       ),
       // TODO(P3): 取景流(依赖相机型号能力,需真机调研)、
       // 快门按钮(半按=对焦,全按=释放)、曝光参数控件。
