@@ -215,7 +215,7 @@ class _BrowserPageState extends State<BrowserPage> {
       });
       watch.stop();
       // P0 传输测速落档:文件名 / 字节数 / 耗时 / 平均速度。
-      debugPrint('[NikonBridge] ${entry.name}: ${result.bytes}B in '
+      debugPrint('[NikonPill] ${entry.name}: ${result.bytes}B in '
           '${result.elapsed.inMilliseconds}ms = '
           '${result.megabytesPerSecond.toStringAsFixed(2)}MB/s');
       progress.value = progress.value.withDone(result);

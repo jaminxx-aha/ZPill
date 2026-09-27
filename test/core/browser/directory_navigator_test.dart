@@ -1,8 +1,8 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:nikon_bridge/core/browser/directory_navigator.dart';
-import 'package:nikon_bridge/core/browser/object_entry.dart';
-import 'package:nikon_bridge/core/browser/object_repository.dart';
-import 'package:nikon_bridge/core/ptpip/object_format.dart';
+import 'package:nikon_pill/core/browser/directory_navigator.dart';
+import 'package:nikon_pill/core/browser/object_entry.dart';
+import 'package:nikon_pill/core/browser/object_repository.dart';
+import 'package:nikon_pill/core/ptpip/object_format.dart';
 
 /// Fake 仓库:目录树 root/{DCIM(文件夹), a.jpg}, DCIM/{b.nef}
 final class _FakeRepository implements ObjectRepository {

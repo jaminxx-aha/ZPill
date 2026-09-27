@@ -3,7 +3,7 @@
 /// 与平台的分工:
 /// - 本层(纯 Dart):队列状态机、去重、进度/速度/剩余时间
 /// - platform 层:前台通知 + WorkManager/BGTask 调度、相册导入
-///   (Android: MediaStore Pictures/Movies/NikonBridge;iOS: PHPhotoLibrary;
+///   (Android: MediaStore Pictures/Movies/NikonPill;iOS: PHPhotoLibrary;
 ///   ohos: photoAccessHelper)
 library;
 

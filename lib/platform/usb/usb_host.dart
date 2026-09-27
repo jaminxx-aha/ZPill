@@ -5,7 +5,7 @@
 ///
 /// | channel            | Android(Kotlin)   | iOS(Swift)                | ohos(ArkTS) |
 /// |--------------------|--------------------|-----------------------------|---------------|
-/// | `nikonbridge/usb`  | UsbManager bulk    | DriverKit dext + UserClient | @ohos.usb     |
+/// | `nikonpill/usb`  | UsbManager bulk    | DriverKit dext + UserClient | @ohos.usb     |
 ///
 /// iOS 前提(重要):DriverKit 自 iOS 26 起开放 iPhone(WWDC25),
 /// 但**分发 dext 需向 Apple 申请 DriverKit entitlement**
@@ -65,8 +65,8 @@ abstract interface class UsbHostChannel implements UsbBytePipe {
   Future<void> close();
 }
 
-/// 经 `nikonbridge/usb` channel:方法 `listCameras`/`open`/`bulkOut`/
-/// `bulkRead`/`close`;事件流走 EventChannel `nikonbridge/usb/events`。
+/// 经 `nikonpill/usb` channel:方法 `listCameras`/`open`/`bulkOut`/
+/// `bulkRead`/`close`;事件流走 EventChannel `nikonpill/usb/events`。
 ///
 /// native 落点(Phase C 起):
 /// - ohos:usbManager(@ohos.usb)的 getDevices/requestRight/connectDevice/
@@ -78,8 +78,8 @@ abstract interface class UsbHostChannel implements UsbBytePipe {
 final class MethodChannelUsbHost implements UsbHostChannel {
   MethodChannelUsbHost();
 
-  static const MethodChannel channel = MethodChannel('nikonbridge/usb');
-  static const EventChannel _events = EventChannel('nikonbridge/usb/events');
+  static const MethodChannel channel = MethodChannel('nikonpill/usb');
+  static const EventChannel _events = EventChannel('nikonpill/usb/events');
 
   Stream<Uint8List>? _eventStream;
 

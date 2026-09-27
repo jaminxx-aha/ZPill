@@ -2,12 +2,12 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_bridge/core/browser/object_repository.dart';
-import 'package:nikon_bridge/core/ptp/operation_codes.dart';
-import 'package:nikon_bridge/core/ptp/ptp_session.dart';
-import 'package:nikon_bridge/core/ptp/ptp_transport.dart';
-import 'package:nikon_bridge/core/ptpip/object_format.dart';
-import 'package:nikon_bridge/core/utils/byte_writer.dart';
+import 'package:nikon_pill/core/browser/object_repository.dart';
+import 'package:nikon_pill/core/ptp/operation_codes.dart';
+import 'package:nikon_pill/core/ptp/ptp_session.dart';
+import 'package:nikon_pill/core/ptp/ptp_transport.dart';
+import 'package:nikon_pill/core/ptpip/object_format.dart';
+import 'package:nikon_pill/core/utils/byte_writer.dart';
 
 import '../ptp/ptp_session_test.dart' show FakePtpTransport;
 

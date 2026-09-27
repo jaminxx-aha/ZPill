@@ -3,11 +3,11 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_bridge/core/camera/camera_connection.dart';
-import 'package:nikon_bridge/core/ptp/operation_codes.dart';
-import 'package:nikon_bridge/core/ptp/ptp_session.dart';
-import 'package:nikon_bridge/core/ptp/ptp_transport.dart';
-import 'package:nikon_bridge/platform/usb/usb_host.dart';
+import 'package:nikon_pill/core/camera/camera_connection.dart';
+import 'package:nikon_pill/core/ptp/operation_codes.dart';
+import 'package:nikon_pill/core/ptp/ptp_session.dart';
+import 'package:nikon_pill/core/ptp/ptp_transport.dart';
+import 'package:nikon_pill/platform/usb/usb_host.dart';
 
 import '../ptp/ptp_session_test.dart' show FakePtpTransport, buildDeviceInfoDataset;
 

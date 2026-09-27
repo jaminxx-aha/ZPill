@@ -17,10 +17,10 @@ abstract interface class BackgroundTransferScheduler {
   Future<void> stop();
 }
 
-/// 经 `nikonbridge/bg` channel:方法 `ensureRunning` / `stop`。
+/// 经 `nikonpill/bg` channel:方法 `ensureRunning` / `stop`。
 /// TODO(P1): native 实现;通知文案、渠道 id 在各端工程内定义。
 final class MethodChannelBackgroundScheduler implements BackgroundTransferScheduler {
-  static const MethodChannel channel = MethodChannel('nikonbridge/bg');
+  static const MethodChannel channel = MethodChannel('nikonpill/bg');
 
   @override
   Future<void> ensureRunning() => throw UnimplementedError();

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""NikonBridge PTP-IP 协议验证 CLI(TODO.md §一 P0)。
+"""NikonPill PTP-IP 协议验证 CLI(TODO.md §一 P0)。
 
 在 App 实现之前对真机跑通握手、核对字节布局,再移植进
 lib/core/ptpip/codec.dart。参考:libgphoto2 ptpip 后端。

@@ -1,4 +1,4 @@
-# NikonBridge 架构
+# NikonPill 架构
 
 > 三端(iOS / Android / HarmonyOS)尼康相机无线传输工具。
 > 技术栈:Flutter(HarmonyOS 走 OpenHarmony-SIG flutter_flutter fork),
@@ -84,7 +84,7 @@ handle **只能**来自 GetObjectHandles 响应。
 
 ## 4. 三端平台契约
 
-channel 命名统一 `nikonbridge/<service>`,完整契约表见
+channel 命名统一 `nikonpill/<service>`,完整契约表见
 [lib/platform/services.dart](../lib/platform/services.dart)。三端能力差异的降级策略:
 
 | 能力 | Android | iOS | HarmonyOS |

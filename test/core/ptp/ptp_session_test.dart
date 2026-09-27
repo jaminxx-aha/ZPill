@@ -4,12 +4,12 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_bridge/core/ptp/operation_codes.dart';
-import 'package:nikon_bridge/core/ptp/ptp_session.dart';
-import 'package:nikon_bridge/core/ptp/ptp_transport.dart';
-import 'package:nikon_bridge/core/ptpusb/containers.dart';
-import 'package:nikon_bridge/core/ptpusb/usb_transport.dart';
-import 'package:nikon_bridge/core/utils/byte_writer.dart';
+import 'package:nikon_pill/core/ptp/operation_codes.dart';
+import 'package:nikon_pill/core/ptp/ptp_session.dart';
+import 'package:nikon_pill/core/ptp/ptp_transport.dart';
+import 'package:nikon_pill/core/ptpusb/containers.dart';
+import 'package:nikon_pill/core/ptpusb/usb_transport.dart';
+import 'package:nikon_pill/core/utils/byte_writer.dart';
 
 import '../ptpusb/fake_usb_byte_pipe.dart';
 

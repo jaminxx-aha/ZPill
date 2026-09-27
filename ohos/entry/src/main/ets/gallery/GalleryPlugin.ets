@@ -1,5 +1,5 @@
 /**
- * NikonBridge 相册/文件通道(ohos 平台,native 侧)。
+ * NikonPill 相册/文件通道(ohos 平台,native 侧)。
  *
  * 对应 Dart 契约 lib/platform/gallery_saver.dart:
  * - tempDir():应用缓存目录下的专用子目录(Dart 侧用 dart:io 把
@@ -20,9 +20,9 @@ import {
 
 const TAG = 'GalleryPlugin';
 
-const TEMP_SUBDIR = 'nikonbridge';
+const TEMP_SUBDIR = 'nikonpill';
 
-/** `nikonbridge/gallery` 通道实现。 */
+/** `nikonpill/gallery` 通道实现。 */
 export class GalleryPlugin implements FlutterPlugin {
   private channel: MethodChannel | null = null;
   private context: common.Context | null = null;
@@ -33,7 +33,7 @@ export class GalleryPlugin implements FlutterPlugin {
 
   onAttachedToEngine(binding: FlutterPluginBinding): void {
     this.context = binding.getApplicationContext();
-    this.channel = new MethodChannel(binding.getBinaryMessenger(), 'nikonbridge/gallery');
+    this.channel = new MethodChannel(binding.getBinaryMessenger(), 'nikonpill/gallery');
     this.channel.setMethodCallHandler({
       onMethodCall: (call: MethodCall, result: MethodResult): void => {
         this.onMethodCall(call, result);

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""NikonBridge USB PTP 探针(TODO.md USB 主线 P0)。
+"""NikonPill USB PTP 探针(TODO.md USB 主线 P0)。
 
 在写 iOS DriverKit dext / Android UsbManager 实现之前,先在 Mac 上对
 真机跑通 PTP/USB 握手、核对容器字节布局 —— 与 tools/ptpip_probe 同纪律。

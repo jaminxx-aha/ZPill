@@ -5,13 +5,13 @@
         "name": "default",
         "type": "HarmonyOS",
         "material": {
-          "certpath": "/Users/aha/.ohos/config/default_ohos_Uq_S3uIteV3HMhx-spKdKAtxvlWJEcBuTUbaME5ahS8=.cer",
+          "certpath": "/Users/aha/.ohos/config/default_ohos_pFjiFWHaHscEFCzcKV5Atuesbz-sSZZ_XrJmE9GNmmE=.cer",
           "keyAlias": "debugKey",
-          "keyPassword": "0000001BA7C98D3B5A65F6B5D6D6C74ABA21AFD6561E7F9C1491762C3467221C381266C259C3BA15645BC9",
-          "profile": "/Users/aha/.ohos/config/default_ohos_Uq_S3uIteV3HMhx-spKdKAtxvlWJEcBuTUbaME5ahS8=.p7b",
+          "keyPassword": "0000001AF7F0E6391207AE00878089F0576409A70E9ED72C81B1CFB6B23A63997D002D8D254DD0F6DEB3",
+          "profile": "/Users/aha/.ohos/config/default_ohos_pFjiFWHaHscEFCzcKV5Atuesbz-sSZZ_XrJmE9GNmmE=.p7b",
           "signAlg": "SHA256withECDSA",
-          "storeFile": "/Users/aha/.ohos/config/default_ohos_Uq_S3uIteV3HMhx-spKdKAtxvlWJEcBuTUbaME5ahS8=.p12",
-          "storePassword": "0000001B0D89F61EE61D54FA317C94145B7325238296B1FA5081B1DB7CCB7AD33DD739D3812661E1BADF36"
+          "storeFile": "/Users/aha/.ohos/config/default_ohos_pFjiFWHaHscEFCzcKV5Atuesbz-sSZZ_XrJmE9GNmmE=.p12",
+          "storePassword": "0000001AE1704477CDB2D6E62549DF29E25C8CE22F1E93F16E89559909D8590751694132B55201C557F7"
         }
       }
     ],
@@ -21,6 +21,7 @@
         "signingConfig": "default",
         "compatibleSdkVersion": "5.1.0(18)",
         "runtimeOS": "HarmonyOS",
+        "targetSdkVersion": "6.1.1(24)"
       }
     ],
     "buildModeSet": [

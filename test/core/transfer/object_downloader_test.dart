@@ -3,13 +3,13 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_bridge/core/browser/object_entry.dart';
-import 'package:nikon_bridge/core/ptp/operation_codes.dart';
-import 'package:nikon_bridge/core/ptp/ptp_session.dart';
-import 'package:nikon_bridge/core/ptp/ptp_transport.dart';
-import 'package:nikon_bridge/core/ptpip/object_format.dart';
-import 'package:nikon_bridge/core/transfer/object_downloader.dart';
-import 'package:nikon_bridge/platform/gallery_saver.dart';
+import 'package:nikon_pill/core/browser/object_entry.dart';
+import 'package:nikon_pill/core/ptp/operation_codes.dart';
+import 'package:nikon_pill/core/ptp/ptp_session.dart';
+import 'package:nikon_pill/core/ptp/ptp_transport.dart';
+import 'package:nikon_pill/core/ptpip/object_format.dart';
+import 'package:nikon_pill/core/transfer/object_downloader.dart';
+import 'package:nikon_pill/platform/gallery_saver.dart';
 
 import '../ptp/ptp_session_test.dart' show FakePtpTransport;
 
@@ -51,7 +51,7 @@ ObjectEntry _entry(String name, int size) => ObjectEntry(
 void main() {
   late Directory dir;
   setUp(() async {
-    dir = await Directory.systemTemp.createTemp('nikonbridge_dl_test');
+    dir = await Directory.systemTemp.createTemp('nikonpill_dl_test');
   });
   tearDown(() async {
     if (await dir.exists()) {

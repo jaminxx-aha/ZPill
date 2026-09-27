@@ -5,11 +5,11 @@
 ///
 /// | channel                | Android(Kotlin)      | iOS(Swift/DriverKit)  | ohos(ArkTS)          |
 /// |------------------------|------------------------|------------------------|-----------------------|
-/// | `nikonbridge/network`  | WifiManager/Connectivity | NEHotspotNetwork*     | @ohos.wifiManager     |
-/// | `nikonbridge/gallery`  | MediaStore             | PHPhotoLibrary         | photoAccessHelper     |
-/// | `nikonbridge/bg`       | WorkManager+前台服务   | BGTaskScheduler        | 后台任务+通知         |
-/// | `nikonbridge/ble`      | BluetoothLeScanner     | CoreBluetooth          | @ohos.bluetooth.ble   |
-/// | `nikonbridge/usb`      | UsbManager bulk        | DriverKit dext**       | @ohos.usb             |
+/// | `nikonpill/network`  | WifiManager/Connectivity | NEHotspotNetwork*     | @ohos.wifiManager     |
+/// | `nikonpill/gallery`  | MediaStore             | PHPhotoLibrary         | photoAccessHelper     |
+/// | `nikonpill/bg`       | WorkManager+前台服务   | BGTaskScheduler        | 后台任务+通知         |
+/// | `nikonpill/ble`      | BluetoothLeScanner     | CoreBluetooth          | @ohos.bluetooth.ble   |
+/// | `nikonpill/usb`      | UsbManager bulk        | DriverKit dext**       | @ohos.usb             |
 ///
 /// *iOS 普通应用拿不到当前 WiFi SSID(需 entitlement 且大多被拒),
 /// 实际策略:直接尝试默认网关直连,详见 docs/ARCHITECTURE.md。
