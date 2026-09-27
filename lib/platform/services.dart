@@ -3,21 +3,25 @@
 /// 三端差异能力(WiFi 检测 / 相册 / 后台任务 / BLE)全部抽象为接口,
 /// native 侧按同一 channel 契约提供实现:
 ///
-/// | channel                | Android(Kotlin)      | iOS(Swift)           | ohos(ArkTS)          |
+/// | channel                | Android(Kotlin)      | iOS(Swift/DriverKit)  | ohos(ArkTS)          |
 /// |------------------------|------------------------|------------------------|-----------------------|
 /// | `nikonbridge/network`  | WifiManager/Connectivity | NEHotspotNetwork*     | @ohos.wifiManager     |
 /// | `nikonbridge/gallery`  | MediaStore             | PHPhotoLibrary         | photoAccessHelper     |
 /// | `nikonbridge/bg`       | WorkManager+前台服务   | BGTaskScheduler        | 后台任务+通知         |
 /// | `nikonbridge/ble`      | BluetoothLeScanner     | CoreBluetooth          | @ohos.bluetooth.ble   |
+/// | `nikonbridge/usb`      | UsbManager bulk        | DriverKit dext**       | @ohos.usb             |
 ///
 /// *iOS 普通应用拿不到当前 WiFi SSID(需 entitlement 且大多被拒),
 /// 实际策略:直接尝试默认网关直连,详见 docs/ARCHITECTURE.md。
+/// **iOS 的 USB 走 DriverKit dext(iOS 26+ 开放 iPhone),需申请
+/// DriverKit entitlement,见 usb/usb_host.dart 头注释。
 library;
 
 import 'background_transfer.dart';
 import 'ble_scanner.dart';
 import 'gallery_saver.dart';
 import 'network_monitor.dart';
+import 'usb/usb_host.dart';
 
 final class PlatformServices {
   PlatformServices._();
@@ -26,6 +30,7 @@ final class PlatformServices {
   static late final GallerySaver gallery;
   static late final BackgroundTransferScheduler background;
   static late final BleScanner ble;
+  static late final UsbHostChannel usb;
 
   /// main() 中调用;测试时可覆盖为 Fake(集成测试注入点)。
   static void bootstrap() {
@@ -33,5 +38,6 @@ final class PlatformServices {
     gallery = MethodChannelGallerySaver();
     background = MethodChannelBackgroundScheduler();
     ble = MethodChannelBleScanner();
+    usb = MethodChannelUsbHost();
   }
 }

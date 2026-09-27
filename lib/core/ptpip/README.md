@@ -7,7 +7,7 @@
 | 文件 | 职责 |
 |---|---|
 | `packet.dart` | 包类型常量(1–14)、包头、包数据模型 |
-| `operation_codes.dart` | PTP 操作码(0x1002/0x1007/0x1008/…)、参数约定、响应码、DataPhase |
+| `operation_codes.dart` | PTP-IP 独有的 DataPhase 取值;标准操作/响应/事件码已上移至 `core/ptp/operation_codes.dart`(PTP/USB 共用),此处转发导出 |
 | `object_format.dart` | ObjectFormatCode 节选 + `ObjectKind` 分类 + MIME 映射 |
 | `object_info.dart` | GetObjectInfo 数据集模型 |
 | `codec.dart` | 包 ↔ 字节编解码(**全部小端**)—— TODO(P0) |
