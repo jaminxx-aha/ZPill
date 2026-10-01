@@ -20,13 +20,16 @@ import 'features/connection/connection_page.dart';
 import 'features/transfers/transfers_page.dart';
 import 'platform/services.dart';
 import 'platform/usb/usb_host.dart';
+import 'platform/usb/watchdog_usb_host.dart';
 
 final class AppServices {
   AppServices._() {
     // 幂等:测试直接 pumpWidget 不经 main(),这里保证平台服务就绪。
     PlatformServices.bootstrap();
 
-    usb = PlatformServices.usb;
+    // 看门狗装饰器包住平台通道:相机拔出/挂死时 bulk 收发秒败 +
+    // breakages 事件(连接层订阅转 failed)。裸通道无检测能力。
+    usb = WatchdogUsbHostChannel(inner: PlatformServices.usb);
     transport = UsbPtpTransport(pipe: usb);
     session = PtpSession(transport: transport);
     connection = CameraConnectionImpl(usb: usb, session: session);

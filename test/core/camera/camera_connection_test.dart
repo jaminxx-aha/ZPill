@@ -21,6 +21,13 @@ final class FakeUsbHostChannel implements UsbHostChannel {
   final StreamController<Uint8List> _eventCtrl =
       StreamController<Uint8List>.broadcast();
 
+  /// 测试注入断链事件(生产由 WatchdogUsbHostChannel 发出)。
+  final StreamController<String> breakageCtrl =
+      StreamController<String>.broadcast();
+
+  @override
+  Stream<String> get breakages => breakageCtrl.stream;
+
   @override
   Future<List<UsbDeviceHandle>> listCameras() async => devices;
 
@@ -152,5 +159,62 @@ void main() {
     expect(conn.state, CameraLinkState.failed);
     expect(conn.error, isNotNull);
     expect(usb.closeCalls, 1);
+  });
+
+  test('受限画像(op 表缺 GetObject):failed + 关机重启指引,不开会话',
+      () async {
+    final usb = FakeUsbHostChannel(const [_zf]);
+    final fake = FakePtpTransport();
+    final conn =
+        CameraConnectionImpl(usb: usb, session: PtpSession(transport: fake));
+
+    // 2026-10-01 真机受限态:元数据/属性/事件在册,数据操作全缺。
+    fake.reply(_ok(data: buildDeviceInfoDataset(
+        operations: [0x1001, 0x1007, 0x9431]))); // GetDeviceInfo
+
+    await conn.connect();
+
+    expect(conn.state, CameraLinkState.failed);
+    expect(conn.error, contains('受限连接状态'));
+    expect(conn.error, contains('重新开机'));
+    // 拦在 OpenSession 之前(会话都开不了,浏览无意义)
+    expect(fake.requests.map((r) => r.opcode),
+        [PtpOperationCode.getDeviceInfo]);
+    expect(usb.closeCalls, 1);
+
+    // 相机重启翻回全量画像后重连:force 刷新不吃受限缓存,正常连上。
+    fake.reply(_ok(data: buildDeviceInfoDataset())); // GetDeviceInfo(force)
+    fake.reply(_ok()); // OpenSession
+    await conn.connect();
+    expect(conn.state, CameraLinkState.connected);
+    expect(conn.deviceName, 'TestModel');
+  });
+
+  test('断链事件(breakages):connected → failed,清理会话与 USB', () async {
+    final usb = FakeUsbHostChannel(const [_zf]);
+    final fake = FakePtpTransport();
+    final session = PtpSession(transport: fake);
+    final conn = CameraConnectionImpl(usb: usb, session: session);
+    final states = <CameraLinkState>[];
+    conn.states.listen(states.add);
+
+    fake.reply(_ok(data: buildDeviceInfoDataset()));
+    fake.reply(_ok()); // OpenSession
+    await conn.connect();
+    expect(conn.state, CameraLinkState.connected);
+
+    fake.reply(_ok()); // CloseSession(_onLinkBreakage 的尽力清理)
+    usb.breakageCtrl.add('相机已断开(USB 连接消失)');
+    await pumpEventQueue();
+
+    expect(conn.state, CameraLinkState.failed);
+    expect(conn.error, '相机已断开(USB 连接消失)');
+    expect(session.isSessionOpen, isFalse);
+    expect(usb.closeCalls, 1);
+    expect(states, [
+      CameraLinkState.connecting,
+      CameraLinkState.connected,
+      CameraLinkState.failed,
+    ]);
   });
 }
