@@ -116,11 +116,23 @@ final class PtpDeviceInfo {
 
 /// PTP 会话:open/close 生命周期 + 浏览/下载操作封装。
 ///
-/// 事务串行由相机侧保证(一次一个 execute);上层不得并发调用。
+/// 事务串行:相机一次只接受一个事务,本层用 future-chain 互斥把所有
+/// [PtpTransport.execute] 排成全局队列(缩略图/大图预览/下载混流时,
+/// 上层可放心并发调用;单文件下载在整个事务期间持锁)。
+/// 锁不可重入:加锁段内不得再调用本类的其他加锁方法。
 final class PtpSession {
   PtpSession({required this.transport});
 
   final PtpTransport transport;
+
+  Future<void> _gate = Future<void>.value();
+
+  /// 把 [op] 排入全局串行队列;失败不断链(后续排队照常执行)。
+  Future<T> _serialized<T>(Future<T> Function() op) {
+    final run = _gate.then((_) => op());
+    _gate = run.then<void>((_) {}, onError: (_) {});
+    return run;
+  }
 
   bool _sessionOpen = false;
 
@@ -133,17 +145,22 @@ final class PtpSession {
   /// 唯一可在 OpenSession 之前调用的操作。
   Future<PtpDeviceInfo> getDeviceInfo({bool force = false}) async {
     if (_deviceInfo != null && !force) return _deviceInfo!;
-    final result = await transport.execute(
-      const PtpRequest(opcode: PtpOperationCode.getDeviceInfo),
-    );
+    final result = await _serialized(() => transport.execute(
+          const PtpRequest(opcode: PtpOperationCode.getDeviceInfo),
+        ));
     _ensureOk(result, PtpOperationCode.getDeviceInfo);
     _deviceInfo = PtpDeviceInfo.parse(result.data!);
     return _deviceInfo!;
   }
 
   /// OpenSession(带 0x201E 自动恢复,照搬 probe ensure_session)。
+  /// 恢复链(Close + 重开)整体持锁,避免与其他操作交错。
   Future<void> open() async {
     if (_sessionOpen) return;
+    await _serialized(_openLocked);
+  }
+
+  Future<void> _openLocked() async {
     final result = await transport.execute(
       const PtpRequest(opcode: PtpOperationCode.openSession, params: [1]),
     );
@@ -172,13 +189,15 @@ final class PtpSession {
   Future<void> close() async {
     if (!_sessionOpen) return;
     _sessionOpen = false;
-    try {
-      await transport.execute(
-        const PtpRequest(opcode: PtpOperationCode.closeSession),
-      );
-    } on Exception {
-      // 链路已断:本地状态已清,足够
-    }
+    await _serialized(() async {
+      try {
+        await transport.execute(
+          const PtpRequest(opcode: PtpOperationCode.closeSession),
+        );
+      } on Exception {
+        // 链路已断:本地状态已清,足够
+      }
+    });
   }
 
   /// GetObjectHandles:u32 计数 + N 个 u32 handle。
@@ -190,10 +209,10 @@ final class PtpSession {
     int objectFormat = GetObjectHandlesParams.formatAll,
     int parent = GetObjectHandlesParams.parentRoot,
   }) async {
-    final result = await transport.execute(PtpRequest(
-      opcode: PtpOperationCode.getObjectHandles,
-      params: [storageId, objectFormat, parent],
-    ));
+    final result = await _serialized(() => transport.execute(PtpRequest(
+          opcode: PtpOperationCode.getObjectHandles,
+          params: [storageId, objectFormat, parent],
+        )));
     _ensureOk(result, PtpOperationCode.getObjectHandles);
     final data = result.data!;
     if (data.length % 4 != 0) {
@@ -206,10 +225,10 @@ final class PtpSession {
 
   /// GetObjectInfo:ObjectInfo 数据集与 PTP-IP 同构,复用 ptpip 解析。
   Future<PtpObjectInfo> getObjectInfo(int handle) async {
-    final result = await transport.execute(PtpRequest(
-      opcode: PtpOperationCode.getObjectInfo,
-      params: [handle],
-    ));
+    final result = await _serialized(() => transport.execute(PtpRequest(
+          opcode: PtpOperationCode.getObjectInfo,
+          params: [handle],
+        )));
     _ensureOk(result, PtpOperationCode.getObjectInfo);
     return PtpObjectInfo.parse(handle: handle, dataset: result.data!);
   }
@@ -220,11 +239,69 @@ final class PtpSession {
     int handle, {
     required void Function(Uint8List chunk) onData,
   }) async {
-    final result = await transport.execute(
-      PtpRequest(opcode: PtpOperationCode.getObject, params: [handle]),
-      onData: onData,
-    );
+    final result = await _serialized(() => transport.execute(
+          PtpRequest(opcode: PtpOperationCode.getObject, params: [handle]),
+          onData: onData,
+        ));
     _ensureOk(result, PtpOperationCode.getObject);
+  }
+
+  /// GetThumb(0x100A):内嵌缩略图,数据小,整体内存返回。
+  Future<Uint8List> getThumb(int handle) async {
+    final result = await _serialized(() => transport.execute(
+          PtpRequest(opcode: PtpOperationCode.getThumb, params: [handle]),
+        ));
+    _ensureOk(result, PtpOperationCode.getThumb);
+    return _sniffJpegStart(result.data ?? Uint8List(0));
+  }
+
+  /// GetPartialObject(0x101B):从 [offset] 起最多 [maxBytes] 字节,
+  /// 32 位偏移分块读。不做能力检查(诊断用途:直接观察相机响应码),
+  /// 转正断点续传时再加 supportsOperation 门禁。
+  Future<Uint8List> getPartialObject(
+    int handle,
+    int offset,
+    int maxBytes,
+  ) async {
+    final result = await _serialized(() => transport.execute(PtpRequest(
+          opcode: PtpOperationCode.getPartialObject,
+          params: [handle, offset, maxBytes],
+        )));
+    _ensureOk(result, PtpOperationCode.getPartialObject);
+    return result.data ?? Uint8List(0);
+  }
+
+  /// Nikon GetLargeThumb(0x90C4):大图预览 JPEG(NEF 也能看)。
+  /// 相机不支持时抛 [UnsupportedError](上层回落 GetThumb 放大)。
+  /// [force] 跳过能力检查直发(诊断用:operationsSupported 可信度
+  /// 本身在验证中时,以相机真实响应码为准)。
+  Future<Uint8List> getLargeThumb(int handle, {bool force = false}) async {
+    // 能力检查走缓存的 GetDeviceInfo(命中时无锁,不会与本方法的锁嵌套)。
+    final info = await getDeviceInfo();
+    if (!force && !info.supportsOperation(NikonOperationCode.getLargeThumb)) {
+      throw UnsupportedError('相机不支持 Nikon GetLargeThumb(0x90C4)');
+    }
+    final result = await _serialized(() => transport.execute(
+          PtpRequest(
+              opcode: NikonOperationCode.getLargeThumb, params: [handle]),
+        ));
+    _ensureOk(result, NikonOperationCode.getLargeThumb);
+    return _sniffJpegStart(result.data ?? Uint8List(0));
+  }
+
+  /// JPEG SOI(FFD8)嗅探:数据非 FFD8 开头时在前 512B 内找 SOI 并剥头
+  /// (Nikon 0x90C4 数据布局真机验证中,防御性处理「头 + JPEG」形态;
+  /// 找不到则原样返回,交由上层解码器报错占位)。
+  static Uint8List _sniffJpegStart(Uint8List data) {
+    if (data.length >= 2 && data[0] == 0xFF && data[1] == 0xD8) {
+      return data;
+    }
+    for (var i = 0; i + 1 < data.length && i < 512; i++) {
+      if (data[i] == 0xFF && data[i + 1] == 0xD8) {
+        return Uint8List.sublistView(data, i);
+      }
+    }
+    return data;
   }
 
   /// 异步事件流透传(ObjectAdded / CaptureComplete…)。

@@ -13,7 +13,7 @@ void main() {
     final labels = nav.destinations
         .map((d) => (d as NavigationDestination).label)
         .toList();
-    expect(labels, containsAll(['相机', '浏览', '传输']));
+    expect(labels, containsAll(['相机', '相册', '下载']));
     expect(find.text('连接'), findsOneWidget);
   });
 }
