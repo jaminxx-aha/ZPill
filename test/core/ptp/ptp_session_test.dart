@@ -13,6 +13,13 @@ import 'package:nikon_pill/core/utils/byte_writer.dart';
 
 import '../ptpusb/fake_usb_byte_pipe.dart';
 
+/// 门控应答:先等 [gate] 完成再回放(测「枚举途中」时序用)。
+final class _GatedReply {
+  const _GatedReply(this.gate, this.result);
+  final Future<void> gate;
+  final PtpResult result;
+}
+
 /// 假传输层:按序回放预置结果(PtpResult)或异常。
 final class FakePtpTransport implements PtpTransport {
   final requests = <PtpRequest>[];
@@ -22,6 +29,10 @@ final class FakePtpTransport implements PtpTransport {
   void reply(PtpResult result) => script.add(result);
   void fail(Exception e) => script.add(e);
 
+  /// 预置一个延迟应答:execute 在 [gate] 完成前挂起。
+  void replyAfter(Future<void> gate, PtpResult result) =>
+      script.add(_GatedReply(gate, result));
+
   @override
   Future<PtpResult> execute(PtpRequest request,
       {void Function(Uint8List chunk)? onData}) async {
@@ -29,7 +40,11 @@ final class FakePtpTransport implements PtpTransport {
     if (script.isEmpty) {
       throw StateError('脚本耗尽:未预置 ${request.opcode.toRadixString(16)} 的响应');
     }
-    final next = script.removeFirst();
+    var next = script.removeFirst();
+    if (next is _GatedReply) {
+      await next.gate;
+      next = next.result;
+    }
     if (next is Exception) throw next;
     var result = next as PtpResult;
     if (onData != null && result.data != null) {
@@ -52,17 +67,50 @@ final class FakePtpTransport implements PtpTransport {
   Future<void> close() async {}
 }
 
+/// 首次 execute 挂在 [gate] 上不放行(验证串行锁排队的探针传输层)。
+final class LockProbeTransport implements PtpTransport {
+  LockProbeTransport(this.gate);
+
+  final Completer<void> gate;
+  final List<int> startedHandles = [];
+  var _calls = 0;
+
+  @override
+  Future<PtpResult> execute(PtpRequest request,
+      {void Function(Uint8List chunk)? onData}) async {
+    startedHandles.add(request.params.single);
+    if (_calls++ == 0) {
+      await gate.future;
+    }
+    return PtpResult(
+      responseCode: PtpResponseCode.ok,
+      data: Uint8List.fromList([0xFF, 0xD8]),
+    );
+  }
+
+  @override
+  Stream<PtpEvent> get events => const Stream.empty();
+
+  @override
+  Future<void> close() async {}
+}
+
 /// 手搓 GetDeviceInfo 数据集(ByteWriter;字段布局独立于被测代码)。
-Uint8List buildDeviceInfoDataset() {
+/// [operations] 可覆盖操作码表(默认不含 0x90C4,测「不在册」路径用)。
+Uint8List buildDeviceInfoDataset(
+    {List<int> operations = const [0x1001, 0x1007, 0x9431]}) {
   final w = ByteWriter()
     ..u16(0x0100) // StandardVersion = 100(PTP/1.0)
     ..u32(0x0000000A) // VendorExtensionId(尼康)
     ..u16(0x0064); // VendorExtensionVersion
   putPtpString(w, 'Nikon'); // VendorExtensionDesc
   w.u16(0x0000); // FunctionalMode 标准
-  // 五组 u32 计数 + u16 数组
+  // 五组 u32 计数 + N 个 u16(计数与元素必须相邻)
+  w.u32(operations.length);
+  for (final op in operations) {
+    w.u16(op);
+  }
   w
-    ..u32(3)..u16(0x1001)..u16(0x1007)..u16(0x9431) // operations
     ..u32(1)..u16(0x4002) // events
     ..u32(2)..u16(0x5001)..u16(0x5007) // deviceProps
     ..u32(0) // captureFormats
@@ -210,6 +258,56 @@ void main() {
       expect(fake.requests.single.params, [7]);
     });
 
+    test('getThumb:数据整体返回,参数为 handle', () async {
+      final fake = FakePtpTransport()
+        ..reply(PtpResult(
+          responseCode: PtpResponseCode.ok,
+          data: Uint8List.fromList([0xFF, 0xD8, 0xFF, 0xE0, 1, 2]),
+        ));
+      final session = PtpSession(transport: fake);
+      final data = await session.getThumb(0x11);
+      expect(data, [0xFF, 0xD8, 0xFF, 0xE0, 1, 2]);
+      expect(fake.requests.single.opcode, PtpOperationCode.getThumb);
+      expect(fake.requests.single.params, [0x11]);
+    });
+
+    test('getThumb:相机非 OK 响应抛 PtpResponseException', () async {
+      final fake = FakePtpTransport()
+        ..reply(const PtpResult(responseCode: 0x2009));
+      final session = PtpSession(transport: fake);
+      await expectLater(
+          session.getThumb(0x11), throwsA(isA<PtpResponseException>()));
+    });
+
+    test('getLargeThumb:在册即发 0x90C4,前置杂字节剥到 SOI', () async {
+      final fake = FakePtpTransport()
+        ..reply(PtpResult(
+            responseCode: PtpResponseCode.ok,
+            data: buildDeviceInfoDataset(
+                operations: [0x1001, NikonOperationCode.getLargeThumb])))
+        ..reply(PtpResult(
+          responseCode: PtpResponseCode.ok,
+          // 3 字节尼康头 + JPEG SOI:防御「头 + JPEG」形态
+          data: Uint8List.fromList([0xAA, 0xBB, 0xCC, 0xFF, 0xD8, 0xFF, 0xE2]),
+        ));
+      final session = PtpSession(transport: fake);
+      final data = await session.getLargeThumb(0x22);
+      expect(data, [0xFF, 0xD8, 0xFF, 0xE2]);
+      expect(fake.requests[1].opcode, NikonOperationCode.getLargeThumb);
+      expect(fake.requests[1].params, [0x22]);
+    });
+
+    test('getLargeThumb:码表不在册抛 UnsupportedError,不发操作', () async {
+      final fake = FakePtpTransport()
+        ..reply(PtpResult(
+            responseCode: PtpResponseCode.ok, data: buildDeviceInfoDataset()));
+      final session = PtpSession(transport: fake);
+      // buildDeviceInfoDataset 的操作码表不含 0x90C4
+      await expectLater(
+          session.getLargeThumb(0x22), throwsA(isA<UnsupportedError>()));
+      expect(fake.requests.length, 1); // 只有 GetDeviceInfo
+    });
+
     test('getDeviceInfo 缓存:第二次不发请求', () async {
       final fake = FakePtpTransport()
         ..reply(PtpResult(
@@ -219,6 +317,36 @@ void main() {
       expect(info.model, 'TestModel');
       await session.getDeviceInfo();
       expect(fake.requests.length, 1);
+    });
+  });
+
+  group('全局串行锁', () {
+    test('并发操作排队:第二个不进传输层直到第一个完成', () async {
+      final gate = Completer<void>();
+      final fake = LockProbeTransport(gate);
+      final session = PtpSession(transport: fake);
+
+      final first = session.getThumb(1);
+      final second = session.getThumb(2);
+      await pumpEventQueue();
+      expect(fake.startedHandles, [1]); // 第二个仍被锁挡在门外
+
+      gate.complete();
+      await Future.wait([first, second]);
+      expect(fake.startedHandles, [1, 2]);
+    });
+
+    test('前一个失败不断链:后续操作照常执行', () async {
+      final fake = FakePtpTransport()
+        ..reply(const PtpResult(responseCode: 0x2009)) // 第一次失败
+        ..reply(PtpResult(
+            responseCode: PtpResponseCode.ok,
+            data: Uint8List.fromList([0xFF, 0xD8])));
+      final session = PtpSession(transport: fake);
+      await expectLater(
+          session.getThumb(1), throwsA(isA<PtpResponseException>()));
+      final data = await session.getThumb(2);
+      expect(data, [0xFF, 0xD8]);
     });
   });
 

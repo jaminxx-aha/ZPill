@@ -9,6 +9,7 @@ final class ObjectEntry {
     required this.name,
     required this.sizeInBytes,
     required this.kind,
+    this.parentHandle = 0,
     this.capturedAt,
     this.formatCode,
   });
@@ -18,6 +19,11 @@ final class ObjectEntry {
   final String name;
   final int sizeInBytes;
   final ObjectKind kind;
+
+  /// 所属文件夹(Association 对象)的 handle;0 = 根层。
+  /// 相册按文件夹分组、批量下载文件名消歧都靠它。
+  final int parentHandle;
+
   final DateTime? capturedAt;
   final int? formatCode;
 
@@ -28,6 +34,7 @@ final class ObjectEntry {
         name: name,
         sizeInBytes: sizeInBytes,
         kind: kind,
+        parentHandle: parentHandle,
         capturedAt: capturedAt ?? this.capturedAt,
         formatCode: formatCode,
       );

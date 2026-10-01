@@ -1,7 +1,9 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:nikon_pill/core/browser/album.dart';
 import 'package:nikon_pill/core/browser/object_repository.dart';
 import 'package:nikon_pill/core/ptp/operation_codes.dart';
 import 'package:nikon_pill/core/ptp/ptp_session.dart';
@@ -84,7 +86,7 @@ void main() {
     final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
     _replyTree(fake);
 
-    await repo.listFolder(parentHandle: 0);
+    await repo.loadAlbums();
 
     final req = fake.requests.first;
     expect(req.opcode, PtpOperationCode.getObjectHandles);
@@ -101,28 +103,84 @@ void main() {
         hasLength(4));
   });
 
-  test('listFolder 按 parent 过滤;文件夹在前、照片时间倒序;NEF 扩展名兜底', () async {
+  test('loadAlbums:汇总相册在前,文件夹相册按 parent 分组、时间倒序', () async {
     final fake = FakePtpTransport();
     final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
     _replyTree(fake);
 
-    final root = await repo.listFolder(parentHandle: 0);
-    expect(root.map((e) => e.name), ['DCIM']);
-    expect(root.single.isFolder, isTrue);
+    final albums = await repo.loadAlbums();
 
-    final dcim = await repo.listFolder(parentHandle: 0x10);
-    expect(dcim.map((e) => e.name), ['100NIKON']);
+    expect(albums.map((a) => a.name), ['全部照片', '100NIKON']);
+    final all = albums[0];
+    expect(all.isAggregate, isTrue);
+    expect(all.folderHandle, CameraAlbum.allPhotosHandle);
+    // 汇总含全部 image/video,新的在前(NEF 9-27 先于 JPG 9-26)。
+    expect(all.items.map((e) => e.name), ['DSC_0001.NEF', 'DSC_0002.JPG']);
+    expect(all.cover!.name, 'DSC_0001.NEF');
 
-    final photos = await repo.listFolder(parentHandle: 0x11);
-    // 时间倒序:9-27 的 NEF 在 9-26 的 JPG 前。
-    expect(photos.map((e) => e.name), ['DSC_0001.NEF', 'DSC_0002.JPG']);
-    // NEF 格式码 0x3000 → kind 由 .nef 扩展名兜底为 image。
-    expect(photos.first.kind, ObjectKind.image);
-    expect(photos.first.sizeInBytes, 26843545);
-    expect(photos.first.capturedAt, DateTime.utc(2026, 9, 27, 10, 15, 20));
+    final folder = albums[1];
+    expect(folder.folderHandle, 0x11);
+    expect(folder.items.map((e) => e.name), ['DSC_0001.NEF', 'DSC_0002.JPG']);
+    // NEF 格式码 0x3000 → kind 由 .nef 扩展名兜底为 image;
+    // parentHandle 落到 entry(相册分组依据)。
+    final nef = folder.items.first;
+    expect(nef.kind, ObjectKind.image);
+    expect(nef.sizeInBytes, 26843545);
+    expect(nef.parentHandle, 0x11);
+    expect(nef.capturedAt, DateTime.utc(2026, 9, 27, 10, 15, 20));
+  });
 
-    // 不存在的 parent:空列表(而非异常)。
-    expect(await repo.listFolder(parentHandle: 0xDEAD), isEmpty);
+  test('loadAlbums:无照片内容的文件夹(MISC)不成为相册', () async {
+    final fake = FakePtpTransport();
+    final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
+    fake.reply(_okData(
+        _handlesDataset([0x10, 0x11, 0x12, 0x20, 0x21, 0x22])));
+    fake.reply(_okData(_objectInfoDataset(
+        format: 0x3001, parent: 0, size: 0, name: 'DCIM')));
+    fake.reply(_okData(_objectInfoDataset(
+        format: 0x3001, parent: 0x10, size: 0, name: '100NIKON')));
+    fake.reply(_okData(_objectInfoDataset(
+        format: 0x3801, parent: 0x11, size: 1000, name: 'DSC_0003.JPG')));
+    // MISC 文件夹 + 其下的杂项文件(.DSC 订单文件 → other):不该成为相册。
+    fake.reply(_okData(_objectInfoDataset(
+        format: 0x3001, parent: 0, size: 0, name: 'MISC')));
+    fake.reply(_okData(_objectInfoDataset(
+        format: 0x3000, parent: 0x20, size: 10, name: 'NIKON001.DSC')));
+    fake.reply(_okData(_objectInfoDataset(
+        format: 0x3008, parent: 0x11, size: 2000, name: 'DSC_0004.MOV',
+        captured: '20260928T120000')));
+
+    final albums = await repo.loadAlbums();
+
+    // 汇总:JPG + MOV(时间倒序,MOV 9-28 在前);MISC 的 .DSC 不是相册内容。
+    expect(albums.map((a) => a.name), ['全部照片', '100NIKON']);
+    expect(albums[0].items.map((e) => e.name),
+        ['DSC_0004.MOV', 'DSC_0003.JPG']);
+    // MOV 扩展名兜底为 video。
+    expect(albums[0].items.first.kind, ObjectKind.video);
+  });
+
+  test('loadAlbums:onProgress 逐对象回调进度', () async {
+    final fake = FakePtpTransport();
+    final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
+    _replyTree(fake);
+
+    final progress = <String>[];
+    await repo.loadAlbums(onProgress: (loaded, total) {
+      progress.add('$loaded/$total');
+    });
+    expect(progress, ['1/4', '2/4', '3/4', '4/4']);
+  });
+
+  test('并发 loadAlbums 共享同一次枚举(不重复往返)', () async {
+    final fake = FakePtpTransport();
+    final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
+    _replyTree(fake);
+
+    final results =
+        await Future.wait([repo.loadAlbums(), repo.loadAlbums()]);
+    expect(results[0].map((a) => a.name), results[1].map((a) => a.name));
+    expect(fake.requests, hasLength(5)); // 1×GetObjectHandles + 4×GetObjectInfo
   });
 
   test('entryFor 查缓存;未枚举到的句柄显式报错', () async {
@@ -130,25 +188,54 @@ void main() {
     final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
     _replyTree(fake);
 
-    await repo.listFolder(parentHandle: 0);
+    await repo.loadAlbums();
     final entry = await repo.entryFor(0x12);
     expect(entry.name, 'DSC_0001.NEF');
     expect(() => repo.entryFor(0xDEAD), throwsStateError);
   });
 
-  test('reset() 丢弃缓存,下次 listFolder 重新全量枚举', () async {
+  test('reset() 丢弃缓存,下次 loadAlbums 重新全量枚举', () async {
     final fake = FakePtpTransport();
     final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
     _replyTree(fake);
-    await repo.listFolder(parentHandle: 0);
+    await repo.loadAlbums();
     expect(repo.isLoaded, isTrue);
 
     repo.reset();
     expect(repo.isLoaded, isFalse);
 
     _replyTree(fake); // 重连后相机重新应答一轮
-    final root = await repo.listFolder(parentHandle: 0);
-    expect(root.single.name, 'DCIM');
+    final albums = await repo.loadAlbums();
+    expect(albums.first.name, '全部照片');
     expect(fake.requests, hasLength(10)); // 两轮各 5 次往返
+  });
+
+  test('枚举途中 reset:世代不符的结果被丢弃,不误标已加载', () async {
+    final fake = FakePtpTransport();
+    final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
+    // ObjectHandles + 第一个 ObjectInfo 正常;第二个 ObjectInfo 挂在门上,
+    // 让「枚举途中」的时序可控(同步假传输层会一口气跑完,停不下来)。
+    final stall = Completer<void>();
+    fake.reply(_okData(_handlesDataset([0x10, 0x11, 0x12, 0x13])));
+    fake.reply(_okData(_objectInfoDataset(
+        format: 0x3001, parent: 0, size: 0, name: 'DCIM')));
+    fake.replyAfter(stall.future, _okData(_objectInfoDataset(
+        format: 0x3001, parent: 0x10, size: 0, name: '100NIKON')));
+    fake.reply(_okData(_objectInfoDataset(
+        format: 0x3000, parent: 0x11, size: 1, name: 'DSC_0001.NEF')));
+    fake.reply(_okData(_objectInfoDataset(
+        format: 0x3801, parent: 0x11, size: 1, name: 'DSC_0002.JPG')));
+
+    final loading = repo.loadAlbums();
+    await pumpEventQueue();
+    repo.reset(); // 枚举挂在门上时断连
+    stall.complete(); // 相机侧继续应答,枚举跑完
+    await loading;
+    expect(repo.isLoaded, isFalse); // 关键:过期枚举不得把缓存标成已加载
+
+    // 重新来一轮正常枚举可用。
+    _replyTree(fake);
+    final albums = await repo.loadAlbums();
+    expect(albums.first.items, isNotEmpty);
   });
 }

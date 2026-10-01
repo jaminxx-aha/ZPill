@@ -1,64 +1,74 @@
-/// 单对象流式下载(P0 闭环的最小传输实现;TODO.md §四 的完整
-/// TransferEngine 队列化留 P1,复用本类的落盘/测速逻辑)。
+/// 单对象流式下载(传输引擎的工作单元)。
 ///
 /// 分工:GetObject 数据容器按块回调(PtpTransport.execute 的 onData)→
-/// 本类边收边写临时文件,**不整体驻留内存**;完成后尝试经
-/// [GallerySaver] 导入系统相册 —— ohos v1 导入未实现(安全控件限制,
-/// 计划内后备):保留沙箱文件并返回路径。
+/// 本类边收边写目标文件,**不整体驻留内存**;写到哪个目录、下载完
+/// 之后要不要进相册,由 TransferEngine 编排(本类不碰 GallerySaver)。
+///
+/// 取消语义:[isCancelled] 返回 true 后停止写盘(transport 继续收块
+/// 排空数据流,保持 USB/PTP 事务状态机干净),排空完毕删除半成品,
+/// 抛 [DownloadCancelledException]。
 library;
 
 import 'dart:io';
 
-import '../../platform/gallery_saver.dart';
 import '../browser/object_entry.dart';
 import '../ptp/ptp_session.dart';
 
-/// 一次完成的下载:落盘信息 + 耗时/平均速度(P0 传输测速即取此处数据)。
+/// 下载被取消:半成品已删,数据流已排空。
+final class DownloadCancelledException implements Exception {
+  const DownloadCancelledException();
+
+  @override
+  String toString() => '下载已取消';
+}
+
+/// 一次完成的下载:落盘信息 + 耗时/平均速度。
 final class ObjectDownload {
   const ObjectDownload({
     required this.path,
     required this.bytes,
     required this.elapsed,
     required this.averageBytesPerSecond,
-    this.galleryUri,
   });
 
-  /// 文件落盘路径(已导入相册时为导入前的临时文件)。
   final String path;
-
   final int bytes;
   final Duration elapsed;
   final double averageBytesPerSecond;
-
-  /// 相册内容 Uri;null = 未导入(ohos v1 后备:沙箱文件,展示路径)。
-  final Uri? galleryUri;
 
   double get megabytesPerSecond => averageBytesPerSecond / 1024 / 1024;
 }
 
 final class ObjectDownloader {
-  ObjectDownloader({required PtpSession session, required GallerySaver gallery})
-      : _session = session,
-        _gallery = gallery;
+  ObjectDownloader({required PtpSession session}) : _session = session;
 
   final PtpSession _session;
-  final GallerySaver _gallery;
 
-  /// 流式下载 [entry] 到临时目录。[onProgress] 每块回调累计字节数
-  /// (UI 进度对话框用;块大小对齐 kUsbStreamChunkBytes,64KB 级)。
-  ///
-  /// 失败/取消语义:删除半成品临时文件后原样上抛。
+  /// 流式下载 [entry] 到 [targetDir](不存在则创建),文件名冲突自动
+  /// 加 ` (n)` 序号。[onProgress] 每块回调累计字节数(块大小对齐
+  /// kUsbStreamChunkBytes,64KB 级)。
   Future<ObjectDownload> download(
     ObjectEntry entry, {
+    required String targetDir,
     void Function(int receivedBytes)? onProgress,
+    bool Function()? isCancelled,
   }) async {
-    final dir = await _gallery.tempDir();
-    final file = File('$dir/${_safeBasename(entry.name)}');
+    final dir = Directory(targetDir);
+    if (!dir.existsSync()) {
+      dir.createSync(recursive: true);
+    }
+    final file = File(await uniquePath(dir, _safeBasename(entry.name)));
     final sink = file.openWrite();
     final watch = Stopwatch()..start();
     var received = 0;
+    var cancelled = false;
     try {
       await _session.getObject(entry.handle, onData: (chunk) {
+        if (isCancelled != null && isCancelled()) {
+          cancelled = true;
+          return; // 不写盘,继续收块排空
+        }
+        if (cancelled) return;
         sink.add(chunk);
         received += chunk.length;
         onProgress?.call(received);
@@ -71,37 +81,45 @@ final class ObjectDownloader {
       } on Exception {
         // 关闭失败不掩盖原始异常
       }
-      if (await file.exists()) {
-        try {
-          await file.delete();
-        } on FileSystemException {
-          // 同上
-        }
-      }
+      await _deleteQuietly(file);
       rethrow;
     }
     watch.stop();
-
-    Uri? uri;
-    try {
-      uri = await _gallery.importFile(
-        file.path,
-        kind: entry.kind,
-        filename: entry.name,
-      );
-    } on UnimplementedError {
-      // ohos v1(计划内后备):相册导入未实现,保留沙箱文件、返回路径。
-    } on Exception {
-      // 导入失败:下载本身已成功,同样保留沙箱文件、返回路径。
+    if (cancelled) {
+      await _deleteQuietly(file);
+      throw const DownloadCancelledException();
     }
     return ObjectDownload(
       path: file.path,
       bytes: received,
       elapsed: watch.elapsed,
-      averageBytesPerSecond:
-          received / watch.elapsed.inMicroseconds * 1e6,
-      galleryUri: uri,
+      averageBytesPerSecond: received / watch.elapsed.inMicroseconds * 1e6,
     );
+  }
+
+  /// 目录内不冲突的完整路径:`A.JPG` → `A (1).JPG`、`A (2).JPG`…
+  /// (app 目的地持久保留会撞名;gallery 临时目录残留也一并防住。)
+  static Future<String> uniquePath(Directory dir, String basename) async {
+    final dot = basename.lastIndexOf('.');
+    final stem = dot > 0 ? basename.substring(0, dot) : basename;
+    final ext = dot > 0 ? basename.substring(dot) : '';
+    var candidate = basename;
+    var n = 0;
+    while (await File('${dir.path}/$candidate').exists()) {
+      n++;
+      candidate = '$stem ($n)$ext';
+    }
+    return '${dir.path}/$candidate';
+  }
+
+  static Future<void> _deleteQuietly(File file) async {
+    if (await file.exists()) {
+      try {
+        await file.delete();
+      } on FileSystemException {
+        // 删失败不掩盖原始结果
+      }
+    }
   }
 
   /// 只取最后一段作文件名(PTP 相机文件名本不含分隔符,防御性处理)。
