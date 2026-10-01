@@ -364,6 +364,12 @@ export class UsbHostPlugin implements FlutterPlugin {
           }
         }
       }
+      // 会话轮换守卫:等待期间 teardown/重连会让 s 的 pipe 失效。
+      // 对应的 Dart 调用早已被看门狗判超时遗弃;应答只为释放通道。
+      if (this.session !== s) {
+        result.error('usb_stale', '会话已轮换,旧链路写结果丢弃', null);
+        return;
+      }
       result.success(null);
     } catch (e) {
       result.error('usb_error', `bulkOut: ${e}`, null);
@@ -400,6 +406,14 @@ export class UsbHostPlugin implements FlutterPlugin {
         // 下限 1ms:rest 若为 0 会变成无限等待,绝不可传 0。
         const rest = timeoutMs <= 0 ? 0 : Math.max(1, timeoutMs - (Date.now() - start));
         n = await usb.bulkTransfer(s.pipe, s.bulkIn, buffer, rest);
+      }
+      // 会话轮换守卫(关键):等待期间 teardown/重连会让 s 的 pipe 失效,
+      // 而晚到的数据绝不能进 this.bulkInLeftover —— leftover 是共享字段,
+      // 旧链路的字节会污染**新会话**的读流。对应的 Dart 调用早已被看门狗
+      // 判超时遗弃;应答只为释放通道。
+      if (this.session !== s) {
+        result.error('usb_stale', '会话已轮换,旧链路读结果丢弃', null);
+        return;
       }
       if (n > 0) {
         if (n > maxLen) {

@@ -97,8 +97,11 @@ final class LockProbeTransport implements PtpTransport {
 
 /// 手搓 GetDeviceInfo 数据集(ByteWriter;字段布局独立于被测代码)。
 /// [operations] 可覆盖操作码表(默认不含 0x90C4,测「不在册」路径用)。
+/// 默认操作码表 = 「正常相机」基线:GetDeviceInfo/OpenSession/GetObject/
+/// GetPartialObjectEx(连接层的受限画像检查以 GetObject 在册为准,
+/// 2026-10-01 真机受限态就是缺它)。
 Uint8List buildDeviceInfoDataset(
-    {List<int> operations = const [0x1001, 0x1007, 0x9431]}) {
+    {List<int> operations = const [0x1001, 0x1007, 0x1009, 0x9431]}) {
   final w = ByteWriter()
     ..u16(0x0100) // StandardVersion = 100(PTP/1.0)
     ..u32(0x0000000A) // VendorExtensionId(尼康)
@@ -136,7 +139,7 @@ void main() {
       expect(info.standardVersion, 0x0100);
       expect(info.vendorExtensionId, 0x0000000A);
       expect(info.functionalMode, 0);
-      expect(info.operationsSupported, [0x1001, 0x1007, 0x9431]);
+      expect(info.operationsSupported, [0x1001, 0x1007, 0x1009, 0x9431]);
       expect(info.eventsSupported, [0x4002]);
       expect(info.devicePropsSupported, [0x5001, 0x5007]);
       expect(info.captureFormats, isEmpty);

@@ -63,6 +63,12 @@ abstract interface class UsbHostChannel implements UsbBytePipe {
   Future<void> open(UsbDeviceHandle device);
 
   Future<void> close();
+
+  /// 链路断开事件(原因文本,如「相机已断开(USB 连接消失)」)。
+  /// 由看门狗装饰器(WatchdogUsbHostChannel)发出;无检测能力的实现
+  /// 返回空流。连接层订阅它把 connected 转 failed(P1:相机拔出后
+  /// 挂起的 bulk 读不会再有任何回调,只能靠主动检测发现断链)。
+  Stream<String> get breakages;
 }
 
 /// 经 `nikonpill/usb` channel:方法 `listCameras`/`open`/`bulkOut`/
@@ -134,4 +140,9 @@ final class MethodChannelUsbHost implements UsbHostChannel {
 
   @override
   Future<void> close() => channel.invokeMethod('close');
+
+  /// 原生通道无断链检测(ohos 无热插拔事件 API);生产装配在
+  /// AppServices 里用 WatchdogUsbHostChannel 包装后才有真实事件。
+  @override
+  Stream<String> get breakages => const Stream.empty();
 }
