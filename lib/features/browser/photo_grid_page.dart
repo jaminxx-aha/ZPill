@@ -1,7 +1,11 @@
 /// 相册缩略图网格:长按进入多选,选中项可批量下载到相册/应用。
 ///
-/// 缩略图 Future 按 handle 缓存在本页 State(setState 重建不闪、
-/// 不重发请求;PtpSession 串行锁 + ThumbnailCache 并发合并兜底)。
+/// 活页模式:随 [BrowserController] 的渐进发布增长(最新优先,新对象尾部
+/// 追加);断连后保留最后快照(相册列表被控制器清空时,网格内容可见,
+/// 缩略图走磁盘缓存)。缩略图 Future 按 handle 缓存在本页 State
+/// (setState 重建不闪、不重发请求;PtpSession 串行锁 + ThumbnailCache
+/// 并发合并兜底)。查看器仍按打开时刻的快照浏览(同步继续不追新,重进
+/// 本页即刷新)。
 library;
 
 import 'dart:io';
@@ -15,12 +19,29 @@ import '../../core/browser/thumbnail_cache.dart';
 import '../../core/ptpip/object_format.dart';
 import '../../core/transfer/transfer_engine.dart';
 import '../../core/transfer/transfer_task.dart';
+import 'browser_controller.dart';
 import 'photo_viewer_page.dart';
 
 class PhotoGridPage extends StatefulWidget {
-  const PhotoGridPage({super.key, required this.album});
+  const PhotoGridPage({
+    super.key,
+    required this.controller,
+    required this.folderHandle,
+    this.fallbackName,
+    this.thumbnails,
+  });
 
-  final CameraAlbum album;
+  /// 应用级共享控制器(本页不拥有、不 dispose);网格随其渐进发布增长。
+  final BrowserController controller;
+
+  /// 目标相册:[CameraAlbum.allPhotosHandle](汇总)或文件夹句柄。
+  final int folderHandle;
+
+  /// 控制器失效(断连清空)后的标题兜底。
+  final String? fallbackName;
+
+  /// 测试注入;缺省用 AppServices 单例。
+  final ThumbnailCache? thumbnails;
 
   @override
   State<PhotoGridPage> createState() => _PhotoGridPageState();
@@ -30,10 +51,22 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
   final Set<int> _selected = {};
   final Map<int, Future<String>> _thumbFutures = {};
 
-  ThumbnailCache get _thumbnails => AppServices.instance.thumbnails;
+  /// 最后一次解析到的活相册(断连后控制器清空,以它保持网格快照)。
+  CameraAlbum? _lastAlbum;
+
+  ThumbnailCache get _thumbnails =>
+      widget.thumbnails ?? AppServices.instance.thumbnails;
   TransferEngine get _engine => AppServices.instance.transferEngine;
 
   bool get _selecting => _selected.isNotEmpty;
+
+  /// 按 folderHandle 找活相册;无匹配(尚未建立/已断连)返回 null。
+  CameraAlbum? _resolve(List<CameraAlbum> albums) {
+    for (final album in albums) {
+      if (album.folderHandle == widget.folderHandle) return album;
+    }
+    return null;
+  }
 
   void _toggle(ObjectEntry entry) {
     setState(() {
@@ -43,18 +76,20 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
     });
   }
 
-  void _selectAll() {
+  /// 全选 = 当前已知项(渐进同步中张数随后续块增长,已选项不自动扩选)。
+  void _selectAll(List<ObjectEntry> items) {
     setState(() {
       _selected
         ..clear()
-        ..addAll(widget.album.items.map((e) => e.handle));
+        ..addAll(items.map((e) => e.handle));
     });
   }
 
   void _clearSelection() => setState(_selected.clear);
 
-  Future<void> _downloadSelected(TransferDestination destination) async {
-    final entries = widget.album.items
+  Future<void> _downloadSelected(
+      List<ObjectEntry> items, TransferDestination destination) async {
+    final entries = items
         .where((e) => _selected.contains(e.handle))
         .toList(growable: false);
     if (entries.isEmpty) {
@@ -72,11 +107,11 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
           SnackBar(content: Text('已开始下载 ${entries.length} 项到$where,详见「下载」页')));
   }
 
-  void _openViewer(int index) {
+  void _openViewer(List<ObjectEntry> items, int index) {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => PhotoViewerPage(
-          items: widget.album.items,
+          items: items,
           initialIndex: index,
         ),
       ),
@@ -85,43 +120,59 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(_selecting ? '已选 ${_selected.length} 项' : widget.album.name),
-        actions: [
-          if (_selecting) ...[
-            IconButton(
-              tooltip: '全选',
-              onPressed: _selectAll,
-              icon: const Icon(Icons.select_all),
+    return ListenableBuilder(
+      listenable: widget.controller,
+      builder: (context, _) {
+        final live = _resolve(widget.controller.albums);
+        if (live != null) _lastAlbum = live;
+        final album = live ?? _lastAlbum;
+        final items = album?.items ?? const <ObjectEntry>[];
+        return Scaffold(
+          appBar: AppBar(
+            title: Text(_selecting
+                ? '已选 ${_selected.length} 项'
+                : (album?.name ?? widget.fallbackName ?? '相册')),
+            actions: [
+              if (_selecting) ...[
+                IconButton(
+                  tooltip: '全选',
+                  onPressed: () => _selectAll(items),
+                  icon: const Icon(Icons.select_all),
+                ),
+                IconButton(
+                  tooltip: '取消选择',
+                  onPressed: _clearSelection,
+                  icon: const Icon(Icons.close),
+                ),
+              ] else
+                const SizedBox(width: 8),
+            ],
+          ),
+          body: GridView.builder(
+            padding: const EdgeInsets.all(2),
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 4,
+              mainAxisSpacing: 2,
+              crossAxisSpacing: 2,
             ),
-            IconButton(
-              tooltip: '取消选择',
-              onPressed: _clearSelection,
-              icon: const Icon(Icons.close),
-            ),
-          ] else
-            const SizedBox(width: 8),
-        ],
-      ),
-      body: GridView.builder(
-        padding: const EdgeInsets.all(2),
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 4,
-          mainAxisSpacing: 2,
-          crossAxisSpacing: 2,
-        ),
-        itemCount: widget.album.items.length,
-        itemBuilder: (_, i) => _cell(widget.album.items[i], i),
-      ),
-      bottomSheet: _selecting ? _actionBar() : null,
+            itemCount: items.length,
+            // key 按 handle:增长期间尾部追加、条目重排时元素正确复用
+            //(选中态与缩略图 Future 都按 handle 键控)。
+            itemBuilder: (_, i) => _cell(items[i], i, items, key: ValueKey(items[i].handle)),
+          ),
+          bottomSheet: _selecting ? _actionBar(items) : null,
+        );
+      },
     );
   }
 
-  Widget _cell(ObjectEntry entry, int index) {
+  Widget _cell(ObjectEntry entry, int index, List<ObjectEntry> items, {Key? key}) {
     final selected = _selected.contains(entry.handle);
     return GestureDetector(
-      onTap: () => _selecting ? _toggle(entry) : _openViewer(index),
+      key: key,
+      onTap: () => _selecting
+          ? _toggle(entry)
+          : _openViewer(items, index),
       onLongPress: () => _toggle(entry),
       child: Stack(
         fit: StackFit.expand,
@@ -196,14 +247,15 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
     );
   }
 
-  Widget _actionBar() {
+  Widget _actionBar(List<ObjectEntry> items) {
     return SafeArea(
       child: BottomAppBar(
         child: Row(
           children: [
             Expanded(
               child: FilledButton.tonalIcon(
-                onPressed: () => _downloadSelected(TransferDestination.gallery),
+                onPressed: () =>
+                    _downloadSelected(items, TransferDestination.gallery),
                 icon: const Icon(Icons.photo_library_outlined),
                 label: const Text('下载到相册'),
               ),
@@ -211,7 +263,7 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
             const SizedBox(width: 8),
             Expanded(
               child: FilledButton.tonalIcon(
-                onPressed: () => _downloadSelected(TransferDestination.app),
+                onPressed: () => _downloadSelected(items, TransferDestination.app),
                 icon: const Icon(Icons.folder_outlined),
                 label: const Text('下载到应用'),
               ),

@@ -70,6 +70,9 @@ SESSION_ALREADY_OPEN = 0x201E
 
 # 尼康厂商码(GetLargeThumb —— 大图预览的候选数据源)
 NIKON_GET_LARGE_THUMB = 0x90C4
+# 尼康厂商码(GetObjectsMetaData —— 批量 ObjectInfo,渐进式相册的快路候选;
+# 姿势/数据布局未真机验证,--objmeta 摸底)
+NIKON_GET_OBJECTS_META = 0x9434
 
 # GetObjectHandles 参数(全部存储 / 全部格式;父对象:0=仅根层,ALL=递归)
 STORAGE_ALL = 0xFFFFFFFF
@@ -94,6 +97,7 @@ NIKON_OC_CANDIDATES = {
     0x9400: "GetPartialObjectHiSpeed(尼康高速分块读)",
     0x9421: "GetObjectSize(64 位对象大小)",
     0x9431: "GetPartialObjectEx(64 位偏移+长度 —— Z 系断点续传主力)",
+    0x9434: "GetObjectsMetaData(批量 ObjectInfo —— 渐进式相册快路候选)",
 }
 NIKON_EVENT_CANDIDATES = {
     0x4002: "ObjectAdded(标准)", 0x400D: "CaptureComplete(标准)",
@@ -376,6 +380,90 @@ def dump_object_info(handle: int, payload: bytes) -> None:
           f"  拍摄时间 {o['captured']}")
 
 
+# ── Nikon GetObjectsMetaData(0x9434)批量数据集布局判定 ────────────────
+
+def parse_object_info_at(buf: bytes, off: int, handle: int | None = None) -> tuple:
+    """游标版 ObjectInfo:从 off 读一条,返回 (字段字典, 下一偏移)。
+
+    与 parse_object_info 的差别:第三个 STRING(modificationDate)也读完 ——
+    批量数据集里记录紧密相邻,不读完会错位(单条数据集停在第二个串,
+    因为后面没有下一条要解析)。尾部字符串缺失时容错停止(数据集恰好在
+    此结束的情形;中间记录缺失则会被精确收尾校验否决,不致误判布局)。
+    """
+    (storage_id, fmt, _prot, size, _tf, _ts, _tw, _th,
+     w, h, _depth, parent, _assoc, _ad, _seq) = struct.unpack_from(
+        "<IHHIHIIIIIIIHII", buf, off)
+    o = {"handle": handle, "storage_id": storage_id, "fmt": fmt, "size": size,
+         "w": w, "h": h, "parent": parent}
+    off += 52
+    o["name"], off = read_ptp_str(buf, off)
+    o["captured"], off = read_ptp_str(buf, off)
+    try:
+        _mod, off = read_ptp_str(buf, off)
+    except (IndexError, struct.error):
+        pass  # 尾部 modificationDate 缺失:容错收尾
+    return o, off
+
+
+def try_parse_meta(payload: bytes) -> tuple:
+    """0x9434 数据载荷布局判定:候选逐个试,全收尾对齐才算命中。
+
+    返回 (布局描述, 记录列表);全部对不上返回 ("", [])。候选(首 u32
+    为记录数 N):
+    - L2  N×(u32 handle + ObjectInfo)   句柄前缀,批量映射最理想
+    - L3  N×ObjectInfo(无句柄,按请求序对齐)
+    - L1  N×(u32 记录长 + ObjectInfo)   长度前缀(含/不含前缀两种口径)
+    - L4  裸句柄数组(GetObjectHandles 同构,对元数据无用,仅记录)
+    """
+    if len(payload) < 4:
+        return "", []
+    (n,) = struct.unpack_from("<I", payload, 0)
+    if n == 0 or n > len(payload) // 40:  # 每条 ObjectInfo ≥52B 头 + 至少两串
+        return "", []
+    if len(payload) == 4 + 4 * n:
+        hs = struct.unpack_from(f"<{n}I", payload, 4)
+        return "L4(裸句柄数组 —— 对元数据无用,等同 GetObjectHandles)", \
+               [{"handle": h} for h in hs]
+    # L2:句柄前缀
+    recs, off = [], 4
+    try:
+        for _ in range(n):
+            (h,) = struct.unpack_from("<I", payload, off)
+            o, off = parse_object_info_at(payload, off + 4, h)
+            recs.append(o)
+    except (struct.error, IndexError):
+        recs = []
+    if recs and off == len(payload):
+        return "L2(u32N + N×(u32句柄 + ObjectInfo))", recs
+    # L3:无句柄,按请求序
+    recs, off = [], 4
+    try:
+        for _ in range(n):
+            o, off = parse_object_info_at(payload, off)
+            recs.append(o)
+    except (struct.error, IndexError):
+        recs = []
+    if recs and off == len(payload):
+        return "L3(u32N + N×ObjectInfo,无句柄按请求序对齐)", recs
+    # L1:长度前缀(先试「长度不含前缀」再试「含前缀」)
+    for incl in (False, True):
+        recs, off = [], 4
+        try:
+            for _ in range(n):
+                (rlen,) = struct.unpack_from("<I", payload, off)
+                o, _end = parse_object_info_at(payload, off + 4)
+                recs.append(o)
+                off = off + rlen if incl else off + 4 + rlen
+                if off > len(payload):
+                    raise IndexError
+        except (struct.error, IndexError):
+            recs = []
+        if recs and off == len(payload):
+            tag = "长度含前缀" if incl else "长度不含前缀"
+            return f"L1(u32N + N×(u32记录长[{tag}] + ObjectInfo))", recs
+    return "", []
+
+
 # ── 缩略图/预览数据布局(GetThumb / Nikon GetLargeThumb) ─────────────
 
 def jpeg_dimensions(data: bytes):
@@ -515,6 +603,12 @@ def main() -> int:
                     help="对这批操作码逐个直发(先带第一个 --peek handle 作参数,"
                          "报错再试无参),记录响应码/数据量/前 16B —— 未知厂商码"
                          "行为摸底(2026-10-01:Zf 精简 op 表 0x943A-0x9442/0x9461)")
+    ap.add_argument("--objmeta", action="store_true",
+                    help="Nikon 0x9434 GetObjectsMetaData 批量元数据摸底:"
+                         "姿势矩阵(A 无参/B storageId/C 首 handle/D-F 数据出与"
+                         "参数携带句柄)× 布局判定(L1-L4)+ 与逐个 GetObjectInfo "
+                         "对拍;顺带句柄↔拍摄时间相关性(渐进加载「最新优先」"
+                         "= 句柄倒序的依据)")
     ap.add_argument("--props", type=lambda s: [int(x, 16) for x in s.split(",")],
                     metavar="hex[,hex…]", default=[],
                     help="读这批设备属性的 Desc(0x1014)+Value(0x1015)—— "
@@ -668,6 +762,160 @@ def main() -> int:
             try_op(op, [param_handle])
             txid += 1
             try_op(op, [])
+
+    # 步骤 4m(可选,--objmeta):Nikon GetObjectsMetaData(0x9434)摸底 ——
+    # 渐进式相册的快路候选:一次往返拿一批 ObjectInfo,代替 N+1 枚举。
+    # 语义(参数/数据相位/返回布局)未真机验证:姿势矩阵逐个试 + 布局判定,
+    # 再与逐个 GetObjectInfo 对拍。全部拒答 → 不做快路,N+1 分块兜底 UX。
+    # 顺带做句柄↔拍摄时间相关性(渐进加载「最新优先 = 句柄倒序」的依据)。
+    if args.objmeta:
+        print("[4m] Nikon 0x9434 GetObjectsMetaData 摸底(渐进式相册快路):")
+        supports = NIKON_GET_OBJECTS_META in device_info["operationsSupported"]
+        print(f"    0x9434 在册:{'✓' if supports else '✗(受限码表欠报先例:0x100A/0x90C4 也曾缺席,仍继续直发摸底)'}")
+
+        def meta_op(params: list, payload_out: bytes | None) -> tuple:
+            """0x9434 一次姿势,返回 (数据载荷|None, 响应码)。
+
+            数据出姿势在读回时按容器类型分叉:相机若在 data-out 后仍回
+            数据相位(批量元数据正是这种形态),先把 DATA 收完再读响应,
+            避免 xact_out 把 DATA 容器当响应、真响应留在缓冲毒化下一姿势。
+            USB 异常照 [4p] 惯例 clear_halt 两端点后续姿势。
+            """
+            nonlocal txid
+            try:
+                if payload_out is None:
+                    txid, blob, rc = xact(dev, ep_out, ep_in, txid,
+                                          NIKON_GET_OBJECTS_META, params)
+                    data = blob[HDR:] if (blob is not None and rc == OK) else None
+                    return data, rc
+                dev.write(ep_out, cmd_container(NIKON_GET_OBJECTS_META, txid,
+                                                params), 5000)
+                dc = (u32(HDR + len(payload_out)) + u16(DATA)
+                      + u16(NIKON_GET_OBJECTS_META) + u32(txid) + payload_out)
+                dev.write(ep_out, dc, 5000)
+                blob = read_container(dev, ep_in)
+                _l, rtype, rc, _x = parse_head(blob)
+                if rtype == DATA:
+                    data = blob[HDR:]
+                    resp = read_container(dev, ep_in)
+                    _l2, _t2, rc, _x2 = parse_head(resp)
+                    return (data if rc == OK else None), rc
+                return None, rc
+            except (usb.core.USBError, IOError) as e:
+                print(f"      USB 异常:{e}")
+                try:
+                    dev.clear_halt(ep_out)
+                    dev.clear_halt(ep_in)
+                    print("      已 clear_halt 两端点")
+                except usb.core.USBError:
+                    pass
+                return None, -1
+
+        # 前置:全量句柄(与 app 同参:Zf 实测 parent=0 才返回全部对象)
+        txid += 1
+        txid, blob, rc = xact(dev, ep_out, ep_in, txid, GET_OBJECT_HANDLES,
+                              [STORAGE_ALL, FORMAT_ALL, PARENT_ROOT])
+        (cnt,) = struct.unpack_from("<I", blob, HDR)
+        all_handles = list(struct.unpack_from(f"<{cnt}I", blob, HDR + 4)) if cnt else []
+        if not all_handles:
+            print("    相机无对象,0x9434 无从对拍 —— 跳过")
+        else:
+            # 首句柄 storageId(姿势 B 用)+ 前 3 个句柄作提问样本
+            txid += 1
+            txid, blob, rc = xact(dev, ep_out, ep_in, txid, GET_OBJECT_INFO,
+                                  [all_handles[0]])
+            sid = struct.unpack_from("<I", blob[HDR:], 0)[0] if rc == OK else 0
+            sample = all_handles[:3]
+            print(f"    全量 {len(all_handles)} 个句柄;提问样本:"
+                  + " ".join(f"0x{h:08X}" for h in sample)
+                  + f";首对象存储 0x{sid:08X}" + ("" if sid else "(未取到,姿势 B 以 0 代替)"))
+            poses = [
+                ("A", "无参", [], None),
+                ("B", "参数=storageId", [sid], None),
+                ("C", "参数=首handle", [sample[0]], None),
+                ("D", "数据出=计数+句柄", [], u32(3) + b"".join(u32(h) for h in sample)),
+                ("E", "数据出=句柄(参数=个数)", [3], b"".join(u32(h) for h in sample)),
+                ("F", "参数=个数+句柄", [3] + list(sample), None),
+            ]
+            for tag, desc, params, payload in poses:
+                print(f"  ▶ 姿势 {tag}({desc})")
+                data, rc = meta_op(params, payload)
+                if rc == -1:
+                    continue
+                if data is None:
+                    print(f"      <- 0x{rc:04X}" + ("(无数据相位)" if rc == OK else ""))
+                    continue
+                print(f"      <- 0x{rc:04X}  数据 {len(data)}B  头 64B: {data[:64].hex(' ')}")
+                if len(data) > 64:
+                    out = f"/tmp/nikonpill_probe_objmeta_{tag}.bin"
+                    with open(out, "wb") as f:
+                        f.write(data)
+                    print(f"      原始字节已存:{out}")
+                layout, recs = try_parse_meta(data)
+                if not layout:
+                    print("      布局:L1/L2/L3 均对不上(见 /tmp 原始字节,人工判读)")
+                    continue
+                print(f"      布局判定:{layout}  解出 {len(recs)} 条"
+                      f"(请求 3,全量 {len(all_handles)})")
+                for o in recs[:3]:
+                    h_s = f"0x{o['handle']:08X}" if o.get("handle") is not None else "(无句柄,按请求序)"
+                    print(f"        {h_s} {o['name']}  fmt=0x{o['fmt']:04X}"
+                          f" size={o['size']} 父=0x{o['parent']:08X} 拍摄 {o.get('captured', '?')}")
+                # 对拍:前 2 条与逐个 GetObjectInfo 比名称/大小/父句柄
+                checked = mismatched = 0
+                for i, o in enumerate(recs[:2]):
+                    h = o.get("handle")
+                    if h is None:
+                        h = sample[i] if i < len(sample) else None  # 无句柄布局按请求序映射
+                    if h is None:
+                        continue
+                    txid += 1
+                    txid, b2, rc2 = xact(dev, ep_out, ep_in, txid, GET_OBJECT_INFO, [h])
+                    if rc2 != OK:
+                        continue
+                    ref = parse_object_info(b2[HDR:])
+                    same = (ref["name"] == o["name"] and ref["size"] == o["size"]
+                            and ref["parent"] == o["parent"])
+                    checked += 1
+                    mismatched += 0 if same else 1
+                    print(f"        对拍 0x{h:08X}:{'一致 ✓' if same else f'不一致!!单条参考:{ref}'}")
+                if checked and not mismatched:
+                    print(f"      ★ 姿势 {tag} 可用:{layout} —— 快路按此实现(Step 6)")
+                elif mismatched:
+                    print("      对拍不一致:布局或顺序判定存疑,人工核对 /tmp 字节")
+
+        # 句柄↔拍摄时间相关性:前 40 + 后 40 个句柄逐个 GetObjectInfo,
+        # 验证「句柄升序 ≈ 拍摄时间升序」(渐进加载最新优先 = 倒序请求的依据)。
+        if all_handles:
+            print("    句柄↔拍摄时间相关性(前 40 + 后 40,按枚举序):")
+            picks = list(dict.fromkeys(all_handles[:40] + all_handles[-40:]))
+            rows = []
+            for h in picks:
+                txid += 1
+                txid, blob, rc = xact(dev, ep_out, ep_in, txid, GET_OBJECT_INFO, [h])
+                if rc == OK:
+                    o = parse_object_info(blob[HDR:])
+                    if o["captured"] and o["captured"] != "(未提供)":
+                        rows.append((h, o["captured"]))
+            for h, t in rows[:6]:
+                print(f"      0x{h:08X} {t}")
+            if len(rows) > 12:
+                print("      …")
+            for h, t in rows[-6:]:
+                print(f"      0x{h:08X} {t}")
+            if len(rows) < 4:
+                print("      样本不足,无法判定")
+            else:
+                # 拍摄时间是 YYYYMMDDTHHMMSS 定长格式,字典序即时间序
+                asc = all(rows[i][1] <= rows[i + 1][1] for i in range(len(rows) - 1))
+                desc = all(rows[i][1] >= rows[i + 1][1] for i in range(len(rows) - 1))
+                if asc and not desc:
+                    print("      结论:句柄升序 ≈ 时间升序 ✓"
+                          " —— 渐进加载用句柄倒序 = 最新优先,保留反转")
+                elif desc and not asc:
+                    print("      结论:句柄升序 ≈ 时间降序 —— 渐进加载保持原序即最新优先,删除反转")
+                else:
+                    print("      结论:无单调关系 —— 最新优先不可靠,填充顺序任选(仅影响出现先后,不影响排序)")
 
     # 步骤 4d(可选,--props):设备属性摸底。身份类属性是重点:
     # 0xD406 MTP_SessionInitiatorInfo(主机自报身份,MTP 规范里可写)、
