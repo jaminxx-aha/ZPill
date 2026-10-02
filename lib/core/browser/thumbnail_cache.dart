@@ -21,16 +21,19 @@ enum ThumbSource { grid, preview }
 
 typedef _CachedThumb = ({String path, int bytes});
 
-final class ThumbnailCache {
+/// 非 final + 依赖字段私有:widget 测试可 implements(仅 pathFor/reset,
+/// 注入假路径,避开平台目录/MethodChannel)。
+class ThumbnailCache {
   ThumbnailCache({
-    required this.session,
-    required this.gallery,
+    required PtpSession session,
+    required GallerySaver gallery,
     this.gridLimitBytes = 32 * 1024 * 1024,
     this.previewLimitBytes = 256 * 1024 * 1024,
-  });
+  })  : _session = session,
+        _gallery = gallery;
 
-  final PtpSession session;
-  final GallerySaver gallery;
+  final PtpSession _session;
+  final GallerySaver _gallery;
 
   /// LRU 字节上限(构造可注入,测试用)。超出后按最久未访问驱逐删盘。
   final int gridLimitBytes;
@@ -86,7 +89,7 @@ final class ThumbnailCache {
     Uint8List data;
     try {
       data = source == ThumbSource.grid
-          ? await session.getThumb(entry.handle)
+          ? await _session.getThumb(entry.handle)
           : await _fetchPreview(entry.handle);
     } catch (e) {
       // 真机诊断辅助:缩略图拉取失败的原因进 hilog(不改变行为,
@@ -106,11 +109,11 @@ final class ThumbnailCache {
   /// GetThumb(小图,UI 放大显示)。
   Future<Uint8List> _fetchPreview(int handle) async {
     try {
-      return await session.getLargeThumb(handle);
+      return await _session.getLargeThumb(handle);
     } on UnsupportedError {
-      return session.getThumb(handle);
+      return _session.getThumb(handle);
     } on PtpResponseException {
-      return session.getThumb(handle);
+      return _session.getThumb(handle);
     }
   }
 
@@ -119,9 +122,9 @@ final class ThumbnailCache {
 
   Future<String> _dirFor(ThumbSource source) async {
     if (source == ThumbSource.grid) {
-      return _thumbsDir ??= await gallery.thumbsDir();
+      return _thumbsDir ??= await _gallery.thumbsDir();
     }
-    return _previewsDir ??= await gallery.previewsDir();
+    return _previewsDir ??= await _gallery.previewsDir();
   }
 
   void _remember(ThumbSource source, String key, String path, int bytes) {
