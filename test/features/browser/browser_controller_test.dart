@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:nikon_pill/core/browser/album.dart';
 import 'package:nikon_pill/core/browser/object_entry.dart';
+import 'package:nikon_pill/core/browser/photo_group.dart';
 import 'package:nikon_pill/core/browser/object_repository.dart';
 import 'package:nikon_pill/core/camera/camera_connection.dart';
 import 'package:nikon_pill/core/ptpip/object_format.dart';
@@ -75,7 +76,8 @@ ObjectEntry _entry(int handle) => ObjectEntry(
       formatCode: 0x3801,
     );
 
-CameraAlbum _album(List<ObjectEntry> items) => CameraAlbum.allPhotos(items);
+CameraAlbum _album(List<ObjectEntry> items) =>
+    CameraAlbum.allPhotos([for (final e in items) PhotoGroup([e])]);
 
 void main() {
   test('块到达:albums 逐块增长,每块一次 notify;完成后 syncing 转 false',

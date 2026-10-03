@@ -22,8 +22,8 @@ library;
 
 import 'package:flutter/foundation.dart';
 
-import '../core/browser/object_entry.dart';
 import '../core/browser/object_repository.dart';
+import '../core/browser/photo_group.dart';
 import '../core/ptp/ptp_session.dart';
 import '../core/ptpip/object_format.dart';
 
@@ -69,12 +69,12 @@ final class PtpDiagnostics {
 
     // 枚举与 UI 共享同一次(_ensureLoaded 去重)。
     final albums = await repository.loadAlbums();
-    final items = albums.isEmpty ? const <ObjectEntry>[] : albums.first.items;
+    final items = albums.isEmpty ? const <PhotoGroup>[] : albums.first.items;
     _p('albums=${albums.length} photos=${items.length}');
 
     final images = [
-      for (final e in items)
-        if (e.kind == ObjectKind.image) e,
+      for (final g in items)
+        if (g.primary.kind == ObjectKind.image) g.primary,
     ]..sort((a, b) => a.sizeInBytes.compareTo(b.sizeInBytes));
     final smallest = images.isEmpty ? null : images.first;
     if (smallest == null) {

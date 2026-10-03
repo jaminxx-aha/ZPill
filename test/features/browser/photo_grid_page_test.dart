@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:nikon_pill/core/browser/album.dart';
 import 'package:nikon_pill/core/browser/object_entry.dart';
 import 'package:nikon_pill/core/browser/object_repository.dart';
+import 'package:nikon_pill/core/browser/photo_group.dart';
 import 'package:nikon_pill/core/browser/thumbnail_cache.dart';
 import 'package:nikon_pill/core/camera/camera_connection.dart';
 import 'package:nikon_pill/core/ptpip/object_format.dart';
@@ -89,6 +90,31 @@ ObjectEntry _entry(int handle) => ObjectEntry(
       formatCode: 0x3801,
     );
 
+/// 单文件组(独立 JPG)。
+PhotoGroup _photo(int handle) => PhotoGroup([_entry(handle)]);
+
+/// 同一快门的 RAW+JPG 双文件组(基名/时刻一致,直接构造)。
+PhotoGroup _pair(int jpgHandle, int rawHandle) => PhotoGroup([
+      ObjectEntry(
+        handle: jpgHandle,
+        name: 'DSC_0001.JPG',
+        sizeInBytes: 8,
+        kind: ObjectKind.image,
+        parentHandle: 0x11,
+        capturedAt: DateTime.utc(2026, 10, 1, 12),
+        formatCode: 0x3801,
+      ),
+      ObjectEntry(
+        handle: rawHandle,
+        name: 'DSC_0001.NEF',
+        sizeInBytes: 26,
+        kind: ObjectKind.image,
+        parentHandle: 0x11,
+        capturedAt: DateTime.utc(2026, 10, 1, 12),
+        formatCode: 0x3000,
+      ),
+    ]);
+
 Widget _host(PhotoGridPage page) => MaterialApp(home: page);
 
 void main() {
@@ -105,7 +131,7 @@ void main() {
     final loading = controller.load();
     // 块 1:两个对象。
     repo.updatesCtrl.add(AlbumsUpdate(
-        albums: [CameraAlbum.allPhotos([_entry(1), _entry(2)])],
+        albums: [CameraAlbum.allPhotos([_photo(1), _photo(2)])],
         loaded: 2,
         total: 4,
         complete: false));
@@ -116,7 +142,7 @@ void main() {
 
     // 块 2:增长到四个 —— 新 cell 尾部追加,首格原位复用不漂移。
     repo.updatesCtrl.add(AlbumsUpdate(
-        albums: [CameraAlbum.allPhotos([_entry(1), _entry(2), _entry(3), _entry(4)])],
+        albums: [CameraAlbum.allPhotos([_photo(1), _photo(2), _photo(3), _photo(4)])],
         loaded: 4,
         total: 4,
         complete: true));
@@ -126,7 +152,7 @@ void main() {
     expect(find.byKey(ValueKey(4)), findsOneWidget);
 
     repo.completeLoad(
-        [CameraAlbum.allPhotos([_entry(1), _entry(2), _entry(3), _entry(4)])]);
+        [CameraAlbum.allPhotos([_photo(1), _photo(2), _photo(3), _photo(4)])]);
     await loading;
   });
 
@@ -142,7 +168,7 @@ void main() {
     )));
 
     final loading = controller.load();
-    final album = CameraAlbum.allPhotos([_entry(1), _entry(2)]);
+    final album = CameraAlbum.allPhotos([_photo(1), _photo(2)]);
     repo.updatesCtrl.add(AlbumsUpdate(
         albums: [album], loaded: 2, total: 2, complete: true));
     await tester.pump();
@@ -175,9 +201,9 @@ void main() {
 
     final loading = controller.load();
     final folder =
-        CameraAlbum(name: '100NIKON', folderHandle: 0x11, items: [_entry(5)]);
+        CameraAlbum(name: '100NIKON', folderHandle: 0x11, items: [_photo(5)]);
     repo.updatesCtrl.add(AlbumsUpdate(albums: [
-      CameraAlbum.allPhotos([_entry(1)]),
+      CameraAlbum.allPhotos([_photo(1)]),
       folder,
     ], loaded: 2, total: 2, complete: true));
     await tester.pump();
@@ -188,6 +214,41 @@ void main() {
     expect(find.text('100NIKON'), findsOneWidget);
 
     repo.completeLoad([folder]);
+    await loading;
+  });
+
+  testWidgets('类型角标:合并组 jpg+raw / 纯 raw / 纯 jpg 各自落格', (tester) async {
+    final repo = _FakeRepo();
+    final controller = BrowserController(repository: repo);
+    await tester.pumpWidget(_host(PhotoGridPage(
+      controller: controller,
+      folderHandle: CameraAlbum.allPhotosHandle,
+      fallbackName: '全部照片',
+      thumbnails: _FakeThumbs(),
+    )));
+
+    final loading = controller.load();
+    repo.updatesCtrl.add(AlbumsUpdate(
+        albums: [
+          CameraAlbum.allPhotos([
+            _pair(101, 102), // DSC_0001 双格式
+            _photo(2), // IMG_2.JPG 独立 JPG
+            _photo(3),
+          ]),
+        ],
+        loaded: 4,
+        total: 4,
+        complete: true));
+    await tester.pump();
+
+    // RAW+JPG 合并:一个 cell、角标 jpg+raw;两份文件不再各占一格。
+    expect(find.text('jpg+raw'), findsOneWidget);
+    expect(find.byKey(ValueKey(102)), findsOneWidget); // 组键 = 最大句柄
+    expect(find.byKey(ValueKey(101)), findsNothing);
+    // 独立 JPG(两张):角标 jpg 各一格。
+    expect(find.text('jpg'), findsNWidgets(2));
+
+    repo.completeLoad([CameraAlbum.allPhotos([_pair(101, 102)])]);
     await loading;
   });
 }

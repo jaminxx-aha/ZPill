@@ -5,8 +5,8 @@
 /// 「相册可以按照文件夹区分,或者汇总」,两种都要)。
 library;
 
-import 'object_entry.dart';
 import 'object_repository.dart';
+import 'photo_group.dart';
 
 final class CameraAlbum {
   const CameraAlbum({
@@ -20,7 +20,7 @@ final class CameraAlbum {
 
   /// 汇总相册:全部 image/video,按 [ObjectRepositoryImpl.compareEntries]
   /// 排序(新的在前)。
-  factory CameraAlbum.allPhotos(List<ObjectEntry> items) => CameraAlbum(
+  factory CameraAlbum.allPhotos(List<PhotoGroup> items) => CameraAlbum(
         name: '全部照片',
         folderHandle: allPhotosHandle,
         items: List.unmodifiable(items),
@@ -32,15 +32,16 @@ final class CameraAlbum {
   /// 对应文件夹对象的 handle;[allPhotosHandle] 表示汇总相册。
   final int folderHandle;
 
-  /// 相册内容(image/video;按拍摄时间倒序,新的在前)。
-  final List<ObjectEntry> items;
+  /// 相册内容(合并后的照片条目:RAW+JPG 一组,见 [PhotoGroup];
+  /// 按拍摄时间倒序,新的在前)。
+  final List<PhotoGroup> items;
 
   bool get isAggregate => folderHandle == allPhotosHandle;
 
   bool get isEmpty => items.isEmpty;
 
   /// 封面:最新一张(网格卡片背景)。
-  ObjectEntry? get cover => items.isEmpty ? null : items.first;
+  PhotoGroup? get cover => items.isEmpty ? null : items.first;
 
   /// 最新拍摄时间(相册排序用;无时间信息为 null)。
   DateTime? get newestAt => cover?.capturedAt;
