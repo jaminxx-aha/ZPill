@@ -6,7 +6,8 @@ import 'package:nikon_pill/core/ptpip/object_info.dart';
 import 'package:nikon_pill/core/utils/byte_writer.dart';
 
 /// 数据集手搓(布局独立于被测代码,字段排布按 ISO 15740 §13.3 与
-/// probe dump_object_info 的 Zf 真机结构):52 字节定长头 + 两个 STRING。
+/// probe dump_object_info 的 Zf 真机结构):52 字节定长头 + 三个 STRING
+/// (filename / captureDate / modificationDate)。
 Uint8List buildDataset() {
   final w = ByteWriter()
     ..u32(0x00010001) // StorageID(Slot 1)
@@ -56,5 +57,21 @@ void main() {
     expect(info.parentHandle, 0xC8);
     expect(info.filename, 'DSC_1234.JPG');
     expect(info.captureDate, '20260927T101520');
+  });
+
+  test('末串 ModificationDate:完整数据集解析出;截断在 captureDate 后则容错为 null', () {
+    // 完整数据集:在 buildDataset 尾部补上第三个 STRING。
+    final w = ByteWriter()
+      ..u8(15)
+      ..utf16le('20260927T101523');
+    final withMod = Uint8List.fromList([...buildDataset(), ...w.takeBytes()]);
+    final info = PtpObjectInfo.parse(handle: 3, dataset: withMod);
+    expect(info.captureDate, '20260927T101520');
+    expect(info.modificationDate, '20260927T101523');
+
+    // 截断数据集(captureDate 后戛然而止):不抛越界,modificationDate 为 null。
+    final truncated = PtpObjectInfo.parse(handle: 4, dataset: buildDataset());
+    expect(truncated.captureDate, '20260927T101520');
+    expect(truncated.modificationDate, isNull);
   });
 }

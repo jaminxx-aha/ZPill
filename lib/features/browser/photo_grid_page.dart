@@ -14,9 +14,8 @@ import 'package:flutter/material.dart';
 
 import '../../app_services.dart';
 import '../../core/browser/album.dart';
-import '../../core/browser/object_entry.dart';
+import '../../core/browser/photo_group.dart';
 import '../../core/browser/thumbnail_cache.dart';
-import '../../core/ptpip/object_format.dart';
 import '../../core/transfer/transfer_engine.dart';
 import '../../core/transfer/transfer_task.dart';
 import 'browser_controller.dart';
@@ -48,7 +47,11 @@ class PhotoGridPage extends StatefulWidget {
 }
 
 class _PhotoGridPageState extends State<PhotoGridPage> {
+  /// 选中集按组身份键(PhotoGroup.key):RAW+JPG 合并组选一次 = 两种都下。
   final Set<int> _selected = {};
+
+  /// 缩略图 Future 按代表文件句柄缓存:主文件变化(渐进配对完成
+  /// NEF→JPG 切换)时取新 Future,其余重建不闪、不重发请求。
   final Map<int, Future<String>> _thumbFutures = {};
 
   /// 最后一次解析到的活相册(断连后控制器清空,以它保持网格快照)。
@@ -68,33 +71,34 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
     return null;
   }
 
-  void _toggle(ObjectEntry entry) {
+  void _toggle(PhotoGroup group) {
     setState(() {
-      if (!_selected.remove(entry.handle)) {
-        _selected.add(entry.handle);
+      if (!_selected.remove(group.key)) {
+        _selected.add(group.key);
       }
     });
   }
 
   /// 全选 = 当前已知项(渐进同步中张数随后续块增长,已选项不自动扩选)。
-  void _selectAll(List<ObjectEntry> items) {
+  void _selectAll(List<PhotoGroup> items) {
     setState(() {
       _selected
         ..clear()
-        ..addAll(items.map((e) => e.handle));
+        ..addAll(items.map((group) => group.key));
     });
   }
 
   void _clearSelection() => setState(_selected.clear);
 
   Future<void> _downloadSelected(
-      List<ObjectEntry> items, TransferDestination destination) async {
-    final entries = items
-        .where((e) => _selected.contains(e.handle))
-        .toList(growable: false);
-    if (entries.isEmpty) {
+      List<PhotoGroup> items, TransferDestination destination) async {
+    final groups =
+        items.where((g) => _selected.contains(g.key)).toList(growable: false);
+    if (groups.isEmpty) {
       return;
     }
+    // 一组 = 整组文件入队:选一张照片,JPG 与 RAW 都下载。
+    final entries = [for (final group in groups) ...group.members];
     await _engine.enqueue(entries, destination: destination);
     _clearSelection();
     if (!mounted) {
@@ -103,11 +107,12 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
     final where = destination == TransferDestination.gallery ? '相册' : '应用';
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
-      ..showSnackBar(
-          SnackBar(content: Text('已开始下载 ${entries.length} 项到$where,详见「下载」页')));
+      ..showSnackBar(SnackBar(
+          content: Text(
+              '已开始下载 ${groups.length} 项 / ${entries.length} 个文件到$where,详见「下载」页')));
   }
 
-  void _openViewer(List<ObjectEntry> items, int index) {
+  void _openViewer(List<PhotoGroup> items, int index) {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => PhotoViewerPage(
@@ -126,7 +131,7 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
         final live = _resolve(widget.controller.albums);
         if (live != null) _lastAlbum = live;
         final album = live ?? _lastAlbum;
-        final items = album?.items ?? const <ObjectEntry>[];
+        final items = album?.items ?? const <PhotoGroup>[];
         return Scaffold(
           appBar: AppBar(
             title: Text(_selecting
@@ -156,9 +161,10 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
               crossAxisSpacing: 2,
             ),
             itemCount: items.length,
-            // key 按 handle:增长期间尾部追加、条目重排时元素正确复用
-            //(选中态与缩略图 Future 都按 handle 键控)。
-            itemBuilder: (_, i) => _cell(items[i], i, items, key: ValueKey(items[i].handle)),
+            // key 按组身份键:增长期间尾部追加、条目重排时元素正确复用
+            //(选中态与缩略图 Future 都按键控);渐进配对前后键稳定,
+            // RAW+JPG 后到的那份并入时 cell 不漂移。
+            itemBuilder: (_, i) => _cell(items[i], i, items, key: ValueKey(items[i].key)),
           ),
           bottomSheet: _selecting ? _actionBar(items) : null,
         );
@@ -166,21 +172,21 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
     );
   }
 
-  Widget _cell(ObjectEntry entry, int index, List<ObjectEntry> items, {Key? key}) {
-    final selected = _selected.contains(entry.handle);
+  Widget _cell(PhotoGroup group, int index, List<PhotoGroup> items, {Key? key}) {
+    final selected = _selected.contains(group.key);
     return GestureDetector(
       key: key,
       onTap: () => _selecting
-          ? _toggle(entry)
+          ? _toggle(group)
           : _openViewer(items, index),
-      onLongPress: () => _toggle(entry),
+      onLongPress: () => _toggle(group),
       child: Stack(
         fit: StackFit.expand,
         children: [
           FutureBuilder<String>(
             future: _thumbFutures.putIfAbsent(
-              entry.handle,
-              () => _thumbnails.pathFor(entry, ThumbSource.grid),
+              group.primary.handle,
+              () => _thumbnails.pathFor(group.primary, ThumbSource.grid),
             ),
             builder: (context, snap) {
               if (snap.connectionState != ConnectionState.done) {
@@ -212,7 +218,31 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
               );
             },
           ),
-          if (entry.kind == ObjectKind.video)
+          // 类型角标(左下):jpg / raw / jpg+raw,RAW+JPG 合并组可见性。
+          if (group.typeLabel.isNotEmpty)
+            Align(
+              alignment: Alignment.bottomLeft,
+              child: Padding(
+                padding: const EdgeInsets.all(4),
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.55),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    group.typeLabel,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 9,
+                      height: 1.3,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          if (group.isVideo)
             const Align(
               alignment: Alignment.bottomRight,
               child: Padding(
@@ -247,7 +277,7 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
     );
   }
 
-  Widget _actionBar(List<ObjectEntry> items) {
+  Widget _actionBar(List<PhotoGroup> items) {
     return SafeArea(
       child: BottomAppBar(
         child: Row(

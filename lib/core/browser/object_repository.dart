@@ -9,6 +9,7 @@ import '../ptpip/object_info.dart';
 import '../ptp/ptp_session.dart';
 import 'album.dart';
 import 'object_entry.dart';
+import 'photo_group.dart';
 
 /// 一次增量发布:渐进枚举期间每块完成时广播,末尾一次 [complete] 事件
 /// (空相机 / 断点续传零缺口也至少有一次完成事件,订阅方有确定终态)。
@@ -61,7 +62,9 @@ abstract interface class ObjectRepository {
       sizeInBytes: info.compressedSize,
       kind: kind,
       parentHandle: info.parentHandle ?? 0,
-      capturedAt: _parsePtpDate(info.captureDate),
+      // 拍摄时刻缺失回落修改时刻(相机文件拍后不改,两者实际同值)。
+      capturedAt:
+          _parsePtpDate(info.captureDate) ?? _parsePtpDate(info.modificationDate),
       formatCode: info.objectFormat,
     );
   }
@@ -224,32 +227,57 @@ final class ObjectRepositoryImpl implements ObjectRepository {
 
   /// 派生相册:汇总 + 按文件夹分组(仅 image/video 计入)。
   ///
+  /// RAW+JPG 合并([buildPhotoGroups]):同一快门的多个文件归为一个
+  /// [PhotoGroup],相册里不再重复显示。同名文件夹(双槽镜像/分存,两槽
+  /// 各一个「100NIKON」)并成一个相册瓦片,内容为并集。
+  ///
   /// [dropUnnamedFolders]:渐进期间文件夹对象(低句柄,倒序后最后取)可能
   /// 尚未到达 —— true 时这些相册暂不亮相,避免「文件夹 0x11」先占位再
   /// 改名的闪变;最终发布与 [loadAlbums] 返回值用默认 false(兜底名,
   /// 防文件夹对象真缺失时丢相册)。
   List<CameraAlbum> _buildAlbums({bool dropUnnamedFolders = false}) {
-    final all = <ObjectEntry>[];
-    final byFolder = <int, List<ObjectEntry>>{};
-    for (final entry in _byHandle.values) {
-      if (entry.isFolder) continue;
-      if (entry.kind != ObjectKind.image && entry.kind != ObjectKind.video) {
-        continue;
-      }
-      all.add(entry);
-      byFolder.putIfAbsent(entry.parentHandle, () => []).add(entry);
-    }
-    all.sort(compareEntries);
+    final entries = <ObjectEntry>[
+      for (final entry in _byHandle.values)
+        if (!entry.isFolder &&
+            (entry.kind == ObjectKind.image ||
+                entry.kind == ObjectKind.video))
+          entry,
+    ];
+    // 组排序一次,各文件夹相册按遍历序继承(免逐夹重排)。
+    final groups = buildPhotoGroups(entries)
+      ..sort((a, b) => compareEntries(a.primary, b.primary));
 
-    final folderAlbums = <CameraAlbum>[];
-    byFolder.forEach((folderHandle, items) {
-      items.sort(compareEntries);
+    final byFolder = <int, List<PhotoGroup>>{};
+    for (final group in groups) {
+      // 双槽分存的组横跨文件夹:涉及的文件夹相册各计入一次。
+      for (final folder in group.folderHandles) {
+        byFolder.putIfAbsent(folder, () => []).add(group);
+      }
+    }
+
+    // 同名文件夹并成一个相册(2026-10-03 真机反馈:双槽各有一个
+    // 「100NIKON」,列表出两个同名瓦片、各展示同一批合并组 —— 用户
+    // 看到「相同文件夹还是有两份」)。句柄取最小保持确定性;内容从
+    // 全局序过滤出并集(同一组实例出现在两夹列表里,过滤天然去重)。
+    final handlesByName = <String, Set<int>>{};
+    for (final folderHandle in byFolder.keys) {
       final folder = _byHandle[folderHandle];
-      if (folder == null && dropUnnamedFolders) return;
+      if (folder == null && dropUnnamedFolders) continue;
+      handlesByName
+          .putIfAbsent(
+              folder?.name ?? '文件夹 0x${folderHandle.toRadixString(16)}',
+              () => <int>{})
+          .add(folderHandle);
+    }
+    final folderAlbums = <CameraAlbum>[];
+    handlesByName.forEach((name, handles) {
       folderAlbums.add(CameraAlbum(
-        name: folder?.name ?? '文件夹 0x${folderHandle.toRadixString(16)}',
-        folderHandle: folderHandle,
-        items: List.unmodifiable(items),
+        name: name,
+        folderHandle: handles.reduce(math.min),
+        items: List.unmodifiable([
+          for (final group in groups)
+            if (group.folderHandles.any(handles.contains)) group,
+        ]),
       ));
     });
     // 文件夹相册按最新拍摄时间倒序(与相册内照片排序一致),再按名稳定兜底。
@@ -261,7 +289,7 @@ final class ObjectRepositoryImpl implements ObjectRepository {
       return a.name.compareTo(b.name);
     });
 
-    return [CameraAlbum.allPhotos(all), ...folderAlbums];
+    return [CameraAlbum.allPhotos(groups), ...folderAlbums];
   }
 
   /// 同层排序:文件夹在前,照片按拍摄时间倒序(新的在前),无时间按名。

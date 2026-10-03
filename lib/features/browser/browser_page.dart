@@ -200,7 +200,7 @@ class _AlbumTile extends StatelessWidget {
         child: SizedBox(
           width: 72,
           height: 72,
-          child: cover == null ? const _CoverPlaceholder() : _Cover(cover),
+          child: cover == null ? const _CoverPlaceholder() : _Cover(cover.primary),
         ),
       ),
       title: Row(

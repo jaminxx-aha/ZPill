@@ -17,6 +17,7 @@ final class PtpObjectInfo {
     required this.compressedSize,
     required this.filename,
     this.captureDate,
+    this.modificationDate,
     this.parentHandle,
   });
 
@@ -29,6 +30,10 @@ final class PtpObjectInfo {
 
   /// PTP 日期串,形如 `YYYYMMDDThhmmss.s`(UTC);解析见 browser 层。
   final String? captureDate;
+
+  /// 修改时刻(ISO 15740 ObjectInfo 末串):个别对象 CaptureDate 缺失时
+  /// 作拍摄时刻的回落(相机文件拍后不改,两者实际同值)。
+  final String? modificationDate;
 
   /// 所属文件夹(Association 对象)的 handle;根目录为 0。
   final int? parentHandle;
@@ -61,6 +66,9 @@ final class PtpObjectInfo {
     r.u32(); // SequenceNumber
     final filename = r.ptpString() ?? '';
     final captureDate = r.ptpString();
+    // 末串 ModificationDate:真机应答都带,但个别对象可能截断;ByteReader
+    // 无越界保护,读前判 eof 兜底(空串语义与 captureDate 的 0xFF 相同)。
+    final modificationDate = r.eof ? null : r.ptpString();
     return PtpObjectInfo(
       handle: handle,
       storageId: storageId,
@@ -68,6 +76,7 @@ final class PtpObjectInfo {
       compressedSize: compressedSize,
       filename: filename,
       captureDate: captureDate,
+      modificationDate: modificationDate,
       parentHandle: parentHandle,
     );
   }

@@ -10,9 +10,8 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 import '../../app_services.dart';
-import '../../core/browser/object_entry.dart';
+import '../../core/browser/photo_group.dart';
 import '../../core/browser/thumbnail_cache.dart';
-import '../../core/ptpip/object_format.dart';
 import '../../core/transfer/transfer_engine.dart';
 import '../../core/transfer/transfer_task.dart';
 import '../common/format.dart';
@@ -24,7 +23,7 @@ class PhotoViewerPage extends StatefulWidget {
     required this.initialIndex,
   });
 
-  final List<ObjectEntry> items;
+  final List<PhotoGroup> items;
   final int initialIndex;
 
   @override
@@ -46,8 +45,9 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
     super.dispose();
   }
 
-  Future<void> _download(ObjectEntry entry, TransferDestination destination) async {
-    await _engine.enqueue([entry], destination: destination);
+  /// 下载 = 整组(RAW+JPG 合并组:两种格式都拿回)。
+  Future<void> _download(PhotoGroup group, TransferDestination destination) async {
+    await _engine.enqueue(group.members, destination: destination);
     if (!mounted) {
       return;
     }
@@ -59,7 +59,7 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
 
   @override
   Widget build(BuildContext context) {
-    final entry = widget.items[_index];
+    final group = widget.items[_index];
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
@@ -73,18 +73,18 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
         onPageChanged: (i) => setState(() => _index = i),
         itemBuilder: (_, i) => _page(widget.items[i]),
       ),
-      bottomNavigationBar: _infoBar(context, entry),
+      bottomNavigationBar: _infoBar(context, group),
     );
   }
 
-  Widget _page(ObjectEntry entry) {
+  Widget _page(PhotoGroup group) {
     return InteractiveViewer(
       maxScale: 8,
       child: Center(
         child: FutureBuilder<String>(
           future: _previewFutures.putIfAbsent(
-            entry.handle,
-            () => _thumbnails.pathFor(entry, ThumbSource.preview),
+            group.primary.handle,
+            () => _thumbnails.pathFor(group.primary, ThumbSource.preview),
           ),
           builder: (context, snap) {
             if (snap.connectionState != ConnectionState.done) {
@@ -124,13 +124,15 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
     );
   }
 
-  Widget _infoBar(BuildContext context, ObjectEntry entry) {
+  Widget _infoBar(BuildContext context, PhotoGroup group) {
+    // RAW+JPG 合并组:两份文件名都列出,大小取合计。
+    final pair = group.hasJpg && group.hasRaw;
     final info = [
-      entry.name,
-      formatBytes(entry.sizeInBytes),
-      if (formatDateTime(entry.capturedAt) != null)
-        formatDateTime(entry.capturedAt)!,
-      if (entry.kind == ObjectKind.video) '视频',
+      pair ? '${group.jpg!.name} + ${group.raw!.name}' : group.name,
+      formatBytes(group.totalBytes),
+      if (formatDateTime(group.capturedAt) != null)
+        formatDateTime(group.capturedAt)!,
+      if (group.isVideo) '视频',
     ].join(' · ');
     return SafeArea(
       top: false,
@@ -161,7 +163,7 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
                         visualDensity: VisualDensity.compact,
                       ),
                       onPressed: () =>
-                          _download(entry, TransferDestination.gallery),
+                          _download(group, TransferDestination.gallery),
                       icon: const Icon(Icons.photo_library_outlined),
                       label: const Text('下载到相册'),
                     ),
@@ -174,7 +176,7 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
                         foregroundColor: Colors.white,
                         visualDensity: VisualDensity.compact,
                       ),
-                      onPressed: () => _download(entry, TransferDestination.app),
+                      onPressed: () => _download(group, TransferDestination.app),
                       icon: const Icon(Icons.folder_outlined),
                       label: const Text('下载到应用'),
                     ),

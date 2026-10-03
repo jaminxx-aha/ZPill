@@ -21,6 +21,7 @@ Uint8List _objectInfoDataset({
   required int size,
   required String name,
   String? captured,
+  String? modified,
 }) {
   final w = ByteWriter()
     ..u32(0x00010001) // StorageID
@@ -42,13 +43,11 @@ Uint8List _objectInfoDataset({
     ..u8(name.length + 1)
     ..utf16le(name)
     ..u16(0); // filename(Zf 真机带结尾 NUL)
-  if (captured != null) {
-    w
-      ..u8(15)
-      ..utf16le(captured);
-  } else {
-    w.u8(0);
-  }
+  // captureDate / modificationDate:与真机一致三串齐全;null 写空串。
+  w.u8(captured == null ? 0 : 15);
+  if (captured != null) w.utf16le(captured);
+  w.u8(modified == null ? 0 : 15);
+  if (modified != null) w.utf16le(modified);
   return w.takeBytes();
 }
 
@@ -137,11 +136,14 @@ void main() {
     expect(folder.items.map((e) => e.name), ['DSC_0001.NEF', 'DSC_0002.JPG']);
     // NEF 格式码 0x3000 → kind 由 .nef 扩展名兜底为 image;
     // parentHandle 落到 entry(相册分组依据)。
-    final nef = folder.items.first;
+    final nef = folder.items.first.primary;
     expect(nef.kind, ObjectKind.image);
     expect(nef.sizeInBytes, 26843545);
     expect(nef.parentHandle, 0x11);
     expect(nef.capturedAt, DateTime.utc(2026, 9, 27, 10, 15, 20));
+    // 基名不同(0001/0002)不合并:两张独立照片,角标各表其类。
+    expect(folder.items.first.typeLabel, 'raw');
+    expect(folder.items.last.typeLabel, 'jpg');
   });
 
   test('loadAlbums:无照片内容的文件夹(MISC)不成为相册', () async {
@@ -171,7 +173,7 @@ void main() {
     expect(albums[0].items.map((e) => e.name),
         ['DSC_0004.MOV', 'DSC_0003.JPG']);
     // MOV 扩展名兜底为 video。
-    expect(albums[0].items.first.kind, ObjectKind.video);
+    expect(albums[0].items.first.isVideo, isTrue);
   });
 
   test('渐进发布:每块合并并广播;文件夹对象未到前文件夹相册不亮相', () async {
@@ -366,5 +368,248 @@ void main() {
     expect(albums.single.items, isEmpty);
     expect(updates.map((u) => (u.loaded, u.total, u.complete)),
         [(0, 0, true)]);
+  });
+
+  // ── RAW+JPG 合并 ──────────────────────────────────────────────
+
+  test('RAW+JPG 合并:同基名同时刻归一组,角标 jpg+raw,代表文件取 JPG', () async {
+    final fake = FakePtpTransport();
+    final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
+    // 句柄升序 [夹, NEF, JPG, 独立JPG];倒序请求:0x24 → 0x23 → 0x11 → 0x10。
+    fake.reply(_okData(_handlesDataset([0x10, 0x11, 0x22, 0x23, 0x24])));
+    fake.reply(_okData(_objectInfoDataset(
+        format: 0x3801, parent: 0x11, size: 2000000,
+        name: 'DSC_0002.JPG', captured: '20260926T090000'))); // 0x24
+    fake.reply(_okData(_objectInfoDataset(
+        format: 0x3801, parent: 0x11, size: 8400000,
+        name: 'DSC_0001.JPG', captured: '20260927T101520'))); // 0x23
+    fake.reply(_okData(_objectInfoDataset(
+        format: 0x3000, parent: 0x11, size: 26843545,
+        name: 'DSC_0001.NEF', captured: '20260927T101520'))); // 0x22
+    fake.reply(_okData(_objectInfoDataset(
+        format: 0x3001, parent: 0x10, size: 0, name: '100NIKON'))); // 0x11
+    fake.reply(_okData(_objectInfoDataset(
+        format: 0x3001, parent: 0, size: 0, name: 'DCIM'))); // 0x10
+
+    final albums = await repo.loadAlbums();
+
+    // 汇总:2 项(合并后),新的在前;组代表文件 = JPG。
+    final all = albums[0];
+    expect(all.items, hasLength(2));
+    expect(all.items.map((g) => g.name), ['DSC_0001.JPG', 'DSC_0002.JPG']);
+
+    final pair = all.items.first;
+    expect(pair.typeLabel, 'jpg+raw');
+    expect(pair.hasJpg, isTrue);
+    expect(pair.hasRaw, isTrue);
+    expect(pair.primary.name, 'DSC_0001.JPG'); // JPG 优先做缩略图/代表
+    expect(pair.totalBytes, 8400000 + 26843545); // 下载 = 两份合计
+    expect(pair.members.map((e) => e.name),
+        unorderedEquals(['DSC_0001.NEF', 'DSC_0001.JPG']));
+    // 组键稳定取成员最大句柄(渐进配对前后不漂移的落点)。
+    expect(pair.key, 0x23);
+    // 独立 JPG:单文件组,角标 jpg。
+    expect(all.items.last.typeLabel, 'jpg');
+    expect(all.items.last.members, hasLength(1));
+
+    // 文件夹相册同样合并,张数 = 快门数而非文件数。
+    final folder = albums[1];
+    expect(folder.items, hasLength(2));
+    expect(folder.items.first.typeLabel, 'jpg+raw');
+  });
+
+  test('跨卡槽 RAW/JPG 分存:不同文件夹同基名同时刻也合并,两夹各现一次', () async {
+    final fake = FakePtpTransport();
+    final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
+    // slot1 夹 0x10 放 NEF,slot2 夹 0x20 放 JPG,同快门同基名。
+    fake.reply(_okData(_handlesDataset([0x10, 0x12, 0x20, 0x22])));
+    fake.reply(_okData(_objectInfoDataset(
+        format: 0x3801, parent: 0x20, size: 8400000,
+        name: 'DSC_0001.JPG', captured: '20260927T101520'))); // 0x22
+    fake.reply(_okData(_objectInfoDataset(
+        format: 0x3001, parent: 0, size: 0, name: 'SLOT2'))); // 0x20
+    fake.reply(_okData(_objectInfoDataset(
+        format: 0x3000, parent: 0x10, size: 26843545,
+        name: 'DSC_0001.NEF', captured: '20260927T101520'))); // 0x12
+    fake.reply(_okData(_objectInfoDataset(
+        format: 0x3001, parent: 0, size: 0, name: 'SLOT1'))); // 0x10
+
+    final albums = await repo.loadAlbums();
+
+    // 汇总:跨夹合并为一项。
+    final all = albums[0];
+    expect(all.items, hasLength(1));
+    expect(all.items.single.typeLabel, 'jpg+raw');
+    // 两个文件夹相册各计入该组一次(组横跨两夹);两夹最新时间同
+    //(同一组),排序回退按名:SLOT1 在前。
+    expect(albums.map((a) => a.name), ['全部照片', 'SLOT1', 'SLOT2']);
+    expect(albums[1].items.single.typeLabel, 'jpg+raw');
+    expect(albums[2].items.single.typeLabel, 'jpg+raw');
+  });
+
+  test('同名不同时刻不合并:时间闸防跨天重编号误并', () async {
+    final fake = FakePtpTransport();
+    final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
+    // 两张独立照片:同基名(跨夹)、拍摄时刻差一年 —— 不得配对。
+    fake.reply(_okData(_handlesDataset([0x10, 0x12, 0x20, 0x22])));
+    fake.reply(_okData(_objectInfoDataset(
+        format: 0x3801, parent: 0x20, size: 8400000,
+        name: 'DSC_0001.JPG', captured: '20261001T090000'))); // 0x22
+    fake.reply(_okData(_objectInfoDataset(
+        format: 0x3001, parent: 0, size: 0, name: 'SLOT2'))); // 0x20
+    fake.reply(_okData(_objectInfoDataset(
+        format: 0x3000, parent: 0x10, size: 26843545,
+        name: 'DSC_0001.NEF', captured: '20250101T090000'))); // 0x12
+    fake.reply(_okData(_objectInfoDataset(
+        format: 0x3001, parent: 0, size: 0, name: 'SLOT1'))); // 0x10
+
+    final albums = await repo.loadAlbums();
+
+    expect(albums[0].items, hasLength(2)); // 各自独立,不合并
+    expect(albums[0].items.map((g) => g.typeLabel), ['jpg', 'raw']);
+  });
+
+  test('渐进配对:RAW 后到并入,组键不漂移,角标升级为 jpg+raw', () async {
+    final fake = FakePtpTransport();
+    final repo = ObjectRepositoryImpl(
+        session: PtpSession(transport: fake), chunkSize: 2);
+    // 句柄升序 [SLOT1夹, NEF, SLOT2夹, JPG];倒序块 1 = [0x22(JPG), 0x20(夹)],
+    // 块 2 = [0x12(NEF), 0x10(夹)] —— 配对的两份拆在两块。
+    fake.reply(_okData(_handlesDataset([0x10, 0x12, 0x20, 0x22])));
+    fake.reply(_okData(_objectInfoDataset(
+        format: 0x3801, parent: 0x20, size: 8400000,
+        name: 'DSC_0001.JPG', captured: '20260927T101520'))); // 0x22
+    fake.reply(_okData(_objectInfoDataset(
+        format: 0x3001, parent: 0, size: 0, name: 'SLOT2'))); // 0x20
+    fake.reply(_okData(_objectInfoDataset(
+        format: 0x3000, parent: 0x10, size: 26843545,
+        name: 'DSC_0001.NEF', captured: '20260927T101520'))); // 0x12
+    fake.reply(_okData(_objectInfoDataset(
+        format: 0x3001, parent: 0, size: 0, name: 'SLOT1'))); // 0x10
+    final updates = <AlbumsUpdate>[];
+    repo.updates.listen(updates.add);
+
+    await repo.loadAlbums();
+
+    // 块 1(仅 JPG 到):单项、角标 jpg、键 = 最大句柄 0x22。
+    final early = updates[0].albums[0].items;
+    expect(early, hasLength(1));
+    expect(early.single.typeLabel, 'jpg');
+    expect(early.single.key, 0x22);
+    // 块 2(NEF 到):并入同组 —— 仍单项、键不变、角标升级。
+    final merged = updates[1].albums[0].items;
+    expect(merged, hasLength(1));
+    expect(merged.single.key, 0x22);
+    expect(merged.single.typeLabel, 'jpg+raw');
+    expect(merged.single.members, hasLength(2));
+  });
+
+  test('真机回归:同文件夹同基名、拍摄时刻差 3 秒(连拍落盘漂移)也合并', () async {
+    final fake = FakePtpTransport();
+    final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
+    // 同夹 0x11:JPG 落盘晚 3 秒(CaptureDate 各记各的提交时刻)。
+    fake.reply(_okData(_handlesDataset([0x10, 0x11, 0x22, 0x23])));
+    fake.reply(_okData(_objectInfoDataset(
+        format: 0x3801, parent: 0x11, size: 8400000,
+        name: 'DSC_0001.JPG', captured: '20261002T090003'))); // 0x23
+    fake.reply(_okData(_objectInfoDataset(
+        format: 0x3000, parent: 0x11, size: 26843545,
+        name: 'DSC_0001.NEF', captured: '20261002T090000'))); // 0x22
+    fake.reply(_okData(_objectInfoDataset(
+        format: 0x3001, parent: 0x10, size: 0, name: '100NIKON'))); // 0x11
+    fake.reply(_okData(_objectInfoDataset(
+        format: 0x3001, parent: 0, size: 0, name: 'DCIM'))); // 0x10
+
+    final albums = await repo.loadAlbums();
+
+    expect(albums[0].items, hasLength(1));
+    expect(albums[0].items.single.typeLabel, 'jpg+raw');
+    expect(albums[0].items.single.totalBytes, 8400000 + 26843545);
+    expect(albums[1].items.single.typeLabel, 'jpg+raw'); // 文件夹相册同并
+  });
+
+  test('CaptureDate 缺失:回落 ModificationDate 补齐拍摄时刻', () async {
+    final fake = FakePtpTransport();
+    final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
+    // NEF 的 captureDate 空串、modificationDate 在 —— 时刻不得丢(排序/
+    // 跨夹佐证都靠它)。
+    fake.reply(_okData(_handlesDataset([0x10, 0x11, 0x12, 0x13])));
+    fake.reply(_okData(_objectInfoDataset(
+        format: 0x3801, parent: 0x11, size: 8400000,
+        name: 'DSC_0002.JPG', captured: '20260926T090000'))); // 0x13
+    fake.reply(_okData(_objectInfoDataset(
+        format: 0x3000, parent: 0x11, size: 26843545,
+        name: 'DSC_0001.NEF', modified: '20260927T101520'))); // 0x12
+    fake.reply(_okData(_objectInfoDataset(
+        format: 0x3001, parent: 0x10, size: 0, name: '100NIKON'))); // 0x11
+    fake.reply(_okData(_objectInfoDataset(
+        format: 0x3001, parent: 0, size: 0, name: 'DCIM'))); // 0x10
+
+    final albums = await repo.loadAlbums();
+
+    final nef = albums[0].items.first.primary;
+    expect(nef.capturedAt, DateTime.utc(2026, 9, 27, 10, 15, 20));
+    // 时刻可用的下游:汇总按时间倒序排(NEF 9-27 新于 JPG 9-26)。
+    expect(albums[0].items.map((g) => g.name), ['DSC_0001.NEF', 'DSC_0002.JPG']);
+  });
+
+  test('双槽同名文件夹:并成一个相册瓦片,内容为并集(不再两份)', () async {
+    final fake = FakePtpTransport();
+    final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
+    // 两槽各有一个「100NIKON」(不同句柄),同一快门的 JPG/NEF 分存两夹
+    //(真机双槽镜像/分存的实际形态)。
+    fake.reply(_okData(_handlesDataset([0x10, 0x12, 0x20, 0x22])));
+    fake.reply(_okData(_objectInfoDataset(
+        format: 0x3801, parent: 0x20, size: 8400000,
+        name: 'DSC_0001.JPG', captured: '20260927T101520'))); // 0x22
+    fake.reply(_okData(_objectInfoDataset(
+        format: 0x3001, parent: 0, size: 0, name: '100NIKON'))); // 0x20 槽2
+    fake.reply(_okData(_objectInfoDataset(
+        format: 0x3000, parent: 0x10, size: 26843545,
+        name: 'DSC_0001.NEF', captured: '20260927T101520'))); // 0x12
+    fake.reply(_okData(_objectInfoDataset(
+        format: 0x3001, parent: 0, size: 0, name: '100NIKON'))); // 0x10 槽1
+
+    final albums = await repo.loadAlbums();
+
+    // 一个 100NIKON 相册(同名瓦片不再重复),组只出现一次。
+    expect(albums.map((a) => a.name), ['全部照片', '100NIKON']);
+    expect(albums[1].items, hasLength(1));
+    expect(albums[1].items.single.typeLabel, 'jpg+raw');
+    expect(albums[1].items.single.folderHandles, {0x10, 0x20});
+    // 句柄取最小,确定性(渐进发布间稳定)。
+    expect(albums[1].folderHandle, 0x10);
+  });
+
+  test('双槽同名文件夹渐进发布:夹对象先后到达也只亮相一个同名相册', () async {
+    final fake = FakePtpTransport();
+    final repo = ObjectRepositoryImpl(
+        session: PtpSession(transport: fake), chunkSize: 3);
+    // 倒序块 1 = [0x22(JPG), 0x20(槽2夹), 0x12(NEF)],块 2 = [0x10(槽1夹)]:
+    // 槽 2 的夹对象先到(相册以 0x20 亮相),槽 1 的夹对象后到 → 并名。
+    fake.reply(_okData(_handlesDataset([0x10, 0x12, 0x20, 0x22])));
+    fake.reply(_okData(_objectInfoDataset(
+        format: 0x3801, parent: 0x20, size: 8400000,
+        name: 'DSC_0001.JPG', captured: '20260927T101520'))); // 0x22
+    fake.reply(_okData(_objectInfoDataset(
+        format: 0x3001, parent: 0, size: 0, name: '100NIKON'))); // 0x20
+    fake.reply(_okData(_objectInfoDataset(
+        format: 0x3000, parent: 0x10, size: 26843545,
+        name: 'DSC_0001.NEF', captured: '20260927T101520'))); // 0x12
+    fake.reply(_okData(_objectInfoDataset(
+        format: 0x3001, parent: 0, size: 0, name: '100NIKON'))); // 0x10
+    final updates = <AlbumsUpdate>[];
+    repo.updates.listen(updates.add);
+
+    await repo.loadAlbums();
+
+    // 块 1:槽 1 夹对象未到 —— 但组横跨两夹,槽 2 的 100NIKON 已含全组,
+    //亮相的始终只有一个 100NIKON。
+    expect(updates[0].albums.map((a) => a.name), ['全部照片', '100NIKON']);
+    expect(updates[0].albums[1].items.single.typeLabel, 'jpg+raw');
+    // 块 2(槽 1 夹到):同名并合,句柄取最小 0x10;仍只有一个。
+    expect(updates[1].albums.map((a) => a.name), ['全部照片', '100NIKON']);
+    expect(updates[1].albums[1].folderHandle, 0x10);
+    expect(updates[1].albums[1].items.single.typeLabel, 'jpg+raw');
   });
 }
