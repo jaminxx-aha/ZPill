@@ -1,14 +1,35 @@
 /// 相册条目:一次快门产出的「一张照片」。
 ///
 /// RAW+JPG 双格式(或双卡槽备份副本)对应多个文件,浏览层把它们合并成
-/// 一个条目,不再重复显示;选中/下载以组为单位 —— 选一张 = JPG 和 RAW
-/// 都拿回。视频不存在双格式,恒为单文件组。
+/// 一个条目,不再重复显示;下载以组为单位,双格式组由用户选格式
+/// (见 [PhotoDownloadFormat]),缺所选格式的组跳过。视频不存在双格式,
+/// 恒为单文件组。
 ///
 /// 配对规则见 [buildPhotoGroups]。
 library;
 
 import '../ptpip/object_format.dart';
 import 'object_entry.dart';
+
+/// 下载格式选择(仅对双格式照片组有意义)。
+enum PhotoDownloadFormat {
+  /// 仅 JPG:组内没有 JPG → 该组跳过。
+  jpg('仅 JPG', 'JPG'),
+
+  /// 仅 RAW:组内没有 RAW → 该组跳过。
+  raw('仅 RAW', 'RAW'),
+
+  /// JPG + RAW:有什么下什么(缺哪个格式就只下另一个)。
+  both('JPG + RAW', 'JPG+RAW');
+
+  const PhotoDownloadFormat(this.label, this.short);
+
+  /// 选择面板选项文案。
+  final String label;
+
+  /// 提示文案简写。
+  final String short;
+}
 
 final class PhotoGroup {
   PhotoGroup(Iterable<ObjectEntry> entries)
@@ -65,6 +86,20 @@ final class PhotoGroup {
     if (hasRaw) return 'raw';
     if (hasJpg) return 'jpg';
     return '';
+  }
+
+  /// 按格式选择取下载文件。
+  ///
+  /// 视频不受格式选择影响恒全量;[PhotoDownloadFormat.jpg]/[raw] 组内
+  /// 缺该格式返回空列表(调用方据此跳过该组);双格式副本(jpg/raw
+  /// 各取其一)不会重复入队。
+  List<ObjectEntry> membersFor(PhotoDownloadFormat format) {
+    if (isVideo) return members;
+    return switch (format) {
+      PhotoDownloadFormat.jpg => hasJpg ? [jpg!] : const <ObjectEntry>[],
+      PhotoDownloadFormat.raw => hasRaw ? [raw!] : const <ObjectEntry>[],
+      PhotoDownloadFormat.both => members,
+    };
   }
 
   ObjectEntry? _firstWhere(bool Function(ObjectEntry) test) {

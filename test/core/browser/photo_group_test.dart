@@ -163,4 +163,66 @@ void main() {
     expect(groups.single.members, hasLength(3));
     expect(groups.single.folderHandles, {0x2000, 0x1000, 0x3000});
   });
+
+  // ── membersFor:下载格式选择过滤 ────────────────────────────────
+
+  group('membersFor 按格式取下载文件', () {
+    test('双格式组:仅 JPG/仅 RAW 各取其一,JPG+RAW 全量', () {
+      final group = buildPhotoGroups([
+        _file(0x23, name: 'DSC_0001.JPG'),
+        _file(0x22, name: 'DSC_0001.NEF', format: 0x3000),
+      ]).single;
+
+      expect(group.membersFor(PhotoDownloadFormat.jpg).single.name,
+          'DSC_0001.JPG');
+      expect(group.membersFor(PhotoDownloadFormat.raw).single.name,
+          'DSC_0001.NEF');
+      expect(group.membersFor(PhotoDownloadFormat.both), hasLength(2));
+    });
+
+    test('纯 RAW 组:仅 JPG → 空(调用方跳过);仅 RAW/两者 → 全量', () {
+      final group = buildPhotoGroups([
+        _file(0x22, name: 'DSC_0001.NEF', format: 0x3000),
+      ]).single;
+
+      expect(group.membersFor(PhotoDownloadFormat.jpg), isEmpty);
+      expect(group.membersFor(PhotoDownloadFormat.raw), hasLength(1));
+      expect(group.membersFor(PhotoDownloadFormat.both), hasLength(1));
+    });
+
+    test('纯 JPG 组:仅 RAW → 空', () {
+      final group = buildPhotoGroups([_file(0x23, name: 'DSC_0001.JPG')]).single;
+
+      expect(group.membersFor(PhotoDownloadFormat.raw), isEmpty);
+    });
+
+    test('视频不受格式选择影响:三种选择都全量', () {
+      final group = PhotoGroup([
+        ObjectEntry(
+          handle: 0x31,
+          name: 'DSC_0001.MP4',
+          sizeInBytes: 1000,
+          kind: ObjectKind.video,
+          parentHandle: 0x11,
+          capturedAt: DateTime.utc(2026, 10, 2, 9, 0, 0),
+          formatCode: 0x300D,
+        ),
+      ]);
+
+      for (final format in PhotoDownloadFormat.values) {
+        expect(group.membersFor(format), hasLength(1),
+            reason: '${format.label} 应全量下载视频');
+      }
+    });
+
+    test('双 JPG 备份副本:仅 JPG 只取一份,两者全量(备份也下)', () {
+      final group = PhotoGroup([
+        _file(0x23, name: 'DSC_0001.JPG'),
+        _file(0x13, name: 'DSC_0001.JPG'),
+      ]);
+
+      expect(group.membersFor(PhotoDownloadFormat.jpg), hasLength(1));
+      expect(group.membersFor(PhotoDownloadFormat.both), hasLength(2));
+    });
+  });
 }

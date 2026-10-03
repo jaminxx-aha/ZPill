@@ -1,8 +1,9 @@
 /// 大图预览:PageView 左右滑 + 双指缩放;底部单张下载到相册/应用。
 ///
-/// 预览走 ThumbnailCache preview 档(Nikon GetLargeThumb 的 JPEG,
-/// NEF 也有内嵌预览;相机不支持时缓存层回落 GetThumb)。
-/// 视频显示预览帧 + 信息(播放不在本期)。
+/// 双格式(RAW+JPG)组下载前弹格式选择(仅 JPG/仅 RAW/两者);单格式
+/// 组与视频直接下载。预览走 ThumbnailCache preview 档(Nikon
+/// GetLargeThumb 的 JPEG,NEF 也有内嵌预览;相机不支持时缓存层回落
+/// GetThumb)。视频显示预览帧 + 信息(播放不在本期)。
 library;
 
 import 'dart:io';
@@ -15,16 +16,25 @@ import '../../core/browser/thumbnail_cache.dart';
 import '../../core/transfer/transfer_engine.dart';
 import '../../core/transfer/transfer_task.dart';
 import '../common/format.dart';
+import 'download_format_sheet.dart';
 
 class PhotoViewerPage extends StatefulWidget {
   const PhotoViewerPage({
     super.key,
     required this.items,
     required this.initialIndex,
+    this.thumbnails,
+    this.engine,
   });
 
   final List<PhotoGroup> items;
   final int initialIndex;
+
+  /// 测试注入;缺省用 AppServices 单例。
+  final ThumbnailCache? thumbnails;
+
+  /// 测试注入;缺省用 AppServices 单例。
+  final TransferEngine? engine;
 
   @override
   State<PhotoViewerPage> createState() => _PhotoViewerPageState();
@@ -36,8 +46,10 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
   late int _index = widget.initialIndex;
   final Map<int, Future<String>> _previewFutures = {};
 
-  ThumbnailCache get _thumbnails => AppServices.instance.thumbnails;
-  TransferEngine get _engine => AppServices.instance.transferEngine;
+  ThumbnailCache get _thumbnails =>
+      widget.thumbnails ?? AppServices.instance.thumbnails;
+  TransferEngine get _engine =>
+      widget.engine ?? AppServices.instance.transferEngine;
 
   @override
   void dispose() {
@@ -45,16 +57,28 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
     super.dispose();
   }
 
-  /// 下载 = 整组(RAW+JPG 合并组:两种格式都拿回)。
+  /// 下载:双格式组先选格式(取消即放弃);单格式/视频直接整组。
   Future<void> _download(PhotoGroup group, TransferDestination destination) async {
-    await _engine.enqueue(group.members, destination: destination);
+    var entries = group.members;
+    PhotoDownloadFormat? format;
+    if (!group.isVideo && group.hasJpg && group.hasRaw) {
+      format = await showDownloadFormatSheet(context,
+          subtitle: '这张照片有 JPG 和 RAW 两份文件');
+      if (format == null) {
+        return; // 取消,不下载
+      }
+      entries = group.membersFor(format);
+    }
+    await _engine.enqueue(entries, destination: destination);
     if (!mounted) {
       return;
     }
     final where = destination == TransferDestination.gallery ? '相册' : '应用';
+    final tag = format == null ? '' : '(${format.short})';
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text('已开始下载到$where,详见「下载」页')));
+      ..showSnackBar(SnackBar(
+          content: Text('已开始下载到$where$tag,详见「下载」页')));
   }
 
   @override
