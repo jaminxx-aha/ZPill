@@ -1,4 +1,5 @@
-/// 相册缩略图网格:长按进入多选,选中项可批量下载到相册/应用。
+/// 相册缩略图网格:长按进入多选,选中项可批量下载到相册/应用(批次含
+/// 双格式组时先选格式,缺格式的组跳过)。
 ///
 /// 活页模式:随 [BrowserController] 的渐进发布增长(最新优先,新对象尾部
 /// 追加);断连后保留最后快照(相册列表被控制器清空时,网格内容可见,
@@ -14,11 +15,13 @@ import 'package:flutter/material.dart';
 
 import '../../app_services.dart';
 import '../../core/browser/album.dart';
+import '../../core/browser/object_entry.dart';
 import '../../core/browser/photo_group.dart';
 import '../../core/browser/thumbnail_cache.dart';
 import '../../core/transfer/transfer_engine.dart';
 import '../../core/transfer/transfer_task.dart';
 import 'browser_controller.dart';
+import 'download_format_sheet.dart';
 import 'photo_viewer_page.dart';
 
 class PhotoGridPage extends StatefulWidget {
@@ -28,6 +31,7 @@ class PhotoGridPage extends StatefulWidget {
     required this.folderHandle,
     this.fallbackName,
     this.thumbnails,
+    this.engine,
   });
 
   /// 应用级共享控制器(本页不拥有、不 dispose);网格随其渐进发布增长。
@@ -42,12 +46,16 @@ class PhotoGridPage extends StatefulWidget {
   /// 测试注入;缺省用 AppServices 单例。
   final ThumbnailCache? thumbnails;
 
+  /// 测试注入;缺省用 AppServices 单例。
+  final TransferEngine? engine;
+
   @override
   State<PhotoGridPage> createState() => _PhotoGridPageState();
 }
 
 class _PhotoGridPageState extends State<PhotoGridPage> {
-  /// 选中集按组身份键(PhotoGroup.key):RAW+JPG 合并组选一次 = 两种都下。
+  /// 选中集按组身份键(PhotoGroup.key):RAW+JPG 合并组算一项,
+  /// 下载格式由选择面板决定(见 _downloadSelected)。
   final Set<int> _selected = {};
 
   /// 缩略图 Future 按代表文件句柄缓存:主文件变化(渐进配对完成
@@ -59,7 +67,8 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
 
   ThumbnailCache get _thumbnails =>
       widget.thumbnails ?? AppServices.instance.thumbnails;
-  TransferEngine get _engine => AppServices.instance.transferEngine;
+  TransferEngine get _engine =>
+      widget.engine ?? AppServices.instance.transferEngine;
 
   bool get _selecting => _selected.isNotEmpty;
 
@@ -90,6 +99,9 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
 
   void _clearSelection() => setState(_selected.clear);
 
+  /// 批量下载:批次里有双格式组才弹格式选择(全是单一格式直接下,
+  /// 行为同旧版);按所选格式过滤,缺格式的组跳过并计数提示;取消
+  /// 选择面板则什么都不下,保留选中态(便于改选格式再下)。
   Future<void> _downloadSelected(
       List<PhotoGroup> items, TransferDestination destination) async {
     final groups =
@@ -97,19 +109,46 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
     if (groups.isEmpty) {
       return;
     }
-    // 一组 = 整组文件入队:选一张照片,JPG 与 RAW 都下载。
-    final entries = [for (final group in groups) ...group.members];
+    PhotoDownloadFormat? format;
+    final pairCount = groups
+        .where((g) => !g.isVideo && g.hasJpg && g.hasRaw)
+        .length;
+    if (pairCount > 0) {
+      format = await showDownloadFormatSheet(context,
+          subtitle: '已选 ${groups.length} 项,其中 $pairCount 项为双格式');
+      if (format == null) {
+        return;
+      }
+      if (!mounted) {
+        return;
+      }
+    }
+    // 面板只在批次含双格式组时弹出,而双格式组对任意选择都非空,
+    // entries 不可能为空(单格式组缺格式直接跳过)。
+    final entries = <ObjectEntry>[];
+    var included = 0;
+    for (final group in groups) {
+      final members = format == null ? group.members : group.membersFor(format);
+      if (members.isEmpty) {
+        continue;
+      }
+      included++;
+      entries.addAll(members);
+    }
     await _engine.enqueue(entries, destination: destination);
     _clearSelection();
     if (!mounted) {
       return;
     }
     final where = destination == TransferDestination.gallery ? '相册' : '应用';
+    final skipped = groups.length - included;
+    final tag = format == null ? '' : '(${format.short})';
+    final skipNote = skipped > 0 ? ',跳过 $skipped 项无 ${format!.short}' : '';
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(
           content: Text(
-              '已开始下载 ${groups.length} 项 / ${entries.length} 个文件到$where,详见「下载」页')));
+              '已开始下载 $included/${groups.length} 项 / ${entries.length} 个文件$tag 到$where$skipNote,详见「下载」页')));
   }
 
   void _openViewer(List<PhotoGroup> items, int index) {
