@@ -4,16 +4,19 @@
 /// - tempDir/thumbsDir/previewsDir 在 cacheDir(系统可随时回收,不承诺持久)
 /// - downloadsDir 在 filesDir(应用内持久存储,「下载到应用」的目的地)
 ///
-/// 相册导入(ohos,真机约束 2026-09-30 核实):HarmonyOS NEXT 三方应用
-/// 静默写媒体库需 ACL 特批权限;免权限路径是
-/// photoAccessHelper 的 showAssetsCreationDialog(系统保存对话框,
-/// 每批一次,用户确认后应用写入授权 URI)。PhotoViewPicker.save 已从
-/// SDK 移除,勿再引用。
+/// 相册导入(ohos,真机约束 2026-10-03 修订):HarmonyOS NEXT 三方应用
+/// 静默写媒体库需 ACL 特批权限;免权限路径有二 ——
+/// showAssetsCreationDialog(系统保存对话框)在本机(HarmonyOS 6)
+/// 因对话框进程冷启动稳定超时(14000011)且零落库,已弃用;现走
+/// SaveButton 安全控件:native 侧亮面板,用户点「保存到图库」获得
+/// ~10s 临时授权,窗口内 createAsset + 拷字节。
+/// PhotoViewPicker.save 已从 SDK 移除,勿再引用。
 ///
 /// 三端落点:Android MediaStore(Pictures/Movies/NikonPill)、
-/// iOS PHPhotoLibrary、ohos photoAccessHelper(上述对话框)。
+/// iOS PHPhotoLibrary、ohos photoAccessHelper(SaveButton 路径)。
 library;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import '../core/ptpip/object_format.dart';
@@ -48,10 +51,11 @@ abstract interface class GallerySaver {
   /// 应用内下载存储(filesDir 下,持久):「下载到应用」的目的地。
   Future<String> downloadsDir();
 
-  /// 批量导入系统相册。ohos 实现弹一次系统保存对话框(showAssetsCreationDialog),
-  /// 用户确认后把各文件写入授权 URI。
+  /// 批量导入系统相册。ohos 实现亮出 native 保存面板(SaveButton 安全
+  /// 控件),用户点「保存到图库」后 native 侧在临时授权窗口内把各文件
+  /// 写入 createAsset 授权 URI。
   ///
-  /// 返回内容 Uri 列表(与 [requests] 等长);**用户取消对话框 → 空列表**
+  /// 返回内容 Uri 列表(与 [requests] 等长);**用户取消面板 → 空列表**
   /// (不抛异常,调用方据此标记「未导入」,可重新发起)。
   Future<List<Uri>> importFiles(List<GalleryImportRequest> requests);
 }
@@ -85,10 +89,23 @@ final class MethodChannelGallerySaver implements GallerySaver {
 
   @override
   Future<List<Uri>> importFiles(List<GalleryImportRequest> requests) async {
-    final uris = await channel.invokeListMethod<String>('importFiles', [
-      for (final r in requests)
-        {'path': r.path, 'kind': r.kind.name, 'filename': r.filename},
-    ]);
-    return [for (final u in uris ?? const <String>[]) Uri.parse(u)];
+    List<String>? uris;
+    try {
+      uris = await channel.invokeListMethod<String>('importFiles', [
+        for (final r in requests)
+          {'path': r.path, 'kind': r.kind.name, 'filename': r.filename},
+      ]);
+    } on PlatformException catch (e) {
+      // 导入失败原因(通道异常)必须可见:引擎侧会按「未导入」落定,
+      // 没有这行日志就只剩无声的黑盒。
+      debugPrint('[Gallery] importFiles 通道异常: ${e.code} ${e.message}');
+      rethrow;
+    }
+    final list = uris ?? const <String>[];
+    if (list.length != requests.length) {
+      debugPrint('[Gallery] importFiles 返回 ${list.length}/${requests.length}'
+          '(用户取消/部分选择)');
+    }
+    return [for (final u in list) Uri.parse(u)];
   }
 }

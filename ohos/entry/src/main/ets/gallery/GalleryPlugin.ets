@@ -6,18 +6,17 @@
  *   系统可回收;缩略图 LRU 与下载临时落盘用);
  * - downloadsDir():filesDir 下持久目录(「下载到应用」的目的地);
  * - importFiles(paths, kinds, filenames):批量导入系统相册 ——
- *   HarmonyOS NEXT 三方应用静默写媒体库需 ACL 特批,免权限路径是
- *   photoAccessHelper.showAssetsCreationDialog(系统保存对话框,
- *   since 12):每批一次,用户确认后应用把源文件字节拷进授权 URI。
- *   用户取消 → 对话框返回空列表 → Dart 侧任务标「未导入」。
+ *   SaveButton 安全控件路径(见 SaveSession/SaveSheet):importFiles
+ *   只登记请求并亮面板,用户点保存按钮获得临时授权后由 native 侧
+ *   createAsset + 拷字节,结果经回调异步回传。
+ *   用户取消 → 空列表 → Dart 侧任务标「未导入」。
  *
- * 弹系统对话框需要 UIAbility context(非 application context),
- * 插件实现 AbilityAware 拿 UIAbility 引用(EntryAbility 经
+ * 面板挂在 Index.ets 的覆盖层上,需要 UIAbility 存活,插件实现
+ * AbilityAware 拿 UIAbility 引用(EntryAbility 经
  * FlutterEngineConnectionRegistry 自动回调,无需额外接线)。
  */
 import fs from '@ohos.file.fs';
 import common from '@ohos.app.ability.common';
-import photoAccessHelper from '@ohos.file.photoAccessHelper';
 import UIAbility from '@ohos.app.ability.UIAbility';
 import {
   FlutterPlugin,
@@ -27,7 +26,9 @@ import {
   MethodChannel,
   MethodCall,
   MethodResult,
+  Log,
 } from '@ohos/flutter_ohos';
+import { SaveRequest, SaveSession } from './SaveSession';
 
 const TAG = 'GalleryPlugin';
 
@@ -123,12 +124,14 @@ export class GalleryPlugin implements FlutterPlugin, AbilityAware {
   }
 
   /**
-   * 批量导入系统相册。
+   * 批量导入系统相册(SaveButton 安全控件路径)。
    * 入参(Dart invokeListMethod):[{path, kind('image'|'video'), filename}]。
-   * 出参:授权 URI 列表(与入参等长);用户取消 → 空列表。
+   * 出参:授权 URI 列表(与入参等长);用户取消 → 空列表;结果面板
+   * 结束后异步回传(面板可能停留任意久,MethodResult 允许延迟应答)。
    */
-  private async importFiles(call: MethodCall, result: MethodResult): Promise<void> {
+  private importFiles(call: MethodCall, result: MethodResult): void {
     if (this.ability === null) {
+      Log.e(TAG, 'importFiles: UIAbility 未挂载(AbilityAware 未回调)');
       result.error('gallery_error', 'UIAbility 未挂载(AbilityAware 未回调)', null);
       return;
     }
@@ -141,9 +144,7 @@ export class GalleryPlugin implements FlutterPlugin, AbilityAware {
         result.error('gallery_error', 'importFiles 参数须为非空列表', null);
         return;
       }
-      const paths: Array<string> = [];
-      const kinds: Array<string> = [];
-      const names: Array<string> = [];
+      const requests: Array<SaveRequest> = [];
       for (const item of items) {
         const path = this.strValue(item.get('path'));
         const kind = this.strValue(item.get('kind'));
@@ -152,50 +153,23 @@ export class GalleryPlugin implements FlutterPlugin, AbilityAware {
           result.error('gallery_error', 'importFiles 项缺 path/filename', null);
           return;
         }
-        paths.push(path);
-        kinds.push(kind);
-        names.push(filename);
+        const req: SaveRequest = { path: path, kind: kind, filename: filename };
+        requests.push(req);
       }
-      const helper = photoAccessHelper.getPhotoAccessHelper(this.ability.context);
-      const srcUris: Array<string> = paths.map(p => `file://${p}`);
-      const configs: Array<photoAccessHelper.PhotoCreationConfig> = [];
-      for (let i = 0; i < names.length; i++) {
-        const name = names[i];
-        const dot = name.lastIndexOf('.');
-        const title = dot > 0 ? name.substring(0, dot) : name;
-        const ext = dot > 0 ? name.substring(dot + 1) : '';
-        const config: photoAccessHelper.PhotoCreationConfig = {
-          title: title,
-          fileNameExtension: ext,
-          photoType: kinds[i] === 'video'
-            ? photoAccessHelper.PhotoType.VIDEO
-            : photoAccessHelper.PhotoType.IMAGE,
-        };
-        configs.push(config);
-      }
-      // 系统保存对话框:用户确认一批(或取消)。取消 → 空列表/抛错,
-      // 两种形态都由 Dart 侧落成「未导入」。
-      const uris = await helper.showAssetsCreationDialog(srcUris, configs);
-      if (uris.length !== paths.length) {
-        result.success([]);
+      if (SaveSession.isActive()) {
+        result.error('gallery_error', '已有保存面板在进行中', null);
         return;
       }
-      // 授权 URI 只是占位:把源文件字节逐个拷入。
-      for (let i = 0; i < paths.length; i++) {
-        const src = fs.openSync(paths[i], fs.OpenMode.READ_ONLY);
-        try {
-          const dst = fs.openSync(uris[i], fs.OpenMode.READ_WRITE);
-          try {
-            fs.copyFileSync(src.fd, dst.fd);
-          } finally {
-            fs.closeSync(dst);
-          }
-        } finally {
-          fs.closeSync(src);
-        }
+      Log.i(TAG, `importFiles: 登记 ${requests.length} 个文件,亮出保存面板`);
+      const opened = SaveSession.open(requests, (uris: Array<string>) => {
+        Log.i(TAG, `保存面板结束:${uris.length}/${requests.length} 个授权 URI`);
+        result.success(uris);
+      });
+      if (!opened) {
+        result.error('gallery_error', '保存面板 UI 未挂载(Index 未注册)', null);
       }
-      result.success(uris);
     } catch (e) {
+      Log.e(TAG, `importFiles 异常: ${e}`);
       result.error('gallery_error', `importFiles: ${e}`, null);
     }
   }
