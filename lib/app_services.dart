@@ -29,7 +29,13 @@ final class AppServices {
 
     // 看门狗装饰器包住平台通道:相机拔出/挂死时 bulk 收发秒败 +
     // breakages 事件(连接层订阅转 failed)。裸通道无检测能力。
-    usb = WatchdogUsbHostChannel(inner: PlatformServices.usb);
+    // probe:幽灵设备防线 —— usb_service 删除记录失败后 getDevices()
+    // 会一直返回已拔出的设备(2026-10-03 真机实证),「设备还在」必须
+    // 用链路上的真实事务复核(GetDeviceInfo 在会话内外都合法)。
+    usb = WatchdogUsbHostChannel(
+      inner: PlatformServices.usb,
+      probe: () => session.getDeviceInfo(force: true),
+    );
     transport = UsbPtpTransport(pipe: usb);
     session = PtpSession(transport: transport);
     connection = CameraConnectionImpl(usb: usb, session: session);

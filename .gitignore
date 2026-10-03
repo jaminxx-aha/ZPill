@@ -36,3 +36,6 @@ tools/ble_pair/nikon_ble_pair
 
 # 本地工作笔记(约定:永不入库)
 TODO.md
+
+# hvigor 缓存(ohos fork 构建在仓库根目录生成)
+.hvigor/
