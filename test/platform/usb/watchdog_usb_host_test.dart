@@ -156,4 +156,155 @@ void main() {
     await Future<void>.delayed(const Duration(milliseconds: 50));
     expect(reasons, hasLength(1));
   });
+
+  // ── 链路探测(幽灵设备防线)──────────────────────────────────
+  // 背景:usb_service 删除记录失败后 getDevices() 一直返回已拔出的设备,
+  // 枚举判定被骗;探测用真实事务复核(见看门狗头注释)。
+
+  test('幽灵设备:枚举一直在但探测挂死 → 断链', () async {
+    final inner = _FakeInner();
+    final wd = WatchdogUsbHostChannel(
+      inner: inner,
+      readGraceMs: 30,
+      bulkOutWatchdogMs: 30,
+      detachPollInterval: const Duration(milliseconds: 5),
+      probeInterval: const Duration(milliseconds: 5),
+      // 模拟链路看门狗超时上抛(幽灵管道上真实事务挂死的表现)
+      probe: () async => throw TimeoutException('bulk IN 无数据'),
+    );
+    final reasons = <String>[];
+    wd.breakages.listen(reasons.add);
+
+    await wd.open(_dev);
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    expect(reasons, hasLength(1));
+    expect(reasons.single, contains('链路探测超时'));
+    // 断链后轮询停:不会再有第二次广播
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    expect(reasons, hasLength(1));
+  });
+
+  test('幽灵设备:探测快速失败连续 2 次断链', () async {
+    final inner = _FakeInner();
+    final wd = WatchdogUsbHostChannel(
+      inner: inner,
+      readGraceMs: 30,
+      bulkOutWatchdogMs: 30,
+      detachPollInterval: const Duration(milliseconds: 5),
+      probeInterval: const Duration(milliseconds: 5),
+      probe: () async => throw StateError('usb -202'),
+    );
+    final reasons = <String>[];
+    wd.breakages.listen(reasons.add);
+
+    await wd.open(_dev);
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    expect(reasons, hasLength(1));
+    expect(reasons.single, contains('连续 2 次失败'));
+  });
+
+  test('探测瞬时失败一次后恢复:不断链', () async {
+    final inner = _FakeInner();
+    var calls = 0;
+    final wd = WatchdogUsbHostChannel(
+      inner: inner,
+      readGraceMs: 30,
+      bulkOutWatchdogMs: 30,
+      detachPollInterval: const Duration(milliseconds: 5),
+      probeInterval: const Duration(milliseconds: 5),
+      probe: () => ++calls == 1
+          ? Future<Object?>.error(StateError('usb -202'))
+          : Future<Object?>.value(null),
+    );
+    final reasons = <String>[];
+    wd.breakages.listen(reasons.add);
+
+    await wd.open(_dev);
+    await Future<void>.delayed(const Duration(milliseconds: 60));
+    expect(calls, greaterThan(2)); // 失败后探测仍在继续
+    expect(reasons, isEmpty);
+  });
+
+  test('探测间隔:probeInterval 未到不重复探测', () async {
+    final inner = _FakeInner();
+    var calls = 0;
+    final wd = WatchdogUsbHostChannel(
+      inner: inner,
+      readGraceMs: 30,
+      bulkOutWatchdogMs: 30,
+      detachPollInterval: const Duration(milliseconds: 5),
+      probeInterval: const Duration(seconds: 10),
+      probe: () async => calls++,
+    );
+
+    await wd.open(_dev);
+    await Future<void>.delayed(const Duration(milliseconds: 60));
+    expect(calls, 1); // 只有开场第一枚,间隔内不再发
+  });
+
+  test('枚举已判消失时不再发探测', () async {
+    final inner = _FakeInner();
+    var calls = 0;
+    final wd = WatchdogUsbHostChannel(
+      inner: inner,
+      readGraceMs: 30,
+      bulkOutWatchdogMs: 30,
+      detachPollInterval: const Duration(milliseconds: 5),
+      probeInterval: const Duration(milliseconds: 5),
+      probe: () async => calls++,
+    );
+    final reasons = <String>[];
+    wd.breakages.listen(reasons.add);
+
+    await wd.open(_dev);
+    inner.cameras = []; // 第一枚轮询前就拔(干净移除路径)
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    expect(reasons, ['相机已断开(USB 连接消失)']);
+    expect(calls, 0);
+  });
+
+  test('旧链路的迟到探测失败不毒化重开后的新链路', () async {
+    final inner = _FakeInner();
+    final firstProbe = Completer<Object?>();
+    var calls = 0;
+    final wd = WatchdogUsbHostChannel(
+      inner: inner,
+      readGraceMs: 30,
+      bulkOutWatchdogMs: 30,
+      detachPollInterval: const Duration(milliseconds: 5),
+      probeInterval: const Duration(milliseconds: 5),
+      probe: () => ++calls == 1
+          ? firstProbe.future
+          : Future<Object?>.value(null),
+    );
+    final reasons = <String>[];
+    wd.breakages.listen(reasons.add);
+
+    await wd.open(_dev);
+    await Future<void>.delayed(
+        const Duration(milliseconds: 10)); // 第一枚探测已挂起
+    await wd.open(_dev); // 重开新链路(世代轮换)
+    firstProbe.completeError(StateError('旧链路死')); // 旧探测迟到失败
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    expect(reasons, isEmpty); // 新链路未被毒化,探测照常成功
+    expect(calls, greaterThan(2));
+  });
+
+  test('旧链路挂死的收发看门狗迟到引爆不毒化重开后的新链路', () async {
+    final inner = _FakeInner();
+    inner.bulkOutImpl = (_) => Completer<void>().future;
+    final wd = _watchdog(inner);
+    final reasons = <String>[];
+    wd.breakages.listen(reasons.add);
+
+    final stale = wd.bulkOut(Uint8List(4)); // 将在 30ms 后超时
+    await Future<void>.delayed(const Duration(milliseconds: 5));
+    await wd.open(_dev); // 超时引爆前重开新链路
+    await expectLater(stale, throwsA(isA<TimeoutException>()));
+    await pumpEventQueue();
+    expect(reasons, isEmpty); // 迟到引爆只抛给原调用者,不断新链路
+
+    inner.bulkOutImpl = null;
+    await wd.bulkOut(Uint8List(4)); // 新链路收发正常,不秒抛
+  });
 }
