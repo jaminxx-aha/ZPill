@@ -68,4 +68,21 @@ final class ByteReader {
     }
     return s;
   }
+
+  /// 读 NUL 终止的 UTF-16LE 字符串,无长度前缀。
+  ///
+  /// 尼康 Wi-Fi 方言(MTP/IP 布局,Camera_Bridge 实证):
+  /// InitCommandResponse 的相机名与 InitCommandRequest 的主机名都用这种。
+  /// 读不到 NUL 时读到缓冲末尾(宽容截断)。
+  String utf16z() {
+    final units = <int>[];
+    while (offset + 1 < bytes.length) {
+      final u = bytes[offset] | (bytes[offset + 1] << 8);
+      offset += 2;
+      if (u == 0) return String.fromCharCodes(units);
+      units.add(u);
+    }
+    if (offset < bytes.length) offset++; // 末尾孤字节,对齐吞掉
+    return String.fromCharCodes(units);
+  }
 }

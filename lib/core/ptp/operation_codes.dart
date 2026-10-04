@@ -50,6 +50,10 @@ abstract final class NikonOperationCode {
   static const int getObjectSize = 0x9421; // 64 位对象大小,data-in
   static const int getPartialObjectEx = 0x9431; // 64 位偏移+长度 —— Z 系断点续传主力
   static const int getObjectsMetaData = 0x9434;
+  // 智能设备配对双op(STA 模式 op 表在册,2026-10-04 Zf 真机;语义按
+  // NiConn_DEMO 对 SnapBridge 的抓包分析,真机流程待核对):
+  static const int completePairing = 0x935A; // 配对确认(param 0x2001),相机记录本客户端
+  static const int getPtpIpPairingCode = 0x952B; // 取配对验证码,data-in
   // Zf 另有大量 0x94xx/0x95xx 码在册但 libgphoto2 未全收录,
   // 需要时以真机行为为准逐个核对补录,禁止臆造名称。
 }

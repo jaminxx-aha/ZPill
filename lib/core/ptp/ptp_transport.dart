@@ -4,8 +4,8 @@
 /// - PTP-IP:TCP 封装(core/ptpip,P0 实现中);
 /// - PTP/USB:USB Still Image 批量端点(core/ptpusb + platform/usb)。
 ///
-/// 差异备忘:事务 ID 在 PTP-IP 里是 uint16、在 USB 里是 uint32,
-/// 共享层一律 int,由各链路在编解码时处理宽度。
+/// 事务 ID 两条链路线上均为 uint32(PTP-IP tid 宽度经 Zf 真机回显验证,
+/// 2026-10-04;此前头注记 uint16 系误记,已订正),共享层一律 int。
 library;
 
 import 'dart:typed_data';
