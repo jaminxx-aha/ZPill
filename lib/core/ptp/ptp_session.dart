@@ -307,6 +307,40 @@ final class PtpSession {
   /// 异步事件流透传(ObjectAdded / CaptureComplete…)。
   Stream<PtpEvent> get events => transport.events;
 
+  /// Nikon GetPtpIpPairingCode(0x952B):智能设备模式的配对验证码。
+  ///
+  /// 数据集 = count(u32 LE)+ count 个字节,各字节的十进制值连成验证码
+  /// (NiConn_DEMO 对 SnapBridge 抓包的语义;例:count=4,字节
+  /// 05 00 07 07 → "5077")。**响应非 OK 时返回 null**(多半意味着本
+  /// 客户端已配对或相机不要求配对,上层据此跳过配对相;具体语义待真机
+  /// 核对);链路级异常照常抛出,不在此吞。
+  Future<String?> getPairingCode() async {
+    late final PtpResult result;
+    try {
+      result = await _serialized(() => transport.execute(const PtpRequest(
+          opcode: NikonOperationCode.getPtpIpPairingCode)));
+      _ensureOk(result, NikonOperationCode.getPtpIpPairingCode);
+    } on PtpResponseException {
+      return null;
+    }
+    final data = result.data;
+    if (data == null || data.length < 4) return null;
+    final count = data[0] | (data[1] << 8) | (data[2] << 16) | (data[3] << 24);
+    if (count <= 0 || count > data.length - 4) return null;
+    return [for (var i = 0; i < count; i++) data[4 + i]].join();
+  }
+
+  /// Nikon CompletePairing(0x935A,param 0x2001):确认配对。
+  ///
+  /// 相机把本客户端(Init 载荷里的 16B UUID)记为已配对设备;Z50II 实测
+  /// 配对完成后相机自行结束会话(Zf 待真机核对)—— 响应前链路被收线
+  /// 属预期,上层按配对完成处理,不当作失败。
+  Future<void> completePairing() async {
+    final result = await _serialized(() => transport.execute(const PtpRequest(
+        opcode: NikonOperationCode.completePairing, params: [0x2001])));
+    _ensureOk(result, NikonOperationCode.completePairing);
+  }
+
   void _ensureOk(PtpResult result, int opcode) {
     if (result.responseCode != PtpResponseCode.ok) {
       throw PtpResponseException(

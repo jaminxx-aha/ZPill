@@ -36,6 +36,7 @@ const TEMP_SUBDIR = 'nikonpill';
 const THUMBS_SUBDIR = 'nikonpill-thumbs';
 const PREVIEWS_SUBDIR = 'nikonpill-previews';
 const DOWNLOADS_SUBDIR = 'nikonpill-downloads';
+const DATA_SUBDIR = 'nikonpill-data';
 
 /** `nikonpill/gallery` 通道实现。 */
 export class GalleryPlugin implements FlutterPlugin, AbilityAware {
@@ -84,6 +85,10 @@ export class GalleryPlugin implements FlutterPlugin, AbilityAware {
         break;
       case 'downloadsDir':
         this.filesSubDir(DOWNLOADS_SUBDIR, result);
+        break;
+      case 'dataDir':
+        // 持久应用数据(客户端身份/配对记录):filesDir 下专用子目录
+        this.filesSubDir(DATA_SUBDIR, result);
         break;
       case 'importFiles':
         this.importFiles(call, result);

@@ -17,7 +17,7 @@ import '../ptpusb/fake_usb_byte_pipe.dart';
 final class _GatedReply {
   const _GatedReply(this.gate, this.result);
   final Future<void> gate;
-  final PtpResult result;
+  final Object result; // PtpResult 或 Exception(延迟失败)
 }
 
 /// 假传输层:按序回放预置结果(PtpResult)或异常。
@@ -32,6 +32,10 @@ final class FakePtpTransport implements PtpTransport {
   /// 预置一个延迟应答:execute 在 [gate] 完成前挂起。
   void replyAfter(Future<void> gate, PtpResult result) =>
       script.add(_GatedReply(gate, result));
+
+  /// 预置一个延迟失败:execute 在 [gate] 完成前挂起,然后抛 [e]。
+  void failAfter(Future<void> gate, Exception e) =>
+      script.add(_GatedReply(gate, e));
 
   @override
   Future<PtpResult> execute(PtpRequest request,
@@ -320,6 +324,57 @@ void main() {
       expect(info.model, 'TestModel');
       await session.getDeviceInfo();
       expect(fake.requests.length, 1);
+    });
+  });
+
+  group('无线配对操作', () {
+    test('getPairingCode:u32 计数 + 数字字节拼接成验证码(NiConn 抓包形态)',
+        () async {
+      final fake = FakePtpTransport()
+        ..reply(PtpResult(
+          responseCode: PtpResponseCode.ok,
+          // count=4 + 05 00 07 07 → "5077"(Zf STA op 表 0x952B)
+          data: Uint8List.fromList([4, 0, 0, 0, 0x05, 0x00, 0x07, 0x07]),
+        ));
+      final session = PtpSession(transport: fake);
+      expect(await session.getPairingCode(), '5077');
+      expect(fake.requests.single.opcode, NikonOperationCode.getPtpIpPairingCode);
+      expect(fake.requests.single.params, isEmpty);
+    });
+
+    test('getPairingCode:相机非 OK 响应 → null(多数 = 本客户端已配对)',
+        () async {
+      final fake = FakePtpTransport()
+        ..reply(const PtpResult(responseCode: PtpResponseCode.generalError));
+      final session = PtpSession(transport: fake);
+      expect(await session.getPairingCode(), isNull);
+    });
+
+    test('getPairingCode:载荷畸形(计数超长)→ null,不抛', () async {
+      final fake = FakePtpTransport()
+        ..reply(PtpResult(
+          responseCode: PtpResponseCode.ok,
+          data: Uint8List.fromList([9, 0, 0, 0, 1]), // count=9 但只有 1 字节
+        ));
+      final session = PtpSession(transport: fake);
+      expect(await session.getPairingCode(), isNull);
+    });
+
+    test('completePairing:发 0x935A + param 0x2001,OK 即成', () async {
+      final fake = FakePtpTransport()
+        ..reply(const PtpResult(responseCode: PtpResponseCode.ok));
+      final session = PtpSession(transport: fake);
+      await session.completePairing();
+      expect(fake.requests.single.opcode, NikonOperationCode.completePairing);
+      expect(fake.requests.single.params, [0x2001]);
+    });
+
+    test('completePairing:非 OK 抛 PtpResponseException', () async {
+      final fake = FakePtpTransport()
+        ..reply(const PtpResult(responseCode: PtpResponseCode.generalError));
+      final session = PtpSession(transport: fake);
+      await expectLater(
+          session.completePairing(), throwsA(isA<PtpResponseException>()));
     });
   });
 
