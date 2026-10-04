@@ -12,8 +12,11 @@
 ///   不走 NWConnection(那会真连 15740)。
 /// - iOS 14+ 浏览 Bonjour 需 Info.plist `NSBonjourServices` 声明
 ///   `_ptp._tcp`(已加),否则系统静默拦截。
-/// - 三端:native 侧 iOS = NetServiceBrowser/NetService;ohos/Android
-///   未落地(尚未装配无线,后续按同契约接 @ohos.net.mdns / NsdManager)。
+/// - 三端落地状态:iOS ✅ 真机验证(NetServiceBrowser/NetService,提交
+///   f68a5d2);ohos/Android ✅ 已落地(编译过,真机待验证)——
+///   @ohos.net.mdns(NsdPlugin.ets)/ NsdManager(NsdPlugin.kt)。
+///   serviceType 尾点差异各按平台文档(iOS/Android 带尾点,ohos 无),
+///   待真机核对。
 library;
 
 import 'dart:async';

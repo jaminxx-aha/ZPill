@@ -3,18 +3,20 @@
 /// 三端差异能力(WiFi 检测 / 相册 / 后台任务 / BLE)全部抽象为接口,
 /// native 侧按同一 channel 契约提供实现:
 ///
-/// | channel                | Android(Kotlin)      | iOS(Swift/DriverKit)  | ohos(ArkTS)          |
+/// | channel                | Android(Kotlin)      | iOS(Swift)             | ohos(ArkTS)          |
 /// |------------------------|------------------------|------------------------|-----------------------|
 /// | `nikonpill/network`  | WifiManager/Connectivity | NEHotspotNetwork*     | @ohos.wifiManager     |
 /// | `nikonpill/gallery`  | MediaStore             | PHPhotoLibrary         | photoAccessHelper     |
 /// | `nikonpill/bg`       | WorkManager+前台服务   | BGTaskScheduler        | 后台任务+通知         |
 /// | `nikonpill/ble`      | BluetoothLeScanner     | CoreBluetooth          | @ohos.bluetooth.ble   |
-/// | `nikonpill/usb`      | UsbManager bulk        | DriverKit dext**       | @ohos.usb             |
+/// | `nikonpill/usb`      | UsbManager bulk        | ImageCaptureCore**     | @ohos.usb             |
+/// | `nikonpill/nsd`      | NsdManager             | NetServiceBrowser      | @ohos.net.mdns        |
 ///
 /// *iOS 普通应用拿不到当前 WiFi SSID(需 entitlement 且大多被拒),
 /// 实际策略:直接尝试默认网关直连,详见 docs/ARCHITECTURE.md。
-/// **iOS 的 USB 走 DriverKit dext(iOS 26+ 开放 iPhone),需申请
-/// DriverKit entitlement,见 usb/usb_host.dart 头注释。
+/// **iOS 的 USB 走 ImageCaptureCore 公开 API(免费个人团队可用,
+/// DriverKit dext 需付费账号,2026-10-04 实证后弃用该路线),
+/// 见 usb/usb_host.dart 头注释。
 library;
 
 import 'background_transfer.dart';
@@ -33,8 +35,8 @@ final class PlatformServices {
   static late final BleScanner ble;
   static late final UsbHostChannel usb;
 
-  /// mDNS/Bonjour 相机发现(`nikonpill/nsd`;iOS 已实现,ohos/Android
-  /// 未落地,调用方需容忍 MissingPluginException)。
+  /// mDNS/Bonjour 相机发现(`nikonpill/nsd`;三端已实现:ohos/Android
+  /// 编译过待真机验证,iOS 真机闭环)。
   static late final NsdScanner nsd;
 
   static bool _bootstrapped = false;

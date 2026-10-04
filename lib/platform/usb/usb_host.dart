@@ -74,13 +74,12 @@ abstract interface class UsbHostChannel implements UsbBytePipe {
 /// 经 `nikonpill/usb` channel:方法 `listCameras`/`open`/`bulkOut`/
 /// `bulkRead`/`close`;事件流走 EventChannel `nikonpill/usb/events`。
 ///
-/// native 落点(Phase C 起):
-/// - ohos:usbManager(@ohos.usb)的 getDevices/requestRight/connectDevice/
-///   claimInterface/bulkTransfer —— 先行,见 ohos/entry/…/UsbHostPlugin.ets。
-/// - Android:UsbManager + usb_device_filter.xml(VID 0x04B0),
-///   bulkTransfer + UsbRequest(interrupt 轮询用独立线程)。
-/// - iOS:DriverKit dext(C++,IOUSBHostDevice/Interface)+ UserClient IPC,
-///   entitlement 申请先行。
+/// native 落地状态:
+/// - ohos:✅ 真机闭环 —— @ohos.usbManager,ohos/entry/…/usbhost/UsbHostPlugin.ets。
+/// - Android:✅ 已落地(编译过,真机待验证)—— UsbManager 应用内
+///   requestPermission 授权(无 intent-filter),bulkTransfer + 独立
+///   interrupt 轮询线程,android/…/usb/UsbHostPlugin.kt。
+/// - iOS:✅ 真机闭环(ImageCaptureCore 免费路线,非 dext)。
 final class MethodChannelUsbHost implements UsbHostChannel {
   MethodChannelUsbHost();
 

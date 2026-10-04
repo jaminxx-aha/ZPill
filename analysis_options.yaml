@@ -3,6 +3,7 @@ analyzer:
   exclude:
     - build/**
     - ios/**
+    - android/**
   language:
     # 协议/字节处理多,禁止隐式 dynamic
     strict-raw-types: true
