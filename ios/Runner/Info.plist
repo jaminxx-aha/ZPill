@@ -26,10 +26,16 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>连接相机后浏览与导入相机中的照片(外部相机媒体权限)</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>连接尼康相机的 Wi-Fi 热点,以浏览和传输照片</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>将传输完成的照片和视频保存到相册</string>
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<false/>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

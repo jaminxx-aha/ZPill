@@ -125,6 +125,13 @@ final class CameraConnectionImpl implements CameraConnection {
       _error = '$e';
       _transition(CameraLinkState.failed);
       await _teardown();
+    } on Error catch (e) {
+      // TypeError/StateError 等 Error 不受 on Exception 约束 —— 真机吃过
+      // 大亏:通道返回类型不符的 TypeError 逃逸后 connect 静默死亡,状态
+      // 机永远 connecting(无限转圈)。宁可显式 failed 把错误亮出来。
+      _error = '$e';
+      _transition(CameraLinkState.failed);
+      await _teardown();
     }
   }
 
