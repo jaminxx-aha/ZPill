@@ -15,5 +15,10 @@ void main() {
         .toList();
     expect(labels, containsAll(['相机', '相册', '下载']));
     expect(find.text('连接'), findsOneWidget);
+    // 初始 tab = 相机(连接页):双链路卡片都在真实对象图里渲染出来
+    expect(find.text('USB 连接'), findsOneWidget);
+    expect(find.text('无线连接(Wi-Fi)'), findsOneWidget);
+    expect(find.text('扫描相机'), findsOneWidget); // STA 扫描入口
+    expect(find.text('手动连接'), findsOneWidget); // 手动 IP 兜底入口
   });
 }

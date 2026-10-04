@@ -22,6 +22,9 @@ final class FakeGallerySaver implements GallerySaver {
   final Directory root;
 
   @override
+  Future<String> dataDir() async => _ensure('${root.path}/data');
+
+  @override
   Future<String> tempDir() async => _ensure('${root.path}/temp');
 
   @override

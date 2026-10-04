@@ -21,6 +21,7 @@ import 'background_transfer.dart';
 import 'ble_scanner.dart';
 import 'gallery_saver.dart';
 import 'network_monitor.dart';
+import 'nsd_scanner.dart';
 import 'usb/usb_host.dart';
 
 final class PlatformServices {
@@ -31,6 +32,10 @@ final class PlatformServices {
   static late final BackgroundTransferScheduler background;
   static late final BleScanner ble;
   static late final UsbHostChannel usb;
+
+  /// mDNS/Bonjour 相机发现(`nikonpill/nsd`;iOS 已实现,ohos/Android
+  /// 未落地,调用方需容忍 MissingPluginException)。
+  static late final NsdScanner nsd;
 
   static bool _bootstrapped = false;
 
@@ -46,5 +51,6 @@ final class PlatformServices {
     background = MethodChannelBackgroundScheduler();
     ble = MethodChannelBleScanner();
     usb = MethodChannelUsbHost();
+    nsd = MethodChannelNsdScanner();
   }
 }

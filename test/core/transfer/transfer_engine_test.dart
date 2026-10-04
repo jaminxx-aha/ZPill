@@ -30,6 +30,9 @@ final class FakeGallerySaver implements GallerySaver {
   List<Uri> importResult = const [];
 
   @override
+  Future<String> dataDir() async => _ensure('${root.path}/data');
+
+  @override
   Future<String> tempDir() async => _ensure('${root.path}/temp');
 
   @override

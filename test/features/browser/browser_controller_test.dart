@@ -60,7 +60,19 @@ final class _FakeConnection implements CameraConnection {
   String? get deviceName => null;
 
   @override
-  Future<void> connect({String? ip}) async {}
+  bool get isWireless => false;
+
+  @override
+  String? get pairingCode => null;
+
+  @override
+  Future<void> connect({String? ip, String? instanceName}) async {}
+
+  @override
+  Future<void> confirmPairing() async {}
+
+  @override
+  Future<void> cancelPairing() async {}
 
   @override
   Future<void> disconnect() async {}

@@ -51,6 +51,10 @@ abstract interface class GallerySaver {
   /// 应用内下载存储(filesDir 下,持久):「下载到应用」的目的地。
   Future<String> downloadsDir();
 
+  /// 应用数据目录(applicationSupport,持久):客户端身份、已配对
+  /// 相机等 JSON 状态文件(区别于可被系统回收的 cache 三兄弟)。
+  Future<String> dataDir();
+
   /// 批量导入系统相册。ohos 实现亮出 native 保存面板(SaveButton 安全
   /// 控件),用户点「保存到图库」后 native 侧在临时授权窗口内把各文件
   /// 写入 createAsset 授权 URI。
@@ -72,6 +76,9 @@ final class MethodChannelGallerySaver implements GallerySaver {
 
   @override
   Future<String> thumbsDir() => _dir('thumbsDir');
+
+  @override
+  Future<String> dataDir() => _dir('dataDir');
 
   @override
   Future<String> previewsDir() => _dir('previewsDir');

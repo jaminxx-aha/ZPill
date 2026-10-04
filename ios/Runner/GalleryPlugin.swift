@@ -19,6 +19,7 @@ private let tempSubdir = "nikonpill"
 private let thumbsSubdir = "nikonpill-thumbs"
 private let previewsSubdir = "nikonpill-previews"
 private let downloadsSubdir = "nikonpill-downloads"
+private let dataSubdir = "nikonpill-data"
 
 public final class GalleryPlugin: NSObject, FlutterPlugin {
   public static func register(with registrar: FlutterPluginRegistrar) {
@@ -35,6 +36,10 @@ public final class GalleryPlugin: NSObject, FlutterPlugin {
     case "downloadsDir":
       let docs = NSSearchPathForDirectoriesInDomains(.documentDirectory, .userDomainMask, true)[0]
       result(Self.ensureSubdir(downloadsSubdir, base: docs))
+    case "dataDir":
+      // applicationSupport(沙盒内应用私有,持久):客户端身份/配对记录等状态文件
+      let appSupport = NSSearchPathForDirectoriesInDomains(.applicationSupportDirectory, .userDomainMask, true)[0]
+      result(Self.ensureSubdir(dataSubdir, base: appSupport))
     case "importFiles": importFiles(call.arguments, result: result)
     default: result(FlutterMethodNotImplemented)
     }
