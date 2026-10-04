@@ -22,6 +22,7 @@ import 'data/paired_cameras_store.dart';
 import 'debug/ptp_diagnostics.dart';
 import 'features/browser/browser_controller.dart';
 import 'features/connection/connection_page.dart';
+import 'features/remote/remote_controller.dart';
 import 'features/transfers/transfers_page.dart';
 import 'platform/services.dart';
 import 'platform/usb/usb_host.dart';
@@ -82,6 +83,10 @@ final class AppServices {
       connection: connection,
       thumbnails: thumbnails,
     );
+    remoteController = RemoteController(
+      session: session,
+      connection: connection,
+    );
     transfersController = TransfersController(
       engine: transferEngine,
       gallery: PlatformServices.gallery,
@@ -126,5 +131,6 @@ final class AppServices {
   late final TransferEngineImpl transferEngine;
   late final ConnectionController connectionController;
   late final BrowserController browserController;
+  late final RemoteController remoteController;
   late final TransfersController transfersController;
 }

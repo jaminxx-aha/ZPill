@@ -9,6 +9,12 @@ lib/core/ptpip/codec.dart。参考:libgphoto2 ptpip 后端。
     python3 probe.py --idle 180 192.168.1.1
     python3 probe.py --setprop 0xd406=NikonPill/1.0 192.168.1.1
     python3 probe.py --setprop 0xd406= --setprop-layout data 192.168.1.1
+    遥控域回归(无线对照 usb_probe 同款):
+    python3 probe.py --propdesc 5007,500d,500f 192.168.0.104
+    python3 probe.py --liveview 10 192.168.0.104
+    python3 probe.py --capture 192.168.0.104                    # 0x100E 标准
+    python3 probe.py --capture --capture-op 9207 192.168.0.104  # 尼康候选落卡拍
+    python3 probe.py --events 30 192.168.0.104                  # 事件监听窗口
 
 前置:手机/电脑先手动连上相机 WiFi 热点(相机菜单「网络 → 连接至智能设备」)。
 
@@ -118,11 +124,31 @@ GET_OBJECT_HANDLES = 0x1007
 GET_OBJECT_INFO = 0x1008
 GET_OBJECT = 0x1009
 GET_THUMB = 0x100A
+GET_DEVICE_PROP_DESC = 0x1014
 GET_DEVICE_PROP_VALUE = 0x1015
 SET_DEVICE_PROP_VALUE = 0x1016
 
+# 遥控域(与 lib/core/ptp/operation_codes.dart 对齐;0x100E 为 ISO 标准,
+# 其余尼康候选码 —— STA 的 9 op 小表不含它们,但勿按表拒连,直发摸底)
+INITIATE_CAPTURE = 0x100E
+NIKON_INITIATE_CAPTURE_REC_IN_MEDIA = 0x9207
+NIKON_INITIATE_CAPTURE_REC_IN_SDRAM = 0x90C0
+NIKON_START_LIVEVIEW = 0x9201
+NIKON_END_LIVEVIEW = 0x9202
+NIKON_GET_LIVEVIEW_IMG = 0x9203
+NIKON_DEVICE_READY = 0x90C8
+DEVICE_BUSY = 0x2019  # ISO 15740 标准响应码(设备忙)
+
 PTP_OK = 0x2001
 SESSION_ALREADY_OPEN = 0x201E
+
+EVENT_NAMES = {
+    0x4002: "ObjectAdded(标准)", 0x400D: "CaptureComplete(标准)",
+    0xC101: "Nikon_ObjectAddedInSDRAM", 0xC102: "Nikon_CaptureCompleteRecInSdram",
+    0xC10C: "Nikon_LiveViewStateChanged(候选,语义未实证)",
+    0xC125: "?(gphoto 未收录)", 0xC700: "?(gphoto 未收录)",
+    0x4006: "DevicePropChanged(标准;2026-10-04 实测疑电量)",
+}
 
 # DataPhaseInfo 取值(libgphoto2 语义,步骤 9 验证)
 DP_NO_DATA, DP_DATA_OUT, DP_DATA_IN = 1, 2, 3
@@ -390,6 +416,161 @@ def parse_device_info(body: bytes) -> dict:
         "version": device_version, "serial": serial,
     }
 
+# ── 遥控域摸底件(镜像 usb_probe 同名件;与 Dart device_prop.dart 对齐)──
+
+def cmd_xact(cmd: socket.socket, tid: Tid, opcode: int, params=(),
+             dp: int = DP_DATA_IN, collect: bool = True):
+    """cmd 通道一次事务(自取 tid),返回 (t, payload, stats, (code, echoed, resp_params))。"""
+    t = tid.next()
+    cmd.sendall(op_request(opcode, params, tid=t, dp=dp))
+    payload, stats, resp = read_data_phase(cmd, t, collect=collect)
+    return t, payload, stats, resp
+
+PTP_DTYPES = {
+    # typecode -> (struct 格式, 字节宽, 名称);ISO 15740 §9.2
+    0x0001: ("<b", 1, "INT8"), 0x0002: ("<B", 1, "UINT8"),
+    0x0003: ("<h", 2, "INT16"), 0x0004: ("<H", 2, "UINT16"),
+    0x0005: ("<i", 4, "INT32"), 0x0006: ("<I", 4, "UINT32"),
+    0x0007: ("<q", 8, "INT64"), 0x0008: ("<Q", 8, "UINT64"),
+    0xFFFF: (None, None, "STR"),
+}
+
+# ISO 15740 标准属性的数据集类型(与 kStandardPropDataType 对齐)
+STANDARD_PROP_DTYPES = {
+    0x5001: 0x0002,  # BatteryLevel u8
+    0x5007: 0x0004,  # FNumber u16
+    0x500D: 0x0006,  # ExposureTime u32
+    0x500F: 0x0004,  # ExposureIndex u16
+}
+
+def read_ptp_str(buf: bytes, off: int) -> tuple[str, int]:
+    n = buf[off]
+    off += 1
+    if n == 0xFF:
+        return "(未提供)", off
+    return buf[off:off + 2 * n].decode("utf-16-le", errors="replace"), off + 2 * n
+
+def read_ptp_value(buf: bytes, off: int, dtype: int):
+    """按数据集类型读一个值,返回 (值, 下一偏移);未知类型抛 ValueError。"""
+    entry = PTP_DTYPES.get(dtype)
+    if entry is None:
+        raise ValueError(f"未知数据集类型 0x{dtype:04X}")
+    fmt, width, _name = entry
+    if fmt is None:
+        return read_ptp_str(buf, off)
+    (v,) = struct.unpack_from(fmt, buf, off)
+    return v, off + width
+
+def parse_prop_desc(d: bytes) -> dict:
+    """DevicePropDesc 数据集(ISO 15740 §10.5.1.3)防御性解码。
+
+    与 Dart PtpDevicePropDesc.parse 同策略:头部/当前值截断 → 保描述弃
+    FORM;FORM 区异常 → 整组置空;值区完好才尝试 MTP 出厂组。
+    """
+    r = {"dataType": None, "getSet": None, "current": None, "factory": None,
+         "rangeMin": None, "rangeMax": None, "rangeStep": None, "enumValues": None}
+    try:
+        (_prop, dtype) = struct.unpack_from("<HH", d, 0)
+        r["dataType"] = dtype
+        if dtype not in PTP_DTYPES:
+            return r  # 未知类型码:头部之外不再解读
+        r["getSet"] = bool(d[4])
+        r["current"], off = read_ptp_value(d, 5, dtype)
+    except (IndexError, struct.error, ValueError):
+        return r
+    try:
+        if off < len(d):
+            form_flag = d[off]
+            off += 1
+            if form_flag == 0x01:  # Range FORM:最小 / 最大 / 步长
+                r["rangeMin"], off = read_ptp_value(d, off, dtype)
+                r["rangeMax"], off = read_ptp_value(d, off, dtype)
+                r["rangeStep"], off = read_ptp_value(d, off, dtype)
+            elif form_flag == 0x02:  # Enumeration FORM:u16 个数 + N 值
+                (count,) = struct.unpack_from("<H", d, off)
+                off += 2
+                vals = []
+                for _ in range(count):
+                    v, off = read_ptp_value(d, off, dtype)
+                    vals.append(v)
+                r["enumValues"] = vals
+    except (IndexError, struct.error, ValueError):
+        r["rangeMin"] = r["rangeMax"] = r["rangeStep"] = None
+        r["enumValues"] = None
+    # MTP 出厂默认值组(u16 个数 + N 值);标准 PTP 固件通常没有,失败置空
+    try:
+        if off + 2 <= len(d):
+            (count,) = struct.unpack_from("<H", d, off)
+            off += 2
+            vals = []
+            for _ in range(count):
+                v, off = read_ptp_value(d, off, dtype)
+                vals.append(v)
+            if vals:
+                r["factory"] = vals
+    except (IndexError, struct.error, ValueError):
+        r["factory"] = None
+    return r
+
+def decode_prop_value(prop: int, d: bytes, dtype_hint: int | None):
+    """0x1015 裸值解码,返回 (值, 类型来源说明)。
+
+    顺序:Desc 自描述类型 → ISO 标准表 → 长度嗅探(奇长且符合字符串
+    布局 1+2n → STR;1/2/4/8 字节 → u8/u16/u32/u64,与
+    PtpDevicePropValue.parse 同规则)。打印来源可直接回答「方言是否
+    偏离标准表」。
+    """
+    n = len(d)
+    dtype = None
+    source = None
+    if dtype_hint is not None and dtype_hint in PTP_DTYPES:
+        dtype, source = dtype_hint, "Desc 自描述"
+    elif prop in STANDARD_PROP_DTYPES:
+        dtype, source = STANDARD_PROP_DTYPES[prop], "ISO 标准表"
+    elif n >= 3 and n % 2 == 1 and d[0] == (n - 1) // 2:
+        dtype, source = 0xFFFF, "嗅探(字符串布局)"
+    elif n in (1, 2, 4, 8):
+        dtype, source = {1: 0x0002, 2: 0x0004, 4: 0x0006, 8: 0x0008}[n], \
+            "嗅探(字节宽)"
+    if dtype is None:
+        return None, f"无法嗅探({n}B)"
+    try:
+        v, _off = read_ptp_value(d, 0, dtype)
+    except (IndexError, struct.error, ValueError) as e:
+        return None, f"解码失败({e})"
+    return v, f"{PTP_DTYPES[dtype][2]} / {source}"
+
+def fmt_event(dt: float, code: int, tid_v: int, params: list[int]) -> str:
+    """事件时间线一行:t+时刻 事件码 名称 tid 参数。"""
+    name = EVENT_NAMES.get(code, "(未知名)")
+    ps = " ".join(f"0x{p:08X}" for p in params)
+    return (f"t+{dt * 1000:.0f}ms  0x{code:04X} {name} tid=0x{tid_v:08X}"
+            + (f" params=[{ps}]" if ps else ""))
+
+def drain_evt_events(evt: socket.socket, t0: float, timeout: float = 0.2) -> int:
+    """排空 evt socket 事件并打印时间线,返回条数(0 = 窗口内无事件)。
+
+    事后恢复 READ_TIMEOUT —— 调用方无需管超时状态。
+    """
+    evt.settimeout(timeout)
+    n = 0
+    while True:
+        try:
+            ptype, body = read_packet(evt)
+        except socket.timeout:
+            break
+        except (ConnectionError, OSError) as e:
+            print(f"      [!] event 通道异常({e})—— 停止排空")
+            break
+        if ptype == EVENT:
+            code, tid_v, params = parse_event(body)
+            n += 1
+            print("      " + fmt_event(time.monotonic() - t0, code, tid_v, params))
+        else:
+            print(f"      [意外包] {describe(ptype, body)}")
+    evt.settimeout(READ_TIMEOUT)
+    return n
+
 # ── 步骤 5:OpenSession(含 0x201E 自愈,照抄 usb_probe ensure_session) ──
 
 def open_session_with_heal(cmd: socket.socket, tid: Tid, session_id: int = 1) -> int:
@@ -494,6 +675,25 @@ def main() -> int:
                          "text 为字面值,空文本 = 清空")
     ap.add_argument("--setprop-layout", choices=("end", "data"), default="end",
                     help="数据出布局:end=StartData+EndData(载荷);data=StartData+Data+空EndData")
+    ap.add_argument("--propdesc", type=lambda s: [int(x, 16) for x in s.split(",")],
+                    metavar="hex[,hex…]", default=[],
+                    help="步骤 9r:Desc/Value 解码对照(镜像 Dart device_prop.dart"
+                         " 的类型表/长度嗅探/FORM/MTP 出厂组,打印类型来源)"
+                         "—— 曝光三属性回归:--propdesc 5007,500d,500f")
+    ap.add_argument("--liveview", type=int, metavar="帧数", default=0,
+                    help="步骤 9v:Live View 摸底 0x9201 → 0x9203 轮询 N 帧"
+                         "(间隔 200ms 对齐 app;连续 5 帧失败收口)→ 0x9202;"
+                         "帧率/字节数/SOI 偏移/单帧往返延迟 + evt 事件时间线")
+    ap.add_argument("--capture", action="store_true",
+                    help="步骤 9c:快门释放摸底(--capture-op 换码)+ evt 事件"
+                         "时间线 + 0x90C8 DeviceReady 忙等收口")
+    ap.add_argument("--capture-op", type=lambda s: int(s, 16), metavar="hex",
+                    default=INITIATE_CAPTURE,
+                    help="拍照操作码:0x100E(标准,默认)/ 0x9207 / 0x90C0"
+                         "(尼康候选,配合 --capture)")
+    ap.add_argument("--events", type=int, metavar="秒", default=0,
+                    help="步骤 9e:evt 通道监听 N 秒(期间在相机上按快门/"
+                         "转波轮),事件时间线带名称与参数")
     args = ap.parse_args()
 
     try:
@@ -676,6 +876,211 @@ def main() -> int:
               f"<- 0x{code:04X}")
     except (ConnectionError, socket.timeout, ProtocolError) as e:
         print(f"[9] OpenSession dp=3:链路异常({e})—— 会话操作错标不宽容")
+
+    # 步骤 9r(可选,--propdesc):Desc/Value 解码对照 —— 无线链路的遥控
+    # 域回归。与 usb_probe --propdesc 同款(镜像 Dart device_prop.dart 的
+    # 解码链:类型来源 Desc 自描述 → ISO 标准表 → 长度嗅探;FORM 范围/
+    # 枚举 + MTP 出厂组)。USB/无线两份输出对拍,方言差异一目了然。
+    if args.propdesc:
+        print("[9r] 设备属性 Desc/Value 解码对照:")
+        for prop in args.propdesc:
+            dtype_hint = None
+            try:
+                t, payload, stats, (code, echoed, _) = cmd_xact(
+                    cmd, tid, GET_DEVICE_PROP_DESC, [prop], dp=DP_DATA_IN)
+            except (ConnectionError, socket.timeout, ProtocolError) as e:
+                print(f"  0x{prop:04X} Desc:链路异常({e})—— 中止本步")
+                break
+            if code == PTP_OK:
+                print(f"  0x{prop:04X} Desc <- OK {len(payload)}B "
+                      f"declared={stats['declared']} Data×{stats['data_packets']} "
+                      f"EndData={stats['end_payload']}B")
+                print(f"    raw: {payload[:64].hex(' ')}"
+                      + (" …" if len(payload) > 64 else ""))
+                desc = parse_prop_desc(payload)
+                dtype_hint = desc["dataType"]
+                if dtype_hint is not None and dtype_hint not in PTP_DTYPES:
+                    print(f"    解码: DataType=0x{dtype_hint:04X}(未知类型码,头部外不解读)")
+                else:
+                    tname = PTP_DTYPES[dtype_hint][2] if dtype_hint is not None else "?"
+                    print(f"    解码: DataType={tname}  getSet={desc['getSet']}"
+                          f"({'可写' if desc['getSet'] else '只读'})"
+                          f"  current={desc['current']!r}")
+                    if desc["rangeMin"] is not None:
+                        print(f"    FORM 范围: {desc['rangeMin']!r} ~ {desc['rangeMax']!r}"
+                              f" 步长 {desc['rangeStep']!r}")
+                    if desc["enumValues"]:
+                        vals = desc["enumValues"]
+                        print(f"    FORM 枚举({len(vals)}): "
+                              + " ".join(repr(v) for v in vals[:12])
+                              + (" …" if len(vals) > 12 else ""))
+                    if desc["factory"]:
+                        print(f"    MTP 出厂组: {desc['factory']!r}")
+            else:
+                print(f"  0x{prop:04X} Desc <- 0x{code:04X}")
+            try:
+                t, payload, stats, (code, echoed, _) = cmd_xact(
+                    cmd, tid, GET_DEVICE_PROP_VALUE, [prop], dp=DP_DATA_IN)
+            except (ConnectionError, socket.timeout, ProtocolError) as e:
+                print(f"  0x{prop:04X} Value:链路异常({e})—— 中止本步")
+                break
+            if code == PTP_OK:
+                print(f"  0x{prop:04X} Value <- OK {len(payload)}B "
+                      f"raw: {payload[:48].hex(' ')}")
+                v, src = decode_prop_value(prop, payload, dtype_hint)
+                print(f"    解码: {src} -> {v!r}")
+            else:
+                print(f"  0x{prop:04X} Value <- 0x{code:04X}")
+
+    # 步骤 9v(可选,--liveview N):Live View 轮询摸底(无线对照)。
+    # 0x9201 → 0x9203 轮询直到 N 帧成功(间隔 200ms 对齐 app;连续 5 帧
+    # 失败收口,LiveViewEngine 同策略)→ 0x9202。帧率/字节数/SOI 偏移/
+    # 单帧往返延迟 + evt 事件时间线(0xC10C 取景态变迁语义在此落定)。
+    # STA 的 9 op 小表不含 0x920x —— 按表拒连即误杀的教训,直发摸底。
+    if args.liveview:
+        print(f"[9v] Live View 摸底(0x9201 → 0x9203 ×{args.liveview} 帧 → 0x9202):")
+        t0 = time.monotonic()
+        try:
+            t, payload, stats, (code, echoed, _) = cmd_xact(
+                cmd, tid, NIKON_START_LIVEVIEW, dp=DP_NO_DATA)
+            print(f"    StartLiveView <- 0x{code:04X} 回显 tid={echoed}")
+        except (ConnectionError, socket.timeout, ProtocolError) as e:
+            print(f"    StartLiveView:链路异常({e})")
+            code = -1
+        if code == PTP_OK:
+            drain_evt_events(evt, t0)
+            sizes, latencies, soi_hist = [], [], {}
+            fails = got = attempt = 0
+            while got < args.liveview and fails < 5:
+                time.sleep(0.2)  # 开取景后相机就绪需拍前摇,失败亦同拍重试
+                attempt += 1
+                t_x = time.monotonic()
+                try:
+                    t, payload, stats, (code, echoed, _) = cmd_xact(
+                        cmd, tid, NIKON_GET_LIVEVIEW_IMG, dp=DP_DATA_IN)
+                except (ConnectionError, socket.timeout, ProtocolError) as e:
+                    print(f"    尝试 #{attempt} <- 链路异常({e})—— 停止轮询")
+                    break
+                latencies.append(time.monotonic() - t_x)
+                drain_evt_events(evt, t0)
+                if code != PTP_OK:
+                    print(f"    尝试 #{attempt} <- 0x{code:04X}"
+                          f" declared={stats['declared']}"
+                          f" Data×{stats['data_packets']}")
+                    fails += 1
+                    continue
+                fails = 0
+                got += 1
+                soi = payload.find(b"\xff\xd8")
+                sizes.append(len(payload))
+                soi_hist[soi] = soi_hist.get(soi, 0) + 1
+                print(f"    帧 #{got}: {len(payload)}B SOI@{soi} "
+                      f"declared={stats['declared']} Data×{stats['data_packets']}")
+                if got == 1:
+                    ext = ".jpg" if soi >= 0 else ".bin"
+                    out = f"/tmp/nikonpill_ptpip_liveview_first{ext}"
+                    with open(out, "wb") as f:
+                        f.write(payload)
+                    print(f"      头 32B: {payload[:32].hex(' ')}  原始帧已存:{out}")
+            elapsed = max(time.monotonic() - t0, 1e-6)
+            print(f"    小结:取得 {got}/{args.liveview} 帧(失败 {fails} 连击即止)"
+                  f"  用时 {elapsed:.1f}s  实测帧率 {got / elapsed:.1f}fps")
+            if sizes:
+                print(f"    帧大小:min {min(sizes)}B / 均值 {sum(sizes) // len(sizes)}B"
+                      f" / max {max(sizes)}B")
+            if latencies:
+                ms = sorted(x * 1000 for x in latencies)
+                print(f"    单帧事务往返:min {ms[0]:.0f}ms / 中位 {ms[len(ms) // 2]:.0f}ms"
+                      f" / max {ms[-1]:.0f}ms(无线对照 USB;app 间隔 200ms 是否够看这里)")
+            if soi_hist:
+                print("    SOI 偏移直方图: "
+                      + "  ".join(f"@{k}×{v}" for k, v in sorted(soi_hist.items())))
+            try:
+                t, payload, stats, (code, echoed, _) = cmd_xact(
+                    cmd, tid, NIKON_END_LIVEVIEW, dp=DP_NO_DATA)
+                print(f"    EndLiveView <- 0x{code:04X}")
+            except (ConnectionError, socket.timeout, ProtocolError) as e:
+                print(f"    EndLiveView:链路异常({e})")
+            drain_evt_events(evt, t0)  # 0xC10C 若在停止时推送,语义在此落定
+
+    # 步骤 9c(可选,--capture):快门释放摸底(无线对照)—— 0x100E(标准)
+    # /0x9207/0x90C0(尼康候选)发一次,evt 事件时间线 + 0x90C8 DeviceReady
+    # 忙等收口(300ms×30,长曝余量;就绪后再听 2s 收 ObjectAdded 拖尾)。
+    # 事件语义(CaptureComplete 先后/双格式双 ObjectAdded/0xC10C)以此
+    # 时间线落定,回填 RemoteController 消费表;与 usb_probe --capture 对拍。
+    if args.capture:
+        names = {INITIATE_CAPTURE: "InitiateCapture 0x100E(标准)",
+                 NIKON_INITIATE_CAPTURE_REC_IN_MEDIA:
+                     "InitiateCaptureRecInMedia 0x9207(候选)",
+                 NIKON_INITIATE_CAPTURE_REC_IN_SDRAM:
+                     "InitiateCaptureRecInSdram 0x90C0(候选)"}
+        label = names.get(args.capture_op, f"0x{args.capture_op:04X}")
+        print(f"[9c] 快门释放摸底({label},参数 0,0):")
+        t0 = time.monotonic()
+        try:
+            t, payload, stats, (code, echoed, _) = cmd_xact(
+                cmd, tid, args.capture_op, [0, 0], dp=DP_NO_DATA)
+            print(f"    t+0ms  op <- 0x{code:04X} 回显 tid={echoed}")
+        except (ConnectionError, socket.timeout, ProtocolError) as e:
+            print(f"    t+0ms  op <- 链路异常({e})")
+            code = -1
+        if code == PTP_OK:
+            drain_evt_events(evt, t0)
+            for i in range(30):  # 300ms × 30 ≈ 9s:app 的 10×300ms 放宽,长曝余量
+                time.sleep(0.3)
+                drain_evt_events(evt, t0)
+                t_x = time.monotonic()
+                try:
+                    t, payload, stats, (code2, echoed, _) = cmd_xact(
+                        cmd, tid, NIKON_DEVICE_READY, dp=DP_NO_DATA)
+                except (ConnectionError, socket.timeout, ProtocolError) as e:
+                    print(f"    DeviceReady:链路异常({e})—— 停止忙等")
+                    break
+                dt = (time.monotonic() - t_x) * 1000
+                if code2 == PTP_OK:
+                    print(f"    t+{(time.monotonic() - t0) * 1000:.0f}ms  "
+                          f"DeviceReady <- OK(落地,第 {i + 1} 轮,事务 {dt:.0f}ms)")
+                    break
+                if code2 == DEVICE_BUSY:
+                    print(f"    t+{(time.monotonic() - t0) * 1000:.0f}ms  "
+                          f"DeviceReady <- 0x2019 忙(事务 {dt:.0f}ms)")
+                    continue
+                print(f"    DeviceReady <- 0x{code2:04X}(非忙,放弃兜底 —— "
+                      "命令已被接受,等事件即可)")
+                break
+            # 就绪后再听 2s:ObjectAdded 常晚于 CaptureComplete/就绪
+            end = time.monotonic() + 2.0
+            while time.monotonic() < end:
+                if drain_evt_events(evt, t0, timeout=0.2):
+                    continue
+                time.sleep(0.2)
+
+    # 步骤 9e(可选,--events N):evt 通道监听窗口 —— 期间在相机上任意
+    # 操作(半按快门/拍一张/转波轮/开关取景),事件时间线带名称与参数。
+    # --idle 骨架的监听件(空闲保持仍归 --idle,两不相扰)。
+    if args.events > 0:
+        print(f"[9e] 事件监听窗口 {args.events}s —— 现在在相机上按快门/转波轮…")
+        t0 = time.monotonic()
+        deadline = t0 + args.events
+        n = 0
+        evt.settimeout(0.5)
+        while time.monotonic() < deadline:
+            try:
+                ptype, body = read_packet(evt)
+            except socket.timeout:
+                continue
+            except (ConnectionError, OSError) as e:
+                print(f"    [!] event 通道异常({e})—— 窗口终止")
+                break
+            if ptype == EVENT:
+                code, tid_v, params = parse_event(body)
+                n += 1
+                print("    " + fmt_event(time.monotonic() - t0, code, tid_v, params))
+            else:
+                print(f"    [意外包] {describe(ptype, body)}")
+        evt.settimeout(READ_TIMEOUT)
+        if n == 0:
+            print("    (窗口内无事件;试试期间按快门/转波轮)")
 
     # 步骤 10:ProbeRequest 回声
     probe_echo(cmd, evt, args.hostname)

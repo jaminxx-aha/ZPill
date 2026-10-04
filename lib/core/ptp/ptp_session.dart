@@ -13,6 +13,7 @@ import 'dart:typed_data';
 
 import '../ptpip/object_info.dart';
 import '../utils/byte_reader.dart';
+import 'device_prop.dart';
 import 'operation_codes.dart';
 import 'ptp_transport.dart';
 
@@ -339,6 +340,117 @@ final class PtpSession {
     final result = await _serialized(() => transport.execute(const PtpRequest(
         opcode: NikonOperationCode.completePairing, params: [0x2001])));
     _ensureOk(result, NikonOperationCode.completePairing);
+  }
+
+  // ---- 遥控域:曝光参数 / Live View / 快门释放 ----
+
+  /// SetDevicePropValue(0x1016)总开关。真机验证可写域之前恒为 false
+  /// (0xD406「写过即回弹」的教训:未验证的写操作一律不落到相机),
+  /// 翻开前 setDevicePropValue 直接抛 UnsupportedError。
+  static const bool kSetPropEnabled = false;
+
+  /// GetDevicePropValue(0x1015):当前值。响应是裸值数据集,解码类型
+  /// 查标准表(见 [PtpDevicePropValue.parse]);方言偏离时改走
+  /// [getDevicePropDesc] 拿自描述类型(待真机核对)。
+  Future<PtpDevicePropValue> getDevicePropValue(int propCode) async {
+    final result = await _serialized(() => transport.execute(PtpRequest(
+          opcode: PtpOperationCode.getDevicePropValue,
+          params: [propCode],
+        )));
+    _ensureOk(result, PtpOperationCode.getDevicePropValue);
+    return PtpDevicePropValue.parse(propCode, result.data ?? Uint8List(0));
+  }
+
+  /// GetDevicePropDesc(0x1014):属性全描述(类型/可写性/枚举域/默认值),
+  /// 数据集自描述类型,是裸值解码的对照组。
+  Future<PtpDevicePropDesc> getDevicePropDesc(int propCode) async {
+    final result = await _serialized(() => transport.execute(PtpRequest(
+          opcode: PtpOperationCode.getDevicePropDesc,
+          params: [propCode],
+        )));
+    _ensureOk(result, PtpOperationCode.getDevicePropDesc);
+    return PtpDevicePropDesc.parse(result.data ?? Uint8List(0));
+  }
+
+  /// SetDevicePropValue(0x1016,数据入相)。门禁 [kSetPropEnabled]。
+  Future<void> setDevicePropValue(PtpDevicePropValue value) async {
+    if (!kSetPropEnabled) {
+      throw UnsupportedError(
+          'SetDevicePropValue 未启用:待真机核对可写域后翻开 kSetPropEnabled');
+    }
+    final result = await _serialized(() => transport.execute(PtpRequest(
+          opcode: PtpOperationCode.setDevicePropValue,
+          params: [value.code],
+          dataOut: value.encode(),
+        )));
+    _ensureOk(result, PtpOperationCode.setDevicePropValue);
+  }
+
+  /// Nikon StartLiveView(0x9201,候选码,待真机核对)。
+  Future<void> startLiveView() async {
+    final result = await _serialized(() => transport.execute(
+          const PtpRequest(opcode: NikonOperationCode.startLiveView),
+        ));
+    _ensureOk(result, NikonOperationCode.startLiveView);
+  }
+
+  /// Nikon EndLiveView(0x9202,候选码,待真机核对)。
+  Future<void> endLiveView() async {
+    final result = await _serialized(() => transport.execute(
+          const PtpRequest(opcode: NikonOperationCode.endLiveView),
+        ));
+    _ensureOk(result, NikonOperationCode.endLiveView);
+  }
+
+  /// Nikon GetLiveViewImage(0x9203,候选码,待真机核对):取一帧取景图像。
+  /// 帧格式未经抓包定案,复用缩略图的 SOI 嗅探剥杂头(防御性兼容
+  /// 「头 + JPEG」形态),嗅探不到 SOI 原样返回交上层解码器报错。
+  Future<Uint8List> getLiveViewImage() async {
+    final result = await _serialized(() => transport.execute(
+          const PtpRequest(opcode: NikonOperationCode.getLiveViewImage),
+        ));
+    _ensureOk(result, NikonOperationCode.getLiveViewImage);
+    return _sniffJpegStart(result.data ?? Uint8List(0));
+  }
+
+  /// InitiateCapture(0x100E 标准,params [0,0]):快门释放,落卡存储。
+  /// 0x2019 DeviceBusy(半按对焦未就绪等)按异常上抛,上层提示重试。
+  Future<void> initiateCapture() async {
+    final result = await _serialized(() => transport.execute(
+          const PtpRequest(
+              opcode: PtpOperationCode.initiateCapture, params: [0, 0]),
+        ));
+    _ensureOk(result, PtpOperationCode.initiateCapture);
+  }
+
+  /// Nikon InitiateCaptureRecInMedia(0x9207,候选码,待真机核对):落卡拍。
+  Future<void> initiateCaptureRecInMedia() async {
+    final result = await _serialized(() => transport.execute(
+          const PtpRequest(opcode: NikonOperationCode.initiateCaptureRecInMedia),
+        ));
+    _ensureOk(result, NikonOperationCode.initiateCaptureRecInMedia);
+  }
+
+  /// Nikon InitiateCaptureRecInSdram(0x90C0,候选码,待真机核对):
+  /// 无卡拍进机身缓存(速传场景的对象随后经 ObjectAddedInSdram 事件流出)。
+  Future<void> initiateCaptureRecInSdram() async {
+    final result = await _serialized(() => transport.execute(const PtpRequest(
+        opcode: NikonOperationCode.initiateCaptureRecInSdram)));
+    _ensureOk(result, NikonOperationCode.initiateCaptureRecInSdram);
+  }
+
+  /// Nikon DeviceReady(0x90C8):拍照后的忙等探针。
+  /// **0x2019 DeviceBusy 是语义不是错误**(返回 false);其余响应码照常
+  /// 抛 [PtpResponseException],链路级异常自然传播(调用方据此判死链)。
+  Future<bool> deviceReady() async {
+    final result = await _serialized(() => transport.execute(
+          const PtpRequest(opcode: NikonOperationCode.deviceReady),
+        ));
+    if (result.responseCode == PtpResponseCode.deviceBusy) {
+      return false;
+    }
+    _ensureOk(result, NikonOperationCode.deviceReady);
+    return true;
   }
 
   void _ensureOk(PtpResult result, int opcode) {

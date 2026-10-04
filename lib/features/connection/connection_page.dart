@@ -450,12 +450,11 @@ class _ConnectionPageState extends State<ConnectionPage> {
                 ),
               ),
               const SizedBox(height: 8),
-              // TODO(P3): 遥控拍摄入口(连接成功后可用)
               OutlinedButton(
                 onPressed: () => Navigator.of(context).push(
                   MaterialPageRoute(builder: (_) => const RemotePage()),
                 ),
-                child: const Text('遥控拍摄(P3)'),
+                child: const Text('遥控拍摄'),
               ),
             ],
           );

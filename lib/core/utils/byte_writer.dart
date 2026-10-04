@@ -32,6 +32,18 @@ final class ByteWriter {
     _b.add(out);
   }
 
+  /// 写 PTP STRING 数据集类型(u8 字符数 + UTF-16LE;null = 0xFF 未提供)。
+  /// 与 [ByteReader.ptpString] 互逆,不写结尾 NUL(读侧自剥)。
+  void ptpString(String? s) {
+    if (s == null) {
+      u8(0xFF);
+      return;
+    }
+    final units = s.codeUnits;
+    u8(units.length);
+    utf16le(s);
+  }
+
   Uint8List takeBytes() => _b.takeBytes();
 
   Uint8List _bytes(int size, void Function(ByteData bd) write) {
