@@ -1,42 +1,177 @@
 /// PTP-IP 传输通道:command 与 event 各一条 TCP 连接,均连 15740。
 ///
-/// core 只依赖本接口 —— 状态机/会话逻辑的单测注入 Fake 即可覆盖,
-/// 不需要真 socket(TODO.md §一「双 TCP 通道」)。
+/// core 只依赖 [PtpIpChannel] 接口 —— 状态机/会话逻辑的单测注入 Fake 即可
+/// 覆盖,不需要真 socket(TODO.md §一「双 TCP 通道」)。
 library;
 
+import 'dart:async';
+import 'dart:io';
+import 'dart:typed_data';
+
 import 'packet.dart';
+
+/// 单帧长度上限(含 8B 包头)。相机侧分块 ≤8MB(Camera_Bridge 自适应
+/// chunk 上限),16MB 整只下载存在;32MiB 为 2× 余量。
+/// 超限几乎必然是流错位 —— 拒绝预分配,直接报错毒化链路。
+const int kMaxPtpIpFrameLength = 32 * 1024 * 1024;
 
 abstract interface class PtpIpChannel {
   bool get isOpen;
 
-  /// 已按包头(类型 u32 + 长度 u32)切好帧的输入流。
+  /// 已按包头(长度 u32 在前 + 类型 u32)切好帧的输入流(单订阅)。
   Stream<PtpIpFrame> get frames;
 
   Future<void> connect(String host, int port);
 
   Future<void> sendFrame(PtpIpFrame frame);
 
-  /// 断开清理:关 socket、复位状态(TODO.md §二)。
+  /// 断开清理:关 socket、复位状态;幂等(TODO.md §二)。
   Future<void> close();
 }
 
-/// 基于 dart:io Socket 的默认实现。
+/// 字节流 → 帧的纯切分器:半包暂存、粘包拆分、逐字节喂入皆可。
 ///
-/// TODO(P1): 帧切分 —— 读满 8 字节头 → 按(长度-8)读满 body;
-/// 半包/粘包必须处理,禁止假设一读一包。
+/// 纯逻辑零 IO,单测即覆盖全部边界;[TcpPtpIpChannel] 内部使用。
+/// 帧错误(长度 < 8 / 超上限)抛 [FormatException] —— 调用方据此毒化
+/// 链路(晚到字节不得污染下一事务)。
+final class PtpIpFrameSplitter {
+  Uint8List _pending = Uint8List(0);
+
+  /// 喂入任意大小的字节块,返回其中完整的帧(可能为空)。
+  ///
+  /// 返回帧的 body 是内部缓冲的**视图**;本类后续 feed 不会使其失效
+  /// (每轮 feed 生成新缓冲),但调用方不得原地修改。
+  List<PtpIpFrame> feed(Uint8List bytes) {
+    if (bytes.isEmpty) {
+      return const [];
+    }
+    final combined = Uint8List(_pending.length + bytes.length);
+    combined.setAll(0, _pending);
+    combined.setAll(_pending.length, bytes);
+
+    final frames = <PtpIpFrame>[];
+    var off = 0;
+    while (combined.length - off >= kPtpIpHeaderLength) {
+      final header = ByteData.sublistView(combined, off, off + kPtpIpHeaderLength);
+      final length = header.getUint32(0, Endian.little);
+      if (length < kPtpIpHeaderLength) {
+        throw FormatException('PTP-IP 帧长度 $length < 8(流错位?)');
+      }
+      if (length > kMaxPtpIpFrameLength) {
+        // 巨值保护:先校验再分配,拒绝按乱序长度预分配大缓冲。
+        throw FormatException('PTP-IP 帧长度 $length 超上限(流错位?)');
+      }
+      if (combined.length - off < length) {
+        break; // 半包,留待下一轮
+      }
+      final type = header.getUint32(4, Endian.little);
+      frames.add(PtpIpFrame(
+        type: type,
+        body: Uint8List.sublistView(
+            combined, off + kPtpIpHeaderLength, off + length),
+      ));
+      off += length;
+    }
+    _pending = Uint8List.sublistView(combined, off);
+    return frames;
+  }
+}
+
+/// 基于 dart:io Socket 的默认实现(薄壳:连接、帧切分、收发、关断)。
+///
+/// 连接超时 5s —— IP 错/热点没开时 Darwin SYN 重试 ~75s,会把 UI 拖进
+/// 「无限 connecting」;超时抛 [SocketException],由上层转成用户指引。
 final class TcpPtpIpChannel implements PtpIpChannel {
-  @override
-  bool get isOpen => throw UnimplementedError();
+  TcpPtpIpChannel({this.connectTimeout = const Duration(seconds: 5)});
+
+  final Duration connectTimeout;
+  Socket? _socket;
+  bool _closed = false;
+  final _frames = StreamController<PtpIpFrame>();
+  final _splitter = PtpIpFrameSplitter();
 
   @override
-  Stream<PtpIpFrame> get frames => throw UnimplementedError();
+  bool get isOpen => !_closed && _socket != null;
 
   @override
-  Future<void> connect(String host, int port) => throw UnimplementedError();
+  Stream<PtpIpFrame> get frames => _frames.stream;
 
   @override
-  Future<void> sendFrame(PtpIpFrame frame) => throw UnimplementedError();
+  Future<void> connect(String host, int port) async {
+    if (_closed) {
+      throw StateError('channel 已关闭');
+    }
+    if (_socket != null) {
+      throw StateError('channel 已连接');
+    }
+    final socket = await Socket.connect(host, port, timeout: connectTimeout);
+    if (_closed) {
+      // close() 与连接完成竞态:立刻回收刚建立的 socket
+      socket.destroy();
+      return;
+    }
+    _socket = socket;
+    socket.listen(
+      (chunk) {
+        for (final frame in _splitter.feed(chunk)) {
+          if (!_frames.isClosed) {
+            _frames.add(frame);
+          }
+        }
+      },
+      onError: (Object e) {
+        if (!_frames.isClosed) {
+          _frames.addError(e);
+        }
+      },
+      onDone: () {
+        if (!_frames.isClosed) {
+          _frames.close();
+        }
+      },
+      cancelOnError: false,
+    );
+  }
 
   @override
-  Future<void> close() => throw UnimplementedError();
+  Future<void> sendFrame(PtpIpFrame frame) {
+    final socket = _socket;
+    if (socket == null || _closed) {
+      throw StateError('channel 未连接');
+    }
+    final out = BytesBuilder(copy: false)
+      ..add(_header(frame.type, frame.body.length));
+    if (frame.body.isNotEmpty) {
+      out.add(frame.body);
+    }
+    socket.add(out.takeBytes());
+    return Future.value();
+  }
+
+  @override
+  Future<void> close() async {
+    if (_closed) {
+      return;
+    }
+    _closed = true;
+    _socket?.destroy();
+    _socket = null;
+    if (!_frames.isClosed) {
+      if (_frames.hasListener) {
+        await _frames.close();
+      } else {
+        // 单订阅流无人监听时,close() 的 done future 永不完成 —— 不能 await
+        unawaited(_frames.close());
+      }
+    }
+  }
+
+  /// 包头:长度(u32,含 8B)在前 + 类型(u32)在后,均小端。
+  static Uint8List _header(int type, int bodyLength) {
+    final h = Uint8List(kPtpIpHeaderLength);
+    final bd = ByteData.sublistView(h);
+    bd.setUint32(0, bodyLength + kPtpIpHeaderLength, Endian.little);
+    bd.setUint32(4, type, Endian.little);
+    return h;
+  }
 }

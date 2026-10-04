@@ -3,7 +3,9 @@
 /// 依据 TODO.md §一 与 USB-IF《Picture Transfer Protocol over TCP/IP
 /// Networks》:
 /// - 所有多字节字段一律**小端序**;大端包会被相机静默丢弃(TODO 注意事项 1)
-/// - 包头 = 包类型(uint32 LE) + 包长度(uint32 LE,长度含包头自身 8 字节)
+/// - 包头 = **包长度(uint32 LE)在前 + 包类型(uint32 LE)在后**,长度含
+///   包头自身 8 字节(libgphoto2 ptpipheader 同构;Camera_Bridge 在 Zf
+///   真机实证 —— 早期骨架曾写反成类型在前,2026-10-04 订正)
 /// - 字节级编解码见 `codec.dart`,传输见 `channels.dart`
 library;
 
@@ -43,8 +45,10 @@ sealed class PtpIpPacket {
   final int type;
 }
 
-/// 1: Init Command Request。
-/// GUID(16B) + 主机名长度(uint32 LE,注意是 4 字节) + UTF-16LE 主机名。
+/// 1: Init Command Request(尼康 Wi-Fi 方言 / MTP/IP 布局,Camera_Bridge 实证)。
+/// GUID(16B 固定值 `kNikonAndroidGuid`)+ UTF-16LE 主机名(NUL 结尾,
+/// **无长度前缀**)+ u32 协议版本 `kPtpIpProtocolVersion`。
+/// 规范 PTP/IP 布局(GUID + u32 长度 + 主机名)会被 Zf 当乱码丢弃。
 final class InitCommandRequestPacket extends PtpIpPacket {
   const InitCommandRequestPacket({required this.guid, required this.hostname})
       : super(type: PtpIpPacketType.initCommandRequest);
@@ -52,11 +56,20 @@ final class InitCommandRequestPacket extends PtpIpPacket {
   final String hostname;
 }
 
-/// 2: Init Command Response:连接号(uint32)。
+/// 2: Init Command Response:连接号(u32) + 相机 GUID(16B) +
+/// 相机名(NUL 终止 UTF-16LE,无长度前缀)+ 协议版本(u32)。
+/// 后三段为尼康方言字段(Camera_Bridge 实证),编解码见 `codec.dart`。
 final class InitCommandResponsePacket extends PtpIpPacket {
-  const InitCommandResponsePacket({required this.connectionNumber})
-      : super(type: PtpIpPacketType.initCommandResponse);
+  const InitCommandResponsePacket({
+    required this.connectionNumber,
+    required this.cameraGuid,
+    required this.cameraName,
+    required this.protocolVersion,
+  }) : super(type: PtpIpPacketType.initCommandResponse);
   final int connectionNumber;
+  final Uint8List cameraGuid; // 16 字节
+  final String cameraName;
+  final int protocolVersion; // 高 16 位为版本号(0x00010000 = 1.0)
 }
 
 /// 3: Init Event Request:连接号(uint32)。
