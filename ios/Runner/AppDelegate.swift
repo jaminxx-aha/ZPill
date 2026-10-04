@@ -12,5 +12,12 @@ import UIKit
 
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
+    let registry = engineBridge.pluginRegistry
+    if let registrar = registry.registrar(forPlugin: "GalleryPlugin") {
+      GalleryPlugin.register(with: registrar)
+    }
+    if let registrar = registry.registrar(forPlugin: "UsbHostPlugin") {
+      UsbHostPlugin.register(with: registrar)
+    }
   }
 }
