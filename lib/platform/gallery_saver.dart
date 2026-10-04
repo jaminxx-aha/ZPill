@@ -12,8 +12,12 @@
 /// ~10s 临时授权,窗口内 createAsset + 拷字节。
 /// PhotoViewPicker.save 已从 SDK 移除,勿再引用。
 ///
-/// 三端落点:Android MediaStore(Pictures/Movies/NikonPill)、
-/// iOS PHPhotoLibrary、ohos photoAccessHelper(SaveButton 路径)。
+/// 三端落地状态:ohos ✅ 真机闭环(photoAccessHelper + SaveButton
+/// 安全控件);iOS ✅ 真机闭环(PHPhotoLibrary + SaveButton 控件,
+/// 提交 f949349);Android ✅ 已落地(编译过,真机待验证)——
+/// MediaStore 直写(RELATIVE_PATH=Pictures/Movies/NikonPill +
+/// IS_PENDING 自有贡献,免权限零弹窗;无系统对话框故无取消路径,
+/// 要么全量成功要么整体异常)。
 library;
 
 import 'package:flutter/foundation.dart';
