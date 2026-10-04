@@ -46,6 +46,8 @@ private let kContainerHeaderLength = 12
 private let kContainerTypeCommand: UInt16 = 1
 private let kContainerTypeData: UInt16 = 2
 private let kContainerTypeResponse: UInt16 = 3
+private let kContainerTypeEvent: UInt16 = 4
+private let kAsyncEventTxid: UInt32 = 0xFFFFFFFF  // 异步事件无关联事务(真机实证)
 private let kOpcodeOpenSession: UInt16 = 0x1002
 private let kOpcodeCloseSession: UInt16 = 0x1003
 private let kResponseOk: UInt16 = 0x2001
@@ -216,12 +218,13 @@ private final class CameraStore: NSObject, ICDeviceBrowserDelegate {
 
 // ── 会话期设备委托 ───────────────────────────────────────────────
 
-/// IC 文档要求:不设 delegate,请求会被静默忽略。除拔出外全部 no-op
-/// (内容目录、缩略图、元数据都走我们自己的 PTP 通道,不用 IC 的封装)。
-/// didReceivePTPEvent 的事件字节格式未实证(v1 无 interrupt 订阅者),
-/// 遥控拍摄落地时再补格式翻译。
+/// IC 文档要求:不设 delegate,请求会被静默忽略。内容目录/缩略图/
+/// 元数据不用 IC 的封装(走我们自己的 PTP 通道);**didReceivePTPEvent
+/// 是遥控拍摄的事件源**(ObjectAdded/CaptureComplete),经 onPtpEvent
+/// 转发到插件的 EventChannel。
 private final class DeviceDelegate: NSObject, ICDeviceDelegate, ICCameraDeviceDelegate {
   var onRemoved: (() -> Void)?
+  var onPtpEvent: ((Data) -> Void)?
 
   func device(_ device: ICDevice, didOpenSessionWithError error: Error?) {}
   func device(_ device: ICDevice, didCloseSessionWithError error: Error?) {}
@@ -240,7 +243,9 @@ private final class DeviceDelegate: NSObject, ICDeviceDelegate, ICCameraDeviceDe
   ) {}
   func cameraDevice(_ camera: ICCameraDevice, didRenameItems items: [ICCameraItem]) {}
   func cameraDeviceDidChangeCapability(_ camera: ICCameraDevice) {}
-  func cameraDevice(_ camera: ICCameraDevice, didReceivePTPEvent eventData: Data) {}
+  func cameraDevice(_ camera: ICCameraDevice, didReceivePTPEvent eventData: Data) {
+    onPtpEvent?(eventData)
+  }
   func deviceDidBecomeReady(withCompleteContentCatalog device: ICCameraDevice) {}
   func cameraDeviceDidRemoveAccessRestriction(_ device: ICDevice) {}
   func cameraDeviceDidEnableAccessRestriction(_ device: ICDevice) {}
@@ -260,6 +265,9 @@ private final class IcPtpSession {
   let camera: ICCameraDevice
   let cameraUuid: String
   private let deviceDelegate = DeviceDelegate()
+
+  /// 事件出口(didReceivePTPEvent → 插件 EventChannel;字节归一在插件侧)。
+  var onPtpEvent: ((Data) -> Void)?
 
   private let lock = NSLock()
   private var staging = [UInt8]()
@@ -290,6 +298,9 @@ private final class IcPtpSession {
     deviceDelegate.onRemoved = { [weak self] in
       self?.markRemoved()
     }
+    deviceDelegate.onPtpEvent = { [weak self] data in
+      self?.onPtpEvent?(data)
+    }
     let sem = DispatchSemaphore(value: 0)
     var openError: String?
     DispatchQueue.main.async { [weak self] in
@@ -313,6 +324,7 @@ private final class IcPtpSession {
 
   /// 主线程关会话并等待完成(重连前确保旧会话收干净)。
   func close(timeoutMs: Int) {
+    deviceDelegate.onPtpEvent = nil
     lock.lock()
     removed = true
     lock.unlock()
@@ -488,6 +500,10 @@ public final class UsbHostPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
   private let usbQueue = DispatchQueue(label: "nikonpill.usb")
   private var session: IcPtpSession?
 
+  /// 事件流出口(遥控拍摄:ObjectAdded/CaptureComplete)。
+  /// EventChannel 的 sink 非线程安全,统一经主线程投递(见 forwardEvent)。
+  private var eventSink: FlutterEventSink?
+
   public static func register(with registrar: FlutterPluginRegistrar) {
     let channel = FlutterMethodChannel(
       name: "nikonpill/usb", binaryMessenger: registrar.messenger())
@@ -559,15 +575,55 @@ public final class UsbHostPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
     }
   }
 
-  // v1 无 interrupt 事件订阅者(拍摄检测未启用);IC 的事件字节格式
-  // 未实证,如实 no-op,遥控拍摄落地时再接 didReceivePTPEvent。
+  /// 只记录事件出口,不驱动会话:相机未 open 时无事件源,open 后
+  /// didReceivePTPEvent 才开始流入(与 ohos/Android 的 interrupt 契约同构)。
   public func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink)
     -> FlutterError?
   {
+    eventSink = events
     return nil
   }
 
   public func onCancel(withArguments arguments: Any?) -> FlutterError? {
+    eventSink = nil
+    return nil
+  }
+
+  /// didReceivePTPEvent 的字节格式未经真机实证,防御性归一(真机核对后回填):
+  /// 1. 已是完整事件容器(u32 长度含头 + u16 type=4)→ 原样转发;
+  /// 2. 裸事件块 u16 code + N×u32 参数 → 合成标准容器(txid=0xFFFFFFFF);
+  /// 3. 都不是 → NSLog dump 丢弃(Dart 侧单条 FormatException 也会静默
+  ///    丢弃,双保险不断流)。
+  private func forwardEvent(_ data: Data) {
+    guard let normalized = normalizePtpEvent(data) else {
+      NSLog("nikonpill/usb: 无法归一的 PTP 事件(%ld B): %@",
+            data.count, data.map { String(format: "%02x", $0) }.joined())
+      return
+    }
+    // IC 委托回调在主线程;sink 恒主线程投递(已在主线程则原样转发)。
+    let sink = eventSink
+    let payload = FlutterStandardTypedData(bytes: Data(normalized))
+    DispatchQueue.main.async {
+      sink?(payload)
+    }
+  }
+
+  private func normalizePtpEvent(_ data: Data) -> [UInt8]? {
+    let n = data.count
+    if n >= kContainerHeaderLength, Int(u32le(data, 0)) == n,
+      u16le(data, 4) == kContainerTypeEvent
+    {
+      return [UInt8](data)
+    }
+    if n >= 2, (n - 2) % 4 == 0 {
+      var out = [UInt8]()
+      appendU32(UInt32(kContainerHeaderLength + n - 2), to: &out)
+      appendU16(kContainerTypeEvent, to: &out)
+      appendU16(u16le(data, 0), to: &out)
+      appendU32(kAsyncEventTxid, to: &out)
+      out.append(contentsOf: data.dropFirst(2))
+      return out
+    }
     return nil
   }
 
@@ -604,6 +660,9 @@ public final class UsbHostPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
     if let openError = newSession.open(timeoutMs: 20_000) {
       result(UsbError.platform(code: "usb_error", message: "打开相机会话失败:\(openError)").flutterError)
       return
+    }
+    newSession.onPtpEvent = { [weak self] data in
+      self?.forwardEvent(data)
     }
     session = newSession
     result(nil)

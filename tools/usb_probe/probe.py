@@ -23,6 +23,11 @@
     身份判别实验(唯一写操作,见 [4s]):
         ... probe.py --props d406 --setprop 0xd406=factory --setprop 0xd406= \
               --setprop "0xd406=NikonPill/1.0 (PTP host)" --getobj 0x291A16A1
+    遥控域回归(曝光属性解码对照 / Live View 帧格式 / 快门事件时间线):
+        ... probe.py --propdesc 5007,500d,500f
+        ... probe.py --liveview 10
+        ... probe.py --capture                    # 0x100E 标准
+        ... probe.py --capture --capture-op 9207  # 尼康候选落卡拍
 
 只读纪律:默认仅枚举/读属性。唯一例外 --setprop(SetDevicePropValue),
 仅用于 0xD406 MTP_SessionInitiatorInfo —— 2026-10-01 相机 op 表 119↔23 两副
@@ -74,6 +79,17 @@ NIKON_GET_LARGE_THUMB = 0x90C4
 # 姿势/数据布局未真机验证,--objmeta 摸底)
 NIKON_GET_OBJECTS_META = 0x9434
 
+# 遥控域(与 lib/core/ptp/operation_codes.dart 对齐;0x100E 为 ISO 标准,
+# 其余尼康候选码 —— 姿势/数据布局待真机核对,--liveview/--capture 摸底)
+INITIATE_CAPTURE = 0x100E
+NIKON_INITIATE_CAPTURE_REC_IN_MEDIA = 0x9207
+NIKON_INITIATE_CAPTURE_REC_IN_SDRAM = 0x90C0
+NIKON_START_LIVEVIEW = 0x9201
+NIKON_END_LIVEVIEW = 0x9202
+NIKON_GET_LIVEVIEW_IMG = 0x9203
+NIKON_DEVICE_READY = 0x90C8
+DEVICE_BUSY = 0x2019  # ISO 15740 标准响应码(设备忙)
+
 # GetObjectHandles 参数(全部存储 / 全部格式;父对象:0=仅根层,ALL=递归)
 STORAGE_ALL = 0xFFFFFFFF
 FORMAT_ALL = 0
@@ -94,6 +110,7 @@ NIKON_OC_CANDIDATES = {
     0x90C7: "GetEvent(旧名 CheckEvent;尼康事件轮询,data-in)",
     0x90C8: "DeviceReady(忙等探针)",
     0x9201: "StartLiveView", 0x9202: "EndLiveView", 0x9203: "GetLiveViewImg",
+    0x9207: "InitiateCaptureRecInMedia(落卡拍,候选)",
     0x9400: "GetPartialObjectHiSpeed(尼康高速分块读)",
     0x9421: "GetObjectSize(64 位对象大小)",
     0x9431: "GetPartialObjectEx(64 位偏移+长度 —— Z 系断点续传主力)",
@@ -262,6 +279,57 @@ def find_sti_endpoints(dev):
     raise IOError("找不到含 bulk IN/OUT 的接口 —— 描述符见上文,发回分析")
 
 
+# ── interrupt 事件读取(单包起读 + 按长度补齐,同步骤 [6] 纪律)────────
+
+EVENT_NAMES = {
+    0x4002: "ObjectAdded(标准)", 0x400D: "CaptureComplete(标准)",
+    0xC101: "Nikon_ObjectAddedInSDRAM", 0xC102: "Nikon_CaptureCompleteRecInSdram",
+    0xC10C: "Nikon_LiveViewStateChanged(候选,语义未实证)",
+    0xC125: "?(gphoto 未收录)", 0xC700: "?(gphoto 未收录)",
+}
+
+
+def read_event_packet(dev, ep_intr, timeout_ms=50):
+    """非阻塞读一个 interrupt 事件包;无事件/超时返回 None。
+
+    疑非事件起始(长度字段不 sane)的包原样返回,由调用方判读 ——
+    8B 起读 + 按 u32 长度补齐,整 8 字节倍数的事件才等得到短包。
+    """
+    try:
+        chunk = bytes(dev.read(ep_intr, 8, timeout_ms))
+    except usb.core.USBError:
+        return None
+    if not chunk:
+        return None  # ZLP:仅包界标志
+    try:
+        (elen,) = struct.unpack_from("<I", chunk, 0)
+        sane = EVENT_HDR <= elen <= 64
+    except struct.error:
+        sane = False
+    if not sane:
+        return chunk
+    ev = chunk
+    while len(ev) < elen:
+        try:
+            ev += bytes(dev.read(ep_intr, 8, 100))
+        except usb.core.USBError:
+            break  # 补齐途中超时:半截事件也原样上报
+    return ev
+
+
+def fmt_event(dt: float, ev: bytes) -> str:
+    """事件时间线一行:t+时刻 事件码 名称 txid 参数。"""
+    if len(ev) < EVENT_HDR:
+        return f"t+{dt * 1000:.0f}ms  疑非事件({len(ev)}B): {ev.hex(' ')}"
+    elen, _etype, ecode, etxid = struct.unpack_from("<IHHI", ev)
+    n_params = max(0, (min(elen, len(ev)) - EVENT_HDR) // 4)
+    params = struct.unpack_from(f"<{n_params}I", ev, EVENT_HDR) if n_params else ()
+    ps = " ".join(f"0x{p:08X}" for p in params)
+    name = EVENT_NAMES.get(ecode, "(未知名)")
+    return (f"t+{dt * 1000:.0f}ms  0x{ecode:04X} {name} txid=0x{etxid:08X}"
+            + (f" params=[{ps}]" if ps else ""))
+
+
 # ── GetDeviceInfo 数据集解析(布局:ISO 15740 §9) ────────────────────
 
 def read_ptp_str(buf: bytes, off: int):
@@ -283,6 +351,121 @@ def read_u16_array(buf: bytes, off: int):
     off += 4
     vals = struct.unpack_from(f"<{n}H", buf, off) if n else ()
     return vals, off + 2 * n
+
+
+# ── 设备属性数据集解码(镜像 lib/core/ptp/device_prop.dart)─────────────
+# 用途:--propdesc 解码对照 —— 真机数据集与 Dart 解码对不上时,以本探针
+# 备案的原始字节为准订正(何层失配一目了然:类型表?FORM?出厂组?)。
+
+PTP_DTYPES = {
+    # typecode -> (struct 格式, 字节宽, 名称);ISO 15740 §9.2
+    0x0001: ("<b", 1, "INT8"), 0x0002: ("<B", 1, "UINT8"),
+    0x0003: ("<h", 2, "INT16"), 0x0004: ("<H", 2, "UINT16"),
+    0x0005: ("<i", 4, "INT32"), 0x0006: ("<I", 4, "UINT32"),
+    0x0007: ("<q", 8, "INT64"), 0x0008: ("<Q", 8, "UINT64"),
+    0xFFFF: (None, None, "STR"),
+}
+
+# ISO 15740 标准属性的数据集类型(与 kStandardPropDataType 对齐)
+STANDARD_PROP_DTYPES = {
+    0x5001: 0x0002,  # BatteryLevel u8
+    0x5007: 0x0004,  # FNumber u16
+    0x500D: 0x0006,  # ExposureTime u32
+    0x500F: 0x0004,  # ExposureIndex u16
+}
+
+
+def read_ptp_value(buf: bytes, off: int, dtype: int):
+    """按数据集类型读一个值,返回 (值, 下一偏移);未知类型抛 ValueError。"""
+    entry = PTP_DTYPES.get(dtype)
+    if entry is None:
+        raise ValueError(f"未知数据集类型 0x{dtype:04X}")
+    fmt, width, _name = entry
+    if fmt is None:
+        return read_ptp_str(buf, off)
+    (v,) = struct.unpack_from(fmt, buf, off)
+    return v, off + width
+
+
+def parse_prop_desc(d: bytes) -> dict:
+    """DevicePropDesc 数据集(ISO 15740 §10.5.1.3)防御性解码。
+
+    与 Dart PtpDevicePropDesc.parse 同策略:头部/当前值截断 → 保描述弃
+    FORM;FORM 区异常 → 整组置空;值区完好才尝试 MTP 出厂组。
+    """
+    r = {"dataType": None, "getSet": None, "current": None, "factory": None,
+         "rangeMin": None, "rangeMax": None, "rangeStep": None, "enumValues": None}
+    try:
+        (_prop, dtype) = struct.unpack_from("<HH", d, 0)
+        r["dataType"] = dtype
+        if dtype not in PTP_DTYPES:
+            return r  # 未知类型码:头部之外不再解读
+        r["getSet"] = bool(d[4])
+        r["current"], off = read_ptp_value(d, 5, dtype)
+    except (IndexError, struct.error, ValueError):
+        return r
+    try:
+        if off < len(d):
+            form_flag = d[off]
+            off += 1
+            if form_flag == 0x01:  # Range FORM:最小 / 最大 / 步长
+                r["rangeMin"], off = read_ptp_value(d, off, dtype)
+                r["rangeMax"], off = read_ptp_value(d, off, dtype)
+                r["rangeStep"], off = read_ptp_value(d, off, dtype)
+            elif form_flag == 0x02:  # Enumeration FORM:u16 个数 + N 值
+                (count,) = struct.unpack_from("<H", d, off)
+                off += 2
+                vals = []
+                for _ in range(count):
+                    v, off = read_ptp_value(d, off, dtype)
+                    vals.append(v)
+                r["enumValues"] = vals
+    except (IndexError, struct.error, ValueError):
+        r["rangeMin"] = r["rangeMax"] = r["rangeStep"] = None
+        r["enumValues"] = None
+    # MTP 出厂默认值组(u16 个数 + N 值);标准 PTP 固件通常没有,失败置空
+    try:
+        if off + 2 <= len(d):
+            (count,) = struct.unpack_from("<H", d, off)
+            off += 2
+            vals = []
+            for _ in range(count):
+                v, off = read_ptp_value(d, off, dtype)
+                vals.append(v)
+            if vals:
+                r["factory"] = vals
+    except (IndexError, struct.error, ValueError):
+        r["factory"] = None
+    return r
+
+
+def decode_prop_value(prop: int, d: bytes, dtype_hint: int | None):
+    """0x1015 裸值解码,返回 (值, 类型来源说明)。
+
+    顺序:Desc 自描述类型 → ISO 标准表 → 长度嗅探(奇长且符合字符串
+    布局 1+2n → STR;1/2/4/8 字节 → u8/u16/u32/u64,与
+    PtpDevicePropValue.parse 同规则)。打印来源可直接回答「方言是否
+    偏离标准表」。
+    """
+    n = len(d)
+    dtype = None
+    source = None
+    if dtype_hint is not None and dtype_hint in PTP_DTYPES:
+        dtype, source = dtype_hint, "Desc 自描述"
+    elif prop in STANDARD_PROP_DTYPES:
+        dtype, source = STANDARD_PROP_DTYPES[prop], "ISO 标准表"
+    elif n >= 3 and n % 2 == 1 and d[0] == (n - 1) // 2:
+        dtype, source = 0xFFFF, "嗅探(字符串布局)"
+    elif n in (1, 2, 4, 8):
+        dtype, source = {1: 0x0002, 2: 0x0004, 4: 0x0006, 8: 0x0008}[n], \
+            "嗅探(字节宽)"
+    if dtype is None:
+        return None, f"无法嗅探({n}B)"
+    try:
+        v, _off = read_ptp_value(d, 0, dtype)
+    except (IndexError, struct.error, ValueError) as e:
+        return None, f"解码失败({e})"
+    return v, f"{PTP_DTYPES[dtype][2]} / {source}"
 
 
 def check_candidates(info: dict) -> None:
@@ -621,6 +804,25 @@ def main() -> int:
                          "空文本=清空 initiator,其余为字面身份串;每候选后回读"
                          "+GetDeviceInfo 对比+数据操作重试,解锁即停"
                          "(先例:libgphoto2 对 Panasonic 写 initiator 改 op 表)")
+    ap.add_argument("--propdesc", type=lambda s: [int(x, 16) for x in s.split(",")],
+                    metavar="hex[,hex…]", default=[],
+                    help="Desc/Value 解码对照(--props 的深化版:镜像 Dart "
+                         "device_prop.dart 的类型表/长度嗅探/FORM/MTP 出厂组"
+                         "解码,并打印类型来源)—— 曝光三属性回归:"
+                         "--propdesc 5007,500d,500f")
+    ap.add_argument("--liveview", type=int, metavar="帧数", default=0,
+                    help="Live View 摸底:0x9201 开取景 → 0x9203 轮询 N 帧"
+                         "(间隔 200ms 对齐 app;连续 5 帧失败收口)→ 0x9202。"
+                         "首帧落盘 /tmp,SOI 偏移直方图、帧率/字节数/"
+                         "单帧往返延迟统计")
+    ap.add_argument("--capture", action="store_true",
+                    help="快门释放摸底:发拍照 op + interrupt 事件时间线"
+                         "+ 0x90C8 DeviceReady 忙等收口(300ms×30,事件先到"
+                         "也继续听完)")
+    ap.add_argument("--capture-op", type=lambda s: int(s, 16), metavar="hex",
+                    default=INITIATE_CAPTURE,
+                    help="拍照操作码:0x100E(标准,默认)/ 0x9207 / 0x90C0"
+                         "(尼康候选,配合 --capture)")
     args = ap.parse_args()
 
     backend = make_backend()
@@ -1090,6 +1292,203 @@ def main() -> int:
                 print(f"    会话重开后 GetDeviceInfo <- 操作码 {len(post_ops)} 个")
             retry_data_ops()
         print(f"  [4s 小结] 数据操作解锁:{'是 ✓' if unlocked else '否 —— 身份假设不成立或需换姿势'}")
+
+    # 步骤 4r(可选,--propdesc):Desc/Value 解码对照 —— 镜像 Dart
+    # device_prop.dart 的解码链(类型来源:Desc 自描述 → ISO 标准表 →
+    # 长度嗅探;FORM 范围/枚举 + MTP 出厂组)。曝光三属性(遥控页)回归:
+    # 真机数据集与 app 解码对不上时,以本步备案的原始字节订正哪层失配。
+    if args.propdesc:
+        print("[4r] 设备属性 Desc/Value 解码对照:")
+        for prop in args.propdesc:
+            dtype_hint = None
+            txid += 1
+            txid, blob, rc = xact(dev, ep_out, ep_in, txid,
+                                  GET_DEVICE_PROP_DESC, [prop])
+            if rc == OK and blob is not None:
+                d = blob[HDR:]
+                print(f"  0x{prop:04X} Desc <- OK {len(d)}B")
+                print(hexdump(d, limit=256))
+                desc = parse_prop_desc(d)
+                dtype_hint = desc["dataType"]
+                if dtype_hint is not None and dtype_hint not in PTP_DTYPES:
+                    print(f"    解码: DataType=0x{dtype_hint:04X}(未知类型码,头部外不解读)")
+                else:
+                    tname = PTP_DTYPES[dtype_hint][2] if dtype_hint is not None else "?"
+                    print(f"    解码: DataType={tname}  getSet={desc['getSet']}"
+                          f"({'可写' if desc['getSet'] else '只读'})"
+                          f"  current={desc['current']!r}")
+                    if desc["rangeMin"] is not None:
+                        print(f"    FORM 范围: {desc['rangeMin']!r} ~ {desc['rangeMax']!r}"
+                              f" 步长 {desc['rangeStep']!r}")
+                    if desc["enumValues"]:
+                        vals = desc["enumValues"]
+                        print(f"    FORM 枚举({len(vals)}): "
+                              + " ".join(repr(v) for v in vals[:12])
+                              + (" …" if len(vals) > 12 else ""))
+                    if desc["factory"]:
+                        print(f"    MTP 出厂组: {desc['factory']!r}")
+            else:
+                print(f"  0x{prop:04X} Desc <- 0x{rc:04X}")
+            txid += 1
+            txid, blob, rc = xact(dev, ep_out, ep_in, txid,
+                                  GET_DEVICE_PROP_VALUE, [prop])
+            if rc == OK and blob is not None:
+                d = blob[HDR:]
+                print(f"  0x{prop:04X} Value <- OK {len(d)}B  raw: {d[:48].hex(' ')}")
+                v, src = decode_prop_value(prop, d, dtype_hint)
+                print(f"    解码: {src} -> {v!r}")
+            else:
+                print(f"  0x{prop:04X} Value <- 0x{rc:04X}")
+
+    # 步骤 4v(可选,--liveview N):Live View 轮询摸底 —— 0x9201 开取景,
+    # 0x9203 逐帧轮询直到 N 帧成功(间隔 200ms 对齐 app;失败同拍重试,
+    # 连续 5 帧失败收口 —— LiveViewEngine 同策略),0x9202 收尾。帧格式
+    # 无参考:首帧落盘 + 头 32B 备案;SOI 偏移直方图/帧大小/单帧事务
+    # 往返延迟,供 _sniffJpegStart 剥离策略与轮询间隔(200ms 够不够)回填。
+    if args.liveview:
+        print(f"[4v] Live View 摸底(0x9201 → 0x9203 ×{args.liveview} 帧 → 0x9202):")
+        txid += 1
+        txid, blob, rc = xact(dev, ep_out, ep_in, txid, NIKON_START_LIVEVIEW)
+        print(f"    StartLiveView <- 0x{rc:04X}")
+        if rc == OK:
+            t0 = time.monotonic()
+            sizes, latencies, soi_hist = [], [], {}
+            fails = got = attempt = 0
+
+            def drain_events() -> None:
+                """排空 interrupt 事件(0xC10C 取景态变迁语义在此落定)。"""
+                while ep_intr is not None:
+                    ev = read_event_packet(dev, ep_intr, 50)
+                    if ev is None:
+                        return
+                    print("      " + fmt_event(time.monotonic() - t0, ev))
+
+            drain_events()
+            while got < args.liveview and fails < 5:
+                time.sleep(0.2)  # 开取景后相机就绪需拍前摇,失败亦同拍重试
+                attempt += 1
+                t_x = time.monotonic()
+                try:
+                    txid += 1
+                    txid, blob, rc = xact(dev, ep_out, ep_in, txid,
+                                          NIKON_GET_LIVEVIEW_IMG)
+                except (usb.core.USBError, IOError) as e:
+                    print(f"    尝试 #{attempt} <- USB 异常:{e}")
+                    try:
+                        dev.clear_halt(ep_out)
+                        dev.clear_halt(ep_in)
+                        print("      已 clear_halt 两端点")
+                    except usb.core.USBError:
+                        pass
+                    fails += 1
+                    continue
+                latencies.append(time.monotonic() - t_x)
+                drain_events()
+                if rc != OK or blob is None:
+                    print(f"    尝试 #{attempt} <- 0x{rc:04X}")
+                    fails += 1
+                    continue
+                fails = 0
+                got += 1
+                data = blob[HDR:]
+                soi = data.find(b"\xff\xd8")
+                sizes.append(len(data))
+                soi_hist[soi] = soi_hist.get(soi, 0) + 1
+                print(f"    帧 #{got}: {len(data)}B  SOI@{soi}")
+                if got == 1:
+                    ext = ".jpg" if soi >= 0 else ".bin"
+                    out = f"/tmp/nikonpill_probe_liveview_first{ext}"
+                    with open(out, "wb") as f:
+                        f.write(data)
+                    print(f"      头 32B: {data[:32].hex(' ')}  原始帧已存:{out}")
+            elapsed = max(time.monotonic() - t0, 1e-6)
+            print(f"    小结:取得 {got}/{args.liveview} 帧(失败 {fails} 连击即止)"
+                  f"  用时 {elapsed:.1f}s  实测帧率 {got / elapsed:.1f}fps")
+            if sizes:
+                print(f"    帧大小:min {min(sizes)}B / 均值 {sum(sizes) // len(sizes)}B"
+                      f" / max {max(sizes)}B")
+            if latencies:
+                ms = sorted(x * 1000 for x in latencies)
+                print(f"    单帧事务往返:min {ms[0]:.0f}ms / 中位 {ms[len(ms) // 2]:.0f}ms"
+                      f" / max {ms[-1]:.0f}ms(app 间隔 200ms 是否够/过看这里)")
+            if soi_hist:
+                print("    SOI 偏移直方图: "
+                      + "  ".join(f"@{k}×{v}" for k, v in sorted(soi_hist.items())))
+                print("      (@0 = JPEG 裸流直接解码;@-1 = 无 SOI,非 JPEG 帧,"
+                      "头 32B 备案判读 —— _sniffJpegStart 剥离策略以此回填)")
+            txid += 1
+            txid, blob, rc = xact(dev, ep_out, ep_in, txid, NIKON_END_LIVEVIEW)
+            print(f"    EndLiveView <- 0x{rc:04X}")
+            drain_events()  # 0xC10C 若在停止时推送,语义在此落定
+
+    # 步骤 4c(可选,--capture):快门释放摸底 —— 0x100E(标准)/0x9207/
+    # 0x90C0(尼康候选)发一次,事件时间线(interrupt 轮询穿插,非阻塞)
+    # + 0x90C8 DeviceReady 忙等收口(300ms×30,长曝余量;就绪后再听 2s
+    # 收 ObjectAdded 拖尾)。事件语义(CaptureComplete 先后/双格式双
+    # ObjectAdded/0xC10C)以此时间线落定,回填 RemoteController 消费表。
+    if args.capture:
+        names = {INITIATE_CAPTURE: "InitiateCapture 0x100E(标准)",
+                 NIKON_INITIATE_CAPTURE_REC_IN_MEDIA:
+                     "InitiateCaptureRecInMedia 0x9207(候选)",
+                 NIKON_INITIATE_CAPTURE_REC_IN_SDRAM:
+                     "InitiateCaptureRecInSdram 0x90C0(候选)"}
+        label = names.get(args.capture_op, f"0x{args.capture_op:04X}")
+        print(f"[4c] 快门释放摸底({label},参数 0,0):")
+        if ep_intr is None:
+            print("    [!] 无 interrupt IN 端点,事件时间线缺失(仅忙等)")
+        t0 = time.monotonic()
+
+        def drain_events() -> None:
+            """排空 interrupt 事件(每条即打,时间线内联)。"""
+            while ep_intr is not None:
+                ev = read_event_packet(dev, ep_intr, 50)
+                if ev is None:
+                    return
+                print("    " + fmt_event(time.monotonic() - t0, ev))
+
+        txid += 1
+        try:
+            txid, blob, rc = xact(dev, ep_out, ep_in, txid, args.capture_op,
+                                  [0, 0])
+        except (usb.core.USBError, IOError) as e:
+            print(f"    t+0ms  op <- USB 异常:{e}")
+            try:
+                dev.clear_halt(ep_out)
+                dev.clear_halt(ep_in)
+                print("      已 clear_halt 两端点")
+            except usb.core.USBError:
+                pass
+            rc = -1
+        else:
+            print(f"    t+0ms  op <- 0x{rc:04X}")
+        if rc == OK:
+            drain_events()
+            for i in range(30):  # 300ms × 30 ≈ 9s:app 的 10×300ms 放宽,长曝余量
+                time.sleep(0.3)
+                drain_events()
+                txid += 1
+                t_x = time.monotonic()
+                txid, blob, rc2 = xact(dev, ep_out, ep_in, txid,
+                                       NIKON_DEVICE_READY)
+                dt = (time.monotonic() - t_x) * 1000
+                if rc2 == OK:
+                    print(f"    t+{(time.monotonic() - t0) * 1000:.0f}ms  "
+                          f"DeviceReady <- OK(落地,第 {i + 1} 轮,事务 {dt:.0f}ms)")
+                    break
+                if rc2 == DEVICE_BUSY:
+                    print(f"    t+{(time.monotonic() - t0) * 1000:.0f}ms  "
+                          f"DeviceReady <- 0x2019 忙(事务 {dt:.0f}ms)")
+                    continue
+                print(f"    DeviceReady <- 0x{rc2:04X}(非忙,放弃兜底 —— "
+                      "命令已被接受,等事件即可)")
+                break
+            # 就绪后再听 2s:ObjectAdded 常晚于 CaptureComplete/就绪
+            if ep_intr is not None:
+                end = time.monotonic() + 2.0
+                while time.monotonic() < end:
+                    ev = read_event_packet(dev, ep_intr, 200)
+                    if ev is not None:
+                        print("    " + fmt_event(time.monotonic() - t0, ev))
 
     # 步骤 4b:OpenSession 之后再取一次 GetDeviceInfo。Zf 的
     # OperationsSupported 会随相机连接状态变(2026-10-01:同固件 V3.00

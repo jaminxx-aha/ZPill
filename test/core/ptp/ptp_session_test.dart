@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:nikon_pill/core/ptp/device_prop.dart';
 import 'package:nikon_pill/core/ptp/operation_codes.dart';
 import 'package:nikon_pill/core/ptp/ptp_session.dart';
 import 'package:nikon_pill/core/ptp/ptp_transport.dart';
@@ -375,6 +376,119 @@ void main() {
       final session = PtpSession(transport: fake);
       await expectLater(
           session.completePairing(), throwsA(isA<PtpResponseException>()));
+    });
+  });
+
+  group('遥控操作', () {
+    test('getDevicePropValue:fNumber 按 u16 解码,params=[propCode]', () async {
+      final fake = FakePtpTransport()
+        ..reply(PtpResult(
+          responseCode: PtpResponseCode.ok,
+          data: Uint8List.fromList([18, 0]), // u16 裸值
+        ));
+      final session = PtpSession(transport: fake);
+      final v = await session.getDevicePropValue(PtpDevicePropCode.fNumber);
+      expect(v.dataType, PtpDataType.uint16);
+      expect(v.value, 18);
+      expect(fake.requests.single.opcode, PtpOperationCode.getDevicePropValue);
+      expect(fake.requests.single.params, [PtpDevicePropCode.fNumber]);
+    });
+
+    test('getDevicePropDesc:数据集字段完整解析', () async {
+      final w = ByteWriter()
+        ..u16(PtpDevicePropCode.exposureIndex)
+        ..u16(PtpDataType.uint16.code)
+        ..u8(1)
+        ..u16(200)
+        ..u8(0x02) // FORM 枚举
+        ..u16(2)
+        ..u16(100)..u16(6400);
+      final fake = FakePtpTransport()
+        ..reply(PtpResult(responseCode: PtpResponseCode.ok, data: w.takeBytes()));
+      final session = PtpSession(transport: fake);
+      final d = await session.getDevicePropDesc(PtpDevicePropCode.exposureIndex);
+      expect(d.currentValue, 200);
+      expect(d.enumValues, [100, 6400]);
+      expect(d.getSet, isTrue);
+    });
+
+    test('setDevicePropValue:门禁关闭抛 UnsupportedError 且不发请求', () async {
+      final fake = FakePtpTransport();
+      final session = PtpSession(transport: fake);
+      final v = PtpDevicePropValue(
+          code: PtpDevicePropCode.fNumber,
+          dataType: PtpDataType.uint16,
+          value: 18);
+      await expectLater(
+          session.setDevicePropValue(v), throwsA(isA<UnsupportedError>()));
+      expect(fake.requests, isEmpty);
+    });
+
+    test('startLiveView/endLiveView:候选码直发,无参数', () async {
+      final fake = FakePtpTransport()
+        ..reply(const PtpResult(responseCode: PtpResponseCode.ok))
+        ..reply(const PtpResult(responseCode: PtpResponseCode.ok));
+      final session = PtpSession(transport: fake);
+      await session.startLiveView();
+      await session.endLiveView();
+      expect(fake.requests.map((r) => r.opcode), [
+        NikonOperationCode.startLiveView,
+        NikonOperationCode.endLiveView,
+      ]);
+      expect(fake.requests.every((r) => r.params.isEmpty), isTrue);
+    });
+
+    test('getLiveViewImage:前置杂字节剥到 SOI(防御「头+JPEG」形态)', () async {
+      final fake = FakePtpTransport()
+        ..reply(PtpResult(
+          responseCode: PtpResponseCode.ok,
+          data: Uint8List.fromList(
+              [0x01, 0x02, 0x03, 0xFF, 0xD8, 0xFF, 0xE0, 0x00]),
+        ));
+      final session = PtpSession(transport: fake);
+      final frame = await session.getLiveViewImage();
+      expect(frame, [0xFF, 0xD8, 0xFF, 0xE0, 0x00]);
+      expect(fake.requests.single.opcode, NikonOperationCode.getLiveViewImage);
+    });
+
+    test('initiateCapture:params 恒 [0, 0];0x2019 忙按异常上抛', () async {
+      final fake = FakePtpTransport()
+        ..reply(const PtpResult(responseCode: PtpResponseCode.deviceBusy));
+      final session = PtpSession(transport: fake);
+      await expectLater(
+          session.initiateCapture(), throwsA(isA<PtpResponseException>()));
+      expect(fake.requests.single.opcode, PtpOperationCode.initiateCapture);
+      expect(fake.requests.single.params, [0, 0]);
+    });
+
+    test('无卡拍/落卡拍候选码直发(语义待真机核对)', () async {
+      final fake = FakePtpTransport()
+        ..reply(const PtpResult(responseCode: PtpResponseCode.ok))
+        ..reply(const PtpResult(responseCode: PtpResponseCode.ok));
+      final session = PtpSession(transport: fake);
+      await session.initiateCaptureRecInSdram();
+      await session.initiateCaptureRecInMedia();
+      expect(fake.requests.map((r) => r.opcode), [
+        NikonOperationCode.initiateCaptureRecInSdram,
+        NikonOperationCode.initiateCaptureRecInMedia,
+      ]);
+    });
+
+    test('deviceReady:0x2019 忙 → false(语义不是错误)', () async {
+      final fake = FakePtpTransport()
+        ..reply(const PtpResult(responseCode: PtpResponseCode.deviceBusy));
+      final session = PtpSession(transport: fake);
+      expect(await session.deviceReady(), isFalse);
+    });
+
+    test('deviceReady:OK → true;其余响应码照常抛', () async {
+      final fake = FakePtpTransport()
+        ..reply(const PtpResult(responseCode: PtpResponseCode.ok))
+        ..reply(const PtpResult(responseCode: PtpResponseCode.generalError));
+      final session = PtpSession(transport: fake);
+      expect(await session.deviceReady(), isTrue);
+      await expectLater(
+          session.deviceReady(), throwsA(isA<PtpResponseException>()));
     });
   });
 
