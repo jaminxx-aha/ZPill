@@ -18,13 +18,26 @@ abstract interface class BackgroundTransferScheduler {
 }
 
 /// 经 `nikonpill/bg` channel:方法 `ensureRunning` / `stop`。
-/// TODO(P1): native 实现;通知文案、渠道 id 在各端工程内定义。
+/// 三端 native 均为幂等实现(重复 ensure 不叠加任务)。native 未实现
+/// (旧端)抛 MissingPluginException —— 按「仅前台传输」静默降级。
 final class MethodChannelBackgroundScheduler implements BackgroundTransferScheduler {
   static const MethodChannel channel = MethodChannel('nikonpill/bg');
 
   @override
-  Future<void> ensureRunning() => throw UnimplementedError();
+  Future<void> ensureRunning() async {
+    try {
+      await channel.invokeMethod<void>('ensureRunning');
+    } on MissingPluginException {
+      // 旧 native:仅前台传输
+    }
+  }
 
   @override
-  Future<void> stop() => throw UnimplementedError();
+  Future<void> stop() async {
+    try {
+      await channel.invokeMethod<void>('stop');
+    } on MissingPluginException {
+      // 旧 native:本来就没开
+    }
+  }
 }

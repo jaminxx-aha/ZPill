@@ -1,10 +1,15 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image/image.dart' as img;
 
 import 'package:nikon_pill/core/browser/object_entry.dart';
+import 'package:nikon_pill/core/media/motion_photo.dart' show injectXmpApp1;
+import 'package:nikon_pill/core/media/watermark.dart';
+import 'package:nikon_pill/core/media/xmp_metadata.dart';
 import 'package:nikon_pill/core/ptp/operation_codes.dart';
 import 'package:nikon_pill/core/ptp/ptp_session.dart';
 import 'package:nikon_pill/core/ptp/ptp_transport.dart';
@@ -12,6 +17,7 @@ import 'package:nikon_pill/core/ptpip/object_format.dart';
 import 'package:nikon_pill/core/transfer/object_downloader.dart';
 import 'package:nikon_pill/core/transfer/transfer_engine.dart';
 import 'package:nikon_pill/core/transfer/transfer_task.dart';
+import 'package:nikon_pill/data/settings_store.dart' show WatermarkStyle;
 import 'package:nikon_pill/platform/gallery_saver.dart';
 
 import '../ptp/ptp_session_test.dart' show FakePtpTransport;
@@ -25,6 +31,11 @@ final class FakeGallerySaver implements GallerySaver {
 
   /// 每次 importFiles 的请求快照。
   final List<List<GalleryImportRequest>> importCalls = [];
+
+  /// 导入时刻各请求的 (path 字节, videoPath 字节) 快照;[captureBytes]
+  /// 开启时取样 —— 收尾后临时文件即删,断言只能落在导入时刻。
+  final List<List<(Uint8List?, Uint8List?)>> importSnapshots = [];
+  var captureBytes = false;
 
   /// importFiles 的应答(默认空列表 = 用户取消对话框)。
   List<Uri> importResult = const [];
@@ -47,7 +58,19 @@ final class FakeGallerySaver implements GallerySaver {
   @override
   Future<List<Uri>> importFiles(List<GalleryImportRequest> requests) async {
     importCalls.add(List.of(requests));
+    if (captureBytes) {
+      importSnapshots.add([
+        for (final r in requests)
+          (_readIfExists(r.path),
+              r.videoPath == null ? null : _readIfExists(r.videoPath!)),
+      ]);
+    }
     return importResult;
+  }
+
+  static Uint8List? _readIfExists(String path) {
+    final f = File(path);
+    return f.existsSync() ? f.readAsBytesSync() : null;
   }
 
   static Future<String> _ensure(String path) async {
@@ -69,6 +92,16 @@ PtpResult _okData(Uint8List data) =>
 PtpResult _okBytes(int n) =>
     _okData(Uint8List.fromList(List.generate(n, (i) => i & 0xFF)));
 
+/// 最小 JPEG 载荷(SOI + APP0 + SOS + 数据 + EOI):注入路径用真图。
+Uint8List _jpegPayload() => Uint8List.fromList([
+      0xFF, 0xD8, //
+      0xFF, 0xE0, 0x00, 0x10,
+      ...'JFIF'.codeUnits, 0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00,
+      0xFF, 0xDA, 0x00, 0x02,
+      0x12, 0x34, 0x56, 0x78,
+      0xFF, 0xD9,
+    ]);
+
 /// 等快照流上出现满足 [test] 的快照(须在 enqueue 之前订阅)。
 Future<List<TransferTask>> waitUntil(TransferEngine engine,
     bool Function(List<TransferTask>) test) {
@@ -78,15 +111,61 @@ Future<List<TransferTask>> waitUntil(TransferEngine engine,
 }
 
 /// 引擎(重试零退避,测试不等)。
-(TransferEngineImpl, FakePtpTransport, FakeGallerySaver) _engine() {
+(TransferEngineImpl, FakePtpTransport, FakeGallerySaver) _engine(
+    {Future<XmpMetadata?> Function(ObjectEntry entry)? metadataFor,
+    Future<WatermarkOptions?> Function(ObjectEntry entry)? watermarkFor,
+    TextRaster? watermarkRaster}) {
   final fake = FakePtpTransport();
   final gallery = FakeGallerySaver();
   final engine = TransferEngineImpl(
     downloader: ObjectDownloader(session: PtpSession(transport: fake)),
     gallery: gallery,
+    metadataFor: metadataFor,
+    watermarkFor: watermarkFor,
+    watermarkRaster: watermarkRaster,
     backoffFor: (_) => Duration.zero,
   );
   return (engine, fake, gallery);
+}
+
+/// 60×40 渐变 JPEG:水印用真图(解码 → 叠字 → 重编码)。
+Uint8List _gradientJpeg() {
+  final photo = img.Image(width: 60, height: 40);
+  for (final p in photo) {
+    p
+      ..r = (p.x * 4) & 0xFF
+      ..g = (p.y * 6) & 0xFF
+      ..b = 128
+      ..a = 255;
+  }
+  return Uint8List.fromList(img.encodeJpg(photo));
+}
+
+/// 假文本光栅:红色实心块(watermark_test 同款,免 dart:ui)。
+Future<img.Image> _fakeRaster(String text, double fontSizePx, int color) async {
+  final h = fontSizePx.round();
+  final image = img.Image(width: h * text.length ~/ 2 + 4, height: h);
+  img.fillRect(image,
+      x1: 0, y1: 0, x2: image.width - 1, y2: image.height - 1,
+      color: img.ColorRgba8(200, 30, 30, 255));
+  return image;
+}
+
+/// 最小 MP4(ftyp box,16 字节):运动照片尾段的合法视频段。
+Uint8List _mp4Payload() => Uint8List.fromList(
+    [0, 0, 0, 16, ...'ftyp'.codeUnits, ...'isom'.codeUnits, 0, 0, 0, 0]);
+
+/// MicroVideoOffset 元素式 XMP 包(与 spliceMotionPhoto 同款)。
+String _microXmp(int offset) =>
+    '<x:xmpmeta xmlns:x="adobe:ns:meta/" '
+    'xmlns:GCamera="http://ns.google.com/photos/1.0/camera/">'
+    '<GCamera:MicroVideoOffset>$offset</GCamera:MicroVideoOffset></x:xmpmeta>';
+
+/// 真可解码的运动照片 JPEG:XMP 标记(静帧长度记录视频段长)+ MP4 尾段。
+/// 返回 (整文件, 剥离视频段后的静帧)。
+(Uint8List, Uint8List) _motionPhotoJpg(Uint8List mp4) {
+  final still = injectXmpApp1(_gradientJpeg(), _microXmp(mp4.length));
+  return (Uint8List.fromList([...still, ...mp4]), still);
 }
 
 void main() {
@@ -309,6 +388,103 @@ void main() {
     expect(Directory('${gallery.root.path}/downloads').listSync(), isEmpty);
   });
 
+  test('metadataFor:JPG 落盘后注入 XMP;NEF 不问也不改', () async {
+    final asked = <String>[];
+    final (engine, fake, gallery) = _engine(
+        metadataFor: (entry) async {
+      asked.add(entry.name);
+      return const XmpMetadata(creator: 'Aha', rating: 4);
+    });
+    final jpeg = _jpegPayload();
+    final raw = Uint8List.fromList(List.generate(9, (i) => i));
+    fake..reply(_okData(jpeg))..reply(_okData(raw));
+
+    final done = waitUntil(
+        engine, (ts) => ts.length == 2 && ts.every((t) => t.isTerminal));
+    await engine.enqueue([
+      _entry(1, 'DSC_1.JPG', jpeg.length),
+      _entry(2, 'DSC_1.NEF', raw.length),
+    ], destination: TransferDestination.app);
+    final tasks = await done;
+
+    expect(tasks.every((t) => t.state == TransferState.completed), isTrue);
+    expect(asked, ['DSC_1.JPG']); // NEF 根本不问提供器
+    final jpgOut = await File('${gallery.root.path}/downloads/DSC_1.JPG')
+        .readAsBytes();
+    expect(jpgOut.length, greaterThan(jpeg.length)); // 已注入
+    expect(String.fromCharCodes(jpgOut), contains('dc:creator'));
+    expect(String.fromCharCodes(jpgOut), contains('Aha'));
+    // NEF 原样(不含 XMP 段)
+    final nefOut = await File('${gallery.root.path}/downloads/DSC_1.NEF')
+        .readAsBytes();
+    expect(nefOut, raw);
+  });
+
+  test('metadataFor 抛异常 / 返回空:任务照常完成,文件原样', () async {
+    final jpeg = _jpegPayload();
+    final (engine, fake, gallery) = _engine(metadataFor: (entry) async {
+      if (entry.name == 'DSC_1.JPG') throw Exception('boom');
+      return const XmpMetadata(); // 空:提供器给了也不注入
+    });
+    fake..reply(_okData(jpeg))..reply(_okData(jpeg));
+
+    final done = waitUntil(
+        engine, (ts) => ts.length == 2 && ts.every((t) => t.isTerminal));
+    await engine.enqueue([
+      _entry(1, 'DSC_1.JPG', jpeg.length), // 提供器抛异常
+      _entry(2, 'DSC_2.JPG', jpeg.length), // 返回空元数据 → identical 免写
+    ], destination: TransferDestination.app);
+    await done;
+
+    expect(Directory('${gallery.root.path}/downloads').listSync(), hasLength(2));
+    for (final name in ['DSC_1.JPG', 'DSC_2.JPG']) {
+      expect(
+          await File('${gallery.root.path}/downloads/$name').readAsBytes(),
+          jpeg);
+    }
+  });
+
+  test('watermarkFor:JPG 先水印后 XMP;NEF 两者皆不碰', () async {
+    final jpeg = _gradientJpeg();
+    final (engine, fake, gallery) = _engine(
+      metadataFor: (entry) async => const XmpMetadata(creator: 'Aha'),
+      watermarkFor: (entry) async =>
+          const WatermarkOptions(style: WatermarkStyle.corner),
+      watermarkRaster: _fakeRaster,
+    );
+    fake..reply(_okData(jpeg))..reply(_okBytes(9));
+
+    final done = waitUntil(
+        engine, (ts) => ts.length == 2 && ts.every((t) => t.isTerminal));
+    await engine.enqueue([
+      _entry(1, 'DSC_1.JPG', jpeg.length),
+      _entry(2, 'DSC_2.NEF', 9),
+    ], destination: TransferDestination.app);
+    await done;
+
+    // JPG:水印重编码(角标在画幅内,字节已非原样)+ XMP 追加其后
+    //(顺序反了的话,重编码会把 XMP APP1 一起丢掉)。
+    final jpgBytes =
+        await File('${gallery.root.path}/downloads/DSC_1.JPG').readAsBytes();
+    expect(jpgBytes, isNot(equals(jpeg)));
+    final decoded = img.decodeJpg(jpgBytes);
+    expect(decoded!.width, 60);
+    expect(decoded.height, 40);
+    // 角标落点:fontSize 16 → margin 11,badge 缩到 maxW=38、高 8,
+    // dstX=11、dstY=21 → (30, 24) 在红块内。
+    final p = decoded.getPixel(30, 24);
+    expect(p.r, greaterThan(150));
+    expect(p.g, lessThan(90));
+    final text = utf8.decode(jpgBytes, allowMalformed: true);
+    expect(text, contains('dc:creator'));
+    expect(text, contains('Aha'));
+
+    // NEF:水印与 XMP 均跳过,原字节落盘
+    final nefBytes =
+        await File('${gallery.root.path}/downloads/DSC_2.NEF').readAsBytes();
+    expect(nefBytes, List.generate(9, (i) => i & 0xFF));
+  });
+
   test('clearHistory:清掉终态任务', () async {
     final (engine, fake, gallery) = _engine();
     fake.reply(_okBytes(4));
@@ -352,5 +528,105 @@ void main() {
 
     expect(gallery.importCalls.single.map((r) => r.filename), ['A.JPG']);
     expect(gallery.importCalls.single.single.path, contains('temp')); // 导入前落临时目录
+  });
+
+  test('gallery 内嵌运动照片:静帧剥离视频段,请求带 videoPath 配对导入', () async {
+    final (engine, fake, gallery) = _engine();
+    gallery.captureBytes = true;
+    final mp4 = _mp4Payload();
+    final (motion, still) = _motionPhotoJpg(mp4);
+    fake.reply(_okData(motion));
+    gallery.importResult = [Uri.parse('content://media/live1')];
+
+    final done = waitUntil(engine, (ts) =>
+        ts.length == 1 &&
+        ts.single.state == TransferState.completed &&
+        ts.single.galleryUri != null);
+    await engine.enqueue([_entry(1, 'DSC_0001.JPG', motion.length)],
+        destination: TransferDestination.gallery);
+    await done;
+
+    // 单请求:静帧文件 + 拆出的视频段临时文件
+    expect(gallery.importCalls, hasLength(1));
+    final req = gallery.importCalls.single.single;
+    expect(req.kind, ObjectKind.image);
+    expect(req.videoPath, isNotNull);
+    expect(req.videoPath, isNot(req.path));
+    final (stillBytes, videoBytes) = gallery.importSnapshots.single.single;
+    expect(stillBytes, still); // 静帧 = 剥离后的原样(无水印/XMP 后处理)
+    expect(videoBytes, mp4); // 视频段完整落临时文件
+    // 静帧与视频段临时文件都清干净
+    expect(Directory('${gallery.root.path}/temp').listSync(), isEmpty);
+  });
+
+  test('gallery 同基名 JPG+MOV:并成单个实况请求,两成员回填同一 Uri', () async {
+    final (engine, fake, gallery) = _engine();
+    gallery.captureBytes = true;
+    final jpeg = _gradientJpeg();
+    final mov = Uint8List.fromList(List.generate(40, (i) => i & 0xFF));
+    fake..reply(_okData(jpeg))..reply(_okData(mov));
+    gallery.importResult = [Uri.parse('content://media/live2')];
+
+    final done = waitUntil(engine, (ts) =>
+        ts.length == 2 &&
+        ts.every((t) => t.state == TransferState.completed) &&
+        ts.every((t) => t.galleryUri == Uri.parse('content://media/live2')));
+    await engine.enqueue([
+      _entry(1, 'DSC_0001.JPG', jpeg.length),
+      _entry(2, 'DSC_0001.MOV', mov.length, kind: ObjectKind.video),
+    ], destination: TransferDestination.gallery);
+    await done;
+
+    // 不再单发 MOV:静帧请求携带 videoPath 配对
+    expect(gallery.importCalls, hasLength(1));
+    final req = gallery.importCalls.single.single;
+    expect(req.filename, 'DSC_0001.JPG');
+    expect(req.videoPath, isNotNull);
+    final (stillBytes, videoBytes) = gallery.importSnapshots.single.single;
+    expect(stillBytes, jpeg);
+    expect(videoBytes, mov);
+    // 两份临时文件(JPG + MOV)都清干净
+    expect(Directory('${gallery.root.path}/temp').listSync(), isEmpty);
+  });
+
+  test('app 目的地:运动照片保留相机原始单文件不拆', () async {
+    final (engine, fake, gallery) = _engine();
+    final mp4 = _mp4Payload();
+    final (motion, _) = _motionPhotoJpg(mp4);
+    fake.reply(_okData(motion));
+
+    final done = waitUntil(
+        engine, (ts) => ts.length == 1 && ts.single.isTerminal);
+    await engine.enqueue([_entry(1, 'DSC_0001.JPG', motion.length)],
+        destination: TransferDestination.app);
+    await done;
+
+    expect(await File('${gallery.root.path}/downloads/DSC_0001.JPG')
+        .readAsBytes(), motion);
+  });
+
+  test('运动照片先拆后水印:静帧重编码,视频段原样保留', () async {
+    final (engine, fake, gallery) = _engine(
+        watermarkFor: (entry) async =>
+            const WatermarkOptions(style: WatermarkStyle.corner),
+        watermarkRaster: _fakeRaster);
+    gallery.captureBytes = true;
+    final mp4 = _mp4Payload();
+    final (motion, still) = _motionPhotoJpg(mp4);
+    fake.reply(_okData(motion));
+
+    final done = waitUntil(
+        engine, (ts) => ts.length == 1 && ts.single.isTerminal);
+    await engine.enqueue([_entry(1, 'DSC_0001.JPG', motion.length)],
+        destination: TransferDestination.gallery);
+    await done;
+
+    expect(gallery.importCalls, hasLength(1));
+    final (stillBytes, videoBytes) = gallery.importSnapshots.single.single;
+    // 水印重编码后静帧已非剥离原样(顺序反了会把内嵌视频段一起毁掉)
+    expect(stillBytes, isNot(equals(still)));
+    expect(img.decodeJpg(stillBytes!)!.width, 60);
+    // 视频段先拆出来了,不受重编码影响
+    expect(videoBytes, mp4);
   });
 }

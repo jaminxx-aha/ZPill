@@ -4,6 +4,9 @@ import { GeneratedPluginRegistrant } from '../plugins/GeneratedPluginRegistrant'
 import { UsbHostPlugin } from '../usbhost/UsbHostPlugin';
 import { GalleryPlugin } from '../gallery/GalleryPlugin';
 import { NsdPlugin } from '../nsd/NsdPlugin';
+import { MotionPlugin } from '../motion/MotionPlugin';
+import { LocationPlugin } from '../location/LocationPlugin';
+import { BgPlugin } from '../bg/BgPlugin';
 
 export default class EntryAbility extends FlutterAbility {
   configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -13,5 +16,8 @@ export default class EntryAbility extends FlutterAbility {
     flutterEngine.getPlugins()?.add(new UsbHostPlugin())
     flutterEngine.getPlugins()?.add(new GalleryPlugin())
     flutterEngine.getPlugins()?.add(new NsdPlugin())
+    flutterEngine.getPlugins()?.add(new MotionPlugin())
+    flutterEngine.getPlugins()?.add(new LocationPlugin())
+    flutterEngine.getPlugins()?.add(new BgPlugin())
   }
 }

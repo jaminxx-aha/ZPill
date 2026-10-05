@@ -22,5 +22,14 @@ import UIKit
     if let registrar = registry.registrar(forPlugin: "UsbHostPlugin") {
       UsbHostPlugin.register(with: registrar)
     }
+    if let registrar = registry.registrar(forPlugin: "MotionPlugin") {
+      MotionPlugin.register(with: registrar)
+    }
+    if let registrar = registry.registrar(forPlugin: "LocationPlugin") {
+      LocationPlugin.register(with: registrar)
+    }
+    if let registrar = registry.registrar(forPlugin: "BGPlugin") {
+      BGPlugin.register(with: registrar)
+    }
   }
 }

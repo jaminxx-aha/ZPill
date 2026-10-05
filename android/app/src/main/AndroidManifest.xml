@@ -1,6 +1,14 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <!-- PTP-IP 无线(dart:io Socket)与 NsdManager 的 mDNS 发现 -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- 传输前台服务:dataSync 类型(targetSdk 34+ 需显式声明两权限) -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
+    <!-- Android 13+ 通知需运行时授予;未授予前台服务照常跑,仅通知不可见 -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <!-- 照片 GPS:仅 FINE 算有效(粗定位误差公里级,写进元数据错比缺糟) -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
     <!-- USB 相机:required=false,无 USB 的设备上无线功能照常 -->
     <uses-feature
         android:name="android.hardware.usb.host"
@@ -31,6 +39,11 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- 传输前台保活:队列非空期间挂 dataSync 常驻通知,退后台续传 -->
+        <service
+            android:name=".bg.TransferForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync"/>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

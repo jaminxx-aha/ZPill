@@ -42,6 +42,12 @@ final class _FakeRepo implements ObjectRepository {
 
   @override
   void reset() => resetCalls++;
+
+  final List<int> removedHandles = [];
+
+  @override
+  void removeHandles(Iterable<int> handles) =>
+      removedHandles.addAll(handles);
 }
 
 final class _FakeConnection implements CameraConnection {

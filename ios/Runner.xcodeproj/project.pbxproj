@@ -19,6 +19,9 @@
 		7A10000200000000000000A1 /* GalleryPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A10000100000000000000A1 /* GalleryPlugin.swift */; };
 		7A10000200000000000000A2 /* UsbHostPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A10000100000000000000A2 /* UsbHostPlugin.swift */; };
 		7A10000200000000000000A3 /* NsdPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A10000100000000000000A3 /* NsdPlugin.swift */; };
+		7A10000200000000000000A4 /* MotionPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A10000100000000000000A4 /* MotionPlugin.swift */; };
+		7A10000200000000000000A5 /* LocationPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A10000100000000000000A5 /* LocationPlugin.swift */; };
+		7A10000200000000000000A6 /* BGPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A10000100000000000000A6 /* BGPlugin.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -65,6 +68,9 @@
 		7A10000100000000000000A1 /* GalleryPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GalleryPlugin.swift; sourceTree = "<group>"; };
 		7A10000100000000000000A2 /* UsbHostPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsbHostPlugin.swift; sourceTree = "<group>"; };
 		7A10000100000000000000A3 /* NsdPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NsdPlugin.swift; sourceTree = "<group>"; };
+		7A10000100000000000000A4 /* MotionPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MotionPlugin.swift; sourceTree = "<group>"; };
+		7A10000100000000000000A5 /* LocationPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocationPlugin.swift; sourceTree = "<group>"; };
+		7A10000100000000000000A6 /* BGPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BGPlugin.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -133,6 +139,9 @@
 				7A10000100000000000000A1 /* GalleryPlugin.swift */,
 				7A10000100000000000000A2 /* UsbHostPlugin.swift */,
 				7A10000100000000000000A3 /* NsdPlugin.swift */,
+				7A10000100000000000000A4 /* MotionPlugin.swift */,
+				7A10000100000000000000A5 /* LocationPlugin.swift */,
+				7A10000100000000000000A6 /* BGPlugin.swift */,
 			);
 			path = Runner;
 			sourceTree = "<group>";
@@ -296,6 +305,9 @@
 				7A10000200000000000000A1 /* GalleryPlugin.swift in Sources */,
 				7A10000200000000000000A2 /* UsbHostPlugin.swift in Sources */,
 				7A10000200000000000000A3 /* NsdPlugin.swift in Sources */,
+				7A10000200000000000000A4 /* MotionPlugin.swift in Sources */,
+				7A10000200000000000000A5 /* LocationPlugin.swift in Sources */,
+				7A10000200000000000000A6 /* BGPlugin.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

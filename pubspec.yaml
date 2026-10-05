@@ -13,6 +13,9 @@ dependencies:
   flutter:
     sdk: flutter
   cupertino_icons: ^1.0.8
+  # 图像解码/编码(纯 Dart):监看辅助直方图/斑马纹(WP6)、水印与
+  # XMP 注入的 JPEG 重编码(WP9/10)、图库编辑滤镜(WP11)。
+  image: ^4.3.0
 
   # ── 按里程碑引入,骨架期不预支 ─────────────────────────────────
   # P1 后台下载(Android WorkManager 等价): workmanager

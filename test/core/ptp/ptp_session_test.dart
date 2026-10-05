@@ -287,6 +287,28 @@ void main() {
           session.getThumb(0x11), throwsA(isA<PtpResponseException>()));
     });
 
+    test('deleteObject:params=[handle],OK 即成;非 OK 抛异常带操作码',
+        () async {
+      final ok = FakePtpTransport()
+        ..reply(const PtpResult(responseCode: PtpResponseCode.ok));
+      final session = PtpSession(transport: ok);
+      await session.deleteObject(0x33);
+      final req = ok.requests.single;
+      expect(req.opcode, PtpOperationCode.deleteObject);
+      expect(req.params, [0x33]);
+
+      final denied = FakePtpTransport()
+        ..reply(const PtpResult(responseCode: 0x2009)); // 非法态
+      final session2 = PtpSession(transport: denied);
+      try {
+        await session2.deleteObject(0x33);
+        fail('应抛 PtpResponseException');
+      } on PtpResponseException catch (e) {
+        expect(e.opcode, PtpOperationCode.deleteObject);
+        expect(e.responseCode, 0x2009);
+      }
+    });
+
     test('getLargeThumb:在册即发 0x90C4,前置杂字节剥到 SOI', () async {
       final fake = FakePtpTransport()
         ..reply(PtpResult(
@@ -325,6 +347,51 @@ void main() {
       expect(info.model, 'TestModel');
       await session.getDeviceInfo();
       expect(fake.requests.length, 1);
+    });
+
+    test('getStorageIds:u32 计数 + N 个 u32(双卡槽)', () async {
+      final fake = FakePtpTransport()
+        ..reply(PtpResult(
+          responseCode: PtpResponseCode.ok,
+          data: Uint8List.fromList([
+            0x02, 0x00, 0x00, 0x00,
+            0x01, 0x00, 0x01, 0x00, // 0x00010001
+            0x01, 0x00, 0x02, 0x00, // 0x00020001
+          ]),
+        ));
+      final session = PtpSession(transport: fake);
+      expect(await session.getStorageIds(), [0x00010001, 0x00020001]);
+      expect(fake.requests.single.opcode, PtpOperationCode.getStorageIds);
+    });
+
+    test('getStorageInfo:params=[storageId],数据集完整解析', () async {
+      final w = ByteWriter()
+        ..u16(0x0004) // removableRAM
+        ..u16(0x0002)
+        ..u16(0x0000)
+        ..u64(64000000000)
+        ..u64(21000000000)
+        ..u32(480)
+        ..u8(7)..utf16le('Slot 1')..u16(0)
+        ..u8(1)..u16(0); // volumeLabel 空串
+      final fake = FakePtpTransport()
+        ..reply(PtpResult(
+            responseCode: PtpResponseCode.ok, data: w.takeBytes()));
+      final session = PtpSession(transport: fake);
+      final storage = await session.getStorageInfo(0x00010001);
+      expect(fake.requests.single.params, [0x00010001]);
+      expect(storage.id, 0x00010001);
+      expect(storage.isRemovable, isTrue);
+      expect(storage.freeSpaceBytes, 21000000000);
+      expect(storage.description, 'Slot 1');
+    });
+
+    test('getStorageInfo:相机非 OK(卡槽空)抛 PtpResponseException', () async {
+      final fake = FakePtpTransport()
+        ..reply(const PtpResult(responseCode: 0x2009));
+      final session = PtpSession(transport: fake);
+      await expectLater(
+          session.getStorageInfo(0x00010001), throwsA(isA<PtpResponseException>()));
     });
   });
 

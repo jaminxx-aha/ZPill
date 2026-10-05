@@ -152,10 +152,11 @@ void main() {
       expect(result.data, isNull);
     });
 
-    test('单分片超过 64KB 上限被切块', () async {
+    test('单分片超过 1MB 上限被切块', () async {
       final pipe = FakeUsbBytePipe();
       final t = UsbPtpTransport(pipe: pipe);
-      final payload = Uint8List.fromList(List.generate(70000, (i) => (i * 7) & 0xFF));
+      final payload = Uint8List.fromList(
+          List.generate(kUsbStreamChunkBytes + 70000, (i) => (i * 7) & 0xFF));
       pipe.enqueue(encodeUsbData(
         opcode: PtpOperationCode.getObject,
         transactionId: 0,
@@ -168,7 +169,8 @@ void main() {
         const PtpRequest(opcode: PtpOperationCode.getObject, params: [42]),
         onData: chunks.add,
       );
-      expect(chunks.map((c) => c.length), [kUsbStreamChunkBytes, 70000 - kUsbStreamChunkBytes]);
+      expect(chunks.map((c) => c.length),
+          [kUsbStreamChunkBytes, payload.length - kUsbStreamChunkBytes]);
       expect(concat(chunks), payload);
     });
   });

@@ -18,11 +18,19 @@
 /// MediaStore 直写(RELATIVE_PATH=Pictures/Movies/NikonPill +
 /// IS_PENDING 自有贡献,免权限零弹窗;无系统对话框故无取消路径,
 /// 要么全量成功要么整体异常)。
+///
+/// 实况照片三端路径(见 [GalleryImportRequest.videoPath]):iOS =
+/// photo+pairedVideo 同资源配对;ohos = IMAGE+VIDEO 分开导入;Android =
+/// 平台层(Dart)先拼回运动照片单文件再走普通图片导入(见
+/// [MethodChannelGallerySaver.importFiles] Android 前置)。
 library;
+
+import 'dart:io' show File, Platform;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
+import '../core/media/motion_photo.dart' show spliceMotionPhoto;
 import '../core/ptpip/object_format.dart';
 
 /// 一次相册导入请求:已落盘的本地文件 → 系统媒体库。
@@ -31,6 +39,7 @@ final class GalleryImportRequest {
     required this.path,
     required this.kind,
     required this.filename,
+    this.videoPath,
   });
 
   /// 本地文件绝对路径(下载引擎的临时产物)。
@@ -39,6 +48,13 @@ final class GalleryImportRequest {
   /// 内容类别(决定媒体库 photoType image/video 与目录)。
   final ObjectKind kind;
   final String filename;
+
+  /// 实况照片配对(TODO §五 LivePhoto 导出):非 null 时本请求按
+  /// 「静帧 + 视频段」导入为一张实况(iOS 配对资源 / ohos 动态照片 /
+  /// Android 原生拼接回运动照片单文件)。native 不识别该字段时按普通
+  /// 图片落库。视频来源二选一:相机同基名 MOV 成员,或运动照片 JPG
+  /// 内嵌段拆出的 MP4(见 core/media/motion_photo.dart)。
+  final String? videoPath;
 }
 
 abstract interface class GallerySaver {
@@ -100,17 +116,48 @@ final class MethodChannelGallerySaver implements GallerySaver {
 
   @override
   Future<List<Uri>> importFiles(List<GalleryImportRequest> requests) async {
+    // Android 前置:实况照片在平台层拼回运动照片单文件 —— native
+    // GalleryPlugin.kt 走 MediaStore 直写,不识别 videoPath(Android 相册
+    // 也无第三方实况配对 API);拼接复用 core 纯 Dart 的
+    // spliceMotionPhoto。拼接失败按普通静帧导入(宁可丢实况不丢照片)。
+    // 瞬时内存 ≈ 静帧+视频+拼接产物(~40MB 量级),v1 可接受。
+    final splicedTemps = <String>[];
+    final payload = <Map<String, Object?>>[];
+    for (final r in requests) {
+      var path = r.path;
+      if (Platform.isAndroid && r.videoPath != null) {
+        final merged = await _spliceMotionPhotoTemp(r.path, r.videoPath!);
+        if (merged != null) {
+          path = merged;
+          splicedTemps.add(merged);
+        } else {
+          debugPrint('[Gallery] 运动照片拼接失败,按普通静帧导入: ${r.filename}');
+        }
+      }
+      payload.add({
+        'path': path,
+        'kind': r.kind.name,
+        'filename': r.filename,
+        // videoPath 仅 iOS/ohos native 消费;Android 已拼入单文件,不下发。
+        if (r.videoPath != null && !Platform.isAndroid) 'videoPath': r.videoPath,
+      });
+    }
     List<String>? uris;
     try {
-      uris = await channel.invokeListMethod<String>('importFiles', [
-        for (final r in requests)
-          {'path': r.path, 'kind': r.kind.name, 'filename': r.filename},
-      ]);
+      uris = await channel.invokeListMethod<String>('importFiles', payload);
     } on PlatformException catch (e) {
       // 导入失败原因(通道异常)必须可见:引擎侧会按「未导入」落定,
       // 没有这行日志就只剩无声的黑盒。
       debugPrint('[Gallery] importFiles 通道异常: ${e.code} ${e.message}');
       rethrow;
+    } finally {
+      for (final p in splicedTemps) {
+        try {
+          File(p).deleteSync();
+        } catch (_) {
+          // cacheDir 产物,残留也可被系统回收
+        }
+      }
     }
     final list = uris ?? const <String>[];
     if (list.length != requests.length) {
@@ -118,5 +165,20 @@ final class MethodChannelGallerySaver implements GallerySaver {
           '(用户取消/部分选择)');
     }
     return [for (final u in list) Uri.parse(u)];
+  }
+
+  /// 拼接静帧 + 视频段 → 同目录临时文件;任一步失败返回 null(降级)。
+  Future<String?> _spliceMotionPhotoTemp(String imagePath, String videoPath) async {
+    try {
+      final image = await File(imagePath).readAsBytes();
+      final video = await File(videoPath).readAsBytes();
+      final merged = spliceMotionPhoto(image, video);
+      final tmp = File('$imagePath.motionphoto.jpg');
+      await tmp.writeAsBytes(merged, flush: true);
+      return tmp.path;
+    } catch (e) {
+      debugPrint('[Gallery] _spliceMotionPhotoTemp: $e');
+      return null;
+    }
   }
 }

@@ -1,0 +1,189 @@
+import 'dart:typed_data';
+
+import 'package:flutter_test/flutter_test.dart';
+import 'package:image/image.dart' as img;
+
+import 'package:nikon_pill/core/media/watermark.dart';
+import 'package:nikon_pill/core/utils/byte_writer.dart';
+import 'package:nikon_pill/data/settings_store.dart' show WatermarkStyle;
+
+/// 小端 TIFF EXIF 载荷:IFD0(Make/Model/DateTime + Exif 指针)+
+/// Exif 子表(FNumber/曝光/ISO/焦距)。偏移手工排布:
+/// 头 8 + IFD0 54(8..61)+ ExifIFD 54(62..115)+ 数据区(116..)。
+/// 注意:字符串 ≤ 4 字节时 EXIF 值内联存储,故用真实长度的
+/// 'NIKON CORPORATION' / 'NIKON Z f' 走偏移路径。
+Uint8List _exifPayload() {
+  const ascii = 2, short = 3, long = 4, rational = 5;
+  const makeOff = 116, modelOff = 134, dateOff = 144;
+  const fNumOff = 164, expOff = 172, focalOff = 180;
+  const exifIfdOff = 62;
+  final w = ByteWriter()
+    ..u16(0x4949) // 'II'
+    ..u16(42)
+    ..u32(8)
+    // IFD0
+    ..u16(4)
+    ..u16(0x010F)..u16(ascii)..u32(18)..u32(makeOff)
+    ..u16(0x0110)..u16(ascii)..u32(10)..u32(modelOff)
+    ..u16(0x0132)..u16(ascii)..u32(20)..u32(dateOff)
+    ..u16(0x8769)..u16(long)..u32(1)..u32(exifIfdOff)
+    ..u32(0)
+    // Exif 子表
+    ..u16(4)
+    ..u16(0x829D)..u16(rational)..u32(1)..u32(fNumOff)
+    ..u16(0x829A)..u16(rational)..u32(1)..u32(expOff)
+    ..u16(0x8827)..u16(short)..u32(1)..u16(100)..u16(0)
+    ..u16(0x920A)..u16(rational)..u32(1)..u32(focalOff)
+    ..u32(0)
+    // 数据区
+    ..raw('NIKON CORPORATION'.codeUnits)..u8(0)
+    ..raw('NIKON Z f'.codeUnits)..u8(0)
+    ..raw('2026:10:02 09:05:33'.codeUnits)..u8(0)
+    ..u32(18)..u32(10) // ƒ/1.8
+    ..u32(1)..u32(250) // 1/250s
+    ..u32(85)..u32(1); // 85mm
+  return w.takeBytes();
+}
+
+/// 带 EXIF 的 60×40 渐变 JPEG(SOI 后插 Exif APP1)。
+Uint8List _exifJpeg({img.Image? photo}) {
+  photo ??= _gradient(60, 40);
+  final jpeg = img.encodeJpg(photo);
+  final payload = _exifPayload();
+  final segLen = 2 + 6 + payload.length;
+  return Uint8List.fromList([
+    0xFF, 0xD8, //
+    0xFF, 0xE1, (segLen >> 8) & 0xFF, segLen & 0xFF,
+    ...'Exif'.codeUnits, 0, 0,
+    ...payload,
+    ...jpeg.sublist(2),
+  ]);
+}
+
+img.Image _gradient(int w, int h) {
+  final image = img.Image(width: w, height: h);
+  for (final p in image) {
+    p
+      ..r = (p.x * 4) & 0xFF
+      ..g = (p.y * 6) & 0xFF
+      ..b = 128
+      ..a = 255;
+  }
+  return image;
+}
+
+/// 假文本光栅:红色实心块(宽 ≈ 字号×字数/2),几何断言用。
+Future<img.Image> _fakeRaster(String text, double fontSizePx, int color) async {
+  final h = fontSizePx.round();
+  final image = img.Image(width: h * text.length ~/ 2 + 4, height: h);
+  img.fillRect(image,
+      x1: 0, y1: 0, x2: image.width - 1, y2: image.height - 1,
+      color: img.ColorRgba8(200, 30, 30, 255));
+  return image;
+}
+
+void main() {
+  test('readJpegExif:APP1 解析出机型/参数/时刻', () {
+    final exif = readJpegExif(_exifJpeg());
+    expect(exif, isNotNull);
+    final card = exifCardDataOf(exif!);
+    expect(card.make, 'NIKON CORPORATION');
+    expect(card.model, 'NIKON Z f');
+    expect(card.titleLine, 'NIKON Z f'); // 型号已含厂牌:去重
+    expect(card.fNumber, 1.8);
+    expect(card.exposureSec, closeTo(1 / 250, 1e-9));
+    expect(card.iso, 100);
+    expect(card.focalLengthMm, 85);
+    expect(card.paramLine, '85mm ƒ/1.8 · 1/250s · ISO 100');
+    expect(card.takenAt, DateTime(2026, 10, 2, 9, 5, 33));
+  });
+
+  test('无 EXIF 的 JPEG:readJpegExif → null,卡片摘要为空', () {
+    final jpeg = img.encodeJpg(_gradient(20, 20));
+    expect(readJpegExif(jpeg), isNull);
+    final card = exifCardDataOf(img.ExifData());
+    expect(card.titleLine, isEmpty);
+    expect(card.paramLine, isEmpty);
+    expect(card.takenAt, isNull);
+  });
+
+  test('格式化:厂牌去重、整档光圈、秒级快门、焦段取整', () {
+    expect(
+        const ExifCardData(make: 'NIKON', model: 'NIKON Z f').titleLine,
+        'NIKON Z f');
+    expect(
+        const ExifCardData(
+                fNumber: 8, exposureSec: 2.5, iso: 640, focalLengthMm: 85.4)
+            .paramLine,
+        '85mm ƒ/8 · 2.5s · ISO 640');
+    expect(
+        const ExifCardData(exposureSec: 0.004).paramLine, contains('1/250s'));
+  });
+
+  test('corner:右下角叠字,画幅不变,EXIF 保留', () async {
+    final jpeg = _exifJpeg();
+    final out = await applyWatermark(
+        jpeg, const WatermarkOptions(style: WatermarkStyle.corner, text: 'Aha'),
+        raster: _fakeRaster);
+    expect(identical(out, jpeg), isFalse);
+
+    final decoded = img.decodeJpg(out);
+    expect(decoded, isNotNull);
+    expect(decoded!.width, 60);
+    expect(decoded.height, 40);
+    // 角标落点(fontSize 16 → margin 11,badge 28×16):
+    // dstX = 60-28-11 = 21,dstY = 40-16-11 = 13 → (30, 20) 在红块内。
+    final p = decoded.getPixel(30, 20);
+    expect(p.r, greaterThan(150));
+    expect(p.g, lessThan(90));
+    // 重编码保留 EXIF(encodeJpg 回写 APP1)。
+    expect(readJpegExif(out)?.imageIfd[0x0110]?.toString(), 'NIKON Z f');
+  });
+
+  test('card:白衬纸加宽加高,照片居中无损,EXIF 保留', () async {
+    final jpeg = _exifJpeg();
+    final out = await applyWatermark(
+        jpeg, const WatermarkOptions(style: WatermarkStyle.card, text: 'Aha'),
+        raster: _fakeRaster);
+    expect(identical(out, jpeg), isFalse);
+
+    final decoded = img.decodeJpg(out);
+    expect(decoded!.width, greaterThan(60));
+    expect(decoded.height, greaterThan(40 + 20)); // 照片 + 至少三行文字区
+    // 四角是白衬纸
+    for (final (x, y) in [(0, 0), (decoded.width - 1, 0), (0, decoded.height - 1), (decoded.width - 1, decoded.height - 1)]) {
+      final c = decoded.getPixel(x, y);
+      expect(c.r, greaterThan(235));
+      expect(c.g, greaterThan(235));
+      expect(c.b, greaterThan(235));
+    }
+    // 照片区居中:左上角衬纸宽 = (out.width - 60) / 2
+    final sidePad = (decoded.width - 60) ~/ 2;
+    final p = decoded.getPixel(sidePad + 30, sidePad + 20);
+    expect(p.r, closeTo(120, 14));
+    expect(p.g, closeTo(120, 14));
+    // EXIF 随行
+    expect(readJpegExif(out)?.imageIfd[0x0110]?.toString(), 'NIKON Z f');
+  });
+
+  test('off / 非 JPEG:原实例直返;小图放不下角标也直返', () async {
+    final jpeg = _exifJpeg();
+    expect(
+        await applyWatermark(jpeg,
+            const WatermarkOptions(style: WatermarkStyle.off)),
+        same(jpeg));
+    final notJpeg = Uint8List.fromList([0x89, 0x50, 0x4E, 0x47]);
+    expect(
+        await applyWatermark(notJpeg,
+            const WatermarkOptions(style: WatermarkStyle.corner)),
+        same(notJpeg));
+
+    // 20×15 小图:fontSize 钳 16 → margin 11 → maxW ≤ 0,放不下。
+    final tiny = img.encodeJpg(_gradient(20, 15));
+    expect(
+        await applyWatermark(tiny,
+            const WatermarkOptions(style: WatermarkStyle.corner, text: 'Aha'),
+            raster: _fakeRaster),
+        same(tiny));
+  });
+}

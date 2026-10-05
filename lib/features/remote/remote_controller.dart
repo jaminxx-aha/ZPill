@@ -1,10 +1,15 @@
-/// 遥控拍摄控制器:Live View 开关、快门释放、曝光只读展示。
+/// 遥控拍摄控制器:Live View 开关、快门释放、曝光展示与调节。
 ///
 /// 事件驱动:CaptureComplete(0x400D / 尼康 0xC102)提前收口拍照等待;
 /// ObjectAdded(0x4002 / 0xC101)→「已拍摄」提示 + 曝光刷新(**不下载**,
 /// 纯遥控 —— 速传联动是 TODO T1 的独立功能)。0xC10C
 /// LiveViewStateChanged 不参与取景启停(语义未实证,引擎纯轮询自治,
 /// 待真机核对后再决定是否消费)。
+///
+/// 曝光参数 PropDesc 驱动(0x1014 自描述:可写性/枚举域/范围域),
+/// 裸值 0x1015 只作 PropDesc 不可用时的回退。写路径(0x1016)三重门禁:
+/// [PtpSession.kSetPropEnabled] 总开关(真机核对前恒关)+ 相机 getSet
+/// 上报 + 值域(枚举/范围外的值由相机 clamp,回读为准)。
 ///
 /// 模式抄 BrowserController:构造器注入 + 断连门闩(_linkUp)+ _invalidate。
 library;
@@ -14,12 +19,14 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import '../../core/camera/camera_connection.dart';
+import '../../core/ptp/device_prop.dart';
 import '../../core/ptp/operation_codes.dart';
 import '../../core/ptp/ptp_session.dart';
 import '../../core/ptp/ptp_transport.dart';
+import '../../core/remote/frame_analyzer.dart';
 import '../../core/remote/live_view_engine.dart';
 
-/// 曝光三要素(只读;null = 该属性读取失败/未读)。
+/// 曝光三要素(只读快照;null = 该属性读取失败/未读)。
 final class Exposure {
   const Exposure({this.fNumber, this.shutterUs, this.iso});
 
@@ -33,16 +40,29 @@ final class Exposure {
   final int? iso;
 }
 
+/// 单个曝光属性的 UI 状态:PropDesc(可写性/取值域)+ 当前值。
+final class ExposurePropState {
+  const ExposurePropState({this.desc, this.value});
+
+  /// 0x1014 全描述;null = PropDesc 不可用(裸值回读,取值域未知)。
+  final PtpDevicePropDesc? desc;
+
+  /// 当前值(曝光域属性全为整型;null = 读取失败)。
+  final int? value;
+}
+
 final class RemoteController extends ChangeNotifier {
   RemoteController({
     required this.session,
     this.connection,
     LiveViewEngine? engine,
     Future<void> Function(Duration)? delay,
+    bool Function()? setPropGate,
   })  : engine = engine ?? LiveViewEngine(session: session),
-        _delay = delay ?? Future<void>.delayed {
+        _delay = delay ?? Future<void>.delayed,
+        _setPropEnabled = setPropGate ?? _sessionSetPropGate {
     this.engine.status.addListener(_onEngineStatus);
-    connection?.states.listen((s) {
+    _statesSub = connection?.states.listen((s) {
       if (s == CameraLinkState.connected) {
         _linkUp = true;
         unawaited(refreshExposure());
@@ -52,20 +72,45 @@ final class RemoteController extends ChangeNotifier {
       }
     });
     _eventsSub = session.events.listen(_onEvent);
+    // 监看辅助:帧分析挂引擎帧通知(禁用时零开销,开关由页面拨)。
+    analyzer.attach(this.engine.frame);
   }
+
+  static bool _sessionSetPropGate() => PtpSession.kSetPropEnabled;
 
   final PtpSession session;
   final CameraConnection? connection;
   final LiveViewEngine engine;
+
+  /// 监看辅助帧分析(直方图/斑马纹)。
+  final FrameAnalyzer analyzer = FrameAnalyzer();
   final Future<void> Function(Duration) _delay;
 
+  /// 写门禁:生产恒取 [PtpSession.kSetPropEnabled];测试注入覆写以
+  /// 覆盖写路径(总开关本身是编译期常量,测试不可翻转)。
+  final bool Function() _setPropEnabled;
+
   bool capturing = false;
+
+  /// 曝光参数写入中(编辑面板防连点)。
+  bool writing = false;
+
   String? error;
 
   /// 「已拍摄」提示(ObjectAdded 事件驱动;下一次操作时清)。
   String? notice;
 
-  Exposure? exposure;
+  /// 曝光参数状态(PropDesc 驱动),键 = [PtpDevicePropCode]。
+  final exposureProps = <int, ExposurePropState>{};
+
+  /// 三要素只读快照(派生自 [exposureProps],chips 展示用)。
+  Exposure? get exposure => exposureProps.isEmpty
+      ? null
+      : Exposure(
+          fNumber: exposureProps[PtpDevicePropCode.fNumber]?.value,
+          shutterUs: exposureProps[PtpDevicePropCode.exposureTime]?.value,
+          iso: exposureProps[PtpDevicePropCode.exposureIndex]?.value,
+        );
 
   /// 取景是否在跑(引擎状态透传)。
   bool get liveViewActive => engine.status.value == LiveViewStatus.running;
@@ -73,8 +118,18 @@ final class RemoteController extends ChangeNotifier {
   /// 链路是否在(断连/失败后闩上,页面据此显示连接指引)。
   bool get linkUp => _linkUp;
 
+  /// 曝光调节总开关(生产 = [PtpSession.kSetPropEnabled],恒关待真机核对)。
+  bool get canAdjustExposure => _setPropEnabled();
+
+  /// 该属性当前是否可调:总门禁 + 相机 getSet 上报双过。
+  bool propWritable(int propCode) {
+    if (!_setPropEnabled()) return false;
+    return exposureProps[propCode]?.desc?.getSet ?? false;
+  }
+
   bool _linkUp = true;
   StreamSubscription<PtpEvent>? _eventsSub;
+  StreamSubscription<CameraLinkState>? _statesSub;
   Completer<void>? _captureDone;
 
   /// DeviceReady 轮询兜底:300ms × 10(CaptureComplete 事件先到则提前)。
@@ -152,29 +207,76 @@ final class RemoteController extends ChangeNotifier {
     }
   }
 
-  /// 曝光只读刷新(0x5007 / 0x500D / 0x500F;单属性失败置 null 不上抛)。
+  /// 曝光刷新(0x5007 / 0x500D / 0x500F):PropDesc 优先(自带当前值 +
+  /// 可写性 + 取值域),PropDesc 不可用退回裸值 0x1015(值有、域未知)。
+  /// 单属性失败置空不上抛,断连后迟到值不上屏。三键顺序刷(不并发):
+  /// PropDesc 拒答的退回路径会二次入队,并发时与脚本应答交错易错位。
   Future<void> refreshExposure() async {
-    int? f;
-    int? s;
-    int? iso;
-    try {
-      f = (await session.getDevicePropValue(PtpDevicePropCode.fNumber)).value as int?;
-    } on Exception {
-      // 属性失败:置 null,不上抛
-    }
-    try {
-      s = (await session.getDevicePropValue(PtpDevicePropCode.exposureTime)).value as int?;
-    } on Exception {
-      // 同上
-    }
-    try {
-      iso = (await session.getDevicePropValue(PtpDevicePropCode.exposureIndex)).value as int?;
-    } on Exception {
-      // 同上
-    }
-    if (!_linkUp) return; // 断连后迟到值不上屏
-    exposure = Exposure(fNumber: f, shutterUs: s, iso: iso);
+    await _refreshProp(PtpDevicePropCode.fNumber);
+    await _refreshProp(PtpDevicePropCode.exposureTime);
+    await _refreshProp(PtpDevicePropCode.exposureIndex);
+    if (!_linkUp) return;
     notifyListeners();
+  }
+
+  Future<void> _refreshProp(int propCode) async {
+    try {
+      final desc = await session.getDevicePropDesc(propCode);
+      if (!_linkUp) return;
+      exposureProps[propCode] =
+          ExposurePropState(desc: desc, value: desc.currentValue as int?);
+      return;
+    } on Exception {
+      // PropDesc 不给(方言/截断/不支持):退回裸值
+    }
+    try {
+      final v = await session.getDevicePropValue(propCode);
+      if (!_linkUp) return;
+      exposureProps[propCode] = ExposurePropState(value: v.value as int?);
+    } on Exception {
+      if (!_linkUp) return;
+      exposureProps[propCode] = const ExposurePropState();
+    }
+  }
+
+  /// 曝光参数调节(0x1016,数据入相)。
+  ///
+  /// 三重门禁:总开关([canAdjustExposure],真机核对前恒关)、相机
+  /// getSet 上报、链路在。写成功后回读当键 —— 相机对域外值可能 clamp,
+  /// 屏显一律以回读为准。
+  Future<void> setExposureProp(int propCode, int value) async {
+    if (!_linkUp) {
+      error = '未连接相机';
+      notifyListeners();
+      return;
+    }
+    if (!_setPropEnabled()) {
+      error = '曝光调节未启用:待真机核对可写域后开放';
+      notifyListeners();
+      return;
+    }
+    final desc = exposureProps[propCode]?.desc;
+    if (desc != null && !desc.getSet) {
+      error = '相机上报该属性为只读';
+      notifyListeners();
+      return;
+    }
+    final dataType = desc?.dataType ??
+        kStandardPropDataType[propCode] ??
+        PtpDataType.uint16;
+    writing = true;
+    error = null;
+    notifyListeners();
+    try {
+      await session.setDevicePropValue(
+          PtpDevicePropValue(code: propCode, dataType: dataType, value: value));
+      await _refreshProp(propCode);
+    } on Exception catch (e) {
+      error = '曝光调节失败:$e';
+    } finally {
+      writing = false;
+      if (_linkUp) notifyListeners();
+    }
   }
 
   void _onEvent(PtpEvent event) {
@@ -201,16 +303,19 @@ final class RemoteController extends ChangeNotifier {
     _linkUp = false;
     unawaited(engine.stop());
     capturing = false;
+    writing = false;
     error = null;
     notice = null;
-    exposure = null;
+    exposureProps.clear();
     notifyListeners();
   }
 
   @override
   void dispose() {
     _eventsSub?.cancel();
+    _statesSub?.cancel();
     engine.status.removeListener(_onEngineStatus);
+    analyzer.dispose();
     super.dispose();
   }
 }

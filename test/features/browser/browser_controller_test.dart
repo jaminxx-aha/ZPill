@@ -41,6 +41,9 @@ final class _FakeRepo implements ObjectRepository {
 
   @override
   void reset() => resetCalls++;
+
+  @override
+  void removeHandles(Iterable<int> handles) {}
 }
 
 /// 伪连接:只驱动 states 流(控制器只订阅它)。
