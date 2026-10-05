@@ -84,14 +84,35 @@ class _SettingsPageState extends State<SettingsPage> {
   late final TextEditingController _creatorCtrl;
   late final TextEditingController _rightsCtrl;
   late final TextEditingController _watermarkCtrl;
+  late final FocusNode _creatorFocus;
+  late final FocusNode _rightsFocus;
+  late final FocusNode _watermarkFocus;
 
   @override
   void initState() {
     super.initState();
-    final s = AppServices.instance.settingsController.settings;
+    final controller = AppServices.instance.settingsController;
+    final s = controller.settings;
     _creatorCtrl = TextEditingController(text: s.xmpCreator ?? '');
     _rightsCtrl = TextEditingController(text: s.xmpRights ?? '');
     _watermarkCtrl = TextEditingController(text: s.watermarkText ?? '');
+    // 焦点离开即落库:手机上没有「回车提交」的心智,输完点走就该生效
+    // —— 只挂 onSubmitted 会静默丢输入。
+    _creatorFocus = _commitOnBlur(_creatorCtrl, controller.setXmpCreator);
+    _rightsFocus = _commitOnBlur(_rightsCtrl, controller.setXmpRights);
+    _watermarkFocus =
+        _commitOnBlur(_watermarkCtrl, controller.setWatermarkText);
+  }
+
+  FocusNode _commitOnBlur(
+      TextEditingController ctrl, ValueSetter<String> save) {
+    final node = FocusNode();
+    node.addListener(() {
+      if (!node.hasFocus) {
+        save(ctrl.text);
+      }
+    });
+    return node;
   }
 
   @override
@@ -99,6 +120,9 @@ class _SettingsPageState extends State<SettingsPage> {
     _creatorCtrl.dispose();
     _rightsCtrl.dispose();
     _watermarkCtrl.dispose();
+    _creatorFocus.dispose();
+    _rightsFocus.dispose();
+    _watermarkFocus.dispose();
     super.dispose();
   }
 
@@ -109,112 +133,122 @@ class _SettingsPageState extends State<SettingsPage> {
       appBar: AppBar(title: const Text('设置')),
       body: ListenableBuilder(
         listenable: controller,
-        builder: (context, _) => ListView(
-          children: [
-            SwitchListTile(
-              title: const Text('自动传输(速传)'),
-              subtitle: const Text('连接期间相机新拍的照片自动下载并导入相册'),
-              value: controller.settings.autoTransfer,
-              onChanged: controller.setAutoTransfer,
-            ),
-            ListTile(
-              title: const Text('速传格式'),
-              subtitle: const Text('双格式(RAW+JPG)照片按此选择下载哪个'),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-              child: SegmentedButton<PhotoDownloadFormat>(
-                segments: [
-                  for (final f in PhotoDownloadFormat.values)
-                    ButtonSegment(value: f, label: Text(f.short)),
-                ],
-                selected: {
-                  controller.settings.autoTransferFormat,
-                },
-                onSelectionChanged: (s) =>
-                    controller.setAutoTransferFormat(s.first),
+        builder: (context, _) => GestureDetector(
+          // 点空白散焦收键盘:文本框自身的点按由它的手势竞技场赢下,不冲突
+          onTap: () => FocusManager.instance.primaryFocus?.unfocus(),
+          child: ListView(
+            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+            children: [
+              SwitchListTile(
+                title: const Text('自动传输(速传)'),
+                subtitle: const Text('连接期间相机新拍的照片自动下载并导入相册'),
+                value: controller.settings.autoTransfer,
+                onChanged: controller.setAutoTransfer,
               ),
-            ),
-            const Divider(),
-            ListTile(
-              title: const Text('元数据注入(XMP)'),
-              subtitle: const Text('下载 JPG 时写入版权/作者/评分/位置(仅影响本机副本)'),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-              child: TextField(
-                controller: _creatorCtrl,
-                decoration: const InputDecoration(
-                  labelText: '作者(dc:creator)',
-                  border: OutlineInputBorder(),
-                  isDense: true,
+              ListTile(
+                title: const Text('速传格式'),
+                subtitle: const Text('双格式(RAW+JPG)照片按此选择下载哪个'),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                child: SegmentedButton<PhotoDownloadFormat>(
+                  segments: [
+                    for (final f in PhotoDownloadFormat.values)
+                      ButtonSegment(value: f, label: Text(f.short)),
+                  ],
+                  selected: {
+                    controller.settings.autoTransferFormat,
+                  },
+                  onSelectionChanged: (s) =>
+                      controller.setAutoTransferFormat(s.first),
                 ),
-                onSubmitted: controller.setXmpCreator,
               ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-              child: TextField(
-                controller: _rightsCtrl,
-                decoration: const InputDecoration(
-                  labelText: '版权(dc:rights)',
-                  border: OutlineInputBorder(),
-                  isDense: true,
-                ),
-                onSubmitted: controller.setXmpRights,
+              const Divider(),
+              ListTile(
+                title: const Text('元数据注入(XMP)'),
+                subtitle: const Text('下载 JPG 时写入版权/作者/评分/位置(仅影响本机副本)'),
               ),
-            ),
-            SwitchListTile(
-              title: const Text('写入评分'),
-              subtitle: const Text('已打星的照片把星级写入 xmp:Rating'),
-              value: controller.settings.xmpInjectRating,
-              onChanged: controller.setXmpInjectRating,
-            ),
-            SwitchListTile(
-              title: const Text('写入位置(GPS)'),
-              subtitle: const Text('下载时取当前位置写入 EXIF GPS(需定位权限)'),
-              value: controller.settings.xmpInjectGps,
-              onChanged: controller.setXmpInjectGps,
-            ),
-            const Divider(),
-            ListTile(
-              title: const Text('水印'),
-              subtitle: const Text('下载 JPG 时合成:角标或摄影卡片(EXIF 卡)'),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-              child: SegmentedButton<WatermarkStyle>(
-                segments: const [
-                  ButtonSegment(value: WatermarkStyle.off, label: Text('关闭')),
-                  ButtonSegment(value: WatermarkStyle.corner, label: Text('角标')),
-                  ButtonSegment(value: WatermarkStyle.card, label: Text('摄影卡')),
-                ],
-                selected: {controller.settings.watermarkStyle},
-                onSelectionChanged: (s) =>
-                    controller.setWatermarkStyle(s.first),
-              ),
-            ),
-            if (controller.settings.watermarkStyle != WatermarkStyle.off)
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
                 child: TextField(
-                  controller: _watermarkCtrl,
+                  controller: _creatorCtrl,
+                  focusNode: _creatorFocus,
                   decoration: const InputDecoration(
-                    labelText: '水印文本(空 = 相机型号)',
+                    labelText: '作者(dc:creator)',
                     border: OutlineInputBorder(),
                     isDense: true,
                   ),
-                  onSubmitted: controller.setWatermarkText,
+                  onSubmitted: controller.setXmpCreator,
                 ),
               ),
-            const Divider(),
-            const ListTile(
-              title: Text('传输质量'),
-              subtitle: Text('原图直传(压缩传输待后续版本)'),
-              enabled: false,
-            ),
-            buildSnapshotSection(context),
-          ],
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                child: TextField(
+                  controller: _rightsCtrl,
+                  focusNode: _rightsFocus,
+                  decoration: const InputDecoration(
+                    labelText: '版权(dc:rights)',
+                    border: OutlineInputBorder(),
+                    isDense: true,
+                  ),
+                  onSubmitted: controller.setXmpRights,
+                ),
+              ),
+              SwitchListTile(
+                title: const Text('写入评分'),
+                subtitle: const Text('已打星的照片把星级写入 xmp:Rating'),
+                value: controller.settings.xmpInjectRating,
+                onChanged: controller.setXmpInjectRating,
+              ),
+              SwitchListTile(
+                title: const Text('写入位置(GPS)'),
+                subtitle: const Text('下载时取当前位置写入 EXIF GPS(需定位权限)'),
+                value: controller.settings.xmpInjectGps,
+                onChanged: controller.setXmpInjectGps,
+              ),
+              const Divider(),
+              ListTile(
+                title: const Text('水印'),
+                subtitle: const Text('下载 JPG 时合成:角标或摄影卡片(EXIF 卡)'),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                child: SegmentedButton<WatermarkStyle>(
+                  segments: const [
+                    ButtonSegment(value: WatermarkStyle.off, label: Text('关闭')),
+                    ButtonSegment(
+                        value: WatermarkStyle.corner, label: Text('角标')),
+                    ButtonSegment(
+                        value: WatermarkStyle.card, label: Text('摄影卡')),
+                  ],
+                  selected: {controller.settings.watermarkStyle},
+                  onSelectionChanged: (s) =>
+                      controller.setWatermarkStyle(s.first),
+                ),
+              ),
+              if (controller.settings.watermarkStyle != WatermarkStyle.off)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                  child: TextField(
+                    controller: _watermarkCtrl,
+                    focusNode: _watermarkFocus,
+                    decoration: const InputDecoration(
+                      labelText: '水印文本(空 = 相机型号)',
+                      border: OutlineInputBorder(),
+                      isDense: true,
+                    ),
+                    onSubmitted: controller.setWatermarkText,
+                  ),
+                ),
+              const Divider(),
+              const ListTile(
+                title: Text('传输质量'),
+                subtitle: Text('原图直传(压缩传输待后续版本)'),
+                enabled: false,
+              ),
+              buildSnapshotSection(context),
+            ],
+          ),
         ),
       ),
     );
