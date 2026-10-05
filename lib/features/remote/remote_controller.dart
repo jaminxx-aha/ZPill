@@ -1,19 +1,20 @@
-/// 遥控拍摄控制器:Live View 开关、快门释放、曝光展示与调节。
+/// 遥控拍摄控制器:Live View 开关、快门释放、拍摄参数展示与调节。
 ///
 /// 快门码回退链:0x100E 标准优先,被「此码不对」类响应(0x2002/
 /// 0x2005/0x2006)拒绝 → 换尼康 0x9207 落卡拍,成功码缓存后续直发
 /// (2026-10-05 Zf 真机实证 0x100E → 0x2002,见 [_fireShutter])。
 ///
 /// 事件驱动:CaptureComplete(0x400D / 尼康 0xC102)提前收口拍照等待;
-/// ObjectAdded(0x4002 / 0xC101)→「已拍摄」提示 + 曝光刷新(**不下载**,
+/// ObjectAdded(0x4002 / 0xC101)→「已拍摄」提示 + 参数刷新(**不下载**,
 /// 纯遥控 —— 速传联动是 TODO T1 的独立功能)。0xC10C
 /// LiveViewStateChanged 不参与取景启停(语义未实证,引擎纯轮询自治,
 /// 待真机核对后再决定是否消费)。
 ///
-/// 曝光参数 PropDesc 驱动(0x1014 自描述:可写性/枚举域/范围域),
-/// 裸值 0x1015 只作 PropDesc 不可用时的回退。写路径(0x1016)三重门禁:
-/// [PtpSession.kSetPropEnabled] 总开关(真机核对前恒关)+ 相机 getSet
-/// 上报 + 值域(枚举/范围外的值由相机 clamp,回读为准)。
+/// 拍摄参数目录驱动([kShootingParams]):PropDesc(0x1014)自描述
+/// (可写性/枚举域/范围域),裸值 0x1015 只作 PropDesc 不可用时的回退。
+/// 写路径(0x1016)三重门禁:[PtpSession.kSetPropEnabled] 总开关
+/// (真机核对前恒关)+ 相机 getSet 上报 + 值域(枚举/范围外的值由
+/// 相机 clamp,回读为准)。
 ///
 /// 模式抄 BrowserController:构造器注入 + 断连门闩(_linkUp)+ _invalidate。
 library;
@@ -29,6 +30,7 @@ import '../../core/ptp/ptp_session.dart';
 import '../../core/ptp/ptp_transport.dart';
 import '../../core/remote/frame_analyzer.dart';
 import '../../core/remote/live_view_engine.dart';
+import 'shooting_param_catalog.dart';
 
 /// 曝光三要素(只读快照;null = 该属性读取失败/未读)。
 final class Exposure {
@@ -44,14 +46,14 @@ final class Exposure {
   final int? iso;
 }
 
-/// 单个曝光属性的 UI 状态:PropDesc(可写性/取值域)+ 当前值。
-final class ExposurePropState {
-  const ExposurePropState({this.desc, this.value});
+/// 单个拍摄属性的 UI 状态:PropDesc(可写性/取值域)+ 当前值。
+final class PropState {
+  const PropState({this.desc, this.value});
 
   /// 0x1014 全描述;null = PropDesc 不可用(裸值回读,取值域未知)。
   final PtpDevicePropDesc? desc;
 
-  /// 当前值(曝光域属性全为整型;null = 读取失败)。
+  /// 当前值(拍摄域属性全为整型;null = 读取失败)。
   final int? value;
 }
 
@@ -69,7 +71,7 @@ final class RemoteController extends ChangeNotifier {
     _statesSub = connection?.states.listen((s) {
       if (s == CameraLinkState.connected) {
         _linkUp = true;
-        unawaited(refreshExposure());
+        unawaited(refreshParams());
       } else if (s == CameraLinkState.disconnected ||
           s == CameraLinkState.failed) {
         _invalidate();
@@ -96,7 +98,7 @@ final class RemoteController extends ChangeNotifier {
 
   bool capturing = false;
 
-  /// 曝光参数写入中(编辑面板防连点)。
+  /// 拍摄参数写入中(编辑面板防连点)。
   bool writing = false;
 
   String? error;
@@ -104,16 +106,16 @@ final class RemoteController extends ChangeNotifier {
   /// 「已拍摄」提示(ObjectAdded 事件驱动;下一次操作时清)。
   String? notice;
 
-  /// 曝光参数状态(PropDesc 驱动),键 = [PtpDevicePropCode]。
-  final exposureProps = <int, ExposurePropState>{};
+  /// 拍摄参数状态(PropDesc 驱动),键 = [PtpDevicePropCode]。
+  final paramProps = <int, PropState>{};
 
-  /// 三要素只读快照(派生自 [exposureProps],chips 展示用)。
-  Exposure? get exposure => exposureProps.isEmpty
+  /// 三要素只读快照(派生自 [paramProps],chips 展示用)。
+  Exposure? get exposure => paramProps.isEmpty
       ? null
       : Exposure(
-          fNumber: exposureProps[PtpDevicePropCode.fNumber]?.value,
-          shutterUs: exposureProps[PtpDevicePropCode.exposureTime]?.value,
-          iso: exposureProps[PtpDevicePropCode.exposureIndex]?.value,
+          fNumber: paramProps[PtpDevicePropCode.fNumber]?.value,
+          shutterUs: paramProps[PtpDevicePropCode.exposureTime]?.value,
+          iso: paramProps[PtpDevicePropCode.exposureIndex]?.value,
         );
 
   /// 取景是否在跑(引擎状态透传)。
@@ -122,13 +124,13 @@ final class RemoteController extends ChangeNotifier {
   /// 链路是否在(断连/失败后闩上,页面据此显示连接指引)。
   bool get linkUp => _linkUp;
 
-  /// 曝光调节总开关(生产 = [PtpSession.kSetPropEnabled],恒关待真机核对)。
-  bool get canAdjustExposure => _setPropEnabled();
+  /// 拍摄参数调节总开关(生产 = [PtpSession.kSetPropEnabled],恒关待真机核对)。
+  bool get canAdjustParams => _setPropEnabled();
 
   /// 该属性当前是否可调:总门禁 + 相机 getSet 上报双过。
   bool propWritable(int propCode) {
     if (!_setPropEnabled()) return false;
-    return exposureProps[propCode]?.desc?.getSet ?? false;
+    return paramProps[propCode]?.desc?.getSet ?? false;
   }
 
   bool _linkUp = true;
@@ -246,14 +248,15 @@ final class RemoteController extends ChangeNotifier {
     }
   }
 
-  /// 曝光刷新(0x5007 / 0x500D / 0x500F):PropDesc 优先(自带当前值 +
-  /// 可写性 + 取值域),PropDesc 不可用退回裸值 0x1015(值有、域未知)。
-  /// 单属性失败置空不上抛,断连后迟到值不上屏。三键顺序刷(不并发):
-  /// PropDesc 拒答的退回路径会二次入队,并发时与脚本应答交错易错位。
-  Future<void> refreshExposure() async {
-    await _refreshProp(PtpDevicePropCode.fNumber);
-    await _refreshProp(PtpDevicePropCode.exposureTime);
-    await _refreshProp(PtpDevicePropCode.exposureIndex);
+  /// 拍摄参数刷新(目录 [kShootingParams] 全量):PropDesc 优先(自带
+  /// 当前值 + 可写性 + 取值域),PropDesc 不可用退回裸值 0x1015(值有、
+  /// 域未知)。单属性失败置空不上抛,断连后迟到值不上屏。目录序逐个
+  /// 刷(不并发):PropDesc 拒答的退回路径会二次入队,并发时与脚本
+  /// 应答交错易错位。
+  Future<void> refreshParams() async {
+    for (final param in kShootingParams) {
+      await _refreshProp(param.code);
+    }
     if (!_linkUp) return;
     notifyListeners();
   }
@@ -262,8 +265,8 @@ final class RemoteController extends ChangeNotifier {
     try {
       final desc = await session.getDevicePropDesc(propCode);
       if (!_linkUp) return;
-      exposureProps[propCode] =
-          ExposurePropState(desc: desc, value: desc.currentValue as int?);
+      paramProps[propCode] =
+          PropState(desc: desc, value: desc.currentValue as int?);
       return;
     } on Exception {
       // PropDesc 不给(方言/截断/不支持):退回裸值
@@ -271,30 +274,30 @@ final class RemoteController extends ChangeNotifier {
     try {
       final v = await session.getDevicePropValue(propCode);
       if (!_linkUp) return;
-      exposureProps[propCode] = ExposurePropState(value: v.value as int?);
+      paramProps[propCode] = PropState(value: v.value as int?);
     } on Exception {
       if (!_linkUp) return;
-      exposureProps[propCode] = const ExposurePropState();
+      paramProps[propCode] = const PropState();
     }
   }
 
-  /// 曝光参数调节(0x1016,数据入相)。
+  /// 拍摄参数调节(0x1016,数据入相)。
   ///
-  /// 三重门禁:总开关([canAdjustExposure],真机核对前恒关)、相机
+  /// 三重门禁:总开关([canAdjustParams],真机核对前恒关)、相机
   /// getSet 上报、链路在。写成功后回读当键 —— 相机对域外值可能 clamp,
   /// 屏显一律以回读为准。
-  Future<void> setExposureProp(int propCode, int value) async {
+  Future<void> setParam(int propCode, int value) async {
     if (!_linkUp) {
       error = '未连接相机';
       notifyListeners();
       return;
     }
     if (!_setPropEnabled()) {
-      error = '曝光调节未启用:待真机核对可写域后开放';
+      error = '参数调节未启用:待真机核对可写域后开放';
       notifyListeners();
       return;
     }
-    final desc = exposureProps[propCode]?.desc;
+    final desc = paramProps[propCode]?.desc;
     if (desc != null && !desc.getSet) {
       error = '相机上报该属性为只读';
       notifyListeners();
@@ -311,7 +314,7 @@ final class RemoteController extends ChangeNotifier {
           PtpDevicePropValue(code: propCode, dataType: dataType, value: value));
       await _refreshProp(propCode);
     } on Exception catch (e) {
-      error = '曝光调节失败:$e';
+      error = '参数写入失败:$e';
     } finally {
       writing = false;
       if (_linkUp) notifyListeners();
@@ -331,13 +334,13 @@ final class RemoteController extends ChangeNotifier {
       case NikonEventCode.objectAddedInSdram:
         notice = '已拍摄';
         notifyListeners();
-        unawaited(refreshExposure());
+        unawaited(refreshParams());
       default:
         break; // 0xC10C 等:见类注,不消费
     }
   }
 
-  /// 断连/失败:停引擎、清状态;迟到的曝光值/事件被门闩挡住。
+  /// 断连/失败:停引擎、清状态;迟到的参数值/事件被门闩挡住。
   void _invalidate() {
     _linkUp = false;
     unawaited(engine.stop());
@@ -345,7 +348,7 @@ final class RemoteController extends ChangeNotifier {
     writing = false;
     error = null;
     notice = null;
-    exposureProps.clear();
+    paramProps.clear();
     notifyListeners();
   }
 
