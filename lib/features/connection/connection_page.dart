@@ -1,8 +1,8 @@
 /// 相机页(底部导航首 tab):连接入口 + 已连接相机信息总览。
 ///
-/// 未连接:三种连接方式卡 —— 有线(USB)/ AP(相机热点)/ STA(同一
-/// Wi-Fi 扫描),同一状态机互斥;已连接:信息卡组(连接/机身/镜头/
-/// 存储卡)+「相册」入口 +「断开连接」。
+/// 未连接:连接方式分段切换(有线 USB / AP 热点 / 同一 Wi-Fi)——
+/// 切到哪种方式,下方只出该方式的连接卡;已连接:信息卡组(连接/
+/// 机身/镜头/存储卡)+「相册」入口 +「断开连接」。
 ///
 /// Controller = ViewModel(ChangeNotifier);**所有按钮必须绑定到
 /// Controller 方法**,禁止 UI 层直连协议层(TODO.md §三 注意事项)。
@@ -25,6 +25,9 @@ import '../browser/photo_grid_page.dart';
 import '../common/format.dart';
 import 'camera_overview_controller.dart';
 
+/// 连接方式(未连接视图的分段选择;切到哪种出哪种卡)。
+enum ConnectionMethod { usb, ap, sta }
+
 class ConnectionController extends ChangeNotifier {
   /// 注入应用级连接(全局单例状态,经 AppServices 收口)+ 扫描器与
   /// 配对档案(均可空:测试/未装配平台降级)。
@@ -45,6 +48,21 @@ class ConnectionController extends ChangeNotifier {
   final ipController = TextEditingController(text: kDefaultCameraIp);
 
   CameraLinkState state = CameraLinkState.disconnected;
+
+  /// 当前选中的连接方式(未连接视图分段;默认有线)。
+  ConnectionMethod method = ConnectionMethod.usb;
+
+  /// 切换连接方式;离开 STA 时若在扫描顺手停掉(结果已不可见)。
+  void selectMethod(ConnectionMethod m) {
+    if (m == method) {
+      return;
+    }
+    if (scanning && m != ConnectionMethod.sta) {
+      stopScan();
+    }
+    method = m;
+    notifyListeners();
+  }
 
   /// 本次连接的无线 IP(已连接视图的「连接方式」行;USB 连接为 null)。
   String? activeIp;
@@ -327,7 +345,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
     );
   }
 
-  // ── 未连接:三种连接方式 ─────────────────────────────────────────
+  // ── 未连接:连接方式分段切换 ─────────────────────────────────────
 
   Widget _methodsView(BuildContext context, ConnectionController controller) {
     final busy = switch (controller.state) {
@@ -347,122 +365,34 @@ class _ConnectionPageState extends State<ConnectionPage> {
           ),
         const SizedBox(height: 16),
 
-        // 方式一:有线(USB C-to-C 数据线直连)
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _methodTitle(context, Icons.usb, '有线连接(USB)'),
-                const SizedBox(height: 4),
-                const Text(
-                    '用 C-to-C 数据线连接相机与手机,解锁相机后点「USB 连接」'),
-                const SizedBox(height: 12),
-                SizedBox(
-                  width: double.infinity,
-                  child: FilledButton(
-                    onPressed: busy ? null : controller.connect,
-                    child: const Text('USB 连接'),
-                  ),
-                ),
-              ],
-            ),
-          ),
+        // 分段切换:切到哪种方式,下方只出该方式的连接卡。
+        SegmentedButton<ConnectionMethod>(
+          segments: const [
+            ButtonSegment(
+                value: ConnectionMethod.usb,
+                icon: Icon(Icons.usb),
+                label: Text('有线')),
+            ButtonSegment(
+                value: ConnectionMethod.ap,
+                icon: Icon(Icons.wifi_tethering),
+                label: Text('AP 热点')),
+            ButtonSegment(
+                value: ConnectionMethod.sta,
+                icon: Icon(Icons.wifi),
+                label: Text('同一 Wi-Fi')),
+          ],
+          selected: {controller.method},
+          onSelectionChanged: busy
+              ? null
+              : (selection) => controller.selectMethod(selection.first),
         ),
         const SizedBox(height: 12),
 
-        // 方式二:AP(相机当热点,手机加入后连固定网段)
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _methodTitle(context, Icons.wifi_tethering, 'AP 连接(相机当热点)'),
-                const SizedBox(height: 4),
-                const Text(
-                    '相机菜单:网络 → 连接至智能设备 → Wi-Fi 连接(热点模式)。'
-                    '先在系统 Wi-Fi 设置里加入相机热点,再回来连接。'),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: controller.ipController,
-                  keyboardType: TextInputType.url,
-                  enabled: !busy,
-                  decoration: const InputDecoration(
-                    labelText: '相机 IP(默认 192.168.1.1)',
-                    hintText: kDefaultCameraIp,
-                    border: OutlineInputBorder(),
-                    isDense: true,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                SizedBox(
-                  width: double.infinity,
-                  child: FilledButton(
-                    onPressed: busy ? null : controller.connectWireless,
-                    child: const Text('AP 连接'),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(height: 12),
-
-        // 方式三:STA(相机与手机加入同一 Wi-Fi,扫描发现)
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _methodTitle(context, Icons.wifi, 'STA 连接(同一 Wi-Fi)'),
-                const SizedBox(height: 4),
-                const Text(
-                    '相机与手机加入同一个 Wi-Fi(相机菜单同上,选择连接到'
-                    '路由器网络),扫描发现相机后点选连接。'),
-                const SizedBox(height: 12),
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton.icon(
-                    icon: Icon(controller.scanning
-                        ? Icons.stop_circle_outlined
-                        : Icons.wifi_find),
-                    label: Text(
-                        controller.scanning ? '扫描中…(点按停止)' : '扫描相机'),
-                    onPressed: busy
-                        ? null
-                        : (controller.scanning
-                            ? controller.stopScan
-                            : controller.startScan),
-                  ),
-                ),
-                for (final camera in controller.cameras)
-                  ListTile(
-                    dense: true,
-                    contentPadding: EdgeInsets.zero,
-                    leading: const Icon(Icons.photo_camera_outlined),
-                    title: Text(camera.name),
-                    subtitle: Text(camera.host),
-                    trailing: const Icon(Icons.chevron_right),
-                    onTap: busy ? null : () => controller.connectDiscovered(camera),
-                  ),
-                if (controller.savedCameras.isNotEmpty)
-                  for (final saved in controller.savedCameras)
-                    ListTile(
-                      dense: true,
-                      contentPadding: EdgeInsets.zero,
-                      leading: const Icon(Icons.history),
-                      title: Text('上次:${saved.name}'),
-                      subtitle: Text(saved.lastIp ?? ''),
-                      trailing: const Icon(Icons.chevron_right),
-                      onTap: busy ? null : () => controller.connectSaved(saved),
-                    ),
-              ],
-            ),
-          ),
-        ),
+        switch (controller.method) {
+          ConnectionMethod.usb => _usbCard(context, controller, busy: busy),
+          ConnectionMethod.ap => _apCard(context, controller, busy: busy),
+          ConnectionMethod.sta => _staCard(context, controller, busy: busy),
+        },
         const SizedBox(height: 12),
         Text(
           '· 首次无线连接会请求配对确认(相机记录本设备,之后免配对);'
@@ -474,6 +404,139 @@ class _ConnectionPageState extends State<ConnectionPage> {
           style: Theme.of(context).textTheme.bodySmall,
         ),
       ],
+    );
+  }
+
+  /// 方式一:有线(USB C-to-C 数据线直连)。
+  Widget _usbCard(
+    BuildContext context,
+    ConnectionController controller, {
+    required bool busy,
+  }) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _methodTitle(context, Icons.usb, '有线连接(USB)'),
+            const SizedBox(height: 4),
+            const Text(
+                '用 C-to-C 数据线连接相机与手机,解锁相机后点「USB 连接」'),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton(
+                onPressed: busy ? null : controller.connect,
+                child: const Text('USB 连接'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 方式二:AP(相机当热点,手机加入后连固定网段)。
+  Widget _apCard(
+    BuildContext context,
+    ConnectionController controller, {
+    required bool busy,
+  }) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _methodTitle(context, Icons.wifi_tethering, 'AP 连接(相机当热点)'),
+            const SizedBox(height: 4),
+            const Text(
+                '相机菜单:网络 → 连接至智能设备 → Wi-Fi 连接(热点模式)。'
+                '先在系统 Wi-Fi 设置里加入相机热点,再回来连接。'),
+            const SizedBox(height: 12),
+            TextField(
+              controller: controller.ipController,
+              keyboardType: TextInputType.url,
+              enabled: !busy,
+              decoration: const InputDecoration(
+                labelText: '相机 IP(默认 192.168.1.1)',
+                hintText: kDefaultCameraIp,
+                border: OutlineInputBorder(),
+                isDense: true,
+              ),
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton(
+                onPressed: busy ? null : controller.connectWireless,
+                child: const Text('AP 连接'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 方式三:STA(相机与手机加入同一 Wi-Fi,扫描发现)。
+  Widget _staCard(
+    BuildContext context,
+    ConnectionController controller, {
+    required bool busy,
+  }) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _methodTitle(context, Icons.wifi, 'STA 连接(同一 Wi-Fi)'),
+            const SizedBox(height: 4),
+            const Text(
+                '相机与手机加入同一个 Wi-Fi(相机菜单同上,选择连接到'
+                '路由器网络),扫描发现相机后点选连接。'),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                icon: Icon(controller.scanning
+                    ? Icons.stop_circle_outlined
+                    : Icons.wifi_find),
+                label: Text(
+                    controller.scanning ? '扫描中…(点按停止)' : '扫描相机'),
+                onPressed: busy
+                    ? null
+                    : (controller.scanning
+                        ? controller.stopScan
+                        : controller.startScan),
+              ),
+            ),
+            for (final camera in controller.cameras)
+              ListTile(
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.photo_camera_outlined),
+                title: Text(camera.name),
+                subtitle: Text(camera.host),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: busy ? null : () => controller.connectDiscovered(camera),
+              ),
+            if (controller.savedCameras.isNotEmpty)
+              for (final saved in controller.savedCameras)
+                ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.history),
+                  title: Text('上次:${saved.name}'),
+                  subtitle: Text(saved.lastIp ?? ''),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: busy ? null : () => controller.connectSaved(saved),
+                ),
+          ],
+        ),
+      ),
     );
   }
 
