@@ -5,7 +5,7 @@ import 'package:nikon_pill/app.dart';
 /// 整棵 UI 树冒烟:真机上"屏幕只打一堆文字"疑似渲染异常,
 /// 此处先在本地复现/排除 Widget 层异常。
 void main() {
-  // 加高视口:ListView 懒构建,默认 600 逻辑高把三连接方式卡/设置项
+  // 加高视口:ListView 懒构建,默认 600 逻辑高把页面尾部/设置项
   // 挡在折线下(未 build 即不可断言)。
   Future<void> boot(WidgetTester tester) async {
     tester.view
@@ -16,14 +16,14 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  testWidgets('应用骨架整体可渲染(相机 tab 三连接方式)', (tester) async {
+  testWidgets('应用骨架整体可渲染(相机 tab 连接方式分段)', (tester) async {
     await boot(tester);
 
     expect(find.text('相机'), findsWidgets); // AppBar 标题 + 底部 tab
     expect(find.text('未连接'), findsOneWidget);
-    expect(find.text('USB 连接'), findsOneWidget);
-    expect(find.text('AP 连接'), findsOneWidget);
-    expect(find.text('扫描相机'), findsOneWidget);
+    expect(find.text('USB 连接'), findsOneWidget); // 默认方式 = 有线
+    expect(find.text('AP 连接'), findsNothing); // 未选中方式不占屏
+    expect(find.text('扫描相机'), findsNothing);
   });
 
   testWidgets('拍摄 tab:取景与快门就位', (tester) async {

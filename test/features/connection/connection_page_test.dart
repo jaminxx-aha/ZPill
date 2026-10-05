@@ -273,6 +273,29 @@ void main() {
       expect(controller.scanning, isFalse);
     });
 
+    test('selectMethod:离开 STA 自动停扫;同方式空转不多发', () async {
+      final scanner = _FakeScanner();
+      final controller =
+          ConnectionController(connection: _FakeConnection(), scanner: scanner);
+
+      await controller.startScan();
+      expect(controller.scanning, isTrue);
+
+      // 扫描中切走 STA:结果不再可见,扫描顺手停掉
+      controller.selectMethod(ConnectionMethod.ap);
+      await pumpEventQueue();
+      expect(controller.method, ConnectionMethod.ap);
+      expect(controller.scanning, isFalse);
+      expect(scanner.stopCalls, 1);
+
+      // 非扫描态切方式:不触发多余的 stopBrowsing
+      controller.selectMethod(ConnectionMethod.sta);
+      controller.selectMethod(ConnectionMethod.usb);
+      await pumpEventQueue();
+      expect(scanner.stopCalls, 1);
+      expect(controller.method, ConnectionMethod.usb);
+    });
+
     test('loadSaved:配对档案进列表(最近优先);connectSaved 透传 IP + 实例名',
         () async {
       final store = InMemoryPairedCamerasStore();
@@ -300,7 +323,7 @@ void main() {
   });
 
   group('ConnectionPage', () {
-    testWidgets('AP 卡:默认 IP 预填,点「AP 连接」按输入连接,空回落默认',
+    testWidgets('AP 卡:分段切入;默认 IP 预填,点「AP 连接」按输入连接,空回落默认',
         (WidgetTester tester) async {
       final conn = _FakeConnection();
       final controller = ConnectionController(connection: conn);
@@ -308,6 +331,10 @@ void main() {
         home: ConnectionPage(controller: controller),
       ));
 
+      // 默认有线;切到 AP 热点分段出 AP 卡
+      expect(find.text('USB 连接'), findsOneWidget);
+      await tester.tap(find.text('AP 热点'));
+      await tester.pump();
       expect(find.text('AP 连接(相机当热点)'), findsOneWidget);
       expect(controller.ipController.text, kDefaultCameraIp);
 
@@ -329,18 +356,18 @@ void main() {
       expect(conn.connectIp, '10.0.0.5');
     });
 
-    testWidgets('扫描 UI:点「扫描相机」→ 发现列表 → 点相机连接', (tester) async {
-      // 加高视口:STA 卡在页面下方,默认视口把按钮挡在折线下(点空)。
-      tester.view
-        ..physicalSize = const Size(800, 2400)
-        ..devicePixelRatio = 1.0;
-      addTearDown(tester.view.reset);
+    testWidgets('扫描 UI:切到 STA 分段,点「扫描相机」→ 发现列表 → 点相机连接',
+        (tester) async {
       final conn = _FakeConnection();
       final scanner = _FakeScanner();
       final controller =
           ConnectionController(connection: conn, scanner: scanner);
       await tester
           .pumpWidget(MaterialApp(home: ConnectionPage(controller: controller)));
+
+      await tester.tap(find.text('同一 Wi-Fi'));
+      await tester.pump();
+      expect(find.text('STA 连接(同一 Wi-Fi)'), findsOneWidget);
 
       await tester.tap(find.text('扫描相机'));
       await tester.pump();
@@ -409,7 +436,7 @@ void main() {
       expect(find.text('配对确认'), findsNothing);
     });
 
-    testWidgets('connecting:三种连接方式按钮全部禁用', (WidgetTester tester) async {
+    testWidgets('connecting:分段切换禁用,各方式卡按钮禁用', (WidgetTester tester) async {
       final conn = _FakeConnection();
       final scanner = _FakeScanner();
       final controller =
@@ -420,6 +447,15 @@ void main() {
 
       conn.statesCtrl.add(CameraLinkState.connecting);
       await tester.pump();
+      // 分段切换本身禁用(连接进行中不可换方式)
+      expect(
+        tester
+            .widget<SegmentedButton<ConnectionMethod>>(
+                find.byType(SegmentedButton<ConnectionMethod>))
+            .onSelectionChanged,
+        isNull,
+      );
+      // 当前方式(有线)主按钮禁用
       expect(
         tester
             .widget<FilledButton>(
@@ -427,12 +463,17 @@ void main() {
             .onPressed,
         isNull,
       );
+      // 另两方式:切过去(经控制器)按钮同样禁用
+      controller.selectMethod(ConnectionMethod.ap);
+      await tester.pump();
       expect(
         tester
             .widget<FilledButton>(find.widgetWithText(FilledButton, 'AP 连接'))
             .onPressed,
         isNull,
       );
+      controller.selectMethod(ConnectionMethod.sta);
+      await tester.pump();
       expect(
         tester
             .widget<OutlinedButton>(
