@@ -43,7 +43,8 @@ final class ShootingParam {
   }
 }
 
-String _formatFNumber(int v) => 'f/${(v / 10).toStringAsFixed(1)}';
+/// 光圈:f 值 ×100(ISO 15740 定点,Zf 实际布局待真机核对)。
+String _formatFNumber(int v) => 'f/${(v / 100).toStringAsFixed(1)}';
 
 String _formatIso(int v) => 'ISO $v';
 

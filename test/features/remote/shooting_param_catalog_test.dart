@@ -34,7 +34,7 @@ void main() {
   });
 
   test('display:数值格式化(光圈/快门/ISO/EV)', () {
-    expect(_param(PtpDevicePropCode.fNumber).display(28), 'f/2.8');
+    expect(_param(PtpDevicePropCode.fNumber).display(280), 'f/2.8');
     expect(_param(PtpDevicePropCode.exposureTime).display(10000), '1/100s');
     expect(_param(PtpDevicePropCode.exposureTime).display(4000000), '4s');
     expect(_param(PtpDevicePropCode.exposureIndex).display(200), 'ISO 200');

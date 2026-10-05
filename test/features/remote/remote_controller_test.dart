@@ -124,7 +124,7 @@ typedef _ParamSpec = ({
 
 const _kParamSpecs = <_ParamSpec>[
   (code: PtpDevicePropCode.exposureProgramMode, type: PtpDataType.uint16, value: 3, enums: [1, 2, 3, 4, 5]),
-  (code: PtpDevicePropCode.fNumber, type: PtpDataType.uint16, value: 28, enums: [28, 32, 40]),
+  (code: PtpDevicePropCode.fNumber, type: PtpDataType.uint16, value: 280, enums: [280, 320, 400]),
   (code: PtpDevicePropCode.exposureTime, type: PtpDataType.uint32, value: 10000, enums: null),
   (code: PtpDevicePropCode.exposureIndex, type: PtpDataType.uint16, value: 200, enums: [100, 200, 400, 800]),
   (code: PtpDevicePropCode.exposureBiasCompensation, type: PtpDataType.int16, value: 300, enums: null),
@@ -181,7 +181,7 @@ void main() {
     _scriptParams(transport);
     conn.statesCtrl.add(CameraLinkState.connected);
     await pumpEventQueue();
-    expect(controller.exposure?.fNumber, 28);
+    expect(controller.exposure?.fNumber, 280);
     expect(controller.exposure?.shutterUs, 10000);
     expect(controller.exposure?.iso, 200);
     expect(controller.paramProps[PtpDevicePropCode.exposureProgramMode]?.value,
@@ -326,8 +326,8 @@ void main() {
     conn.statesCtrl.add(CameraLinkState.connected);
     await pumpEventQueue();
     final f = controller.paramProps[PtpDevicePropCode.fNumber]!;
-    expect(f.value, 28);
-    expect(f.desc?.enumValues, [28, 32, 40]);
+    expect(f.value, 280);
+    expect(f.desc?.enumValues, [280, 320, 400]);
     expect(f.desc?.getSet, isTrue);
     expect(controller.exposure?.shutterUs, 10000);
     final mode = controller.paramProps[PtpDevicePropCode.exposureProgramMode]!;
@@ -343,7 +343,7 @@ void main() {
     }
     conn.statesCtrl.add(CameraLinkState.connected);
     await pumpEventQueue();
-    expect(controller.exposure?.fNumber, 28);
+    expect(controller.exposure?.fNumber, 280);
     expect(controller.exposure?.shutterUs, 10000);
     expect(controller.exposure?.iso, 200);
     expect(controller.paramProps[PtpDevicePropCode.exposureProgramMode]?.value,
@@ -353,7 +353,7 @@ void main() {
   });
 
   test('门禁关(生产默认):setParam 直接拒绝,零流量', () async {
-    await controller.setParam(PtpDevicePropCode.fNumber, 32);
+    await controller.setParam(PtpDevicePropCode.fNumber, 320);
     expect(controller.error, contains('参数调节未启用'));
     expect(transport.requests, isEmpty);
     expect(controller.writing, isFalse);
@@ -381,17 +381,17 @@ void main() {
         isTrue);
 
     transport
-      ..ok() // 0x1016 写 fNumber=32
-      ..ok(data: _propDescDataset( // 回读:相机 clamp 到 40
-          PtpDevicePropCode.fNumber, PtpDataType.uint16, 40,
-          enums: [28, 32, 40]));
-    await controller.setParam(PtpDevicePropCode.fNumber, 32);
+      ..ok() // 0x1016 写 fNumber=320
+      ..ok(data: _propDescDataset( // 回读:相机 clamp 到 400
+          PtpDevicePropCode.fNumber, PtpDataType.uint16, 400,
+          enums: [280, 320, 400]));
+    await controller.setParam(PtpDevicePropCode.fNumber, 320);
 
     final write = transport.requests
         .singleWhere((r) => r.opcode == PtpOperationCode.setDevicePropValue);
     expect(write.params, [PtpDevicePropCode.fNumber]);
-    expect(write.dataOut, Uint8List.fromList([32, 0])); // u16 裸值
-    expect(controller.exposure?.fNumber, 40, reason: '屏显以回读为准');
+    expect(write.dataOut, Uint8List.fromList([0x40, 0x01])); // u16 裸值 320
+    expect(controller.exposure?.fNumber, 400, reason: '屏显以回读为准');
     expect(controller.error, isNull);
     expect(controller.writing, isFalse);
   });
@@ -412,7 +412,7 @@ void main() {
     conn.statesCtrl.add(CameraLinkState.connected);
     await pumpEventQueue();
 
-    await controller.setParam(PtpDevicePropCode.fNumber, 32);
+    await controller.setParam(PtpDevicePropCode.fNumber, 320);
     expect(controller.error, contains('只读'));
     expect(
         transport.requests
@@ -439,9 +439,9 @@ void main() {
     await pumpEventQueue();
 
     transport.reply(PtpResponseCode.deviceBusy); // 0x1016 忙
-    await controller.setParam(PtpDevicePropCode.fNumber, 32);
+    await controller.setParam(PtpDevicePropCode.fNumber, 320);
     expect(controller.error, contains('参数写入失败'));
-    expect(controller.exposure?.fNumber, 28, reason: '失败后原值不动');
+    expect(controller.exposure?.fNumber, 280, reason: '失败后原值不动');
     expect(controller.writing, isFalse);
   });
 }

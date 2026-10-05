@@ -75,11 +75,11 @@ void main() {
 
   group('PtpDevicePropValue.parse', () {
     test('标准表属性:fNumber=0x5007 按 u16 解码', () {
-      final data = ByteWriter()..u16(18); // 18 → f/1.8 的 1.8×10
+      final data = ByteWriter()..u16(280); // 280 = ƒ/2.8(ISO 15740 ×100)
       final v = PtpDevicePropValue.parse(
           PtpDevicePropCode.fNumber, data.takeBytes());
       expect(v.dataType, PtpDataType.uint16);
-      expect(v.value, 18);
+      expect(v.value, 280);
     });
 
     test('表外属性按宽度嗅探:4B → u32(exposureBias 类)', () {
@@ -116,25 +116,26 @@ void main() {
 
   group('PtpDevicePropDesc.parse', () {
     test('完整布局:枚举 FORM(u16 计数 + N 值)+ MTP 出厂默认组', () {
-      // fNumber:u16 类型,当前 18,枚举域 [16,18,20,22],出厂 [18]
+      // fNumber:u16 类型,当前 280(ƒ/2.8),枚举域 [180,280,400,560],
+      // 出厂 [280](ISO 15740 ×100 标度)
       final w = propDescHeader(
         propCode: PtpDevicePropCode.fNumber,
         dataType: PtpDataType.uint16,
         getSet: true,
-        value: 18,
+        value: 280,
       )
         ..u8(0x02) // FORM = Enumeration
         ..u16(4)
-        ..u16(16)..u16(18)..u16(20)..u16(22)
+        ..u16(180)..u16(280)..u16(400)..u16(560)
         ..u16(1) // MTP factory group:个数 + 值
-        ..u16(18);
+        ..u16(280);
       final d = PtpDevicePropDesc.parse(w.takeBytes());
       expect(d.code, PtpDevicePropCode.fNumber);
       expect(d.dataType, PtpDataType.uint16);
       expect(d.getSet, isTrue);
-      expect(d.currentValue, 18);
-      expect(d.enumValues, [16, 18, 20, 22]);
-      expect(d.factoryValues, [18]);
+      expect(d.currentValue, 280);
+      expect(d.enumValues, [180, 280, 400, 560]);
+      expect(d.factoryValues, [280]);
     });
 
     test('范围 FORM:min/max/step 三元组', () {
@@ -172,12 +173,12 @@ void main() {
         propCode: PtpDevicePropCode.fNumber,
         dataType: PtpDataType.uint16,
         getSet: true,
-        value: 18,
+        value: 280,
       )
         ..u8(0x02) // FORM = Enumeration,但计数被截断
         ..u8(0x04); // 只有半个 u16
       final d = PtpDevicePropDesc.parse(w.takeBytes());
-      expect(d.currentValue, 18);
+      expect(d.currentValue, 280);
       expect(d.enumValues, isNull);
     });
 

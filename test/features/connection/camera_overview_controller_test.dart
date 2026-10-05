@@ -200,12 +200,12 @@ PhotoGroup _jpgGroup(int handle) => PhotoGroup([
       ),
     ]);
 
-void _emitJpgChunk(_FakeRepo repo, int handle) {
+void _emitJpgChunk(_FakeRepo repo, int handle, {bool complete = true}) {
   repo.updatesCtrl.add(AlbumsUpdate(
       albums: [CameraAlbum.allPhotos([_jpgGroup(handle)])],
       loaded: 1,
       total: 1,
-      complete: true));
+      complete: complete));
 }
 
 void main() {
@@ -228,7 +228,7 @@ void main() {
         data: Uint8List.fromList([0x90, 0x01]))); // 焦距 u16 LE = 400
     transport.reply(PtpResult(
         responseCode: PtpResponseCode.ok,
-        data: Uint8List.fromList([28, 0]))); // 光圈 u16 LE = 28
+        data: Uint8List.fromList([0x18, 0x01]))); // 光圈 u16 LE = 280(ƒ/2.8)
 
     conn.statesCtrl.add(CameraLinkState.connected);
     await pumpEventQueue();
@@ -236,7 +236,9 @@ void main() {
     expect(controller.deviceInfo?.model, 'TestModel');
     expect(controller.batteryPercent, 80);
     expect(controller.focalLengthMm, 400);
-    expect(controller.fNumber, 28);
+    expect(controller.fNumber, 280);
+    expect(controller.focalLengthFromExif, isFalse, reason: '属性路径');
+    expect(controller.fNumberFromExif, isFalse);
     // 请求序:GetDeviceInfo + 三次属性(声明表外的码不发)
     expect(transport.requests.map((r) => r.opcode),
         [0x1001, 0x1015, 0x1015, 0x1015]);
@@ -265,7 +267,7 @@ void main() {
     expect(transport.requests, hasLength(1));
   });
 
-  test('镜头型号:首个含 JPG 的块 → GetPartialObject 头 64KB → EXIF LensModel;'
+  test('镜头型号:枚举完成事件 → GetPartialObject 头 64KB → EXIF LensModel;'
       ' 属性缺读时焦距/光圈 EXIF 兜底,一次连接只读一次', () async {
     final transport = FakePtpTransport();
     final session = PtpSession(transport: transport);
@@ -296,7 +298,9 @@ void main() {
     expect(controller.lens, 'NIKKOR Z 40mm f/2');
     expect(controller.batteryPercent, 80); // 属性路径
     expect(controller.focalLengthMm, 85); // EXIF 兜底
-    expect(controller.fNumber, 18); // ƒ/1.8 ×10
+    expect(controller.fNumber, 180); // ƒ/1.8 ×100(与 0x5007 定点一致)
+    expect(controller.focalLengthFromExif, isTrue);
+    expect(controller.fNumberFromExif, isTrue);
     // 部分读只取头部 64KB,从 0 起
     final partial = transport.requests.last;
     expect(partial.opcode, PtpOperationCode.getPartialObject);
@@ -306,6 +310,37 @@ void main() {
     _emitJpgChunk(repo, 0x9002);
     await pumpEventQueue();
     expect(transport.requests, hasLength(3));
+  });
+
+  test('渐进块不触发镜头读(双槽首块可能是旧照),枚举完成事件才读', () async {
+    final transport = FakePtpTransport();
+    final session = PtpSession(transport: transport);
+    final conn = _FakeConnection();
+    final repo = _FakeRepo();
+    final controller = CameraOverviewController(
+        session: session, connection: conn, repository: repo);
+
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: buildDataset(
+            operations: const [0x1001, 0x1007, 0x1009, 0x101B],
+            deviceProps: const [])));
+    conn.statesCtrl.add(CameraLinkState.connected);
+    await pumpEventQueue();
+
+    // 渐进块(未完成):全局句柄倒序,双卡槽首块全是 2 号槽 —— 可能是
+    // 旧照,不能当「最近一张」读
+    _emitJpgChunk(repo, 0x9001, complete: false);
+    await pumpEventQueue();
+    expect(transport.requests, hasLength(1)); // 只有 GetDeviceInfo
+    expect(controller.lens, isNull);
+
+    // 完成事件:全量合并快照(拍摄时间倒序),才读最新一张
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok, data: lensJpeg()));
+    _emitJpgChunk(repo, 0x9001, complete: true);
+    await pumpEventQueue();
+    expect(controller.lens, 'NIKKOR Z 40mm f/2');
   });
 
   test('0x101B 不在册:块到达也不发部分读,镜头行留空', () async {

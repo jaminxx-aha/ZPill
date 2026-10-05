@@ -631,8 +631,9 @@ class _ConnectionPageState extends State<ConnectionPage> {
     );
   }
 
-  /// 镜头信息卡:型号(最近一张 JPG 的 EXIF)+ 当前焦距/光圈
-  /// (属性门禁;缺读时 EXIF 兜底,语义同为「最近一张」)。
+  /// 镜头信息卡:型号(最近一张 JPG 的 EXIF)+ 焦距/光圈
+  /// (属性门禁;缺读时 EXIF 兜底,行标换「最近照片」)。
+  /// 光圈 0x5007 是 f 值 ×100(ISO 15740 定点)。
   Widget _lensCard(BuildContext context) {
     final overview = _overview;
     final f = overview.fNumber;
@@ -643,12 +644,15 @@ class _ConnectionPageState extends State<ConnectionPage> {
           _infoRow(
               context,
               Icons.straighten_outlined,
-              '当前焦距',
+              overview.focalLengthFromExif ? '焦距(最近照片)' : '当前焦距',
               overview.focalLengthMm == null
                   ? '--'
                   : '${overview.focalLengthMm}mm'),
-          _infoRow(context, Icons.camera_outlined, '当前光圈',
-              f == null ? '--' : 'ƒ/${(f / 10).toStringAsFixed(1)}',
+          _infoRow(
+              context,
+              Icons.camera_outlined,
+              overview.fNumberFromExif ? '光圈(最近照片)' : '当前光圈',
+              f == null ? '--' : 'ƒ/${(f / 100).toStringAsFixed(1)}',
               last: true),
         ],
       ),

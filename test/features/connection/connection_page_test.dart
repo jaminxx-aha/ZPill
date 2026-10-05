@@ -506,7 +506,7 @@ void main() {
           data: Uint8List.fromList([0x90, 0x01]))); // 焦距 400(u16 LE)
       transport.reply(PtpResult(
           responseCode: PtpResponseCode.ok,
-          data: Uint8List.fromList([28, 0]))); // 光圈 ƒ/2.8
+          data: Uint8List.fromList([0x18, 0x01]))); // 光圈 ƒ/2.8(280)
       final overview =
           CameraOverviewController(session: session, connection: conn);
       final controller = ConnectionController(connection: conn);

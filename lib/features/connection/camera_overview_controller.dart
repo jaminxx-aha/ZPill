@@ -7,8 +7,9 @@
 /// - 镜头型号:最近一张 JPG 的 EXIF LensModel —— GetPartialObject
 ///   (0x101B,标准码)只取头部 64KB(EXIF APP1 紧跟 SOI,足够),
 ///   解析复用水印管线的 [readJpegExif];属性路径缺读时 EXIF 的
-///   焦距/光圈顺带兜底。触发时机 = 仓库渐进发布首个含 JPG 的块
-///   (句柄倒序,最新照片先到),不等全量枚举。
+///   焦距/光圈顺带兜底。触发时机 = 仓库枚举**完成**事件 —— 渐进块
+///   是全局句柄倒序,双卡槽时首块全是 2 号槽(可能是旧照),
+///   等全量合并后的快照才取得到真正的最新一张。
 ///
 /// 真机核对注:0x5001/0x5008/0x101B 在 Zf 的实际应答未验,拒绝/失败
 /// 均静默降级为该行不显示,不报错 —— 信息卡是锦上添花,不拦使用。
@@ -40,8 +41,8 @@ final class CameraOverviewController extends ChangeNotifier {
         _invalidate();
       }
     });
-    // 仓库渐进块:首个含 JPG 的块一到就读镜头(最新照片低延迟亮相,
-    // 不等全量枚举完成)。
+    // 仓库发布流:只认枚举完成事件才读镜头(渐进块是全局句柄倒序,
+    // 双卡槽首块可能是 2 号槽旧照,首块就读会拿错照片)。
     _updatesSub = repository?.updates.listen(_onRepoUpdate);
   }
 
@@ -58,8 +59,15 @@ final class CameraOverviewController extends ChangeNotifier {
   /// 当前焦距(mm);null 同上。EXIF 兜底时是「最近一张」的焦距。
   int? focalLengthMm;
 
-  /// 当前光圈 ×10(28 = ƒ/2.8);null 同上。
+  /// 当前光圈 ×100(280 = ƒ/2.8;ISO 15740 定点,Zf 实际布局待真机
+  /// 核对);null 同上。EXIF 兜底时是「最近一张」的光圈
+  ///([fNumberFromExif] 为 true)。
   int? fNumber;
+
+  /// 焦距/光圈是否来自 EXIF 兜底(true = 展示语义是「最近一张」,
+  /// 属性路径缺读时的降级;UI 据此换行标)。
+  bool focalLengthFromExif = false;
+  bool fNumberFromExif = false;
 
   /// 镜头型号(最近一张 JPG 的 EXIF LensModel);null = 未知。
   String? lens;
@@ -112,6 +120,10 @@ final class CameraOverviewController extends ChangeNotifier {
 
   void _onRepoUpdate(AlbumsUpdate update) {
     if (!_linkUp || _lensReadDone) return;
+    // 只认枚举完成事件:渐进块按句柄倒序,双卡槽下首块全是 2 号槽
+    // 的照片(可能很旧),那不是「最近一张」;等全量合并后的快照
+    //(汇总相册按拍摄时间倒序)再取首个带 JPG 的组。
+    if (!update.complete) return;
     final albums = update.albums;
     if (albums.isEmpty) return;
     // 汇总相册恒在首位(items 新的在前):跳过视频/纯 RAW 组取首个
@@ -143,9 +155,16 @@ final class CameraOverviewController extends ChangeNotifier {
       if (exif == null) return;
       final card = exifCardDataOf(exif);
       lens = card.lens;
-      // 属性路径缺读时 EXIF 兜底(标注语义变为「最近一张」)。
-      focalLengthMm ??= card.focalLengthMm?.round();
-      fNumber ??= card.fNumber == null ? null : (card.fNumber! * 10).round();
+      // 属性路径缺读时 EXIF 兜底(标注语义变为「最近一张」;
+      // 光圈换算 ×100,与 0x5007 定点标度一致)。
+      if (focalLengthMm == null && card.focalLengthMm != null) {
+        focalLengthMm = card.focalLengthMm!.round();
+        focalLengthFromExif = true;
+      }
+      if (fNumber == null && card.fNumber != null) {
+        fNumber = (card.fNumber! * 100).round();
+        fNumberFromExif = true;
+      }
       notifyListeners();
     } on Exception {
       // 部分读被拒/链路异常:镜头行留空
@@ -159,6 +178,8 @@ final class CameraOverviewController extends ChangeNotifier {
     batteryPercent = null;
     focalLengthMm = null;
     fNumber = null;
+    focalLengthFromExif = false;
+    fNumberFromExif = false;
     lens = null;
     _lensReadDone = false;
     notifyListeners();

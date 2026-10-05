@@ -36,7 +36,7 @@ import 'shooting_param_catalog.dart';
 final class Exposure {
   const Exposure({this.fNumber, this.shutterUs, this.iso});
 
-  /// 光圈值 ×10(u16;28 = f/2.8)。
+  /// 光圈值 ×100(u16;280 = f/2.8,ISO 15740 定点)。
   final int? fNumber;
 
   /// 快门时长(µs,u32;10000 = 1/100s)。
