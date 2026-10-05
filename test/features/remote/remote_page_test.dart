@@ -104,8 +104,8 @@ void _scriptParams(_ScriptTransport t) {
         PtpDataType.uint16, 3,
         enums: [1, 2, 3, 4, 5]))
     ..ok(data: _propDescDataset(
-        PtpDevicePropCode.fNumber, PtpDataType.uint16, 28,
-        enums: [28, 32, 40]))
+        PtpDevicePropCode.fNumber, PtpDataType.uint16, 280,
+        enums: [280, 320, 400]))
     ..ok(data: _propDescDataset(
         PtpDevicePropCode.exposureTime, PtpDataType.uint32, 10000))
     ..ok(data: _propDescDataset(
