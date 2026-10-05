@@ -1,26 +1,29 @@
-/// 连接页(TODO.md §七 P1):连接/断开、状态着色、状态提示。
+/// 相机页(底部导航首 tab):连接入口 + 已连接相机信息总览。
+///
+/// 未连接:三种连接方式卡 —— 有线(USB)/ AP(相机热点)/ STA(同一
+/// Wi-Fi 扫描),同一状态机互斥;已连接:信息卡组(连接/机身/镜头/
+/// 存储卡)+「相册」入口 +「断开连接」。
 ///
 /// Controller = ViewModel(ChangeNotifier);**所有按钮必须绑定到
 /// Controller 方法**,禁止 UI 层直连协议层(TODO.md §三 注意事项)。
-/// 双路径单连接:USB(C-to-C 直连)与 PTP-IP 无线(扫描发现或手动
-/// IP,默认 192.168.1.1:15740),同一状态机互斥。
-///
 /// 无线流程(2026-10-04):扫描(mDNS `_ptp._tcp`)→ 点选相机 → 连接;
-/// 未配对相机在连接中弹配对码确认(相机记录本设备,见
-/// CameraConnectionImpl 类注),已配对/手动 IP 直连。手动输入保留为
-/// 扫描失效(AP 模式未广播等)时的兜底。
+/// 未配对相机在连接中弹配对码确认(相机记录本设备),已配对直连。
+/// AP 模式保留手动 IP 兜底(热点下广播未实证,默认 192.168.1.1)。
 library;
 
 import 'package:flutter/material.dart';
 
 import '../../app_services.dart';
+import '../../core/browser/album.dart';
+import '../../core/browser/storage_info.dart';
 import '../../core/camera/camera_connection.dart';
 import '../../core/camera/camera_discovery.dart';
 import '../../core/camera/camera_info.dart';
 import '../../data/paired_cameras_store.dart';
 import '../../platform/nsd_scanner.dart';
-import '../remote/remote_page.dart';
-import '../settings/settings_page.dart';
+import '../browser/photo_grid_page.dart';
+import '../common/format.dart';
+import 'camera_overview_controller.dart';
 
 class ConnectionController extends ChangeNotifier {
   /// 注入应用级连接(全局单例状态,经 AppServices 收口)+ 扫描器与
@@ -43,6 +46,9 @@ class ConnectionController extends ChangeNotifier {
 
   CameraLinkState state = CameraLinkState.disconnected;
 
+  /// 本次连接的无线 IP(已连接视图的「连接方式」行;USB 连接为 null)。
+  String? activeIp;
+
   /// 扫描到的相机(按实例名去重;解析失败无 IP 的不上榜)。
   final Map<String, DiscoveredIpCamera> _cameras = {};
   List<DiscoveredIpCamera> get cameras => _cameras.values.toList(growable: false);
@@ -53,15 +59,14 @@ class ConnectionController extends ChangeNotifier {
   /// 已配对/曾连接过的相机(最近优先),用于快速重连。
   List<CameraInfo> savedCameras = const [];
 
-  /// 状态提示:失败原因(含插线/解锁/热点指引)、成功后的去向(分链路)。
+  /// 状态提示:失败原因(含插线/解锁/热点指引)、配对等待去向。
+  /// 已连接不在此列 —— 已连接视图(信息卡组)自带全部信息。
   String? get hint {
     final c = connection;
     if (c == null) {
       return null;
     }
     return switch (state) {
-      CameraLinkState.connected =>
-        '${c.isWireless ? 'Wi-Fi' : 'USB'} 已连接${c.deviceName == null ? '' : ':${c.deviceName}'}。到「浏览」页查看照片',
       CameraLinkState.pairing => '相机请求配对确认(见弹窗)',
       CameraLinkState.failed => c.error ?? '连接失败',
       _ => null,
@@ -131,12 +136,13 @@ class ConnectionController extends ChangeNotifier {
   /// 页面首帧拉一次配对档案(快速重连入口)。
   Future<void> loadSaved() => _reloadSaved();
 
+  /// 有线连接(USB):状态经 states 流回(本地 state 只是流的镜像)。
   Future<void> connect() async {
     final c = connection;
     if (c == null) {
       return;
     }
-    // 状态经 states 流回(本地 state 只是流的镜像)。
+    activeIp = null;
     await c.connect();
   }
 
@@ -147,6 +153,7 @@ class ConnectionController extends ChangeNotifier {
       return;
     }
     await stopScan();
+    activeIp = camera.host;
     await c.connect(ip: camera.host, instanceName: camera.name);
   }
 
@@ -157,10 +164,11 @@ class ConnectionController extends ChangeNotifier {
     if (c == null || ip == null) {
       return;
     }
+    activeIp = ip;
     await c.connect(ip: ip, instanceName: camera.name);
   }
 
-  /// 无线连接(手动 IP 兜底):输入为空时回落默认网关地址。
+  /// AP 连接(手动 IP 兜底):输入为空时回落默认网关地址。
   Future<void> connectWireless() async {
     final c = connection;
     if (c == null) {
@@ -170,6 +178,7 @@ class ConnectionController extends ChangeNotifier {
     if (ip.isEmpty) {
       ip = kDefaultCameraIp;
     }
+    activeIp = ip;
     await c.connect(ip: ip);
   }
 
@@ -197,10 +206,13 @@ class ConnectionController extends ChangeNotifier {
 }
 
 class ConnectionPage extends StatefulWidget {
-  const ConnectionPage({super.key, this.controller});
+  const ConnectionPage({super.key, this.controller, this.overview});
 
   /// 测试注入;缺省取应用级单例(连接是全局单例状态)。
   final ConnectionController? controller;
+
+  /// 测试注入;缺省取应用级单例。
+  final CameraOverviewController? overview;
 
   @override
   State<ConnectionPage> createState() => _ConnectionPageState();
@@ -209,6 +221,9 @@ class ConnectionPage extends StatefulWidget {
 class _ConnectionPageState extends State<ConnectionPage> {
   ConnectionController get _controller =>
       widget.controller ?? AppServices.instance.connectionController;
+
+  CameraOverviewController get _overview =>
+      widget.overview ?? AppServices.instance.cameraOverview;
 
   /// 配对弹窗只弹一次的哨兵(state 离开 pairing 即复位)。
   bool _pairingDialogShown = false;
@@ -299,166 +314,322 @@ class _ConnectionPageState extends State<ConnectionPage> {
   Widget build(BuildContext context) {
     final controller = _controller;
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('相机'),
-        actions: [
-          IconButton(
-            tooltip: '设置',
-            onPressed: () => Navigator.of(context)
-                .push(MaterialPageRoute(builder: (_) => const SettingsPage())),
-            icon: const Icon(Icons.settings_outlined),
-          ),
-        ],
-      ),
+      appBar: AppBar(title: const Text('相机')),
       body: ListenableBuilder(
         listenable: controller,
         builder: (context, _) {
-          return ListView(
+          if (controller.state == CameraLinkState.connected) {
+            return _connectedView(context, controller);
+          }
+          return _methodsView(context, controller);
+        },
+      ),
+    );
+  }
+
+  // ── 未连接:三种连接方式 ─────────────────────────────────────────
+
+  Widget _methodsView(BuildContext context, ConnectionController controller) {
+    final busy = switch (controller.state) {
+      CameraLinkState.connecting ||
+      CameraLinkState.pairing => true,
+      _ => false,
+    };
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        // 状态着色:disconnected 灰 / connecting 蓝 / pairing 橙 / failed 红
+        _StatusCard(state: controller.state),
+        if (controller.hint != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Text(controller.hint!),
+          ),
+        const SizedBox(height: 16),
+
+        // 方式一:有线(USB C-to-C 数据线直连)
+        Card(
+          child: Padding(
             padding: const EdgeInsets.all(16),
-            children: [
-              // 状态着色:disconnected 灰 / connecting 蓝 / pairing 橙
-              // / connected 绿 / failed 红
-              _StatusCard(state: controller.state),
-              if (controller.hint != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: Text(controller.hint!),
-                ),
-              const SizedBox(height: 16),
-              // USB:C-to-C 数据线直连
-              Card(
-                child: ListTile(
-                  leading: const Icon(Icons.usb),
-                  title: const Text('USB 连接'),
-                  subtitle:
-                      const Text('用 C-to-C 数据线连接相机与手机,解锁相机后点「连接」'),
-                ),
-              ),
-              FilledButton(
-                onPressed: switch (controller.state) {
-                  CameraLinkState.connected => controller.disconnect,
-                  CameraLinkState.connecting ||
-                  CameraLinkState.pairing => null,
-                  _ => controller.connect,
-                },
-                child: Text(
-                    controller.state == CameraLinkState.connected ? '断开' : '连接'),
-              ),
-              const SizedBox(height: 16),
-              // 无线(PTP-IP):扫描发现 → 点选连接;手动 IP 兜底
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          const Icon(Icons.wifi),
-                          const SizedBox(width: 8),
-                          Text('无线连接(Wi-Fi)',
-                              style: Theme.of(context).textTheme.titleMedium),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      SizedBox(
-                        width: double.infinity,
-                        child: OutlinedButton.icon(
-                          icon: Icon(controller.scanning
-                              ? Icons.stop_circle_outlined
-                              : Icons.wifi_find),
-                          label: Text(
-                              controller.scanning ? '扫描中…(点按停止)' : '扫描相机'),
-                          onPressed: controller.scanning
-                              ? controller.stopScan
-                              : controller.startScan,
-                        ),
-                      ),
-                      for (final camera in controller.cameras)
-                        ListTile(
-                          dense: true,
-                          contentPadding: EdgeInsets.zero,
-                          leading: const Icon(Icons.photo_camera_outlined),
-                          title: Text(camera.name),
-                          subtitle: Text(camera.host),
-                          trailing: const Icon(Icons.chevron_right),
-                          onTap: switch (controller.state) {
-                            CameraLinkState.connecting ||
-                            CameraLinkState.connected ||
-                            CameraLinkState.pairing => null,
-                            _ => () => controller.connectDiscovered(camera),
-                          },
-                        ),
-                      if (controller.savedCameras.isNotEmpty &&
-                          controller.state != CameraLinkState.connected)
-                        for (final saved in controller.savedCameras)
-                          ListTile(
-                            dense: true,
-                            contentPadding: EdgeInsets.zero,
-                            leading: const Icon(Icons.history),
-                            title: Text('上次:${saved.name}'),
-                            subtitle: Text(saved.lastIp ?? ''),
-                            trailing: const Icon(Icons.chevron_right),
-                            onTap: switch (controller.state) {
-                              CameraLinkState.connecting ||
-                              CameraLinkState.connected ||
-                              CameraLinkState.pairing => null,
-                              _ => () => controller.connectSaved(saved),
-                            },
-                          ),
-                      const Divider(height: 24),
-                      TextField(
-                        controller: controller.ipController,
-                        keyboardType: TextInputType.url,
-                        decoration: const InputDecoration(
-                          labelText: '相机 IP(扫描不到时手动输入)',
-                          hintText: kDefaultCameraIp,
-                          border: OutlineInputBorder(),
-                          isDense: true,
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      SizedBox(
-                        width: double.infinity,
-                        child: OutlinedButton.icon(
-                          icon: const Icon(Icons.wifi),
-                          label: const Text('手动连接'),
-                          onPressed: switch (controller.state) {
-                            CameraLinkState.connecting ||
-                            CameraLinkState.connected ||
-                            CameraLinkState.pairing => null,
-                            _ => controller.connectWireless,
-                          },
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      Text(
-                        '两种模式(相机菜单:网络 → 连接至智能设备 → Wi-Fi 连接):\n'
-                        '· STA 模式:相机与你手机加入同一个 Wi-Fi,'
-                        '点「扫描相机」发现后连接;\n'
-                        '· AP 模式:相机当热点,先在系统 Wi-Fi 设置里加入它'
-                        '(扫描找不到时手动输入,IP 默认 192.168.1.1)。\n'
-                        '首次连接会请求配对确认(相机记录本设备,之后免配对);\n'
-                        '相机同一时间只允许一个客户端:若被 SnapBridge(尼享)'
-                        '抢先连上会遭拒,请先彻底关闭它。\n'
-                        '首次连接若失败,请在系统弹窗中允许访问本地网络后重试;'
-                        '下载大文件期间请保持 App 在前台、屏幕点亮。',
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                    ],
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _methodTitle(context, Icons.usb, '有线连接(USB)'),
+                const SizedBox(height: 4),
+                const Text(
+                    '用 C-to-C 数据线连接相机与手机,解锁相机后点「USB 连接」'),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton(
+                    onPressed: busy ? null : controller.connect,
+                    child: const Text('USB 连接'),
                   ),
                 ),
-              ),
-              const SizedBox(height: 8),
-              OutlinedButton(
-                onPressed: () => Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const RemotePage()),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+
+        // 方式二:AP(相机当热点,手机加入后连固定网段)
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _methodTitle(context, Icons.wifi_tethering, 'AP 连接(相机当热点)'),
+                const SizedBox(height: 4),
+                const Text(
+                    '相机菜单:网络 → 连接至智能设备 → Wi-Fi 连接(热点模式)。'
+                    '先在系统 Wi-Fi 设置里加入相机热点,再回来连接。'),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: controller.ipController,
+                  keyboardType: TextInputType.url,
+                  enabled: !busy,
+                  decoration: const InputDecoration(
+                    labelText: '相机 IP(默认 192.168.1.1)',
+                    hintText: kDefaultCameraIp,
+                    border: OutlineInputBorder(),
+                    isDense: true,
+                  ),
                 ),
-                child: const Text('遥控拍摄'),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton(
+                    onPressed: busy ? null : controller.connectWireless,
+                    child: const Text('AP 连接'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+
+        // 方式三:STA(相机与手机加入同一 Wi-Fi,扫描发现)
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _methodTitle(context, Icons.wifi, 'STA 连接(同一 Wi-Fi)'),
+                const SizedBox(height: 4),
+                const Text(
+                    '相机与手机加入同一个 Wi-Fi(相机菜单同上,选择连接到'
+                    '路由器网络),扫描发现相机后点选连接。'),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    icon: Icon(controller.scanning
+                        ? Icons.stop_circle_outlined
+                        : Icons.wifi_find),
+                    label: Text(
+                        controller.scanning ? '扫描中…(点按停止)' : '扫描相机'),
+                    onPressed: busy
+                        ? null
+                        : (controller.scanning
+                            ? controller.stopScan
+                            : controller.startScan),
+                  ),
+                ),
+                for (final camera in controller.cameras)
+                  ListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.photo_camera_outlined),
+                    title: Text(camera.name),
+                    subtitle: Text(camera.host),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: busy ? null : () => controller.connectDiscovered(camera),
+                  ),
+                if (controller.savedCameras.isNotEmpty)
+                  for (final saved in controller.savedCameras)
+                    ListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(Icons.history),
+                      title: Text('上次:${saved.name}'),
+                      subtitle: Text(saved.lastIp ?? ''),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: busy ? null : () => controller.connectSaved(saved),
+                    ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Text(
+          '· 首次无线连接会请求配对确认(相机记录本设备,之后免配对);'
+          '相机屏幕出现提示时请在机身上按 OK。\n'
+          '· 相机同一时间只允许一个客户端:若被 SnapBridge(尼享)抢先连上'
+          '会遭拒,请先彻底关闭它。\n'
+          '· 首次连接若失败,请在系统弹窗中允许访问本地网络后重试;'
+          '下载大文件期间请保持 App 在前台、屏幕点亮。',
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+      ],
+    );
+  }
+
+  Widget _methodTitle(BuildContext context, IconData icon, String text) {
+    return Row(
+      children: [
+        Icon(icon),
+        const SizedBox(width: 8),
+        Text(text, style: Theme.of(context).textTheme.titleMedium),
+      ],
+    );
+  }
+
+  // ── 已连接:相机信息总览 ─────────────────────────────────────────
+
+  Widget _connectedView(BuildContext context, ConnectionController controller) {
+    return ListenableBuilder(
+      listenable: _overview,
+      builder: (context, _) => ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          _StatusCard(state: controller.state),
+          const SizedBox(height: 12),
+          _linkCard(context, controller),
+          const SizedBox(height: 12),
+          _bodyCard(context),
+          const SizedBox(height: 12),
+          _lensCard(context),
+          const SizedBox(height: 12),
+          const _StoragePanel(),
+          const SizedBox(height: 16),
+          SizedBox(
+            height: 48,
+            child: FilledButton.icon(
+              onPressed: _openAlbum,
+              icon: const Icon(Icons.photo_library_outlined),
+              label: const Text('相册'),
+            ),
+          ),
+          const SizedBox(height: 8),
+          SizedBox(
+            height: 48,
+            child: OutlinedButton(
+              onPressed: controller.disconnect,
+              child: const Text('断开连接'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 连接信息卡:链路方式(有线/无线·IP)+ 设备名。
+  Widget _linkCard(BuildContext context, ConnectionController controller) {
+    final c = controller.connection;
+    final wireless = c?.isWireless ?? false;
+    final link = wireless
+        ? (controller.activeIp == null
+            ? 'Wi-Fi'
+            : 'Wi-Fi(${controller.activeIp})')
+        : 'USB 数据线';
+    return Card(
+      child: Column(
+        children: [
+          _infoRow(context, Icons.link, '连接方式', link),
+          _infoRow(context, Icons.photo_camera_outlined, '设备',
+              c?.deviceName ?? '--',
+              last: true),
+        ],
+      ),
+    );
+  }
+
+  /// 机身信息卡:GetDeviceInfo(型号/固件/序列号)+ 电池(属性门禁)。
+  Widget _bodyCard(BuildContext context) {
+    final info = _overview.deviceInfo;
+    return Card(
+      child: Column(
+        children: [
+          _infoRow(context, Icons.camera_outlined, '型号',
+              info?.model ?? '读取中…'),
+          _infoRow(context, Icons.system_update_alt_outlined, '固件版本',
+              info?.deviceVersion ?? '--'),
+          _infoRow(context, Icons.tag_outlined, '序列号',
+              info?.serialNumber ?? '--'),
+          if (_overview.batteryPercent != null)
+            _infoRow(context, Icons.battery_std_outlined, '电池',
+                '${_overview.batteryPercent}%',
+                last: true),
+        ],
+      ),
+    );
+  }
+
+  /// 镜头信息卡:型号(最近一张 JPG 的 EXIF)+ 当前焦距/光圈
+  /// (属性门禁;缺读时 EXIF 兜底,语义同为「最近一张」)。
+  Widget _lensCard(BuildContext context) {
+    final overview = _overview;
+    final f = overview.fNumber;
+    return Card(
+      child: Column(
+        children: [
+          _infoRow(context, Icons.camera, '镜头型号(最近照片)',
+              overview.lens ?? '--'),
+          _infoRow(context, Icons.straighten_outlined, '当前焦距',
+              overview.focalLengthMm == null
+                  ? '--'
+                  : '${overview.focalLengthMm}mm'),
+          _infoRow(context, Icons.camera_outlined, '当前光圈',
+              f == null ? '--' : 'ƒ/${(f / 10).toStringAsFixed(1)}',
+              last: true),
+        ],
+      ),
+    );
+  }
+
+  Widget _infoRow(
+    BuildContext context,
+    IconData icon,
+    String label,
+    String value, {
+    bool last = false,
+  }) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: EdgeInsets.fromLTRB(16, 6, 16, last ? 10 : 6),
+      child: Row(
+        children: [
+          Icon(icon, size: 20, color: theme.colorScheme.onSurfaceVariant),
+          const SizedBox(width: 12),
+          Text(label, style: theme.textTheme.bodyMedium),
+          const Spacer(),
+          Flexible(
+            child: Text(
+              value,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.end,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                fontWeight: FontWeight.w600,
               ),
-            ],
-          );
-        },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _openAlbum() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => PhotoGridPage(
+          controller: AppServices.instance.browserController,
+          folderHandle: CameraAlbum.allPhotosHandle,
+          fallbackName: '相机相册',
+        ),
       ),
     );
   }
@@ -486,6 +657,94 @@ class _StatusCard extends StatelessWidget {
         title: Text(label),
         trailing: Icon(Icons.circle, color: color, size: 12),
       ),
+    );
+  }
+}
+
+/// 双卡槽余量卡:每槽一行(名 + 剩余/总容量 + 余量进度条)。相机未上报
+/// 容量只显示名字;无槽不占位。(相册页删除后随相机信息卡组落户此处。)
+class _StoragePanel extends StatelessWidget {
+  const _StoragePanel();
+
+  @override
+  Widget build(BuildContext context) {
+    final overview = AppServices.instance.storageOverview;
+    return ListenableBuilder(
+      listenable: overview,
+      builder: (context, _) {
+        final storages = overview.storages;
+        if (storages.isEmpty) {
+          return const SizedBox.shrink();
+        }
+        return Card(
+          margin: EdgeInsets.zero,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            child: Column(
+              children: [
+                for (final storage in storages)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: _StorageRow(storage: storage),
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _StorageRow extends StatelessWidget {
+  const _StorageRow({required this.storage});
+
+  final CameraStorage storage;
+
+  @override
+  Widget build(BuildContext context) {
+    final ratio = storage.freeRatio;
+    final colorScheme = Theme.of(context).colorScheme;
+    // 低余量(<10%)转警示色。
+    final barColor =
+        ratio != null && ratio < 0.1 ? colorScheme.error : colorScheme.primary;
+    return Row(
+      children: [
+        Icon(Icons.sd_card_outlined,
+            size: 20, color: colorScheme.onSurfaceVariant),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(storage.label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodyMedium),
+              if (ratio != null) ...[
+                const SizedBox(height: 4),
+                LinearProgressIndicator(
+                  value: 1 - ratio, // 已用占比
+                  minHeight: 4,
+                  borderRadius: BorderRadius.circular(2),
+                  backgroundColor: colorScheme.surfaceContainerHighest,
+                  color: barColor,
+                ),
+              ],
+            ],
+          ),
+        ),
+        const SizedBox(width: 12),
+        Text(
+          storage.maxCapacityBytes > 0
+              ? '${formatBytes(storage.freeSpaceBytes)} 可用 / ${formatBytes(storage.maxCapacityBytes)}'
+              : '容量未知',
+          style: Theme.of(context)
+              .textTheme
+              .bodySmall
+              ?.copyWith(color: colorScheme.onSurfaceVariant),
+        ),
+      ],
     );
   }
 }

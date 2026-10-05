@@ -157,7 +157,7 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
     final tag = format == null ? '' : '(${format.short})';
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text('已开始下载到$where$tag,详见「下载」页')));
+      ..showSnackBar(SnackBar(content: Text('已开始下载到$where$tag,进度见「图库」页')));
   }
 
   /// 编辑:拉取组内 JPG 原图到临时目录(相机会话串行,排队即得),

@@ -1,10 +1,13 @@
-/// 遥控拍摄页:Live View 监看 + 快门释放 + 曝光展示与调节。
+/// 拍摄页(底部导航 tab):Live View 监看 + 快门释放 + 曝光展示与调节。
 ///
 /// PTP 操作:0x9201/0x9203/0x9202 取景三步(候选码,待真机核对)、
 /// InitiateCapture 0x100E 快门、GetDevicePropDesc 0x1014 曝光三要素
 /// (可写性/取值域驱动调节控件)。SetDevicePropValue(0x1016)被
 /// [PtpSession.kSetPropEnabled] 门禁 —— 真机核对前调节入口静默只读,
 /// 翻开后同一 UI 即可写。
+///
+/// tab 模式:IndexedStack 常驻挂载,离开 tab([active] 变 false)即停
+/// 取景(相机侧 Live View 高功耗,后台白白打链路)。
 library;
 
 import 'dart:async';
@@ -22,9 +25,12 @@ import 'live_view_overlays.dart';
 import 'remote_controller.dart';
 
 class RemotePage extends StatefulWidget {
-  const RemotePage({super.key, this.controller});
+  const RemotePage({super.key, this.controller, this.active = true});
 
   final RemoteController? controller;
+
+  /// tab 是否在前台(IndexedStack 常驻):false 时停取景。
+  final bool active;
 
   @override
   State<RemotePage> createState() => _RemotePageState();
@@ -45,6 +51,16 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     controller = widget.controller ?? AppServices.instance.remoteController;
     WidgetsBinding.instance.addObserver(this);
     controller.analyzer.enabled.addListener(_syncAnalyzerEnabled);
+  }
+
+  @override
+  void didUpdateWidget(RemotePage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // 切走 tab 即停取景(引擎单例持有,后台持续打链路不可取);
+    // 切回不自动重启 —— 取景是显式动作。
+    if (!widget.active && oldWidget.active && controller.liveViewActive) {
+      unawaited(controller.toggleLiveView());
+    }
   }
 
   @override
@@ -82,7 +98,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('遥控拍摄')),
+      appBar: AppBar(title: const Text('拍摄')),
       body: SafeArea(
         child: AnimatedBuilder(
           animation: Listenable.merge([
@@ -96,7 +112,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                 Expanded(child: _frameArea(context)),
                 _assistToolbar(context),
                 if (!controller.linkUp)
-                  _banner(context, '未连接相机 —— 请先在连接页建立连接',
+                  _banner(context, '未连接相机 —— 请先在「相机」页建立连接',
                       Colors.orange)
                 else if (controller.error != null)
                   _banner(context, controller.error!, Colors.red),

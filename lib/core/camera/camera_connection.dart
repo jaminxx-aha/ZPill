@@ -48,7 +48,7 @@ abstract interface class CameraConnection {
   String? get deviceName;
 
   /// 当前(或最近一次)连接是否走无线(PTP-IP);false = USB。
-  /// 连接页据此区分提示文案。
+  /// 相机页据此区分提示文案。
   bool get isWireless;
 
   /// 配对等待期(state == pairing)的验证码;其余状态为 null。

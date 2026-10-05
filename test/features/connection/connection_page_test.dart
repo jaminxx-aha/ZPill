@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -7,7 +8,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:nikon_pill/core/camera/camera_connection.dart';
 import 'package:nikon_pill/core/camera/camera_discovery.dart';
 import 'package:nikon_pill/core/camera/camera_info.dart';
+import 'package:nikon_pill/core/ptp/operation_codes.dart';
+import 'package:nikon_pill/core/ptp/ptp_session.dart';
+import 'package:nikon_pill/core/ptp/ptp_transport.dart';
+import 'package:nikon_pill/core/utils/byte_writer.dart';
 import 'package:nikon_pill/data/paired_cameras_store.dart';
+import 'package:nikon_pill/features/connection/camera_overview_controller.dart';
 import 'package:nikon_pill/features/connection/connection_page.dart';
 import 'package:nikon_pill/platform/nsd_scanner.dart';
 
@@ -85,6 +91,68 @@ final class _FailingScanner implements NsdScanner {
   Future<void> stopBrowsing() async {}
 }
 
+/// 按序回放的假传输层(只够 GetDeviceInfo / GetDevicePropValue 走通,
+/// 已连接信息卡用)。
+final class _ScriptTransport implements PtpTransport {
+  final requests = <PtpRequest>[];
+  final Queue<PtpResult> script = Queue();
+
+  void reply(PtpResult result) => script.add(result);
+
+  @override
+  Future<PtpResult> execute(PtpRequest request,
+      {void Function(Uint8List chunk)? onData}) async {
+    requests.add(request);
+    if (script.isEmpty) {
+      throw StateError('脚本耗尽:未预置 0x${request.opcode.toRadixString(16)} 的响应');
+    }
+    return script.removeFirst();
+  }
+
+  @override
+  Stream<PtpEvent> get events => const Stream.empty();
+
+  @override
+  Future<void> close() async {}
+}
+
+/// 手搓 GetDeviceInfo 数据集(布局独立于被测代码;deviceProps 可覆盖)。
+Uint8List _deviceInfoDataset({List<int> deviceProps = const [0x5001, 0x5007]}) {
+  final w = ByteWriter()
+    ..u16(0x0100) // StandardVersion
+    ..u32(0x0000000A) // VendorExtensionId(尼康)
+    ..u16(0x0064); // VendorExtensionVersion
+  void str(String s) {
+    w
+      ..u8(s.length + 1)
+      ..utf16le(s)
+      ..u16(0);
+  }
+
+  str('Nikon'); // VendorExtensionDesc
+  w.u16(0x0000); // FunctionalMode 标准
+  w.u32(2); // operations
+  w
+    ..u16(0x1001)
+    ..u16(0x1009);
+  w.u32(1); // events
+  w.u16(0x4002);
+  w.u32(deviceProps.length); // deviceProps
+  for (final p in deviceProps) {
+    w.u16(p);
+  }
+  w
+    ..u32(0) // captureFormats
+    ..u32(2) // imageFormats
+    ..u16(0x3000)
+    ..u16(0x3801);
+  str('Nikon Corp'); // manufacturer
+  str('TestModel'); // model
+  str('V1.00'); // deviceVersion
+  str('012345678901'); // serialNumber
+  return w.takeBytes();
+}
+
 const _zfCamera = DiscoveredIpCamera(
     name: 'Z_f_8014411', host: '192.168.0.104', port: 15740);
 
@@ -103,19 +171,53 @@ void main() {
       expect(conn.connectIp, kDefaultCameraIp);
     });
 
-    test('hint:connected 文案按链路区分(USB / Wi-Fi)', () async {
+    test('hint:connected 无提示(信息视图自释);pairing/failed 保留', () async {
+      final conn = _FakeConnection()..deviceName = 'NIKON ZF';
+      final controller = ConnectionController(connection: conn);
+
+      conn.statesCtrl.add(CameraLinkState.connected);
+      await pumpEventQueue();
+      expect(controller.state, CameraLinkState.connected);
+      expect(controller.hint, isNull);
+
+      conn.statesCtrl.add(CameraLinkState.pairing);
+      await pumpEventQueue();
+      expect(controller.hint, '相机请求配对确认(见弹窗)');
+
+      conn.statesCtrl.add(CameraLinkState.failed);
+      await pumpEventQueue();
+      expect(controller.hint, '连接失败'); // error null → 兜底文案
+    });
+
+    test('activeIp:各连接方式落账(USB null / 发现 / 档案 / 手动)', () async {
       final conn = _FakeConnection();
       final controller = ConnectionController(connection: conn);
 
-      conn.deviceName = 'NIKON ZF';
-      conn.statesCtrl.add(CameraLinkState.connected);
-      await pumpEventQueue();
+      await controller.connect(); // USB:无 IP
+      expect(conn.connectIp, isNull);
+      expect(controller.activeIp, isNull);
 
-      conn.wireless = false;
-      expect(controller.hint, 'USB 已连接:NIKON ZF。到「浏览」页查看照片');
+      await controller.connectDiscovered(_zfCamera);
+      expect(controller.activeIp, '192.168.0.104');
 
-      conn.wireless = true;
-      expect(controller.hint, 'Wi-Fi 已连接:NIKON ZF。到「浏览」页查看照片');
+      final store = InMemoryPairedCamerasStore();
+      await store.save(CameraInfo(
+          id: 'a',
+          name: 'A',
+          lastIp: '9.9.9.9',
+          lastConnectedAt: DateTime(2026, 1, 1)));
+      final controller2 = ConnectionController(
+          connection: conn, pairedCameras: store);
+      await controller2.loadSaved();
+      await controller2.connectSaved(controller2.savedCameras.single);
+      expect(controller2.activeIp, '9.9.9.9');
+
+      controller2.ipController.text = ' 10.0.0.5 ';
+      await controller2.connectWireless();
+      expect(controller2.activeIp, '10.0.0.5');
+      controller2.ipController.clear();
+      await controller2.connectWireless();
+      expect(controller2.activeIp, kDefaultCameraIp);
     });
 
     test('扫描:found/lost 驱动列表;无 IP 不上榜;点选连接 = IP + 实例名 + 停扫',
@@ -198,7 +300,7 @@ void main() {
   });
 
   group('ConnectionPage', () {
-    testWidgets('无线卡:默认 IP 预填,点「手动连接」按输入连接,空回落默认',
+    testWidgets('AP 卡:默认 IP 预填,点「AP 连接」按输入连接,空回落默认',
         (WidgetTester tester) async {
       final conn = _FakeConnection();
       final controller = ConnectionController(connection: conn);
@@ -206,28 +308,33 @@ void main() {
         home: ConnectionPage(controller: controller),
       ));
 
-      expect(find.text('无线连接(Wi-Fi)'), findsOneWidget);
+      expect(find.text('AP 连接(相机当热点)'), findsOneWidget);
       expect(controller.ipController.text, kDefaultCameraIp);
 
       // 预填默认 IP:直接透传
-      await tester.tap(find.text('手动连接'));
+      await tester.tap(find.widgetWithText(FilledButton, 'AP 连接'));
       await tester.pump();
       expect(conn.connectIp, kDefaultCameraIp);
 
       // 清空输入:回落默认
       await tester.enterText(find.byType(TextField), '');
-      await tester.tap(find.text('手动连接'));
+      await tester.tap(find.widgetWithText(FilledButton, 'AP 连接'));
       await tester.pump();
       expect(conn.connectIp, kDefaultCameraIp);
 
       // 自定义 IP:原样透传
       await tester.enterText(find.byType(TextField), '10.0.0.5');
-      await tester.tap(find.text('手动连接'));
+      await tester.tap(find.widgetWithText(FilledButton, 'AP 连接'));
       await tester.pump();
       expect(conn.connectIp, '10.0.0.5');
     });
 
     testWidgets('扫描 UI:点「扫描相机」→ 发现列表 → 点相机连接', (tester) async {
+      // 加高视口:STA 卡在页面下方,默认视口把按钮挡在折线下(点空)。
+      tester.view
+        ..physicalSize = const Size(800, 2400)
+        ..devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
       final conn = _FakeConnection();
       final scanner = _FakeScanner();
       final controller =
@@ -302,10 +409,11 @@ void main() {
       expect(find.text('配对确认'), findsNothing);
     });
 
-    testWidgets('connecting / connected:无线按钮与 USB 按钮双双禁用',
-        (WidgetTester tester) async {
+    testWidgets('connecting:三种连接方式按钮全部禁用', (WidgetTester tester) async {
       final conn = _FakeConnection();
-      final controller = ConnectionController(connection: conn);
+      final scanner = _FakeScanner();
+      final controller =
+          ConnectionController(connection: conn, scanner: scanner);
       await tester.pumpWidget(MaterialApp(
         home: ConnectionPage(controller: controller),
       ));
@@ -314,30 +422,78 @@ void main() {
       await tester.pump();
       expect(
         tester
-            .widget<OutlinedButton>(
-                find.widgetWithText(OutlinedButton, '手动连接'))
+            .widget<FilledButton>(
+                find.widgetWithText(FilledButton, 'USB 连接'))
             .onPressed,
         isNull,
       );
       expect(
-        tester.widget<FilledButton>(find.byType(FilledButton)).onPressed,
+        tester
+            .widget<FilledButton>(find.widgetWithText(FilledButton, 'AP 连接'))
+            .onPressed,
         isNull,
       );
-
-      conn.statesCtrl.add(CameraLinkState.connected);
-      await tester.pump();
       expect(
         tester
             .widget<OutlinedButton>(
-                find.widgetWithText(OutlinedButton, '手动连接'))
+                find.widgetWithText(OutlinedButton, '扫描相机'))
             .onPressed,
         isNull,
       );
-      // USB 主按钮变「断开」(connected 态唯一可用动作)
-      expect(
-        tester.widget<FilledButton>(find.byType(FilledButton)).onPressed,
-        controller.disconnect,
-      );
+    });
+
+    testWidgets('已连接视图:信息卡组(链路/机身/镜头)+ 相册 + 断开连接',
+        (WidgetTester tester) async {
+      // 加高视口:信息卡组较长,断开按钮在折线下(点空)。
+      tester.view
+        ..physicalSize = const Size(800, 2400)
+        ..devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      final conn = _FakeConnection()..deviceName = 'NIKON ZF';
+      final transport = _ScriptTransport();
+      final session = PtpSession(transport: transport);
+      // refresh() 脚本:GetDeviceInfo + 电池/焦距/光圈(全在册)。
+      transport.reply(PtpResult(
+          responseCode: PtpResponseCode.ok,
+          data: _deviceInfoDataset(
+              deviceProps: const [0x5001, 0x5008, 0x5007])));
+      transport.reply(PtpResult(
+          responseCode: PtpResponseCode.ok,
+          data: Uint8List.fromList([80]))); // 电池 80%
+      transport.reply(PtpResult(
+          responseCode: PtpResponseCode.ok,
+          data: Uint8List.fromList([0x90, 0x01]))); // 焦距 400(u16 LE)
+      transport.reply(PtpResult(
+          responseCode: PtpResponseCode.ok,
+          data: Uint8List.fromList([28, 0]))); // 光圈 ƒ/2.8
+      final overview =
+          CameraOverviewController(session: session, connection: conn);
+      final controller = ConnectionController(connection: conn);
+      await tester.pumpWidget(MaterialApp(
+        home: ConnectionPage(controller: controller, overview: overview),
+      ));
+
+      conn.statesCtrl.add(CameraLinkState.connected);
+      await tester.pumpAndSettle();
+
+      // 连接卡:USB 链路 + 设备名
+      expect(find.text('USB 数据线'), findsOneWidget);
+      expect(find.text('NIKON ZF'), findsOneWidget);
+      // 机身卡:GetDeviceInfo + 电池(属性门禁读到)
+      expect(find.text('TestModel'), findsOneWidget);
+      expect(find.text('V1.00'), findsOneWidget);
+      expect(find.text('012345678901'), findsOneWidget);
+      expect(find.text('80%'), findsOneWidget);
+      // 镜头卡:无照片/无 EXIF → 型号缺读,属性在册读到
+      expect(find.text('400mm'), findsOneWidget);
+      expect(find.text('ƒ/2.8'), findsOneWidget);
+      // 动作:相册入口 + 断开
+      expect(find.text('相册'), findsOneWidget);
+      expect(find.text('断开连接'), findsOneWidget);
+
+      await tester.tap(find.text('断开连接'));
+      await tester.pump();
+      expect(conn.disconnectCalls, 1);
     });
   });
 }

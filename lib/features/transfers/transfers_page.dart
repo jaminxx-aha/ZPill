@@ -1,5 +1,6 @@
-/// 下载页:任务列表(进度/速度/剩余时间/取消/导入结果)+
-/// 「应用内文件」区块(downloadsDir 直读、应用内查看、删除)。
+/// 传输页(图库页右上角徽标进入):下载任务列表(进度/速度/剩余时间/
+/// 取消/导入结果)。应用内文件区块已移交图库 tab(LocalLibraryPage,
+/// 同一 TransfersController 的 appFiles 数据源)。
 ///
 /// TransfersController 是共享实例(AppServices 持有):订阅
 /// TransferEngine.tasks 快照流;速度/剩余时间按字节增量真实计算
@@ -133,7 +134,7 @@ class _TransfersPageState extends State<TransfersPage> {
       listenable: _controller,
       builder: (context, _) => Scaffold(
         appBar: AppBar(
-          title: const Text('下载'),
+          title: const Text('传输'),
           actions: [
             IconButton(
               tooltip: '清空历史',
@@ -150,30 +151,14 @@ class _TransfersPageState extends State<TransfersPage> {
 
   Widget _body() {
     final tasks = _controller.tasks;
-    final files = _controller.appFiles;
-    if (tasks.isEmpty && files.isEmpty) {
-      return const Center(child: Text('暂无下载任务\n(在「相册」页多选或大图页单张下载)',
+    if (tasks.isEmpty) {
+      return const Center(child: Text('暂无传输任务\n(在相机相册里多选或大图页单张下载)',
           textAlign: TextAlign.center));
     }
     return ListView.builder(
       padding: const EdgeInsets.only(bottom: 16),
-      itemCount: tasks.length + (files.isEmpty ? 0 : 1 + files.length),
-      itemBuilder: (_, i) {
-        if (i < tasks.length) {
-          return _TaskTile(
-            task: tasks[i],
-            controller: _controller,
-          );
-        }
-        final j = i - tasks.length;
-        if (j == 0) {
-          return const Padding(
-            padding: EdgeInsets.fromLTRB(16, 20, 16, 4),
-            child: Text('应用内文件', style: TextStyle(fontWeight: FontWeight.bold)),
-          );
-        }
-        return _AppFileTile(file: files[j - 1], controller: _controller);
-      },
+      itemCount: tasks.length,
+      itemBuilder: (_, i) => _TaskTile(task: tasks[i], controller: _controller),
     );
   }
 }
@@ -248,86 +233,6 @@ class _TaskTile extends StatelessWidget {
         ],
       ),
       trailing: trailing,
-    );
-  }
-}
-
-/// 应用内文件行:图片可应用内查看;删除按钮。
-class _AppFileTile extends StatelessWidget {
-  const _AppFileTile({required this.file, required this.controller});
-
-  final File file;
-  final TransfersController controller;
-
-  static const _viewableExts = {'.jpg', '.jpeg', '.png', '.webp', '.gif'};
-
-  bool get _viewable {
-    final name = file.uri.pathSegments.last.toLowerCase();
-    return _viewableExts.any(name.endsWith);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final stat = file.statSync();
-    final name = file.uri.pathSegments.last;
-    return ListTile(
-      dense: true,
-      leading: Icon(
-          _viewable ? Icons.image_outlined : Icons.insert_drive_file_outlined),
-      title: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis),
-      subtitle: Text([
-        formatBytes(stat.size),
-        if (formatDateTime(stat.modified) != null) formatDateTime(stat.modified)!,
-      ].join(' · ')),
-      onTap: _viewable ? () => _view(context, name) : null,
-      trailing: IconButton(
-        tooltip: '删除',
-        onPressed: () => controller.deleteAppFile(file),
-        icon: const Icon(Icons.delete_outline),
-      ),
-    );
-  }
-
-  void _view(BuildContext context, String name) {
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => _AppImageViewer(file: file, title: name),
-      ),
-    );
-  }
-}
-
-/// 应用内图片查看(黑底 + 双指缩放;NEF 等原生格式 Flutter 解不了,
-/// 此页只接待可解码扩展名)。
-class _AppImageViewer extends StatelessWidget {
-  const _AppImageViewer({required this.file, required this.title});
-
-  final File file;
-  final String title;
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      appBar: AppBar(
-        backgroundColor: Colors.black87,
-        foregroundColor: Colors.white,
-        title: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
-      ),
-      body: InteractiveViewer(
-        maxScale: 8,
-        child: Center(
-          child: Image.file(
-            file,
-            fit: BoxFit.contain,
-            errorBuilder: (context, error, stackTrace) => const Icon(
-              Icons.broken_image_outlined,
-              color: Colors.white54,
-              size: 48,
-            ),
-          ),
-        ),
-      ),
     );
   }
 }

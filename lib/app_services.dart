@@ -32,6 +32,7 @@ import 'debug/ptp_diagnostics.dart';
 import 'features/browser/browser_controller.dart';
 import 'features/browser/ratings_controller.dart';
 import 'features/browser/storage_overview_controller.dart';
+import 'features/connection/camera_overview_controller.dart';
 import 'features/connection/connection_page.dart';
 import 'features/remote/remote_controller.dart';
 import 'features/settings/settings_page.dart';
@@ -176,6 +177,12 @@ final class AppServices {
       connection: connection,
       thumbnails: thumbnails,
     );
+    // 相机页信息总览:机身/镜头/电池,连接成功即拉(能力门禁见类注)。
+    cameraOverview = CameraOverviewController(
+      session: session,
+      connection: connection,
+      repository: repository,
+    );
     // 双卡槽余量:连接成功即拉,相册页顶展示。
     storageOverview = StorageOverviewController(
       session: session,
@@ -251,6 +258,7 @@ final class AppServices {
   late final SnapshotController snapshotController;
   late final ConnectionController connectionController;
   late final BrowserController browserController;
+  late final CameraOverviewController cameraOverview;
   late final StorageOverviewController storageOverview;
   late final RemoteController remoteController;
   late final TransfersController transfersController;

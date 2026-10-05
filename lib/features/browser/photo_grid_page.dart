@@ -1,15 +1,17 @@
-/// 相册缩略图网格:按拍摄日期分段(段头点按 = 整日选择/取消),长按进入
-/// 多选,选中项可批量下载到相册/应用(批次含双格式组时先选格式,缺格式
-/// 的组跳过)、批量删除(相机侧逐文件 0x100B,确认对话框把关)。本地
-/// 评分角标(左上星标)随 [RatingsController] 变化;连拍簇一条目
-/// (typeLabel 带 ×N)。
+/// 相机相册页(相机页「相册」入口直达):全部照片网格按拍摄日期分段
+/// (段头点按 = 整日选择/取消),顶部文件夹 chips 切换分类(同文件夹内
+/// RAW+JPG 仍合并);长按进入多选,选中项可批量下载到相册/应用(批次含
+/// 双格式组时先选格式,缺格式的组跳过)、批量删除(相机侧逐文件
+/// 0x100B,确认对话框把关)。本地评分角标(左上星标)随
+/// [RatingsController] 变化;连拍簇一条目(typeLabel 带 ×N)。
 ///
 /// 活页模式:随 [BrowserController] 的渐进发布增长(最新优先,新对象尾部
-/// 追加);断连后保留最后快照(相册列表被控制器清空时,网格内容可见,
-/// 缩略图走磁盘缓存)。缩略图 Future 按 handle 缓存在本页 State
-/// (setState 重建不闪、不重发请求;PtpSession 串行锁 + ThumbnailCache
-/// 并发合并兜底)。查看器仍按打开时刻的快照浏览(同步继续不追新,重进
-/// 本页即刷新)。
+/// 追加);AppBar 细进度条 + 刷新按钮 + 下拉刷新重枚举;首块前轻加载态,
+/// 同步中断 = 无内容硬错误屏 / 有内容软横幅(已显示内容可继续浏览)。
+/// 断连后保留最后快照(相册列表被控制器清空时,网格内容可见,缩略图走
+/// 磁盘缓存)。缩略图 Future 按 handle 缓存在本页 State(setState 重建
+/// 不闪、不重发请求;PtpSession 串行锁 + ThumbnailCache 并发合并兜底)。
+/// 查看器仍按打开时刻的快照浏览(同步继续不追新,重进本页即刷新)。
 library;
 
 import 'dart:io';
@@ -83,12 +85,19 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
   /// 下载格式由选择面板决定(见 _downloadSelected)。
   final Set<int> _selected = {};
 
+  /// 当前过滤的相册(初始 = 入口句柄;chips 切换)。选中的文件夹在
+  /// 重枚举后消失时回落汇总(见 build 里的 post-frame 兜底)。
+  late int _filterHandle = widget.folderHandle;
+
   /// 缩略图 Future 按代表文件句柄缓存:主文件变化(渐进配对完成
   /// NEF→JPG 切换)时取新 Future,其余重建不闪、不重发请求。
   final Map<int, Future<String>> _thumbFutures = {};
 
   /// 最后一次解析到的活相册(断连后控制器清空,以它保持网格快照)。
   CameraAlbum? _lastAlbum;
+
+  /// 最后一次非空的相册列表(chips 快照,断连后保持可切换)。
+  List<CameraAlbum> _lastAlbums = const [];
 
   ThumbnailCache get _thumbnails =>
       widget.thumbnails ?? AppServices.instance.thumbnails;
@@ -172,12 +181,22 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
     );
   }
 
-  /// 按 folderHandle 找活相册;无匹配(尚未建立/已断连)返回 null。
+  /// 按当前过滤句柄找活相册;无匹配(尚未建立/已断连)返回 null。
   CameraAlbum? _resolve(List<CameraAlbum> albums) {
     for (final album in albums) {
-      if (album.folderHandle == widget.folderHandle) return album;
+      if (album.folderHandle == _filterHandle) return album;
     }
     return null;
+  }
+
+  /// chips 切换过滤:清空选择(跨相册选择无意义)+ 弃旧快照。
+  void _switchFilter(int handle) {
+    if (handle == _filterHandle) return;
+    setState(() {
+      _filterHandle = handle;
+      _selected.clear();
+      _lastAlbum = null;
+    });
   }
 
   void _toggle(PhotoGroup group) {
@@ -256,7 +275,7 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(
           content: Text(
-              '已开始下载 $included/${groups.length} 项 / ${entries.length} 个文件$tag 到$where$skipNote,详见「下载」页')));
+              '已开始下载 $included/${groups.length} 项 / ${entries.length} 个文件$tag 到$where$skipNote,进度见「图库」页')));
   }
 
   /// 批量删除(相机侧,不可逆):确认对话框点明项数与文件数;逐成员
@@ -327,15 +346,30 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
       // 评分角标随本地评分变化刷新(枚举/相册结构仍由 controller 驱动)。
       listenable: Listenable.merge([widget.controller, _ratings]),
       builder: (context, _) {
-        final live = _resolve(widget.controller.albums);
+        final controller = widget.controller;
+        final live = _resolve(controller.albums);
         if (live != null) _lastAlbum = live;
+        // 过滤的文件夹在重枚举完成后消失:回落汇总相册(渐进同步期间
+        // 不判 —— 早期块可能还没枚举到该文件夹)。post-frame 规避
+        // build 内 setState。
+        if (live == null &&
+            !controller.syncing &&
+            controller.albums.isNotEmpty) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) _switchFilter(CameraAlbum.allPhotosHandle);
+          });
+        }
         final album = live ?? _lastAlbum;
         final items = album?.items ?? const <PhotoGroup>[];
+        // chips 源:活列表优先,断连后用快照(chips 保持可切换)。
+        if (controller.albums.isNotEmpty) _lastAlbums = controller.albums;
+        final chipAlbums =
+            controller.albums.isNotEmpty ? controller.albums : _lastAlbums;
         return Scaffold(
           appBar: AppBar(
             title: Text(_selecting
                 ? '已选 ${_selected.length} 项'
-                : (album?.name ?? widget.fallbackName ?? '相册')),
+                : (widget.fallbackName ?? '相机相册')),
             actions: [
               if (_selecting) ...[
                 IconButton(
@@ -348,43 +382,182 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
                   onPressed: _clearSelection,
                   icon: const Icon(Icons.close),
                 ),
-              ] else
+              ] else ...[
+                IconButton(
+                  tooltip: '刷新',
+                  onPressed: controller.syncing ? null : controller.reload,
+                  icon: const Icon(Icons.refresh),
+                ),
                 const SizedBox(width: 8),
-            ],
-          ),
-          body: CustomScrollView(
-            slivers: [
-              for (final section in _sectionsOf(items)) ...[
-                SliverToBoxAdapter(
-                  child: _sectionHeader(section, items),
-                ),
-                SliverPadding(
-                  padding: const EdgeInsets.symmetric(horizontal: 2),
-                  sliver: SliverGrid.builder(
-                    gridDelegate:
-                        const SliverGridDelegateWithFixedCrossAxisCount(
-                      crossAxisCount: 4,
-                      mainAxisSpacing: 2,
-                      crossAxisSpacing: 2,
-                    ),
-                    itemCount: section.items.length,
-                    // key 按组身份键:增长期间尾部追加、条目重排时元素正确
-                    // 复用(选中态与缩略图 Future 都按键控);渐进配对前后
-                    // 键稳定,RAW+JPG 后到的那份并入时 cell 不漂移。
-                    itemBuilder: (_, i) => _cell(
-                      section.items[i],
-                      section.firstIndex + i,
-                      items,
-                      key: ValueKey(section.items[i].key),
-                    ),
-                  ),
-                ),
               ],
             ],
+            // 同步进度细条:首块前(无 progress)为不定进度动画。
+            bottom: controller.syncing
+                ? PreferredSize(
+                    preferredSize: const Size.fromHeight(2),
+                    child: LinearProgressIndicator(
+                      minHeight: 2,
+                      value: (controller.progress == null ||
+                              controller.progress!.$2 == 0)
+                          ? null
+                          : controller.progress!.$1 / controller.progress!.$2,
+                    ),
+                  )
+                : null,
           ),
+          body: _body(controller, chipAlbums, album, items),
           bottomSheet: _selecting ? _actionBar(items) : null,
         );
       },
+    );
+  }
+
+  /// 主体四态:无内容硬错误屏 / 首块前轻加载 / 空相册提示 / 内容网格
+  /// (同步中断仅软横幅,已显示内容可继续浏览,下拉刷新重枚举)。
+  Widget _body(BrowserController controller, List<CameraAlbum> chipAlbums,
+      CameraAlbum? album, List<PhotoGroup> items) {
+    if (items.isEmpty) {
+      if (controller.error != null) {
+        return Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text(controller.error!),
+              ),
+              FilledButton(
+                onPressed: controller.load,
+                child: const Text('重试'),
+              ),
+            ],
+          ),
+        );
+      }
+      if (controller.syncing) {
+        final p = controller.progress;
+        return Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(
+                width: 28,
+                height: 28,
+                child: CircularProgressIndicator(strokeWidth: 2.5),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                p == null ? '正在连接相机读取对象…' : '正在读取相机对象 ${p.$1}/${p.$2}…',
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
+        );
+      }
+      return const Center(
+        child: Text('相机里还没有照片\n(未连接时请先在「相机」页连接)',
+            textAlign: TextAlign.center),
+      );
+    }
+    return Column(
+      children: [
+        if (controller.error != null) _syncErrorBanner(controller),
+        Expanded(
+          child: RefreshIndicator(
+            onRefresh: controller.reload,
+            child: CustomScrollView(
+              // 常可滚动:内容不足一屏时下拉刷新仍可用。
+              physics: const AlwaysScrollableScrollPhysics(),
+              slivers: [
+                _filterChips(chipAlbums),
+                for (final section in _sectionsOf(items)) ...[
+                  SliverToBoxAdapter(
+                    child: _sectionHeader(section, items),
+                  ),
+                  SliverPadding(
+                    padding: const EdgeInsets.symmetric(horizontal: 2),
+                    sliver: SliverGrid.builder(
+                      gridDelegate:
+                          const SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: 4,
+                        mainAxisSpacing: 2,
+                        crossAxisSpacing: 2,
+                      ),
+                      itemCount: section.items.length,
+                      // key 按组身份键:增长期间尾部追加、条目重排时元素正确
+                      // 复用(选中态与缩略图 Future 都按键控);渐进配对前后
+                      // 键稳定,RAW+JPG 后到的那份并入时 cell 不漂移。
+                      itemBuilder: (_, i) => _cell(
+                        section.items[i],
+                        section.firstIndex + i,
+                        items,
+                        key: ValueKey(section.items[i].key),
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// 同步中断横幅:内容已显示,重试只补缺失对象(断点续传)。
+  Widget _syncErrorBanner(BrowserController controller) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      child: Card(
+        margin: EdgeInsets.zero,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+          child: Row(
+            children: [
+              const Icon(Icons.sync_problem, size: 20),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  controller.error!,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              TextButton(
+                onPressed: controller.load,
+                child: const Text('重试'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 文件夹筛选 chips(首 sliver):汇总 + 各文件夹;只有汇总一个相册时
+  /// 不占位(无分类可言)。
+  Widget _filterChips(List<CameraAlbum> albums) {
+    if (albums.length < 2) {
+      return const SliverToBoxAdapter(child: SizedBox.shrink());
+    }
+    return SliverToBoxAdapter(
+      child: SizedBox(
+        height: 44,
+        child: ListView.separated(
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+          itemCount: albums.length,
+          separatorBuilder: (_, __) => const SizedBox(width: 8),
+          itemBuilder: (context, i) {
+            final album = albums[i];
+            return ChoiceChip(
+              label: Text(album.name),
+              selected: _filterHandle == album.folderHandle,
+              onSelected: (_) => _switchFilter(album.folderHandle),
+            );
+          },
+        ),
+      ),
     );
   }
 

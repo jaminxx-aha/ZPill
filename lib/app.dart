@@ -4,8 +4,7 @@ import 'features/shell/home_shell.dart';
 
 /// 应用根。
 ///
-/// 结构对应 TODO.md §七:底部导航三 tab(相机 / 浏览 / 传输);
-/// 设置页、遥控页(P3)从相机页 push 进入。
+/// 结构:底部导航四 tab(相机 / 拍摄 / 图库 / 设置,见 HomeShell)。
 class NikonPillApp extends StatelessWidget {
   const NikonPillApp({super.key});
 
