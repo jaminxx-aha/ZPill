@@ -46,6 +46,47 @@ final class FrameAnalysis {
   }
 }
 
+/// 解析 JPEG SOF 标记取帧尺寸(宽高,像素)。只走标记结构不解码 ——
+/// 触控对焦的坐标映射用(0x9205 参数是取景帧像素坐标;OpenZCine 帧头
+/// coordinateWidth 空间,此处以解码帧尺寸作候选,标定待真机核对)。
+///
+/// 扫不到(截断/畸形/无 SOF)返回 null,宁失败不错值。
+/// SOF 家族 = 0xC0-0xCF 去掉 C4(DHT)/C8(JPG)/CC(DAC);
+/// 扫描上限 64KB(LV 帧的 SOF 在量化/哈夫曼表之后,离头部不远)。
+({int width, int height})? jpegSofSize(Uint8List jpeg) {
+  if (jpeg.length < 4 || jpeg[0] != 0xFF || jpeg[1] != 0xD8) return null;
+  final limit = jpeg.length < 65536 ? jpeg.length : 65536;
+  var i = 2;
+  while (i + 4 <= limit) {
+    if (jpeg[i] != 0xFF) return null; // 标记流错位:数据段长度对不上
+    var marker = jpeg[i + 1];
+    while (marker == 0xFF && i + 2 < limit) {
+      // 填充 FF:跳过再看
+      i++;
+      marker = jpeg[i + 1];
+    }
+    if (marker == 0xD9 || marker == 0x01 || (marker >= 0xD0 && marker <= 0xD7)) {
+      return null; // 无长度段的标记/EOI:走到图像数据了仍没遇到 SOF
+    }
+    final segLen = (jpeg[i + 2] << 8) | jpeg[i + 3];
+    final isSof = marker >= 0xC0 &&
+        marker <= 0xCF &&
+        marker != 0xC4 &&
+        marker != 0xC8 &&
+        marker != 0xCC;
+    if (isSof) {
+      // SOF 载荷:precision(1) height(2) width(2)
+      if (i + 9 > jpeg.length) return null;
+      final h = (jpeg[i + 5] << 8) | jpeg[i + 6];
+      final w = (jpeg[i + 7] << 8) | jpeg[i + 8];
+      if (h <= 0 || w <= 0) return null;
+      return (width: w, height: h);
+    }
+    i += 2 + segLen; // 跳过本段(长度含自身 2 字节)
+  }
+  return null;
+}
+
 /// 解码 JPEG 帧并分析。解码失败/空帧返回 null(调用方保持上次结果)。
 ///
 /// 采样步长 = 一个掩码格的像素宽,保证每格至少被扫到;直方图与掩码

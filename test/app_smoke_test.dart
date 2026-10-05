@@ -37,10 +37,17 @@ void main() {
     expect(find.text('取景'), findsOneWidget);
     // 「快门」×2:曝光参数 chip + 快门钮文案
     expect(find.text('快门'), findsNWidgets(2));
-    // 参数目录 chips(未读值 = '--')
+    // 参数目录 chips(未读值 = '--');参数扩到 17 后横滚行懒构建,
+    // 行尾芯片(画质/对焦后拍)要滚到可见
     expect(find.text('模式'), findsOneWidget);
     expect(find.text('白平衡'), findsOneWidget);
-    expect(find.text('画质'), findsOneWidget);
+    final chips = find.byWidgetPredicate(
+        (w) => w is Scrollable && w.axisDirection == AxisDirection.right);
+    await tester.scrollUntilVisible(find.text('画质'), 120, scrollable: chips);
+    await tester.scrollUntilVisible(
+        find.text('对焦后拍'), 120,
+        scrollable: chips);
+    expect(find.text('对焦后拍'), findsOneWidget);
   });
 
   testWidgets('图库 tab:空态(非 ohos 环境静默)', (tester) async {

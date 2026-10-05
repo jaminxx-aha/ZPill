@@ -528,17 +528,42 @@ void main() {
       expect(fake.requests.single.params, [0, 0]);
     });
 
-    test('无卡拍/落卡拍候选码直发(语义待真机核对)', () async {
+    test('无卡拍/落卡拍候选码直发;CaptureSort 首参(语义待真机核对)', () async {
       final fake = FakePtpTransport()
+        ..reply(const PtpResult(responseCode: PtpResponseCode.ok))
         ..reply(const PtpResult(responseCode: PtpResponseCode.ok))
         ..reply(const PtpResult(responseCode: PtpResponseCode.ok));
       final session = PtpSession(transport: fake);
       await session.initiateCaptureRecInSdram();
       await session.initiateCaptureRecInMedia();
+      await session.initiateCaptureRecInMedia(focusBeforeCapture: true);
       expect(fake.requests.map((r) => r.opcode), [
         NikonOperationCode.initiateCaptureRecInSdram,
         NikonOperationCode.initiateCaptureRecInMedia,
+        NikonOperationCode.initiateCaptureRecInMedia,
       ]);
+      // 默认保持 Zf 真机已实证的 [0,0];对焦后拍换 CaptureSort 首参
+      expect(fake.requests[1].params, [0, 0]);
+      expect(fake.requests[2].params, [0xFFFFFFFE, 0]);
+    });
+
+    test('对焦三 op:0x9205 双参直发 / 0x90C1、0x9206 无参(候选码)', () async {
+      final fake = FakePtpTransport()
+        ..reply(const PtpResult(responseCode: PtpResponseCode.ok))
+        ..reply(const PtpResult(responseCode: PtpResponseCode.ok))
+        ..reply(const PtpResult(responseCode: PtpResponseCode.ok));
+      final session = PtpSession(transport: fake);
+      await session.changeAfArea(320, 240);
+      await session.afDrive();
+      await session.afDriveCancel();
+      expect(fake.requests.map((r) => r.opcode), [
+        NikonOperationCode.changeAfArea,
+        NikonOperationCode.afDrive,
+        NikonOperationCode.afDriveCancel,
+      ]);
+      expect(fake.requests[0].params, [320, 240]);
+      expect(fake.requests[1].params, isEmpty);
+      expect(fake.requests[2].params, isEmpty);
     });
 
     test('deviceReady:0x2019 忙 → false(语义不是错误)', () async {

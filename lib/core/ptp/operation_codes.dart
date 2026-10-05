@@ -44,6 +44,8 @@ abstract final class NikonOperationCode {
   static const int startLiveView = 0x9201;
   static const int endLiveView = 0x9202;
   static const int getLiveViewImage = 0x9203;
+  static const int changeAfArea = 0x9205; // 移动取景对焦区域:两 u32 参数 = 帧像素 x/y(候选,待真机核对)
+  static const int afDriveCancel = 0x9206; // 取消自动对焦(候选,待真机核对)
   static const int initiateCaptureRecInMedia = 0x9207;
   static const int getPartialObjectHiSpeed = 0x9400; // handle + 块长 + 终止位
   static const int getEventEx = 0x941C; // 多参数事件
@@ -88,6 +90,21 @@ abstract final class PtpResponseCode {
   // 以 ISO 15740 §13.4 响应码表为准,禁止臆造。
 }
 
+/// 尼康厂商响应码(0xA0xx;名称镜像 libgphoto2 PTP_RC_NIKON_* 符号,
+/// 值表来自 OpenZCine PTPOperation.swift,Zf 待真机核对)。
+///
+/// 对焦/快门路径的常见答语:0xA002 未合焦、0xA004 状态不允许、
+/// 0xA00B 未开取景 —— 上层据此转友好提示而非裸十六进制。
+abstract final class NikonResponseCode {
+  static const int hardwareError = 0xA001;
+  static const int outOfFocus = 0xA002;
+  static const int changeCameraModeFailed = 0xA003;
+  static const int invalidStatus = 0xA004;
+  static const int shutterSpeedBulb = 0xA008;
+  static const int cameraModeNotAdjustFnumber = 0xA00A;
+  static const int notLiveView = 0xA00B;
+}
+
 /// PTP 标准事件码(USB interrupt IN / PTP-IP 事件通道上报;
 /// 以下均为 Zf 实测在册)。
 ///
@@ -120,8 +137,11 @@ abstract final class NikonEventCode {
   // 待 --events 真机抓包核对语义后再入册。
 }
 
-/// 设备属性码(Zf 实测在册;现代尼康走标准 0x50xx 码表,
-/// 而非旧机身的尼康 0xD0xx)。
+/// 设备属性码。0x50xx 标准区:Zf 真机 GetDeviceInfo 在册(现代尼康走
+/// 标准码表,而非旧机身的尼康 0xD0xx);0xD0xx/0xD2xx 厂商区:候选码
+/// (值表来自 OpenZCine/libgphoto2,**不在 Zf 在册表内** —— 在册表不是
+/// 真相的全部,与 STA 9-op 小表同理,相机可能照常应答;PropDesc 拒答
+/// 时目录置空不上屏),全部待真机核对。
 abstract final class PtpDevicePropCode {
   static const int batteryLevel = 0x5001;
   static const int imageSize = 0x5003;
@@ -141,6 +161,14 @@ abstract final class PtpDevicePropCode {
   static const int burstNumber = 0x5018;
   static const int artist = 0x501E;
   static const int copyrightInfo = 0x501F;
+  // ---- 厂商候选区(不在 Zf 在册表;语义/类型注为 OpenZCine 实测口径)----
+  static const int rawCompressionType = 0xD016; // NEF(RAW)记录压缩,u8
+  static const int wbColorTemp = 0xD01E; // 白平衡色温(K),u16
+  static const int captureAreaCrop = 0xD030; // 图像区域 FX/DX/1:1/16:9,u8
+  static const int stillFocusMode = 0xD061; // 静照对焦模式 AF-S/AF-C/MF/AF-A,u8
+  static const int activePicCtrlItem = 0xD200; // 优化校准(Picture Control),u16
   // Zf 另报 MTP 标准属性 0xD303/0xD406/0xD407(UseDeviceStageFlag /
   // SessionInitiatorInfo / PerceivedDeviceType,与拍摄无关,不入册)。
+  // 色调模式 OpenZCine 记作 0x0001D01C(u32 扩展形态,超 u16 属性码宽;
+  // USB 载体会截断成 0xD01C 阴天微调 = 静默错值)—— 不入册,留抓包项。
 }

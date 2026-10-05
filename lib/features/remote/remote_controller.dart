@@ -16,6 +16,12 @@
 /// (真机核对前恒关)+ 相机 getSet 上报 + 值域(枚举/范围外的值由
 /// 相机 clamp,回读为准)。
 ///
+/// 对焦域(候选码,待真机核对):点取景画面 → 0x9205 移动对焦区域 +
+/// 0x90C1 驱动对焦(对焦按钮单独驱动);「对焦后拍」开关把快门 0x9207
+/// 首参换成 CaptureSort 0xFFFFFFFE(先 AF 后释放,OpenZCine 候选)。
+/// 曝光读数轮换轮询:取景运行期间每 2s 刷三要素(机身重算曝光不发
+/// 0x4006,OpenZCine 实测口径)。
+///
 /// 模式抄 BrowserController:构造器注入 + 断连门闩(_linkUp)+ _invalidate。
 library;
 
@@ -28,6 +34,7 @@ import '../../core/ptp/device_prop.dart';
 import '../../core/ptp/operation_codes.dart';
 import '../../core/ptp/ptp_session.dart';
 import '../../core/ptp/ptp_transport.dart';
+import '../../core/remote/frame_analysis.dart';
 import '../../core/remote/frame_analyzer.dart';
 import '../../core/remote/live_view_engine.dart';
 import 'shooting_param_catalog.dart';
@@ -57,17 +64,29 @@ final class PropState {
   final int? value;
 }
 
+/// 触控对焦框:归一化坐标(0..1,取景图像坐标系;页面按 BoxFit.contain
+/// 映射回屏幕)。相机侧合焦与否无事件可依 —— 纯位置指示,下次点按
+/// 替换、停取景/断连清除。
+final class AfBox {
+  const AfBox({required this.nx, required this.ny});
+  final double nx;
+  final double ny;
+}
+
 final class RemoteController extends ChangeNotifier {
   RemoteController({
     required this.session,
     this.connection,
     LiveViewEngine? engine,
     Future<void> Function(Duration)? delay,
+    Future<void> Function(Duration)? aeDelay,
     bool Function()? setPropGate,
   })  : engine = engine ?? LiveViewEngine(session: session),
         _delay = delay ?? Future<void>.delayed,
+        _aeDelay = aeDelay ?? delay ?? Future<void>.delayed,
         _setPropEnabled = setPropGate ?? _sessionSetPropGate {
     this.engine.status.addListener(_onEngineStatus);
+    this.engine.frame.addListener(_onFrame);
     _statesSub = connection?.states.listen((s) {
       if (s == CameraLinkState.connected) {
         _linkUp = true;
@@ -91,6 +110,10 @@ final class RemoteController extends ChangeNotifier {
   /// 监看辅助帧分析(直方图/斑马纹)。
   final FrameAnalyzer analyzer = FrameAnalyzer();
   final Future<void> Function(Duration) _delay;
+
+  /// AE 轮询节拍(测试注入独立门控,与 [_delay] 分离 —— 共享门控时
+  /// AE 拍与忙退避会互抢放行次序);默认与 [_delay] 同源。
+  final Future<void> Function(Duration) _aeDelay;
 
   /// 写门禁:生产恒取 [PtpSession.kSetPropEnabled];测试注入覆写以
   /// 覆盖写路径(总开关本身是编译期常量,测试不可翻转)。
@@ -138,6 +161,27 @@ final class RemoteController extends ChangeNotifier {
   StreamSubscription<CameraLinkState>? _statesSub;
   Completer<void>? _captureDone;
 
+  /// 最近取景帧尺寸(SOF 嗅探):触控对焦坐标映射 + 页面画幅计算用。
+  final frameSize = ValueNotifier<({int width, int height})?>(null);
+
+  /// 触控对焦框位置;null = 无。
+  AfBox? afBox;
+
+  /// 对焦驱动进行中(对焦按钮 / 触控对焦共用,期间防重入)。
+  bool focusing = false;
+
+  bool _focusBeforeCapture = false;
+
+  /// 对焦后拍:快门 0x9207 首参 CaptureSort —— true = 0xFFFFFFFE(先
+  /// 驱动 AF 再释放,半按-全按;OpenZCine 候选语义,待真机核对),
+  /// false = 0x0000(Zf 真机已实证姿势,默认)。
+  bool get focusBeforeCapture => _focusBeforeCapture;
+  set focusBeforeCapture(bool v) {
+    if (_focusBeforeCapture == v) return;
+    _focusBeforeCapture = v;
+    notifyListeners();
+  }
+
   /// 本轮会话已验证可用的快门码(0x100E / 0x9207)。断连不清:相机
   /// 个性跨连接稳定,重连后直发省一次失败事务。
   int? _captureOpPref;
@@ -155,7 +199,8 @@ final class RemoteController extends ChangeNotifier {
   Future<void> _fireShutter() async {
     final pref = _captureOpPref;
     if (pref == NikonOperationCode.initiateCaptureRecInMedia) {
-      await session.initiateCaptureRecInMedia();
+      await session.initiateCaptureRecInMedia(
+          focusBeforeCapture: _focusBeforeCapture);
       return;
     }
     if (pref == PtpOperationCode.initiateCapture) {
@@ -167,7 +212,8 @@ final class RemoteController extends ChangeNotifier {
       _captureOpPref = PtpOperationCode.initiateCapture;
     } on PtpResponseException catch (e) {
       if (!_captureFallbackFrom.contains(e.responseCode)) rethrow;
-      await session.initiateCaptureRecInMedia();
+      await session.initiateCaptureRecInMedia(
+          focusBeforeCapture: _focusBeforeCapture);
       _captureOpPref = NikonOperationCode.initiateCaptureRecInMedia;
     }
   }
@@ -180,9 +226,166 @@ final class RemoteController extends ChangeNotifier {
     if (engine.status.value == LiveViewStatus.failed && engine.lastError != null) {
       error = engine.lastError;
     }
+    if (engine.status.value != LiveViewStatus.running) {
+      afBox = null; // 对焦框只活在取景中
+    }
+    _syncAePolling();
     notifyListeners();
   }
 
+  /// 取景帧到达:SOF 嗅探帧尺寸(只走标记结构不解码,开销可忽略;
+  /// 失败保留旧值)。
+  void _onFrame() {
+    final f = engine.frame.value;
+    if (f == null) return;
+    final s = jpegSofSize(f);
+    if (s != null && s != frameSize.value) frameSize.value = s;
+  }
+
+  // ---- 对焦域:触控对焦 + 对焦驱动(候选码,待真机核对)----
+
+  /// 0x9205 忙重试(OpenZCine 同款策略:对焦区域移动遇 0x2019 短退避重试)。
+  static const _afBusyRetries = 3;
+  static const _afBusyRetryDelay = Duration(milliseconds: 200);
+
+  /// 触控对焦:点按取景画面 [nx]/[ny](归一化 0..1,取景图像坐标系)→
+  /// 帧像素坐标 → 0x9205 ChangeAfArea 移动对焦区域,随即驱动一次 AF
+  /// (点按即合焦的常规预期;若机身移点即自动对焦,后随的 0x90C1 应当
+  /// 立即返回,真机核对)。对焦框上屏直到下次点按/停取景。
+  Future<void> touchFocus(double nx, double ny) async {
+    if (!_linkUp) {
+      error = '未连接相机';
+      notifyListeners();
+      return;
+    }
+    if (!liveViewActive || focusing) return; // 无取景/对焦中:静默忽略
+    final size = frameSize.value;
+    if (size == null) {
+      error = '暂无取景帧,无法定位对焦点';
+      notifyListeners();
+      return;
+    }
+    final x = (nx * size.width).round().clamp(0, size.width);
+    final y = (ny * size.height).round().clamp(0, size.height);
+    error = null;
+    notifyListeners();
+    for (var attempt = 0;; attempt++) {
+      try {
+        await session.changeAfArea(x, y);
+        break;
+      } on PtpResponseException catch (e) {
+        if (e.responseCode != PtpResponseCode.deviceBusy ||
+            attempt >= _afBusyRetries) {
+          error = '对焦区域移动失败:${_nikonHint(e.responseCode) ?? e}';
+          notifyListeners();
+          return;
+        }
+        await _delay(_afBusyRetryDelay);
+      }
+    }
+    if (!_linkUp) return;
+    afBox = AfBox(nx: nx, ny: ny);
+    notifyListeners();
+    await _driveAf();
+  }
+
+  /// 对焦按钮:独立驱动一次自动对焦(取景开启是前置条件 ——
+  /// 0xA00B notLiveView 为未开取景的应答形态)。
+  Future<void> afDriveNow() async {
+    if (focusing) return;
+    if (!_linkUp) {
+      error = '未连接相机';
+      notifyListeners();
+      return;
+    }
+    if (!liveViewActive) {
+      error = '请先开启取景';
+      notifyListeners();
+      return;
+    }
+    error = null;
+    notifyListeners();
+    await _driveAf();
+  }
+
+  /// 驱动自动对焦(0x90C1):挂起取景轮询防事务挤占串行锁;厂商响应码
+  /// (0xA002 未合焦 / 0xA004 状态不允许等)转友好提示。
+  Future<void> _driveAf() async {
+    focusing = true;
+    notifyListeners();
+    engine.pause();
+    try {
+      await session.afDrive();
+    } on PtpResponseException catch (e) {
+      error = '对焦失败:${_nikonHint(e.responseCode) ?? e}';
+    } on Exception catch (e) {
+      error = '对焦失败:$e';
+    } finally {
+      engine.resume();
+      focusing = false;
+      if (_linkUp) notifyListeners();
+    }
+  }
+
+  /// 尼康厂商响应码 → 中文提示(候选语义,OpenZCine 口径);
+  /// null = 无表项,调用方用原始异常。
+  static String? _nikonHint(int code) {
+    switch (code) {
+      case NikonResponseCode.hardwareError:
+        return '相机硬件错误';
+      case NikonResponseCode.outOfFocus:
+        return '未合焦';
+      case NikonResponseCode.changeCameraModeFailed:
+        return '相机模式切换失败';
+      case NikonResponseCode.invalidStatus:
+        return '当前相机状态不允许该操作';
+      case NikonResponseCode.notLiveView:
+        return '未开启取景';
+      default:
+        return null;
+    }
+  }
+
+  // ---- 曝光读数轮换轮询 ----
+
+  /// A/P/S + 自动 ISO 下机身持续重算快门/光圈/ISO,而多数机身不发
+  /// DevicePropChanged(0x4006)—— 必须主动轮询(OpenZCine
+  /// CameraAutoExposureReadouts 实测口径;它轮厂商码 0xD0B5/0xD100/
+  /// 0x5007,我们用标准三码)。只在取景运行期间跑,拍照/写参数时跳过
+  /// (事务在会话串行锁上自然交错,不与取帧抢锁)。
+  static const _aePollInterval = Duration(seconds: 2);
+  static const _aePollProps = <int>[
+    PtpDevicePropCode.fNumber,
+    PtpDevicePropCode.exposureTime,
+    PtpDevicePropCode.exposureIndex,
+  ];
+  bool _aePolling = false;
+  int _aeRun = 0;
+
+  void _syncAePolling() {
+    final shouldRun = _linkUp && engine.status.value == LiveViewStatus.running;
+    if (shouldRun && !_aePolling) {
+      _aePolling = true;
+      unawaited(_aePollLoop(++_aeRun));
+    } else if (!shouldRun && _aePolling) {
+      _aePolling = false;
+      _aeRun++;
+    }
+  }
+
+  Future<void> _aePollLoop(int run) async {
+    while (_aePolling && run == _aeRun) {
+      await _aeDelay(_aePollInterval);
+      if (!_aePolling || run != _aeRun || !_linkUp) return;
+      if (capturing || writing) continue;
+      for (final code in _aePollProps) {
+        await _refreshProp(code);
+      }
+      if (_linkUp) notifyListeners();
+    }
+  }
+
+  /// 取景开关:引擎启停(帧轮询/AE 轮询/对焦框状态都随引擎状态联动)。
   Future<void> toggleLiveView() async {
     error = null;
     notice = null;
@@ -343,20 +546,26 @@ final class RemoteController extends ChangeNotifier {
   /// 断连/失败:停引擎、清状态;迟到的参数值/事件被门闩挡住。
   void _invalidate() {
     _linkUp = false;
+    _syncAePolling(); // 引擎停转的通知可能在门闩之后才到,这里先收口
     unawaited(engine.stop());
     capturing = false;
     writing = false;
     error = null;
     notice = null;
+    afBox = null;
     paramProps.clear();
     notifyListeners();
   }
 
   @override
   void dispose() {
+    _aePolling = false;
+    _aeRun++;
     _eventsSub?.cancel();
     _statesSub?.cancel();
     engine.status.removeListener(_onEngineStatus);
+    engine.frame.removeListener(_onFrame);
+    frameSize.dispose();
     analyzer.dispose();
     super.dispose();
   }
