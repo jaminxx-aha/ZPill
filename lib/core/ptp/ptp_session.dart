@@ -462,15 +462,18 @@ final class PtpSession {
     _ensureOk(result, PtpOperationCode.initiateCapture);
   }
 
-  /// Nikon InitiateCaptureRecInMedia(0x9207,候选码,待真机核对):落卡拍。
-  /// 参数姿势 [0,0] 对齐 probe --capture-op 9207(libgphoto2
-  /// ptp_nikon_capture2 的双参形态),真机结论回填后如有出入只改这里。
-  Future<void> initiateCaptureRecInMedia() async {
-    final result = await _serialized(() => transport.execute(
-          const PtpRequest(
-              opcode: NikonOperationCode.initiateCaptureRecInMedia,
-              params: [0, 0]),
-        ));
+  /// Nikon InitiateCaptureRecInMedia(0x9207):落卡拍。
+  /// 参数姿势 [0,0] 对齐 probe --capture-op 9207(**Zf 真机已实证**,
+  /// libgphoto2 ptp_nikon_capture2 双参形态);[focusBeforeCapture] 走
+  /// OpenZCine CaptureSort 语义(StillCapture.swift 候选,待真机核对):
+  /// true → 首参 0xFFFFFFFE = 先驱动 AF 再释放(半按-全按),
+  /// false → 保持已实证的 0x0000。参数在 USB/PTP-IP 容器里都是 u32,
+  /// 0xFFFFFFFE 两条链路均可完整传输。
+  Future<void> initiateCaptureRecInMedia({bool focusBeforeCapture = false}) async {
+    final result = await _serialized(() => transport.execute(PtpRequest(
+          opcode: NikonOperationCode.initiateCaptureRecInMedia,
+          params: [focusBeforeCapture ? 0xFFFFFFFE : 0, 0],
+        )));
     _ensureOk(result, NikonOperationCode.initiateCaptureRecInMedia);
   }
 
@@ -480,6 +483,36 @@ final class PtpSession {
     final result = await _serialized(() => transport.execute(const PtpRequest(
         opcode: NikonOperationCode.initiateCaptureRecInSdram)));
     _ensureOk(result, NikonOperationCode.initiateCaptureRecInSdram);
+  }
+
+  /// Nikon ChangeAfArea(0x9205,候选码,待真机核对):移动取景对焦区域。
+  /// 参数布局按 OpenZCine PTPIPClientSession:两 UINT32 = 取景帧像素
+  /// 坐标 x/y(其帧头 coordinateWidth 空间;我们无帧头,用解码帧尺寸
+  /// 作候选坐标系,标定待真机核对),无数据相。
+  Future<void> changeAfArea(int x, int y) async {
+    final result = await _serialized(() => transport.execute(PtpRequest(
+          opcode: NikonOperationCode.changeAfArea,
+          params: [x, y],
+        )));
+    _ensureOk(result, NikonOperationCode.changeAfArea);
+  }
+
+  /// Nikon AfDrive(0x90C1,候选码,待真机核对):驱动自动对焦(一次
+  /// 半按)。需取景开启(0xA00B notLiveView = 未开取景的应答形态);
+  /// 未合焦回 0xA002 OutOfFocus,状态不允许回 0xA004。
+  Future<void> afDrive() async {
+    final result = await _serialized(() => transport.execute(
+          const PtpRequest(opcode: NikonOperationCode.afDrive)));
+    _ensureOk(result, NikonOperationCode.afDrive);
+  }
+
+  /// Nikon AfDriveCancel(0x9206,候选码,待真机核对):取消进行中的
+  /// 自动对焦。注意:PtpSession 事务全局串行,afDrive 的响应未回前本
+  /// 操作只能排队 —— 能否真的打断长对焦待真机核对,先入库备用。
+  Future<void> afDriveCancel() async {
+    final result = await _serialized(() => transport.execute(
+          const PtpRequest(opcode: NikonOperationCode.afDriveCancel)));
+    _ensureOk(result, NikonOperationCode.afDriveCancel);
   }
 
   /// Nikon DeviceReady(0x90C8):拍照后的忙等探针。

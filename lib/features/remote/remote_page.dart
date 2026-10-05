@@ -6,6 +6,10 @@
 /// SetDevicePropValue(0x1016)被 [PtpSession.kSetPropEnabled] 门禁 ——
 /// 真机核对前调节入口静默只读,翻开后台同一 UI 即可写。
 ///
+/// 对焦域(候选码,待真机核对):点取景画面 = 触控对焦(0x9205 移动
+/// 对焦区域 + 0x90C1 驱动,对焦框回投);「对焦」按钮单独驱动;
+/// 「对焦后拍」开关切快门 0x9207 的 CaptureSort 首参。
+///
 /// tab 模式:IndexedStack 常驻挂载,离开 tab([active] 变 false)即停
 /// 取景(相机侧 Live View 高功耗,后台白白打链路)。
 library;
@@ -129,15 +133,22 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                 ),
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-                  child: Wrap(
-                    spacing: 8,
-                    runSpacing: 4,
-                    alignment: WrapAlignment.center,
-                    children: [
-                      for (final p
-                          in kShootingParams.where((p) => !p.prominent))
-                        _smallParamChip(context, p),
-                    ],
+                  // 参数多了改横滚行(Wrap 会溢出);行尾挂「对焦后拍」
+                  child: SizedBox(
+                    height: 44,
+                    child: ListView(
+                      scrollDirection: Axis.horizontal,
+                      padding: const EdgeInsets.symmetric(vertical: 2),
+                      children: [
+                        for (final p
+                            in kShootingParams.where((p) => !p.prominent))
+                          Padding(
+                            padding: const EdgeInsets.only(right: 8),
+                            child: _smallParamChip(context, p),
+                          ),
+                        _focusBeforeCaptureChip(context),
+                      ],
+                    ),
                   ),
                 ),
                 Padding(
@@ -146,6 +157,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                     mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                     children: [
                       _liveViewToggle(context),
+                      _focusButton(context),
                       _shutterButton(context),
                     ],
                   ),
@@ -161,62 +173,114 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   Widget _frameArea(BuildContext context) {
     final Uint8List? frame = controller.engine.frame.value;
     final status = controller.engine.status;
-    return Container(
-      color: Colors.black,
-      width: double.infinity,
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          if (frame != null)
-            Image.memory(frame, fit: BoxFit.contain,
-                gaplessPlayback: true) // 换帧不闪黑
-          else
-            Center(
-              child: Text(
-                status.value == LiveViewStatus.running
-                    ? '取景中…(等待首帧)'
-                    : status.value == LiveViewStatus.failed
-                        ? '取景失败(${controller.engine.lastError ?? "未知错误"})'
-                        : '取景已关闭\n开启「取景」查看实时画面',
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: Colors.white54),
-              ),
-            ),
-          if (_showGrid)
-            ValueListenableBuilder(
-              valueListenable: controller.analyzer.analysis,
-              builder: (context, FrameAnalysis? analysis, _) => GridOverlay(
-                  aspect: analysis == null
-                      ? null
-                      : analysis.width / analysis.height),
-            ),
-          if (_showZebra)
-            ValueListenableBuilder(
-              valueListenable: controller.analyzer.analysis,
-              builder: (context, FrameAnalysis? analysis, _) =>
-                  ZebraOverlay(analysis: analysis),
-            ),
-          if (_showHistogram)
-            Align(
-              alignment: Alignment.bottomLeft,
-              child: Padding(
-                padding: const EdgeInsets.all(8),
-                child: ValueListenableBuilder(
+    return LayoutBuilder(builder: (context, constraints) {
+      // 取景图像在画面里的实际显示矩形(BoxFit.contain 数学):
+      // 点按坐标 → 归一化帧坐标、对焦框回投,共用这一份映射。
+      final boxSize = constraints.biggest;
+      final frameSize = controller.frameSize.value;
+      Rect? imageRect;
+      if (frameSize != null && frameSize.width > 0 && frameSize.height > 0) {
+        final iw = frameSize.width.toDouble();
+        final ih = frameSize.height.toDouble();
+        final scale =
+            boxSize.width / iw < boxSize.height / ih ? boxSize.width / iw : boxSize.height / ih;
+        imageRect = Rect.fromLTWH((boxSize.width - iw * scale) / 2,
+            (boxSize.height - ih * scale) / 2, iw * scale, ih * scale);
+      }
+      return GestureDetector(
+        // 点按取景画面 = 触控对焦(无帧/未取景时控制器内静默忽略)
+        onTapUp: (d) => _handleTapFocus(d, imageRect),
+        child: Container(
+          color: Colors.black,
+          width: double.infinity,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              if (frame != null)
+                Image.memory(frame, fit: BoxFit.contain,
+                    gaplessPlayback: true) // 换帧不闪黑
+              else
+                Center(
+                  child: Text(
+                    status.value == LiveViewStatus.running
+                        ? '取景中…(等待首帧)'
+                        : status.value == LiveViewStatus.failed
+                            ? '取景失败(${controller.engine.lastError ?? "未知错误"})'
+                            : '取景已关闭\n开启「取景」查看实时画面\n点按画面可触控对焦',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: Colors.white54),
+                  ),
+                ),
+              if (_showGrid)
+                ValueListenableBuilder(
+                  valueListenable: controller.analyzer.analysis,
+                  builder: (context, FrameAnalysis? analysis, _) => GridOverlay(
+                      aspect: analysis == null
+                          ? null
+                          : analysis.width / analysis.height),
+                ),
+              if (_showZebra)
+                ValueListenableBuilder(
                   valueListenable: controller.analyzer.analysis,
                   builder: (context, FrameAnalysis? analysis, _) =>
-                      HistogramView(analysis: analysis),
+                      ZebraOverlay(analysis: analysis),
                 ),
-              ),
-            ),
-          if (_showLevel)
-            StreamBuilder<MotionOrientation>(
-              stream: PlatformServices.motion.attitudes,
-              builder: (context, snapshot) {
-                if (!snapshot.hasData) return const SizedBox.shrink();
-                return LevelOverlay(orientation: snapshot.data!);
-              },
-            ),
-        ],
+              if (_showHistogram)
+                Align(
+                  alignment: Alignment.bottomLeft,
+                  child: Padding(
+                    padding: const EdgeInsets.all(8),
+                    child: ValueListenableBuilder(
+                      valueListenable: controller.analyzer.analysis,
+                      builder: (context, FrameAnalysis? analysis, _) =>
+                          HistogramView(analysis: analysis),
+                    ),
+                  ),
+                ),
+              if (_showLevel)
+                StreamBuilder<MotionOrientation>(
+                  stream: PlatformServices.motion.attitudes,
+                  builder: (context, snapshot) {
+                    if (!snapshot.hasData) return const SizedBox.shrink();
+                    return LevelOverlay(orientation: snapshot.data!);
+                  },
+                ),
+              if (controller.afBox != null && imageRect != null)
+                _afBoxOverlay(imageRect, controller.afBox!),
+            ],
+          ),
+        ),
+      );
+    });
+  }
+
+  /// 点按 → 触控对焦:屏幕坐标经 contain 矩形归一化到取景帧坐标系。
+  void _handleTapFocus(TapUpDetails d, Rect? imageRect) {
+    if (imageRect == null) return;
+    final nx = ((d.localPosition.dx - imageRect.left) / imageRect.width)
+        .clamp(0.0, 1.0);
+    final ny = ((d.localPosition.dy - imageRect.top) / imageRect.height)
+        .clamp(0.0, 1.0);
+    unawaited(controller.touchFocus(nx, ny));
+  }
+
+  /// 触控对焦框:位置回投 contain 矩形;尺寸是视觉占位(相机侧实际
+  /// 对焦区域大小无从得知)。
+  Widget _afBoxOverlay(Rect imageRect, AfBox box) {
+    final side = imageRect.width * 0.18;
+    return Positioned(
+      left: imageRect.left + box.nx * imageRect.width - side / 2,
+      top: imageRect.top + box.ny * imageRect.height - side / 2,
+      width: side,
+      height: side,
+      child: const IgnorePointer(
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            border: Border.fromBorderSide(
+                BorderSide(color: Color(0xFFFFC107), width: 2)),
+            borderRadius: BorderRadius.all(Radius.circular(6)),
+          ),
+        ),
       ),
     );
   }
@@ -298,7 +362,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     );
   }
 
-  /// 其余拍摄参数小芯片(标签 + 值单行,Wrap 流式排布)。
+  /// 其余拍摄参数小芯片(标签 + 值单行,横滚行排布)。
   Widget _smallParamChip(BuildContext context, ShootingParam p) {
     final value = controller.paramProps[p.code]?.value;
     final writable = controller.propWritable(p.code);
@@ -432,6 +496,46 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         const SizedBox(height: 4),
         Text(active ? '取景中' : '取景'),
       ],
+    );
+  }
+
+  /// 对焦按钮:驱动一次自动对焦(0x90C1,候选码待真机核对;
+  /// 取景开启是前置条件 —— 未开取景机身回 0xA00B)。
+  Widget _focusButton(BuildContext context) {
+    final usable = controller.linkUp && controller.liveViewActive;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        FloatingActionButton(
+          heroTag: 'focus',
+          backgroundColor: usable ? null : Colors.grey,
+          onPressed:
+              usable && !controller.focusing ? controller.afDriveNow : null,
+          child: controller.focusing
+              ? const SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: CircularProgressIndicator(strokeWidth: 3),
+                )
+              : const Icon(Icons.center_focus_strong),
+        ),
+        const SizedBox(height: 4),
+        Text(controller.focusing ? '对焦中' : '对焦'),
+      ],
+    );
+  }
+
+  /// 「对焦后拍」开关:快门 0x9207 首参 CaptureSort —— 开 = 0xFFFFFFFE
+  /// (先驱动 AF 再释放,OpenZCine 候选语义);关 = 0x0000(Zf 已实证)。
+  Widget _focusBeforeCaptureChip(BuildContext context) {
+    return Tooltip(
+      message: '释放快门前先自动对焦(半按-全按;候选参数,待真机核对)',
+      child: FilterChip(
+        label: const Text('对焦后拍'),
+        selected: controller.focusBeforeCapture,
+        onSelected: (_) =>
+            controller.focusBeforeCapture = !controller.focusBeforeCapture,
+      ),
     );
   }
 

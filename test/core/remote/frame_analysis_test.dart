@@ -34,6 +34,45 @@ final class _FakeFrames extends ChangeNotifier implements ValueListenable<Uint8L
 }
 
 void main() {
+  group('jpegSofSize(标记结构嗅探,不解码)', () {
+    test('真实编码帧 → 32×24', () {
+      expect(jpegSofSize(_gradientJpeg()), (width: 32, height: 24));
+    });
+
+    test('手拼段链:跳过 APP0 读 SOF0 宽高', () {
+      final jpeg = Uint8List.fromList([
+        0xFF, 0xD8, // SOI
+        0xFF, 0xE0, 0x00, 0x04, 0x00, 0x00, // APP0(空段)
+        0xFF, 0xC0, 0x00, 0x0B, 0x08, // SOF0:段长 11、精度 8
+        0x00, 0x18, // 高 24
+        0x00, 0x20, // 宽 32
+        0x01, 0x00, 0x00, 0x00, // 1 分量占位
+      ]);
+      expect(jpegSofSize(jpeg), (width: 32, height: 24));
+    });
+
+    test('DHT(0xC4)不误判为 SOF;SOF2(渐进式)照常解析', () {
+      final jpeg = Uint8List.fromList([
+        0xFF, 0xD8, // SOI
+        0xFF, 0xC4, 0x00, 0x04, 0x00, 0x00, // DHT(空段,C0..CF 排除项)
+        0xFF, 0xC2, 0x00, 0x0B, 0x08, // SOF2:渐进式
+        0x00, 0x0C, // 高 12
+        0x00, 0x10, // 宽 16
+        0x01, 0x00, 0x00, 0x00,
+      ]);
+      expect(jpegSofSize(jpeg), (width: 16, height: 12));
+    });
+
+    test('非 JPEG / 空 / SOI+EOI 无 SOF → null', () {
+      expect(jpegSofSize(Uint8List.fromList([1, 2, 3, 4])), isNull);
+      expect(jpegSofSize(Uint8List(0)), isNull);
+      expect(
+          jpegSofSize(
+              Uint8List.fromList([0xFF, 0xD8, 0xFF, 0xD9])), // 只有起止标记
+          isNull);
+    });
+  });
+
   group('analyzeJpegFrame', () {
     test('渐变帧:直方图铺开 + 无过曝', () async {
       final a = analyzeJpegFrame(_gradientJpeg(), maskCols: 8, maskRows: 6);

@@ -114,7 +114,8 @@ Uint8List _propDescDataset(int code, PtpDataType type, int current,
 }
 
 /// 目录序参数应答表(模式 A · f/2.8 · 1/100s · ISO 200 · EV+0.3 ·
-/// 白平衡自动 · 测光/对焦/画质=2 · 释放单张)。
+/// 白平衡自动 · 色温 5500K · 闪光关闭 · 测光 2 · 对焦 AF-C · 对焦模式
+/// AF-S · 释放单张 · 画质 RAW · RAW 无损 · 尺寸 2 · 区域 FX · 校准标准)。
 typedef _ParamSpec = ({
   int code,
   PtpDataType type,
@@ -128,11 +129,18 @@ const _kParamSpecs = <_ParamSpec>[
   (code: PtpDevicePropCode.exposureTime, type: PtpDataType.uint32, value: 10000, enums: null),
   (code: PtpDevicePropCode.exposureIndex, type: PtpDataType.uint16, value: 200, enums: [100, 200, 400, 800]),
   (code: PtpDevicePropCode.exposureBiasCompensation, type: PtpDataType.int16, value: 300, enums: null),
-  (code: PtpDevicePropCode.whiteBalance, type: PtpDataType.uint16, value: 2, enums: [1, 2, 4, 5, 6, 7]),
+  (code: PtpDevicePropCode.whiteBalance, type: PtpDataType.uint16, value: 2, enums: [2, 4, 5, 6, 7, 0x8010]),
+  (code: PtpDevicePropCode.wbColorTemp, type: PtpDataType.uint16, value: 5500, enums: [2700, 5500, 6500]),
+  (code: PtpDevicePropCode.flashMode, type: PtpDataType.uint16, value: 2, enums: [2, 4, 0x8010, 0x8012]),
   (code: PtpDevicePropCode.exposureMeteringMode, type: PtpDataType.uint16, value: 2, enums: [1, 2, 3, 4, 5]),
-  (code: PtpDevicePropCode.focusMode, type: PtpDataType.uint16, value: 2, enums: [1, 2, 3]),
-  (code: PtpDevicePropCode.stillCaptureMode, type: PtpDataType.uint16, value: 1, enums: [1, 2, 3]),
-  (code: PtpDevicePropCode.compressionSetting, type: PtpDataType.uint16, value: 2, enums: [1, 2, 3]),
+  (code: PtpDevicePropCode.focusMode, type: PtpDataType.uint16, value: 1, enums: [0, 1, 2, 4]),
+  (code: PtpDevicePropCode.stillFocusMode, type: PtpDataType.uint8, value: 0, enums: [0, 1, 4, 5]),
+  (code: PtpDevicePropCode.stillCaptureMode, type: PtpDataType.uint16, value: 1, enums: [1, 2, 0x8010, 0x8011]),
+  (code: PtpDevicePropCode.compressionSetting, type: PtpDataType.uint8, value: 7, enums: [4, 5, 7, 12]),
+  (code: PtpDevicePropCode.rawCompressionType, type: PtpDataType.uint8, value: 0, enums: [0, 3, 4]),
+  (code: PtpDevicePropCode.imageSize, type: PtpDataType.uint16, value: 2, enums: [1, 2, 3]),
+  (code: PtpDevicePropCode.captureAreaCrop, type: PtpDataType.uint8, value: 0, enums: [0, 2, 4, 5]),
+  (code: PtpDevicePropCode.activePicCtrlItem, type: PtpDataType.uint16, value: 1, enums: [1, 2, 3, 4]),
 ];
 
 /// 目录序全量 PropDesc 应答(均可写;readonlyCodes 指定只读属性)。
@@ -143,14 +151,28 @@ void _scriptParams(_ScriptTransport t, {Set<int> readonlyCodes = const {}}) {
   }
 }
 
-/// 裸值应答字节(u32 四字节,其余 u16;供 0x1015 回退路径)。
+/// 裸值应答字节(按类型宽度:u8 一字节 / u16 两字节 / u32 四字节;
+/// 供 0x1015 回退路径)。
 Uint8List _rawBytes(_ParamSpec s) {
-  final v = s.value;
-  return s.type == PtpDataType.uint32
-      ? Uint8List.fromList(
-          [v & 0xFF, (v >> 8) & 0xFF, (v >> 16) & 0xFF, (v >> 24) & 0xFF])
-      : Uint8List.fromList([v & 0xFF, (v >> 8) & 0xFF]);
+  final width = s.type.width!;
+  return Uint8List.fromList(
+      [for (var i = 0; i < width; i++) (s.value >> (8 * i)) & 0xFF]);
 }
+
+/// 挂起的 delay(永不完成):引擎帧轮询/AE 轮询在测试里驻停,
+/// 不与被测路径抢脚本应答。
+Future<void> _parkedDelay(Duration _) => Completer<void>().future;
+
+/// SOF-only 假帧(SOI + SOF0 段头,32×24):够 jpegSofSize 取尺寸,
+/// 不必是可解码 JPEG(控制器测试不渲染)。
+Uint8List _fakeFrame({int width = 32, int height = 24}) =>
+    Uint8List.fromList([
+      0xFF, 0xD8, // SOI
+      0xFF, 0xC0, 0x00, 0x0B, 0x08, // SOF0:段长 11、精度 8
+      (height >> 8) & 0xFF, height & 0xFF, // 高
+      (width >> 8) & 0xFF, width & 0xFF, // 宽
+      0x01, 0x00, 0x00, 0x00, // 1 分量(占位,尺寸解析不读)
+    ]);
 
 void main() {
   late _ScriptTransport transport;
@@ -443,5 +465,225 @@ void main() {
     expect(controller.error, contains('参数写入失败'));
     expect(controller.exposure?.fNumber, 280, reason: '失败后原值不动');
     expect(controller.writing, isFalse);
+  });
+
+  test('对焦后拍默认关:0x9207 保持 Zf 实证 [0,0]', () async {
+    transport
+      ..reply(PtpResponseCode.generalError) // 0x100E 拒
+      ..ok() // 0x9207
+      ..ok(); // deviceReady
+    final c = controller.capture();
+    await pumpEventQueue();
+    delay.release();
+    await c;
+    expect(
+        transport.requests
+            .singleWhere(
+                (r) => r.opcode == NikonOperationCode.initiateCaptureRecInMedia)
+            .params,
+        [0, 0]);
+  });
+
+  test('对焦后拍开:回退路径与直发路径的 0x9207 都带 CaptureSort 首参',
+      () async {
+    controller.focusBeforeCapture = true;
+    expect(controller.focusBeforeCapture, isTrue);
+    transport
+      ..reply(PtpResponseCode.generalError) // 0x100E 拒
+      ..ok() // 0x9207(对焦后拍)
+      ..ok(); // deviceReady
+    final first = controller.capture();
+    await pumpEventQueue();
+    delay.release();
+    await first;
+
+    transport
+      ..ok() // 0x9207 直发
+      ..ok(); // deviceReady
+    final second = controller.capture();
+    await pumpEventQueue();
+    delay.release();
+    await second;
+
+    final mediaOps = transport.requests
+        .where((r) => r.opcode == NikonOperationCode.initiateCaptureRecInMedia)
+        .toList();
+    expect(mediaOps, hasLength(2));
+    expect(mediaOps[0].params, [0xFFFFFFFE, 0]);
+    expect(mediaOps[1].params, [0xFFFFFFFE, 0],
+        reason: '缓存码直发路径同样携带');
+  });
+
+  group('触控对焦与对焦驱动(候选码,待真机核对)', () {
+    late _ScriptTransport transport;
+    late _FakeConnection conn;
+    late RemoteController controller;
+
+    setUp(() {
+      transport = _ScriptTransport();
+      conn = _FakeConnection();
+      // 引擎帧轮询/AE 轮询驻停(不抢脚本);控制器 delay 保留门控
+      // 供 0x2019 忙退避测试放行。
+      controller = RemoteController(
+        session: PtpSession(transport: transport),
+        connection: conn,
+        engine: LiveViewEngine(
+            session: PtpSession(transport: transport), delay: _parkedDelay),
+        delay: delay.call,
+        aeDelay: _parkedDelay,
+      );
+    });
+
+    tearDown(() async {
+      controller.dispose();
+    });
+
+    /// 开取景:0x9201 + 首帧(SOF 32×24)→ 帧轮询驻停,帧尺寸已入册。
+    Future<void> startLiveView() async {
+      transport
+        ..ok() // 0x9201
+        ..ok(data: _fakeFrame()); // 首帧
+      await controller.toggleLiveView();
+      await pumpEventQueue();
+      expect(controller.frameSize.value, (width: 32, height: 24));
+    }
+
+    test('点按 → 0x9205 帧像素坐标 + 0x90C1 驱动 + 对焦框上屏', () async {
+      await startLiveView();
+      transport
+        ..ok() // changeAfArea
+        ..ok(); // afDrive
+      await controller.touchFocus(0.5, 0.25);
+      final af = transport.requests
+          .singleWhere((r) => r.opcode == NikonOperationCode.changeAfArea);
+      expect(af.params, [16, 6], reason: '0.5×32、0.25×24');
+      expect(transport.count(NikonOperationCode.afDrive), 1);
+      expect(controller.afBox, isNotNull);
+      expect(controller.afBox!.nx, 0.5);
+      expect(controller.afBox!.ny, 0.25);
+      expect(controller.error, isNull);
+      expect(controller.focusing, isFalse);
+    });
+
+    test('0x9205 忙(0x2019)→ 短退避重试后成功', () async {
+      await startLiveView();
+      transport
+        ..reply(PtpResponseCode.deviceBusy)
+        ..reply(PtpResponseCode.deviceBusy)
+        ..ok() // changeAfArea 第 3 次成功
+        ..ok(); // afDrive
+      final f = controller.touchFocus(0.25, 0.25);
+      await pumpEventQueue();
+      delay.release(); // 第 1 次退避
+      await pumpEventQueue();
+      delay.release(); // 第 2 次退避
+      await f;
+      expect(transport.count(NikonOperationCode.changeAfArea), 3);
+      expect(controller.afBox, isNotNull);
+      expect(controller.error, isNull);
+    });
+
+    test('未开取景点按 → 静默忽略,零流量', () async {
+      await controller.touchFocus(0.5, 0.5);
+      expect(
+          transport.requests
+              .where((r) => r.opcode == NikonOperationCode.changeAfArea),
+          isEmpty);
+      expect(controller.error, isNull);
+    });
+
+    test('取景中但帧无 SOF(尺寸未知)→ 提示且不发对焦', () async {
+      transport
+        ..ok() // 0x9201
+        ..ok(data: Uint8List.fromList([1, 2, 3])); // 非 JPEG 帧
+      await controller.toggleLiveView();
+      await pumpEventQueue();
+      expect(controller.frameSize.value, isNull);
+      await controller.touchFocus(0.5, 0.5);
+      expect(controller.error, contains('暂无取景帧'));
+      expect(transport.count(NikonOperationCode.changeAfArea), 0);
+    });
+
+    test('对焦按钮:0x90C1 成功;0xA002 未合焦转友好提示', () async {
+      await startLiveView();
+      transport.ok(); // afDrive 成功
+      await controller.afDriveNow();
+      expect(controller.error, isNull);
+      expect(controller.focusing, isFalse);
+
+      transport.reply(NikonResponseCode.outOfFocus);
+      await controller.afDriveNow();
+      expect(controller.error, contains('未合焦'));
+      expect(controller.focusing, isFalse);
+    });
+
+    test('对焦按钮:未开取景 → 提示不发(0xA00B notLiveView 应答形态)',
+        () async {
+      await controller.afDriveNow();
+      expect(controller.error, contains('请先开启取景'));
+      expect(
+          transport.requests
+              .where((r) => r.opcode == NikonOperationCode.afDrive),
+          isEmpty);
+    });
+
+    test('对焦框:停取景即清', () async {
+      await startLiveView();
+      transport
+        ..ok()
+        ..ok();
+      await controller.touchFocus(0.5, 0.5);
+      expect(controller.afBox, isNotNull);
+      transport.ok(); // 0x9202
+      await controller.toggleLiveView(); // 关取景
+      await pumpEventQueue();
+      expect(controller.afBox, isNull);
+    });
+  });
+
+  test('AE 轮换轮询:取景运行期间按节拍刷三要素,停取景即停', () async {
+    final aeGates = Queue<Completer<void>>();
+    final aeController = RemoteController(
+      session: PtpSession(transport: transport),
+      connection: conn,
+      engine: LiveViewEngine(
+          session: PtpSession(transport: transport), delay: _parkedDelay),
+      delay: _parkedDelay,
+      aeDelay: (_) {
+        final c = Completer<void>();
+        aeGates.add(c);
+        return c.future;
+      },
+    );
+    addTearDown(aeController.dispose);
+    transport
+      ..ok() // 0x9201
+      ..ok(data: _fakeFrame()); // 首帧
+    await aeController.toggleLiveView();
+    await pumpEventQueue();
+    expect(aeController.liveViewActive, isTrue);
+
+    // 第 1 拍:三要素全刷(机身重算 → 快门 1/50、ISO 400)
+    transport
+      ..ok(data: _propDescDataset(
+          PtpDevicePropCode.fNumber, PtpDataType.uint16, 280))
+      ..ok(data: _propDescDataset(
+          PtpDevicePropCode.exposureTime, PtpDataType.uint32, 20000))
+      ..ok(data: _propDescDataset(
+          PtpDevicePropCode.exposureIndex, PtpDataType.uint16, 400));
+    aeGates.removeFirst().complete();
+    await pumpEventQueue();
+    expect(aeController.exposure?.iso, 400);
+    expect(aeController.exposure?.shutterUs, 20000);
+
+    // 停取景 → 轮询停:在途节拍放行也不得再刷(脚本未预置应答,
+    // 若错误刷新会以脚本耗尽 StateError 炸出 —— Error 不被 on Exception 捕)。
+    transport.ok(); // 0x9202
+    await aeController.toggleLiveView();
+    await pumpEventQueue();
+    expect(aeController.liveViewActive, isFalse);
+    aeGates.removeFirst().complete();
+    await pumpEventQueue();
+    expect(aeController.exposure?.iso, 400, reason: '停取景后不得再刷');
   });
 }
