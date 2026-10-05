@@ -26,17 +26,21 @@ void main() {
     expect(find.text('扫描相机'), findsNothing);
   });
 
-  testWidgets('拍摄 tab:取景与快门就位', (tester) async {
+  testWidgets('拍摄 tab:取景/快门/参数芯片就位', (tester) async {
     await boot(tester);
 
     // 未连接时 linkUp 门闩默认放行(RemoteController 冷启乐观态),
-    // 断连横幅不显示 —— 以取景/快门控件在场为冒烟点。
+    // 断连横幅不显示 —— 以取景/快门/参数控件在场为冒烟点。
     await tester.tap(find.text('拍摄'));
     await tester.pumpAndSettle();
     expect(find.text('拍摄'), findsWidgets); // AppBar + tab
     expect(find.text('取景'), findsOneWidget);
     // 「快门」×2:曝光参数 chip + 快门钮文案
     expect(find.text('快门'), findsNWidgets(2));
+    // 参数目录 chips(未读值 = '--')
+    expect(find.text('模式'), findsOneWidget);
+    expect(find.text('白平衡'), findsOneWidget);
+    expect(find.text('画质'), findsOneWidget);
   });
 
   testWidgets('图库 tab:空态(非 ohos 环境静默)', (tester) async {

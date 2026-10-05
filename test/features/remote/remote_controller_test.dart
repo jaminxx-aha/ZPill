@@ -113,17 +113,43 @@ Uint8List _propDescDataset(int code, PtpDataType type, int current,
   return w.takeBytes();
 }
 
-/// 三次曝光属性 PropDesc 应答(f/2.8 · 1/100s · ISO 200,均可写)。
-void _scriptExposure(_ScriptTransport t) {
-  t
-    ..ok(data: _propDescDataset(
-        PtpDevicePropCode.fNumber, PtpDataType.uint16, 28,
-        enums: [28, 32, 40]))
-    ..ok(data: _propDescDataset(
-        PtpDevicePropCode.exposureTime, PtpDataType.uint32, 10000))
-    ..ok(data: _propDescDataset(
-        PtpDevicePropCode.exposureIndex, PtpDataType.uint16, 200,
-        enums: [100, 200, 400, 800]));
+/// 目录序参数应答表(模式 A · f/2.8 · 1/100s · ISO 200 · EV+0.3 ·
+/// 白平衡自动 · 测光/对焦/画质=2 · 释放单张)。
+typedef _ParamSpec = ({
+  int code,
+  PtpDataType type,
+  int value,
+  List<int>? enums,
+});
+
+const _kParamSpecs = <_ParamSpec>[
+  (code: PtpDevicePropCode.exposureProgramMode, type: PtpDataType.uint16, value: 3, enums: [1, 2, 3, 4, 5]),
+  (code: PtpDevicePropCode.fNumber, type: PtpDataType.uint16, value: 28, enums: [28, 32, 40]),
+  (code: PtpDevicePropCode.exposureTime, type: PtpDataType.uint32, value: 10000, enums: null),
+  (code: PtpDevicePropCode.exposureIndex, type: PtpDataType.uint16, value: 200, enums: [100, 200, 400, 800]),
+  (code: PtpDevicePropCode.exposureBiasCompensation, type: PtpDataType.int16, value: 300, enums: null),
+  (code: PtpDevicePropCode.whiteBalance, type: PtpDataType.uint16, value: 2, enums: [1, 2, 4, 5, 6, 7]),
+  (code: PtpDevicePropCode.exposureMeteringMode, type: PtpDataType.uint16, value: 2, enums: [1, 2, 3, 4, 5]),
+  (code: PtpDevicePropCode.focusMode, type: PtpDataType.uint16, value: 2, enums: [1, 2, 3]),
+  (code: PtpDevicePropCode.stillCaptureMode, type: PtpDataType.uint16, value: 1, enums: [1, 2, 3]),
+  (code: PtpDevicePropCode.compressionSetting, type: PtpDataType.uint16, value: 2, enums: [1, 2, 3]),
+];
+
+/// 目录序全量 PropDesc 应答(均可写;readonlyCodes 指定只读属性)。
+void _scriptParams(_ScriptTransport t, {Set<int> readonlyCodes = const {}}) {
+  for (final s in _kParamSpecs) {
+    t.ok(data: _propDescDataset(s.code, s.type, s.value,
+        getSet: !readonlyCodes.contains(s.code), enums: s.enums));
+  }
+}
+
+/// 裸值应答字节(u32 四字节,其余 u16;供 0x1015 回退路径)。
+Uint8List _rawBytes(_ParamSpec s) {
+  final v = s.value;
+  return s.type == PtpDataType.uint32
+      ? Uint8List.fromList(
+          [v & 0xFF, (v >> 8) & 0xFF, (v >> 16) & 0xFF, (v >> 24) & 0xFF])
+      : Uint8List.fromList([v & 0xFF, (v >> 8) & 0xFF]);
 }
 
 void main() {
@@ -151,13 +177,16 @@ void main() {
     controller.dispose();
   });
 
-  test('连接成功 → 曝光自动刷新(0x5007/0x500D/0x500F)', () async {
-    _scriptExposure(transport);
+  test('连接成功 → 参数自动刷新(目录全量:三要素 + 模式/白平衡等)', () async {
+    _scriptParams(transport);
     conn.statesCtrl.add(CameraLinkState.connected);
     await pumpEventQueue();
     expect(controller.exposure?.fNumber, 28);
     expect(controller.exposure?.shutterUs, 10000);
     expect(controller.exposure?.iso, 200);
+    expect(controller.paramProps[PtpDevicePropCode.exposureProgramMode]?.value,
+        3, reason: '模式 = 光圈优先 A');
+    expect(controller.paramProps[PtpDevicePropCode.whiteBalance]?.value, 2);
     expect(controller.linkUp, isTrue);
   });
 
@@ -258,13 +287,13 @@ void main() {
     expect(transport.count(NikonOperationCode.deviceReady), 0);
   });
 
-  test('ObjectAdded → 「已拍摄」提示 + 曝光刷新;断连后迟到事件丢弃', () async {
-    _scriptExposure(transport);
+  test('ObjectAdded → 「已拍摄」提示 + 参数刷新;断连后迟到事件丢弃', () async {
+    _scriptParams(transport);
     conn.statesCtrl.add(CameraLinkState.connected);
     await pumpEventQueue();
     expect(controller.exposure?.iso, 200);
 
-    _scriptExposure(transport); // ObjectAdded 触发的刷新
+    _scriptParams(transport); // ObjectAdded 触发的刷新
     transport.eventCtrl
         .add(const PtpEvent(code: PtpEventCode.objectAdded, transactionId: 0xFFFFFFFF, params: [0x1234]));
     await pumpEventQueue();
@@ -293,36 +322,39 @@ void main() {
   });
 
   test('PropDesc 驱动:desc 域入状态(枚举值/可写性可见)', () async {
-    _scriptExposure(transport);
+    _scriptParams(transport);
     conn.statesCtrl.add(CameraLinkState.connected);
     await pumpEventQueue();
-    final f = controller.exposureProps[PtpDevicePropCode.fNumber]!;
+    final f = controller.paramProps[PtpDevicePropCode.fNumber]!;
     expect(f.value, 28);
     expect(f.desc?.enumValues, [28, 32, 40]);
     expect(f.desc?.getSet, isTrue);
     expect(controller.exposure?.shutterUs, 10000);
+    final mode = controller.paramProps[PtpDevicePropCode.exposureProgramMode]!;
+    expect(mode.desc?.enumValues, [1, 2, 3, 4, 5]);
+    expect(mode.desc?.getSet, isTrue);
   });
 
   test('PropDesc 不可用退回裸值 0x1015(域未知但值可用)', () async {
-    transport
-      ..reply(PtpResponseCode.operationNotSupported) // fNumber 0x1014 拒
-      ..ok(data: Uint8List.fromList([28, 0]))
-      ..reply(PtpResponseCode.operationNotSupported) // exposureTime
-      ..ok(data: Uint8List.fromList([16, 39, 0, 0]))
-      ..reply(PtpResponseCode.operationNotSupported) // exposureIndex
-      ..ok(data: Uint8List.fromList([200, 0]));
+    for (final s in _kParamSpecs) {
+      transport
+        ..reply(PtpResponseCode.operationNotSupported) // 0x1014 拒
+        ..ok(data: _rawBytes(s)); // 0x1015 兜底
+    }
     conn.statesCtrl.add(CameraLinkState.connected);
     await pumpEventQueue();
     expect(controller.exposure?.fNumber, 28);
     expect(controller.exposure?.shutterUs, 10000);
     expect(controller.exposure?.iso, 200);
-    expect(controller.exposureProps[PtpDevicePropCode.fNumber]?.desc, isNull,
+    expect(controller.paramProps[PtpDevicePropCode.exposureProgramMode]?.value,
+        3);
+    expect(controller.paramProps[PtpDevicePropCode.fNumber]?.desc, isNull,
         reason: 'PropDesc 拒答后不得残留旧 desc');
   });
 
-  test('门禁关(生产默认):setExposureProp 直接拒绝,零流量', () async {
-    await controller.setExposureProp(PtpDevicePropCode.fNumber, 32);
-    expect(controller.error, contains('曝光调节未启用'));
+  test('门禁关(生产默认):setParam 直接拒绝,零流量', () async {
+    await controller.setParam(PtpDevicePropCode.fNumber, 32);
+    expect(controller.error, contains('参数调节未启用'));
     expect(transport.requests, isEmpty);
     expect(controller.writing, isFalse);
   });
@@ -340,18 +372,20 @@ void main() {
       setPropGate: () => true,
     );
 
-    _scriptExposure(transport);
+    _scriptParams(transport);
     conn.statesCtrl.add(CameraLinkState.connected);
     await pumpEventQueue();
-    expect(controller.canAdjustExposure, isTrue);
+    expect(controller.canAdjustParams, isTrue);
     expect(controller.propWritable(PtpDevicePropCode.fNumber), isTrue);
+    expect(controller.propWritable(PtpDevicePropCode.exposureProgramMode),
+        isTrue);
 
     transport
       ..ok() // 0x1016 写 fNumber=32
       ..ok(data: _propDescDataset( // 回读:相机 clamp 到 40
           PtpDevicePropCode.fNumber, PtpDataType.uint16, 40,
           enums: [28, 32, 40]));
-    await controller.setExposureProp(PtpDevicePropCode.fNumber, 32);
+    await controller.setParam(PtpDevicePropCode.fNumber, 32);
 
     final write = transport.requests
         .singleWhere((r) => r.opcode == PtpOperationCode.setDevicePropValue);
@@ -373,18 +407,12 @@ void main() {
       setPropGate: () => true,
     );
 
-    transport
-      ..ok(data: _propDescDataset( // fNumber 只读
-          PtpDevicePropCode.fNumber, PtpDataType.uint16, 28,
-          getSet: false))
-      ..ok(data: _propDescDataset(
-          PtpDevicePropCode.exposureTime, PtpDataType.uint32, 10000))
-      ..ok(data: _propDescDataset(
-          PtpDevicePropCode.exposureIndex, PtpDataType.uint16, 200));
+    _scriptParams(transport,
+        readonlyCodes: {PtpDevicePropCode.fNumber}); // 光圈只读
     conn.statesCtrl.add(CameraLinkState.connected);
     await pumpEventQueue();
 
-    await controller.setExposureProp(PtpDevicePropCode.fNumber, 32);
+    await controller.setParam(PtpDevicePropCode.fNumber, 32);
     expect(controller.error, contains('只读'));
     expect(
         transport.requests
@@ -406,13 +434,13 @@ void main() {
       setPropGate: () => true,
     );
 
-    _scriptExposure(transport);
+    _scriptParams(transport);
     conn.statesCtrl.add(CameraLinkState.connected);
     await pumpEventQueue();
 
     transport.reply(PtpResponseCode.deviceBusy); // 0x1016 忙
-    await controller.setExposureProp(PtpDevicePropCode.fNumber, 32);
-    expect(controller.error, contains('曝光调节失败'));
+    await controller.setParam(PtpDevicePropCode.fNumber, 32);
+    expect(controller.error, contains('参数写入失败'));
     expect(controller.exposure?.fNumber, 28, reason: '失败后原值不动');
     expect(controller.writing, isFalse);
   });

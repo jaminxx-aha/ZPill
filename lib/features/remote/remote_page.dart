@@ -1,10 +1,10 @@
-/// 拍摄页(底部导航 tab):Live View 监看 + 快门释放 + 曝光展示与调节。
+/// 拍摄页(底部导航 tab):Live View 监看 + 快门释放 + 拍摄参数展示与调节。
 ///
 /// PTP 操作:0x9201/0x9203/0x9202 取景三步(候选码,待真机核对)、
-/// InitiateCapture 0x100E 快门、GetDevicePropDesc 0x1014 曝光三要素
-/// (可写性/取值域驱动调节控件)。SetDevicePropValue(0x1016)被
-/// [PtpSession.kSetPropEnabled] 门禁 —— 真机核对前调节入口静默只读,
-/// 翻开后同一 UI 即可写。
+/// InitiateCapture 0x100E 快门、GetDevicePropDesc 0x1014 拍摄参数
+/// (可写性/取值域驱动调节控件;参数表见 [kShootingParams])。
+/// SetDevicePropValue(0x1016)被 [PtpSession.kSetPropEnabled] 门禁 ——
+/// 真机核对前调节入口静默只读,翻开后台同一 UI 即可写。
 ///
 /// tab 模式:IndexedStack 常驻挂载,离开 tab([active] 变 false)即停
 /// 取景(相机侧 Live View 高功耗,后台白白打链路)。
@@ -16,13 +16,13 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 
 import '../../app_services.dart';
-import '../../core/ptp/operation_codes.dart';
 import '../../core/remote/frame_analysis.dart';
 import '../../core/remote/live_view_engine.dart';
 import '../../platform/motion_host.dart';
 import '../../platform/services.dart';
 import 'live_view_overlays.dart';
 import 'remote_controller.dart';
+import 'shooting_param_catalog.dart';
 
 class RemotePage extends StatefulWidget {
   const RemotePage({super.key, this.controller, this.active = true});
@@ -119,15 +119,24 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                 if (controller.notice != null)
                   _banner(context, controller.notice!, Colors.green),
                 Padding(
-                  padding: const EdgeInsets.all(16),
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
                   child: Row(
                     children: [
-                      _exposureChip(
-                          context, '光圈', PtpDevicePropCode.fNumber),
-                      _exposureChip(
-                          context, '快门', PtpDevicePropCode.exposureTime),
-                      _exposureChip(
-                          context, 'ISO', PtpDevicePropCode.exposureIndex),
+                      for (final p in kShootingParams.where((p) => p.prominent))
+                        _bigParamChip(context, p),
+                    ],
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                  child: Wrap(
+                    spacing: 8,
+                    runSpacing: 4,
+                    alignment: WrapAlignment.center,
+                    children: [
+                      for (final p
+                          in kShootingParams.where((p) => !p.prominent))
+                        _smallParamChip(context, p),
                     ],
                   ),
                 ),
@@ -257,14 +266,15 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     );
   }
 
-  Widget _exposureChip(BuildContext context, String label, int propCode) {
-    final value = controller.exposureProps[propCode]?.value;
-    final writable = controller.propWritable(propCode);
+  /// 曝光三要素大芯片(值 + 标签两行)。
+  Widget _bigParamChip(BuildContext context, ShootingParam p) {
+    final value = controller.paramProps[p.code]?.value;
+    final writable = controller.propWritable(p.code);
     return Expanded(
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 4),
         child: InkWell(
-          onTap: writable ? () => _editProp(context, propCode, label) : null,
+          onTap: writable ? () => _editParam(context, p) : null,
           borderRadius: BorderRadius.circular(8),
           child: Container(
             padding: const EdgeInsets.symmetric(vertical: 8),
@@ -276,9 +286,9 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
             ),
             child: Column(
               children: [
-                Text(label,
+                Text(p.label,
                     style: const TextStyle(fontSize: 12, color: Colors.grey)),
-                Text(_formatProp(propCode, value),
+                Text(p.display(value),
                     style: const TextStyle(fontSize: 16)),
               ],
             ),
@@ -288,10 +298,38 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     );
   }
 
-  /// 曝光参数编辑面板:枚举域 → 列表单选;范围域 → 滑条;域未知 → 只读
+  /// 其余拍摄参数小芯片(标签 + 值单行,Wrap 流式排布)。
+  Widget _smallParamChip(BuildContext context, ShootingParam p) {
+    final value = controller.paramProps[p.code]?.value;
+    final writable = controller.propWritable(p.code);
+    return InkWell(
+      onTap: writable ? () => _editParam(context, p) : null,
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          border: Border.all(
+              color: writable ? Theme.of(context).colorScheme.primary
+                  : Colors.grey),
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(p.label,
+                style: const TextStyle(fontSize: 11, color: Colors.grey)),
+            const SizedBox(width: 4),
+            Text(p.display(value), style: const TextStyle(fontSize: 13)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 拍摄参数编辑面板:枚举域 → 列表单选;范围域 → 滑条;域未知 → 只读
   /// 提示。选中即写(0x1016)并回读刷新,不额外确认 —— 相机侧可随时再调。
-  Future<void> _editProp(BuildContext context, int propCode, String label) {
-    final state = controller.exposureProps[propCode];
+  Future<void> _editParam(BuildContext context, ShootingParam p) {
+    final state = controller.paramProps[p.code];
     final desc = state?.desc;
     final enums =
         desc?.enumValues?.whereType<int>().toList(growable: false);
@@ -306,7 +344,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
           animation: controller,
           builder: (context, _) {
             final current =
-                controller.exposureProps[propCode]?.value;
+                controller.paramProps[p.code]?.value;
             final writing = controller.writing; // 写中防连点
             return Column(
               mainAxisSize: MainAxisSize.min,
@@ -314,7 +352,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
               children: [
                 Padding(
                   padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
-                  child: Text(label,
+                  child: Text(p.label,
                       style: Theme.of(sheetContext)
                           .textTheme
                           .titleMedium
@@ -327,7 +365,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                       children: [
                         for (final v in enums)
                           ListTile(
-                            title: Text(_formatProp(propCode, v)),
+                            title: Text(p.display(v)),
                             trailing: v == current
                                 ? const Icon(Icons.check)
                                 : null,
@@ -335,7 +373,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                                 ? null
                                 : () {
                                     Navigator.of(sheetContext).pop();
-                                    controller.setExposureProp(propCode, v);
+                                    controller.setParam(p.code, v);
                                   },
                           ),
                       ],
@@ -349,7 +387,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                     padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
                     child: Column(
                       children: [
-                        Text(_formatProp(propCode, current),
+                        Text(p.display(current),
                             style: Theme.of(sheetContext)
                                 .textTheme
                                 .headlineSmall),
@@ -360,10 +398,10 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                           max: rangeMax.toDouble(),
                           divisions:
                               ((rangeMax - rangeMin) ~/ rangeStep).clamp(1, 1 << 20),
-                          label: _formatProp(propCode, current),
+                          label: p.display(current),
                           onChanged: writing ? null : (_) {},
                           onChangeEnd: (v) =>
-                              controller.setExposureProp(propCode, v.round()),
+                              controller.setParam(p.code, v.round()),
                         ),
                       ],
                     ),
@@ -379,16 +417,6 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         ),
       ),
     );
-  }
-
-  String _formatProp(int propCode, int? v) {
-    if (v == null) return '--';
-    return switch (propCode) {
-      PtpDevicePropCode.fNumber => 'f/${(v / 10).toStringAsFixed(1)}',
-      PtpDevicePropCode.exposureTime => _formatShutter(v),
-      PtpDevicePropCode.exposureIndex => 'ISO $v',
-      _ => '$v',
-    };
   }
 
   Widget _liveViewToggle(BuildContext context) {
@@ -434,14 +462,5 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         const Text('快门'),
       ],
     );
-  }
-
-  String _formatShutter(int? us) {
-    if (us == null || us <= 0) return '--';
-    if (us >= 1000000) {
-      final s = us / 1000000;
-      return '${s == s.roundToDouble() ? s.toInt() : s.toStringAsFixed(1)}s';
-    }
-    return '1/${(1000000 / us).round()}s';
   }
 }
