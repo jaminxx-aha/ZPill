@@ -427,4 +427,79 @@ void main() {
 
     await _drainSnackBar(tester);
   });
+
+  // ── 文件夹筛选 chips(独立相机相册页) ─────────────────────────
+
+  testWidgets('文件夹 chips:双相册亮出,点选切换过滤并清空跨相册选择',
+      (tester) async {
+    final repo = _FakeRepo();
+    final controller = BrowserController(repository: repo);
+    await tester.pumpWidget(_host(PhotoGridPage(
+      controller: controller,
+      folderHandle: CameraAlbum.allPhotosHandle,
+      fallbackName: '相机相册',
+      thumbnails: _FakeThumbs(),
+    )));
+
+    final loading = controller.load();
+    // 汇总 = 全部(含文件夹里的);文件夹相册只含自己的。
+    final aggregate = CameraAlbum.allPhotos([_photo(1), _photo(2), _photo(5)]);
+    final folder =
+        CameraAlbum(name: '100NIKON', folderHandle: 0x11, items: [_photo(5)]);
+    repo.updatesCtrl.add(AlbumsUpdate(
+        albums: [aggregate, folder], loaded: 3, total: 3, complete: true));
+    await tester.pump();
+
+    // chips:全部照片 + 文件夹名;标题用兜底名(过滤态由 chip 表达)
+    expect(find.text('相机相册'), findsOneWidget);
+    expect(find.text('全部照片'), findsOneWidget);
+    expect(find.text('100NIKON'), findsOneWidget);
+    // 默认过滤 = 全部:三个组都在格
+    expect(find.byKey(ValueKey(1)), findsOneWidget);
+    expect(find.byKey(ValueKey(5)), findsOneWidget);
+
+    // 长按进入多选,再切 chip:选择必须清空(跨相册选择无意义)
+    await tester.longPress(find.byKey(ValueKey(1)));
+    await tester.pump();
+    expect(find.text('已选 1 项'), findsOneWidget);
+
+    await tester.tap(find.text('100NIKON'));
+    await tester.pump();
+    expect(find.byKey(ValueKey(5)), findsOneWidget);
+    expect(find.byKey(ValueKey(1)), findsNothing);
+    expect(find.text('已选 1 项'), findsNothing);
+    expect(find.text('相机相册'), findsOneWidget); // 标题回常态
+
+    // 切回汇总:两组回归
+    await tester.tap(find.text('全部照片'));
+    await tester.pump();
+    expect(find.byKey(ValueKey(1)), findsOneWidget);
+    expect(find.byKey(ValueKey(5)), findsOneWidget);
+
+    repo.completeLoad([aggregate, folder]);
+    await loading;
+  });
+
+  testWidgets('单相册:chips 不占位(无分类可言)', (tester) async {
+    final repo = _FakeRepo();
+    final controller = BrowserController(repository: repo);
+    await tester.pumpWidget(_host(PhotoGridPage(
+      controller: controller,
+      folderHandle: CameraAlbum.allPhotosHandle,
+      fallbackName: '相机相册',
+      thumbnails: _FakeThumbs(),
+    )));
+
+    final loading = controller.load();
+    final aggregate = CameraAlbum.allPhotos([_photo(1)]);
+    repo.updatesCtrl.add(
+        AlbumsUpdate(albums: [aggregate], loaded: 1, total: 1, complete: true));
+    await tester.pump();
+
+    expect(find.byType(ChoiceChip), findsNothing);
+    expect(find.byKey(ValueKey(1)), findsOneWidget);
+
+    repo.completeLoad([aggregate]);
+    await loading;
+  });
 }

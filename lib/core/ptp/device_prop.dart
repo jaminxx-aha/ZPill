@@ -106,6 +106,7 @@ const Map<int, PtpDataType> kStandardPropDataType = {
   PtpDevicePropCode.fNumber: PtpDataType.uint16,
   PtpDevicePropCode.exposureTime: PtpDataType.uint32,
   PtpDevicePropCode.exposureIndex: PtpDataType.uint16,
+  PtpDevicePropCode.focalLength: PtpDataType.uint16,
 };
 
 /// 0x1015 GetDevicePropValue / 0x1016 SetDevicePropValue 的值单元。
