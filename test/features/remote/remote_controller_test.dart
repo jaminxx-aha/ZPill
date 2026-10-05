@@ -215,6 +215,47 @@ void main() {
     expect(controller.error, contains('快门释放失败'));
     expect(controller.capturing, isFalse);
     expect(transport.count(NikonOperationCode.deviceReady), 0);
+    expect(transport.count(NikonOperationCode.initiateCaptureRecInMedia), 0,
+        reason: '忙不是换码信号,不得回退');
+  });
+
+  test('capture:0x100E 被 0x2002 拒(Zf 真机实证)→ 回退 0x9207,后续直发',
+      () async {
+    transport
+      ..reply(PtpResponseCode.generalError) // 0x100E:Zf 回 GeneralError
+      ..ok() // 0x9207 回退成功
+      ..ok(); // deviceReady → true
+    final first = controller.capture();
+    await pumpEventQueue();
+    delay.release(); // 第 1 轮 DeviceReady
+    await first;
+    expect(controller.error, isNull);
+    expect(transport.count(PtpOperationCode.initiateCapture), 1);
+    expect(transport.count(NikonOperationCode.initiateCaptureRecInMedia), 1);
+
+    // 第二次:直发缓存码 0x9207,不再重试标准码
+    transport
+      ..ok() // 0x9207 直发
+      ..ok(); // deviceReady → true
+    final second = controller.capture();
+    await pumpEventQueue();
+    delay.release(); // 第 1 轮 DeviceReady
+    await second;
+    expect(controller.error, isNull);
+    expect(transport.count(PtpOperationCode.initiateCapture), 1,
+        reason: '缓存码后不再重试标准码');
+    expect(transport.count(NikonOperationCode.initiateCaptureRecInMedia), 2);
+  });
+
+  test('capture:两码皆拒 → 报后码异常,不轮询', () async {
+    transport
+      ..reply(PtpResponseCode.generalError) // 0x100E 拒
+      ..reply(PtpResponseCode.operationNotSupported); // 0x9207 也拒
+    await controller.capture();
+    expect(controller.error, contains('快门释放失败'));
+    expect(controller.error, contains('0x9207'), reason: '后码(尼康)失败更可诊断');
+    expect(controller.capturing, isFalse);
+    expect(transport.count(NikonOperationCode.deviceReady), 0);
   });
 
   test('ObjectAdded → 「已拍摄」提示 + 曝光刷新;断连后迟到事件丢弃', () async {

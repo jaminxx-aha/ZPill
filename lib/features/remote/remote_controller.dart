@@ -1,5 +1,9 @@
 /// 遥控拍摄控制器:Live View 开关、快门释放、曝光展示与调节。
 ///
+/// 快门码回退链:0x100E 标准优先,被「此码不对」类响应(0x2002/
+/// 0x2005/0x2006)拒绝 → 换尼康 0x9207 落卡拍,成功码缓存后续直发
+/// (2026-10-05 Zf 真机实证 0x100E → 0x2002,见 [_fireShutter])。
+///
 /// 事件驱动:CaptureComplete(0x400D / 尼康 0xC102)提前收口拍照等待;
 /// ObjectAdded(0x4002 / 0xC101)→「已拍摄」提示 + 曝光刷新(**不下载**,
 /// 纯遥控 —— 速传联动是 TODO T1 的独立功能)。0xC10C
@@ -132,6 +136,40 @@ final class RemoteController extends ChangeNotifier {
   StreamSubscription<CameraLinkState>? _statesSub;
   Completer<void>? _captureDone;
 
+  /// 本轮会话已验证可用的快门码(0x100E / 0x9207)。断连不清:相机
+  /// 个性跨连接稳定,重连后直发省一次失败事务。
+  int? _captureOpPref;
+
+  /// 快门码回退信号集:相机明说「此码不对」的响应码 → 换尼康码重发。
+  /// 忙(0x2019)/会话/链路类错误不在其列 —— 换码解决不了,原样上抛。
+  static const _captureFallbackFrom = {
+    PtpResponseCode.generalError,
+    PtpResponseCode.operationNotSupported,
+    PtpResponseCode.parameterNotSupported,
+  };
+
+  /// 快门码回退链:标准 0x100E 优先;被拒(2026-10-05 Zf 真机实证
+  /// 0x100E → 0x2002 GeneralError)→ 尼康 0x9207 落卡拍;成功后缓存。
+  Future<void> _fireShutter() async {
+    final pref = _captureOpPref;
+    if (pref == NikonOperationCode.initiateCaptureRecInMedia) {
+      await session.initiateCaptureRecInMedia();
+      return;
+    }
+    if (pref == PtpOperationCode.initiateCapture) {
+      await session.initiateCapture();
+      return;
+    }
+    try {
+      await session.initiateCapture();
+      _captureOpPref = PtpOperationCode.initiateCapture;
+    } on PtpResponseException catch (e) {
+      if (!_captureFallbackFrom.contains(e.responseCode)) rethrow;
+      await session.initiateCaptureRecInMedia();
+      _captureOpPref = NikonOperationCode.initiateCaptureRecInMedia;
+    }
+  }
+
   /// DeviceReady 轮询兜底:300ms × 10(CaptureComplete 事件先到则提前)。
   static const _capturePollInterval = Duration(milliseconds: 300);
   static const int _capturePolls = 10;
@@ -154,7 +192,8 @@ final class RemoteController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 快门释放(InitiateCapture 0x100E,落卡)。
+  /// 快门释放:0x100E 标准码优先,被拒自动回退尼康 0x9207 落卡拍
+  /// (成功码缓存,后续直发 —— 见 [_fireShutter])。
   ///
   /// 取景开着时挂起轮询,避免取帧事务挤占串行锁;完成信号 = 事件优先、
   /// DeviceReady 轮询兜底。0x2019 忙(半按对焦未就绪等)按失败提示。
@@ -173,7 +212,7 @@ final class RemoteController extends ChangeNotifier {
     if (wasLive) engine.pause();
     try {
       try {
-        await session.initiateCapture();
+        await _fireShutter();
       } on Exception catch (e) {
         error = '快门释放失败:$e';
         return;
