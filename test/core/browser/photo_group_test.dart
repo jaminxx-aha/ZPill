@@ -53,8 +53,7 @@ void main() {
 
   test('同夹不同基名:两张独立照片不并', () {
     final groups = buildPhotoGroups([
-      _file(0x13,
-          name: 'DSC_0002.JPG', captured: DateTime.utc(2026, 9, 26)),
+      _file(0x13, name: 'DSC_0002.JPG', captured: DateTime.utc(2026, 9, 26)),
       _file(0x12,
           name: 'DSC_0001.NEF',
           format: 0x3000,
@@ -124,8 +123,7 @@ void main() {
           name: 'DSC_0001.JPG',
           parent: 0x2000,
           captured: DateTime.utc(2026, 10, 2, 9, 0, 0)),
-      _file(0x0A1A9827,
-          name: 'DSC_0001.NEF', parent: 0x1000, format: 0x3000),
+      _file(0x0A1A9827, name: 'DSC_0001.NEF', parent: 0x1000, format: 0x3000),
     ]);
 
     expect(groups, hasLength(1));
@@ -135,8 +133,7 @@ void main() {
   test('跨夹同基名:时刻缺失且低位不同(两次独立快门)不并', () {
     final groups = buildPhotoGroups([
       _file(0x291A9827, name: 'DSC_0001.JPG', parent: 0x2000),
-      _file(0x0A1A0001,
-          name: 'DSC_0001.NEF', parent: 0x1000, format: 0x3000),
+      _file(0x0A1A0001, name: 'DSC_0001.NEF', parent: 0x1000, format: 0x3000),
     ]);
 
     expect(groups, hasLength(2));
@@ -178,6 +175,8 @@ void main() {
       expect(group.membersFor(PhotoDownloadFormat.raw).single.name,
           'DSC_0001.NEF');
       expect(group.membersFor(PhotoDownloadFormat.both), hasLength(2));
+      expect(group.membersFor(PhotoDownloadFormat.video), isEmpty,
+          reason: '纯照片组选「仅视频」→ 空,调用方跳过');
     });
 
     test('纯 RAW 组:仅 JPG → 空(调用方跳过);仅 RAW/两者 → 全量', () {
@@ -191,12 +190,13 @@ void main() {
     });
 
     test('纯 JPG 组:仅 RAW → 空', () {
-      final group = buildPhotoGroups([_file(0x23, name: 'DSC_0001.JPG')]).single;
+      final group =
+          buildPhotoGroups([_file(0x23, name: 'DSC_0001.JPG')]).single;
 
       expect(group.membersFor(PhotoDownloadFormat.raw), isEmpty);
     });
 
-    test('视频不受格式选择影响:三种选择都全量', () {
+    test('视频组不受格式选择影响:各选择都全量', () {
       final group = PhotoGroup([
         ObjectEntry(
           handle: 0x31,
@@ -227,13 +227,13 @@ void main() {
   });
 
   group('连拍簇合并', () {
-    test('同夹 4 连拍(间隔 100ms)并一簇:isBurst、×N 角标、键取最大句柄',
-        () {
+    test('同夹 4 连拍(间隔 100ms)并一簇:isBurst、×N 角标、键取最大句柄', () {
       final t0 = DateTime.utc(2026, 10, 2, 9, 0, 0);
       final groups = buildPhotoGroups([
         for (var i = 0; i < 4; i++)
           _file(0x20 + i,
-              name: 'DSC_000${i + 1}.JPG', captured: t0.add(Duration(milliseconds: 100 * i))),
+              name: 'DSC_000${i + 1}.JPG',
+              captured: t0.add(Duration(milliseconds: 100 * i))),
       ]);
 
       expect(groups, hasLength(1));
@@ -273,7 +273,8 @@ void main() {
       final t0 = DateTime.utc(2026, 10, 2, 9, 0, 0);
       final groups = buildPhotoGroups([
         _file(0x21, name: 'DSC_0001.JPG', captured: t0),
-        _file(0x20, name: 'DSC_0002.JPG',
+        _file(0x20,
+            name: 'DSC_0002.JPG',
             captured: t0.add(const Duration(milliseconds: 200))),
       ]);
 
@@ -285,12 +286,14 @@ void main() {
       final t0 = DateTime.utc(2026, 10, 2, 9, 0, 0);
       final groups = buildPhotoGroups([
         _file(0x23, name: 'DSC_0001.JPG', captured: t0),
-        _file(0x22, name: 'DSC_0002.JPG',
+        _file(0x22,
+            name: 'DSC_0002.JPG',
             captured: t0.add(const Duration(milliseconds: 100))),
         // 2 秒间隔:连拍中断(缓冲清空/松开快门)。
-        _file(0x21, name: 'DSC_0003.JPG',
-            captured: t0.add(const Duration(seconds: 2))),
-        _file(0x20, name: 'DSC_0004.JPG',
+        _file(0x21,
+            name: 'DSC_0003.JPG', captured: t0.add(const Duration(seconds: 2))),
+        _file(0x20,
+            name: 'DSC_0004.JPG',
             captured: t0.add(const Duration(seconds: 2, milliseconds: 100))),
       ]);
 
@@ -298,20 +301,27 @@ void main() {
       expect(groups.every((g) => !g.isBurst), isTrue);
     });
 
-    test('双槽镜像连拍:同基名跨夹先并,再入簇 —— 一簇 6 文件,每张一份下载',
-        () {
+    test('双槽镜像连拍:同基名跨夹先并,再入簇 —— 一簇 6 文件,每张一份下载', () {
       final t0 = DateTime.utc(2026, 10, 2, 9, 0, 0);
       final groups = buildPhotoGroups([
         _file(0x23, name: 'DSC_0001.JPG', parent: 0x11, captured: t0),
-        _file(0x22, name: 'DSC_0002.JPG', parent: 0x11,
+        _file(0x22,
+            name: 'DSC_0002.JPG',
+            parent: 0x11,
             captured: t0.add(const Duration(milliseconds: 100))),
-        _file(0x21, name: 'DSC_0003.JPG', parent: 0x11,
+        _file(0x21,
+            name: 'DSC_0003.JPG',
+            parent: 0x11,
             captured: t0.add(const Duration(milliseconds: 200))),
         // 另一夹同时刻的镜像副本(双槽同格式备份)。
         _file(0x33, name: 'DSC_0001.JPG', parent: 0x20, captured: t0),
-        _file(0x32, name: 'DSC_0002.JPG', parent: 0x20,
+        _file(0x32,
+            name: 'DSC_0002.JPG',
+            parent: 0x20,
             captured: t0.add(const Duration(milliseconds: 100))),
-        _file(0x31, name: 'DSC_0003.JPG', parent: 0x20,
+        _file(0x31,
+            name: 'DSC_0003.JPG',
+            parent: 0x20,
             captured: t0.add(const Duration(milliseconds: 200))),
       ]);
 
@@ -330,7 +340,8 @@ void main() {
       final t0 = DateTime.utc(2026, 10, 2, 9, 0, 0);
       final groups = buildPhotoGroups([
         _file(0x23, name: 'DSC_0001.JPG', captured: t0),
-        _file(0x22, name: 'DSC_0002.JPG',
+        _file(0x22,
+            name: 'DSC_0002.JPG',
             captured: t0.add(const Duration(milliseconds: 100))),
         _file(0x21, name: 'DSC_0003.JPG'), // 无时刻
       ]);
@@ -368,18 +379,19 @@ void main() {
       expect(pair.primary.name, 'DSC_0001.JPG');
     });
 
-    test('实况对下载:「仅 JPG」也带视频件(实况成分非另一张);仅 RAW 跳过整组', () {
+    test('实况对下载:「仅 JPG」也带视频件(实况成分非另一张);仅 RAW 跳过整组;仅视频只取视频件', () {
       final pair = buildPhotoGroups([
         _file(0x23,
             name: 'DSC_0001.JPG', captured: DateTime.utc(2026, 10, 2, 9, 0, 0)),
         video(0x22, name: 'DSC_0001.MOV'),
       ]).single;
 
-      expect(
-          pair.membersFor(PhotoDownloadFormat.jpg).map((e) => e.name),
+      expect(pair.membersFor(PhotoDownloadFormat.jpg).map((e) => e.name),
           ['DSC_0001.JPG', 'DSC_0001.MOV']);
       expect(pair.membersFor(PhotoDownloadFormat.raw), isEmpty);
       expect(pair.membersFor(PhotoDownloadFormat.both), hasLength(2));
+      expect(pair.membersFor(PhotoDownloadFormat.video).map((e) => e.name),
+          ['DSC_0001.MOV']);
     });
 
     test('双格式 + MOV 三件组:jpg+raw+mov 角标;仅 JPG 取 JPG+MOV 略过 NEF', () {
@@ -396,6 +408,8 @@ void main() {
       expect(group.membersFor(PhotoDownloadFormat.jpg).map((e) => e.name),
           ['DSC_0001.JPG', 'DSC_0001.MOV']);
       expect(group.membersFor(PhotoDownloadFormat.both), hasLength(3));
+      expect(group.membersFor(PhotoDownloadFormat.video).map((e) => e.name),
+          ['DSC_0001.MOV']);
     });
 
     test('连拍簇含实况对:角标 jpg+mov ×N', () {

@@ -72,14 +72,16 @@ final class AutoTransferService {
     }
   }
 
-  /// 格式过滤:视频不受格式选择影响;图片按 [format] 选(与
-  /// PhotoGroup.membersFor 同语义,单文件粒度)。
+  /// 格式过滤:视频不受照片格式选择影响;图片按 [format] 选(与
+  /// PhotoGroup.membersFor 同语义,单文件粒度);「仅视频」反过来只放行
+  /// 视频,照片全部跳过。
   static bool formatAllows(ObjectEntry entry, PhotoDownloadFormat format) {
     if (entry.kind != ObjectKind.image) return true;
     return switch (format) {
       PhotoDownloadFormat.jpg => isJpgFile(entry),
       PhotoDownloadFormat.raw => isRawFile(entry),
       PhotoDownloadFormat.both => true,
+      PhotoDownloadFormat.video => false,
     };
   }
 
