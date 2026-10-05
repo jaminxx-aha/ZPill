@@ -463,9 +463,13 @@ final class PtpSession {
   }
 
   /// Nikon InitiateCaptureRecInMedia(0x9207,候选码,待真机核对):落卡拍。
+  /// 参数姿势 [0,0] 对齐 probe --capture-op 9207(libgphoto2
+  /// ptp_nikon_capture2 的双参形态),真机结论回填后如有出入只改这里。
   Future<void> initiateCaptureRecInMedia() async {
     final result = await _serialized(() => transport.execute(
-          const PtpRequest(opcode: NikonOperationCode.initiateCaptureRecInMedia),
+          const PtpRequest(
+              opcode: NikonOperationCode.initiateCaptureRecInMedia,
+              params: [0, 0]),
         ));
     _ensureOk(result, NikonOperationCode.initiateCaptureRecInMedia);
   }
