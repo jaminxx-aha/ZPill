@@ -69,7 +69,8 @@ class ConnectionController extends ChangeNotifier {
 
   /// 扫描到的相机(按实例名去重;解析失败无 IP 的不上榜)。
   final Map<String, DiscoveredIpCamera> _cameras = {};
-  List<DiscoveredIpCamera> get cameras => _cameras.values.toList(growable: false);
+  List<DiscoveredIpCamera> get cameras =>
+      _cameras.values.toList(growable: false);
 
   /// 扫描进行中(未装配扫描器/平台未实现时永远 false)。
   bool scanning = false;
@@ -349,61 +350,65 @@ class _ConnectionPageState extends State<ConnectionPage> {
 
   Widget _methodsView(BuildContext context, ConnectionController controller) {
     final busy = switch (controller.state) {
-      CameraLinkState.connecting ||
-      CameraLinkState.pairing => true,
+      CameraLinkState.connecting || CameraLinkState.pairing => true,
       _ => false,
     };
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        // 状态着色:disconnected 灰 / connecting 蓝 / pairing 橙 / failed 红
-        _StatusCard(state: controller.state),
-        if (controller.hint != null)
-          Padding(
-            padding: const EdgeInsets.only(top: 8),
-            child: Text(controller.hint!),
+    return GestureDetector(
+      // 点空白散焦收键盘:AP IP 输入框点开后,页面里没有任何收起手段
+      onTap: () => FocusManager.instance.primaryFocus?.unfocus(),
+      child: ListView(
+        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+        padding: const EdgeInsets.all(16),
+        children: [
+          // 状态着色:disconnected 灰 / connecting 蓝 / pairing 橙 / failed 红
+          _StatusCard(state: controller.state),
+          if (controller.hint != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(controller.hint!),
+            ),
+          const SizedBox(height: 16),
+
+          // 分段切换:切到哪种方式,下方只出该方式的连接卡。
+          SegmentedButton<ConnectionMethod>(
+            segments: const [
+              ButtonSegment(
+                  value: ConnectionMethod.usb,
+                  icon: Icon(Icons.usb),
+                  label: Text('有线')),
+              ButtonSegment(
+                  value: ConnectionMethod.ap,
+                  icon: Icon(Icons.wifi_tethering),
+                  label: Text('AP 热点')),
+              ButtonSegment(
+                  value: ConnectionMethod.sta,
+                  icon: Icon(Icons.wifi),
+                  label: Text('同一 Wi-Fi')),
+            ],
+            selected: {controller.method},
+            onSelectionChanged: busy
+                ? null
+                : (selection) => controller.selectMethod(selection.first),
           ),
-        const SizedBox(height: 16),
+          const SizedBox(height: 12),
 
-        // 分段切换:切到哪种方式,下方只出该方式的连接卡。
-        SegmentedButton<ConnectionMethod>(
-          segments: const [
-            ButtonSegment(
-                value: ConnectionMethod.usb,
-                icon: Icon(Icons.usb),
-                label: Text('有线')),
-            ButtonSegment(
-                value: ConnectionMethod.ap,
-                icon: Icon(Icons.wifi_tethering),
-                label: Text('AP 热点')),
-            ButtonSegment(
-                value: ConnectionMethod.sta,
-                icon: Icon(Icons.wifi),
-                label: Text('同一 Wi-Fi')),
-          ],
-          selected: {controller.method},
-          onSelectionChanged: busy
-              ? null
-              : (selection) => controller.selectMethod(selection.first),
-        ),
-        const SizedBox(height: 12),
-
-        switch (controller.method) {
-          ConnectionMethod.usb => _usbCard(context, controller, busy: busy),
-          ConnectionMethod.ap => _apCard(context, controller, busy: busy),
-          ConnectionMethod.sta => _staCard(context, controller, busy: busy),
-        },
-        const SizedBox(height: 12),
-        Text(
-          '· 首次无线连接会请求配对确认(相机记录本设备,之后免配对);'
-          '相机屏幕出现提示时请在机身上按 OK。\n'
-          '· 相机同一时间只允许一个客户端:若被 SnapBridge(尼享)抢先连上'
-          '会遭拒,请先彻底关闭它。\n'
-          '· 首次连接若失败,请在系统弹窗中允许访问本地网络后重试;'
-          '下载大文件期间请保持 App 在前台、屏幕点亮。',
-          style: Theme.of(context).textTheme.bodySmall,
-        ),
-      ],
+          switch (controller.method) {
+            ConnectionMethod.usb => _usbCard(context, controller, busy: busy),
+            ConnectionMethod.ap => _apCard(context, controller, busy: busy),
+            ConnectionMethod.sta => _staCard(context, controller, busy: busy),
+          },
+          const SizedBox(height: 12),
+          Text(
+            '· 首次无线连接会请求配对确认(相机记录本设备,之后免配对);'
+            '相机屏幕出现提示时请在机身上按 OK。\n'
+            '· 相机同一时间只允许一个客户端:若被 SnapBridge(尼享)抢先连上'
+            '会遭拒,请先彻底关闭它。\n'
+            '· 首次连接若失败,请在系统弹窗中允许访问本地网络后重试;'
+            '下载大文件期间请保持 App 在前台、屏幕点亮。',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ],
+      ),
     );
   }
 
@@ -421,8 +426,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
           children: [
             _methodTitle(context, Icons.usb, '有线连接(USB)'),
             const SizedBox(height: 4),
-            const Text(
-                '用 C-to-C 数据线连接相机与手机,解锁相机后点「USB 连接」'),
+            const Text('用 C-to-C 数据线连接相机与手机,解锁相机后点「USB 连接」'),
             const SizedBox(height: 12),
             SizedBox(
               width: double.infinity,
@@ -451,8 +455,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
           children: [
             _methodTitle(context, Icons.wifi_tethering, 'AP 连接(相机当热点)'),
             const SizedBox(height: 4),
-            const Text(
-                '相机菜单:网络 → 连接至智能设备 → Wi-Fi 连接(热点模式)。'
+            const Text('相机菜单:网络 → 连接至智能设备 → Wi-Fi 连接(热点模式)。'
                 '先在系统 Wi-Fi 设置里加入相机热点,再回来连接。'),
             const SizedBox(height: 12),
             TextField(
@@ -494,8 +497,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
           children: [
             _methodTitle(context, Icons.wifi, 'STA 连接(同一 Wi-Fi)'),
             const SizedBox(height: 4),
-            const Text(
-                '相机与手机加入同一个 Wi-Fi(相机菜单同上,选择连接到'
+            const Text('相机与手机加入同一个 Wi-Fi(相机菜单同上,选择连接到'
                 '路由器网络),扫描发现相机后点选连接。'),
             const SizedBox(height: 12),
             SizedBox(
@@ -504,8 +506,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
                 icon: Icon(controller.scanning
                     ? Icons.stop_circle_outlined
                     : Icons.wifi_find),
-                label: Text(
-                    controller.scanning ? '扫描中…(点按停止)' : '扫描相机'),
+                label: Text(controller.scanning ? '扫描中…(点按停止)' : '扫描相机'),
                 onPressed: busy
                     ? null
                     : (controller.scanning
@@ -602,8 +603,8 @@ class _ConnectionPageState extends State<ConnectionPage> {
       child: Column(
         children: [
           _infoRow(context, Icons.link, '连接方式', link),
-          _infoRow(context, Icons.photo_camera_outlined, '设备',
-              c?.deviceName ?? '--',
+          _infoRow(
+              context, Icons.photo_camera_outlined, '设备', c?.deviceName ?? '--',
               last: true),
         ],
       ),
@@ -616,12 +617,11 @@ class _ConnectionPageState extends State<ConnectionPage> {
     return Card(
       child: Column(
         children: [
-          _infoRow(context, Icons.camera_outlined, '型号',
-              info?.model ?? '读取中…'),
+          _infoRow(context, Icons.camera_outlined, '型号', info?.model ?? '读取中…'),
           _infoRow(context, Icons.system_update_alt_outlined, '固件版本',
               info?.deviceVersion ?? '--'),
-          _infoRow(context, Icons.tag_outlined, '序列号',
-              info?.serialNumber ?? '--'),
+          _infoRow(
+              context, Icons.tag_outlined, '序列号', info?.serialNumber ?? '--'),
           if (_overview.batteryPercent != null)
             _infoRow(context, Icons.battery_std_outlined, '电池',
                 '${_overview.batteryPercent}%',
@@ -639,9 +639,11 @@ class _ConnectionPageState extends State<ConnectionPage> {
     return Card(
       child: Column(
         children: [
-          _infoRow(context, Icons.camera, '镜头型号(最近照片)',
-              overview.lens ?? '--'),
-          _infoRow(context, Icons.straighten_outlined, '当前焦距',
+          _infoRow(context, Icons.camera, '镜头型号(最近照片)', overview.lens ?? '--'),
+          _infoRow(
+              context,
+              Icons.straighten_outlined,
+              '当前焦距',
               overview.focalLengthMm == null
                   ? '--'
                   : '${overview.focalLengthMm}mm'),
