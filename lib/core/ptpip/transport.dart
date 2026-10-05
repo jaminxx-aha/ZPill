@@ -29,6 +29,7 @@ library;
 import 'dart:async';
 import 'dart:typed_data';
 
+import '../camera/keepalive.dart';
 import '../ptp/operation_codes.dart';
 import '../ptp/ptp_transport.dart';
 import 'channels.dart';
@@ -73,6 +74,8 @@ int _dataPhaseFor(int opcode, Uint8List? dataOut) {
   if (dataOut != null) return 2;
   const dataInOps = <int>{
     PtpOperationCode.getDeviceInfo,
+    PtpOperationCode.getStorageIds,
+    PtpOperationCode.getStorageInfo,
     PtpOperationCode.getObjectHandles,
     PtpOperationCode.getObjectInfo,
     PtpOperationCode.getObject,
@@ -140,7 +143,13 @@ final class PtpIpTransport implements PtpTransport {
     Uint8List? clientGuid,
     this.hostname = 'Android Device',
     this.transactionTimeout = const Duration(seconds: 15),
+    this.enableKeepalive = false,
+    this.keepaliveInterval = const Duration(seconds: 15),
+    this.keepaliveMaxMissed = 3,
+    this.probeTimeout = const Duration(seconds: 10),
+    Future<void> Function(Duration)? keepaliveDelay,
   })  : _createChannel = createChannel ?? TcpPtpIpChannel.new,
+        _keepaliveDelay = keepaliveDelay ?? Future<void>.delayed,
         clientGuid = clientGuid ?? Uint8List.fromList(kNikonAndroidGuid);
 
   /// 通道工厂。null = 生产 TCP(5s 连接超时,见 [TcpPtpIpChannel]);
@@ -161,6 +170,26 @@ final class PtpIpTransport implements PtpTransport {
   /// 整事务超时(发送 → 数据相 → 响应全程,每帧重置)。
   final Duration transactionTimeout;
 
+  /// 心跳保活开关:握手完成后在 event 通道周期真发 ProbeRequest(13)、
+  /// 等 ProbeResponse(14) 回声(2026-10-04 probe 13 步真机已证有回声;
+  /// 只发不收等于定时断线)。默认关 —— 生产装配在创建处显式打开,
+  /// 纯回放脚本的测试不受打扰。
+  final bool enableKeepalive;
+
+  /// 心跳周期间隔(默认 15s;真机 ~180s 空闲杀 command 通道,15s×3
+  /// 的探测密度足够在之前判死)。
+  final Duration keepaliveInterval;
+
+  /// 连续无响应上限,达到即按断链收口。
+  final int keepaliveMaxMissed;
+
+  /// 单次心跳等回声的窗口;必须短于 [keepaliveInterval](串行循环,
+  /// 挂满窗口会推迟下一拍,但不重叠)。
+  final Duration probeTimeout;
+
+  /// 心跳 delay 注入(测试驱动;生产恒真实挂钟)。
+  final Future<void> Function(Duration) _keepaliveDelay;
+
   final _codec = PtpIpCodecImpl();
 
   PtpIpChannel? _command;
@@ -179,6 +208,12 @@ final class PtpIpTransport implements PtpTransport {
 
   int _nextTid = 0;
   final _pending = <int, _Pending>{};
+
+  /// 运行期心跳(握手完成后创建;断链/主动关闭即停)。
+  ProbeKeepalive? _keepalive;
+
+  /// 在途心跳的回声 Completer:收到 ProbeResponse 即完成;超时/换代作废。
+  Completer<void>? _probePong;
 
   final _eventsCtrl = StreamController<PtpEvent>.broadcast();
 
@@ -240,6 +275,18 @@ final class PtpIpTransport implements PtpTransport {
       _command = command;
       _event = event;
       _connected = true;
+      if (enableKeepalive) {
+        final keepalive = ProbeKeepalive(
+          ping: _probe,
+          interval: keepaliveInterval,
+          maxMissed: keepaliveMaxMissed,
+          delay: _keepaliveDelay,
+          onDead: () => _onBreakage(
+              '心跳丢失:$keepaliveMaxMissed 次连续 ProbeRequest 无回声,判定链路已断'),
+        );
+        _keepalive = keepalive;
+        unawaited(keepalive.start());
+      }
     } on Object {
       // 握手失败不留半开连接;transport 保持未连接态可由上层决定重试
       _cmdHandshake = null;
@@ -358,18 +405,27 @@ final class PtpIpTransport implements PtpTransport {
     }
   }
 
-  /// event 通道常驻 dispatcher:Event 包转广播,其余(ProbeRequest 回声
-  /// 等,真机已证无害)忽略。
+  /// event 通道常驻 dispatcher:Event 包转广播,ProbeResponse 完成在途
+  /// 心跳,其余(相机主动 ProbeRequest 等,真机已证无害)忽略。
   void _onEventFrame(PtpIpFrame frame) {
     if (_poisoned) return;
     try {
       final packet = _codec.decode(frame);
-      if (packet is EventPacket) {
-        _eventsCtrl.add(PtpEvent(
-          code: packet.eventCode,
-          transactionId: packet.transactionId,
-          params: packet.params,
-        ));
+      switch (packet) {
+        case EventPacket ev:
+          _eventsCtrl.add(PtpEvent(
+            code: ev.eventCode,
+            transactionId: ev.transactionId,
+            params: ev.params,
+          ));
+        case ProbeResponsePacket():
+          // 心跳回声(真机实证:ProbeRequest 在 event 通道有回声)。
+          // 迟到的前代回声可能误完成新一拍 —— 窗口内到得这么密,链路
+          // 活着,误判方向无害。
+          final pong = _probePong;
+          if (pong != null && !pong.isCompleted) pong.complete();
+        default:
+          break;
       }
     } on Object catch (e) {
       _onBreakage('event 通道帧处理失败($e)');
@@ -494,6 +550,8 @@ final class PtpIpTransport implements PtpTransport {
     if (_poisoned) return;
     _poisoned = true;
     _deathReason = reason;
+    _keepalive?.stop();
+    _keepalive = null;
     _failPending(PtpLinkException(reason));
     _breakagesCtrl.add(reason);
     unawaited(_eventsCtrl.close());
@@ -517,6 +575,8 @@ final class PtpIpTransport implements PtpTransport {
   Future<void> close() async {
     if (_closed) return;
     _closed = true;
+    _keepalive?.stop();
+    _keepalive = null;
     if (!_poisoned) {
       _poisoned = true;
       _deathReason = '链路已关闭';
@@ -538,5 +598,24 @@ final class PtpIpTransport implements PtpTransport {
       type: packet.type,
       body: Uint8List.sublistView(bytes, kPtpIpHeaderLength),
     ));
+  }
+
+  /// 心跳一拍:向 event 通道真发 ProbeRequest,窗口内等到回声才算活。
+  /// 链路已死/发送失败/超时 → false(由 keepalive 累计,达上限判死链)。
+  Future<bool> _probe() async {
+    final event = _event;
+    if (event == null || _poisoned) return false;
+    final pong = _probePong = Completer<void>();
+    try {
+      await _send(event, const ProbeRequestPacket());
+    } on Object {
+      return false; // 通道已死:breakage 广播由通道 done/error 负责
+    }
+    try {
+      await pong.future.timeout(probeTimeout);
+      return true;
+    } on Object {
+      return false; // 超时(或链路毒化后的异常):本拍无回声
+    }
   }
 }

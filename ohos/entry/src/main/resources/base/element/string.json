@@ -11,6 +11,10 @@
     {
       "name": "EntryAbility_label",
       "value": "Nikon Pill"
+    },
+    {
+      "name": "location_reason",
+      "value": "下载照片时读取当前位置,将 GPS 坐标写入照片元数据"
     }
   ]
 }

@@ -11,6 +11,7 @@ library;
 
 import 'dart:typed_data';
 
+import '../browser/storage_info.dart';
 import '../ptpip/object_info.dart';
 import '../utils/byte_reader.dart';
 import 'device_prop.dart';
@@ -224,6 +225,31 @@ final class PtpSession {
     return [for (var i = 0; i < count; i++) r.u32()];
   }
 
+  /// GetStorageIDs(0x1004):u32 计数 + N 个 u32(双卡槽 = 两个 ID)。
+  Future<List<int>> getStorageIds() async {
+    final result = await _serialized(() => transport.execute(
+          const PtpRequest(opcode: PtpOperationCode.getStorageIds),
+        ));
+    _ensureOk(result, PtpOperationCode.getStorageIds);
+    final data = result.data!;
+    if (data.length % 4 != 0) {
+      throw FormatException('GetStorageIDs 数据集 ${data.length}B 非 4 对齐');
+    }
+    final r = ByteReader(data);
+    final count = r.u32();
+    return [for (var i = 0; i < count; i++) r.u32()];
+  }
+
+  /// GetStorageInfo(0x1005):单存储槽容量/余量(双卡余量展示)。
+  Future<CameraStorage> getStorageInfo(int storageId) async {
+    final result = await _serialized(() => transport.execute(
+          PtpRequest(
+              opcode: PtpOperationCode.getStorageInfo, params: [storageId]),
+        ));
+    _ensureOk(result, PtpOperationCode.getStorageInfo);
+    return CameraStorage.parse(id: storageId, dataset: result.data!);
+  }
+
   /// GetObjectInfo:ObjectInfo 数据集与 PTP-IP 同构,复用 ptpip 解析。
   Future<PtpObjectInfo> getObjectInfo(int handle) async {
     final result = await _serialized(() => transport.execute(PtpRequest(
@@ -232,6 +258,18 @@ final class PtpSession {
         )));
     _ensureOk(result, PtpOperationCode.getObjectInfo);
     return PtpObjectInfo.parse(handle: handle, dataset: result.data!);
+  }
+
+  /// DeleteObject(0x100B,标准码):删除相机上的单个对象。
+  ///
+  /// RAW+JPG 合并组按成员逐个删;被删对象由仓库层出缓存
+  /// (ObjectRepository.removeHandles)。**不可逆**,调用方必须弹确认。
+  Future<void> deleteObject(int handle) async {
+    final result = await _serialized(() => transport.execute(PtpRequest(
+          opcode: PtpOperationCode.deleteObject,
+          params: [handle],
+        )));
+    _ensureOk(result, PtpOperationCode.deleteObject);
   }
 
   /// GetObject 流式下载:数据容器按块经 [onData] 回调(64KB 级),
@@ -346,8 +384,9 @@ final class PtpSession {
 
   /// SetDevicePropValue(0x1016)总开关。真机验证可写域之前恒为 false
   /// (0xD406「写过即回弹」的教训:未验证的写操作一律不落到相机),
-  /// 翻开前 setDevicePropValue 直接抛 UnsupportedError。
-  static const bool kSetPropEnabled = false;
+  /// 翻开前 setDevicePropValue 直接抛 UnsupportedError。非常量 static:
+  /// 真机核对后(或测试)直接翻此旗,不改动调用方。
+  static bool kSetPropEnabled = false;
 
   /// GetDevicePropValue(0x1015):当前值。响应是裸值数据集,解码类型
   /// 查标准表(见 [PtpDevicePropValue.parse]);方言偏离时改走

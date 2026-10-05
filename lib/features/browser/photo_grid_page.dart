@@ -1,5 +1,8 @@
-/// 相册缩略图网格:长按进入多选,选中项可批量下载到相册/应用(批次含
-/// 双格式组时先选格式,缺格式的组跳过)。
+/// 相册缩略图网格:按拍摄日期分段(段头点按 = 整日选择/取消),长按进入
+/// 多选,选中项可批量下载到相册/应用(批次含双格式组时先选格式,缺格式
+/// 的组跳过)、批量删除(相机侧逐文件 0x100B,确认对话框把关)。本地
+/// 评分角标(左上星标)随 [RatingsController] 变化;连拍簇一条目
+/// (typeLabel 带 ×N)。
 ///
 /// 活页模式:随 [BrowserController] 的渐进发布增长(最新优先,新对象尾部
 /// 追加);断连后保留最后快照(相册列表被控制器清空时,网格内容可见,
@@ -15,14 +18,17 @@ import 'package:flutter/material.dart';
 
 import '../../app_services.dart';
 import '../../core/browser/album.dart';
+import '../../core/browser/camera_file_ops.dart';
 import '../../core/browser/object_entry.dart';
 import '../../core/browser/photo_group.dart';
 import '../../core/browser/thumbnail_cache.dart';
 import '../../core/transfer/transfer_engine.dart';
 import '../../core/transfer/transfer_task.dart';
+import '../common/format.dart';
 import 'browser_controller.dart';
 import 'download_format_sheet.dart';
 import 'photo_viewer_page.dart';
+import 'ratings_controller.dart';
 
 class PhotoGridPage extends StatefulWidget {
   const PhotoGridPage({
@@ -32,6 +38,8 @@ class PhotoGridPage extends StatefulWidget {
     this.fallbackName,
     this.thumbnails,
     this.engine,
+    this.fileOps,
+    this.ratings,
   });
 
   /// 应用级共享控制器(本页不拥有、不 dispose);网格随其渐进发布增长。
@@ -49,8 +57,25 @@ class PhotoGridPage extends StatefulWidget {
   /// 测试注入;缺省用 AppServices 单例。
   final TransferEngine? engine;
 
+  /// 测试注入;缺省用 AppServices 单例。
+  final CameraFileOps? fileOps;
+
+  /// 测试注入;缺省用 AppServices 单例。
+  final RatingsController? ratings;
+
   @override
   State<PhotoGridPage> createState() => _PhotoGridPageState();
+}
+
+/// 网格日期段:同日本地日期的照片一段([day] null = 未知日期)。
+final class _DateSection {
+  _DateSection(this.day, this.items);
+
+  final DateTime? day;
+  final List<PhotoGroup> items;
+
+  /// 段首在全局列表的下标(查看器按全局序翻页)。
+  int firstIndex = 0;
 }
 
 class _PhotoGridPageState extends State<PhotoGridPage> {
@@ -69,8 +94,83 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
       widget.thumbnails ?? AppServices.instance.thumbnails;
   TransferEngine get _engine =>
       widget.engine ?? AppServices.instance.transferEngine;
+  CameraFileOps get _fileOps => widget.fileOps ?? AppServices.instance.fileOps;
+  RatingsController get _ratings =>
+      widget.ratings ?? AppServices.instance.ratings;
 
   bool get _selecting => _selected.isNotEmpty;
+
+  /// 日期分段:items 按拍摄时间倒序(仓库序),本地日期变化即切段;
+  /// 无时刻条目(排序必在尾)归「未知日期」段收尾。段记 [firstIndex]
+  /// 让查看器仍按全局序翻页。
+  List<_DateSection> _sectionsOf(List<PhotoGroup> items) {
+    final dated = <_DateSection>[];
+    final undated = <PhotoGroup>[];
+    _DateSection? current;
+    for (final group in items) {
+      final at = group.capturedAt;
+      if (at == null) {
+        undated.add(group);
+        continue;
+      }
+      final local = at.toLocal();
+      final day = DateTime(local.year, local.month, local.day);
+      if (current != null && current.day == day) {
+        current.items.add(group);
+      } else {
+        current = _DateSection(day, [group]);
+        dated.add(current);
+      }
+    }
+    final sections = dated;
+    if (undated.isNotEmpty) {
+      sections.add(_DateSection(null, undated));
+    }
+    var offset = 0;
+    for (final s in sections) {
+      s.firstIndex = offset;
+      offset += s.items.length;
+    }
+    return sections;
+  }
+
+  /// 段头:日期 + 张数;多选模式下点按整日选择/取消,右侧显示该日
+  /// 是否已全选。
+  Widget _sectionHeader(_DateSection section, List<PhotoGroup> items) {
+    final label = section.day == null ? '未知日期' : sectionDateLabel(section.day!);
+    final daySelected =
+        _selecting && section.items.every((g) => _selected.contains(g.key));
+    return InkWell(
+      onTap: _selecting ? () => _toggleDay(section.items) : null,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                '$label · ${section.items.length} 张',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ),
+            if (_selecting)
+              Icon(
+                daySelected ? Icons.check_circle : Icons.radio_button_unchecked,
+                size: 18,
+                color: daySelected
+                    ? Theme.of(context).colorScheme.primary
+                    : Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+          ],
+        ),
+      ),
+    );
+  }
 
   /// 按 folderHandle 找活相册;无匹配(尚未建立/已断连)返回 null。
   CameraAlbum? _resolve(List<CameraAlbum> albums) {
@@ -97,6 +197,15 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
     });
   }
 
+  /// 整日选择/取消:段头点按(仅多选模式下生效)。
+  void _toggleDay(List<PhotoGroup> dayItems) {
+    final keys = dayItems.map((g) => g.key).toSet();
+    final allSelected = keys.every(_selected.contains);
+    setState(() {
+      allSelected ? _selected.removeAll(keys) : _selected.addAll(keys);
+    });
+  }
+
   void _clearSelection() => setState(_selected.clear);
 
   /// 批量下载:批次里有双格式组才弹格式选择(全是单一格式直接下,
@@ -110,9 +219,8 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
       return;
     }
     PhotoDownloadFormat? format;
-    final pairCount = groups
-        .where((g) => !g.isVideo && g.hasJpg && g.hasRaw)
-        .length;
+    final pairCount =
+        groups.where((g) => !g.isVideo && g.hasJpg && g.hasRaw).length;
     if (pairCount > 0) {
       format = await showDownloadFormatSheet(context,
           subtitle: '已选 ${groups.length} 项,其中 $pairCount 项为双格式');
@@ -151,12 +259,63 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
               '已开始下载 $included/${groups.length} 项 / ${entries.length} 个文件$tag 到$where$skipNote,详见「下载」页')));
   }
 
+  /// 批量删除(相机侧,不可逆):确认对话框点明项数与文件数;逐成员
+  /// 0x100B,单文件失败只计数不拖死整批,成功句柄出仓库缓存(相册
+  /// 立即收缩,无需全量重枚举)。部分失败给出计数提示。
+  Future<void> _deleteSelected(List<PhotoGroup> items) async {
+    final groups =
+        items.where((g) => _selected.contains(g.key)).toList(growable: false);
+    if (groups.isEmpty) {
+      return;
+    }
+    final fileCount = groups.fold<int>(0, (n, g) => n + g.members.length);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('删除相机上的文件?'),
+        content: Text('将删除 ${groups.length} 项(共 $fileCount 个文件)。\n此操作不可恢复。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) {
+      return;
+    }
+    if (!mounted) {
+      return;
+    }
+    final result = await _fileOps.deleteGroups(groups);
+    if (!mounted) {
+      return;
+    }
+    _clearSelection();
+    final messenger = ScaffoldMessenger.of(context)..hideCurrentSnackBar();
+    if (result.failed > 0) {
+      messenger.showSnackBar(SnackBar(
+        content: Text(
+            '已删除 ${result.deleted} 个文件,${result.failed} 个失败(相机拒绝或传输中断,条目保留)'),
+      ));
+    } else {
+      messenger
+          .showSnackBar(SnackBar(content: Text('已删除 ${result.deleted} 个文件')));
+    }
+  }
+
   void _openViewer(List<PhotoGroup> items, int index) {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => PhotoViewerPage(
           items: items,
           initialIndex: index,
+          ratings: widget.ratings,
         ),
       ),
     );
@@ -165,7 +324,8 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: widget.controller,
+      // 评分角标随本地评分变化刷新(枚举/相册结构仍由 controller 驱动)。
+      listenable: Listenable.merge([widget.controller, _ratings]),
       builder: (context, _) {
         final live = _resolve(widget.controller.albums);
         if (live != null) _lastAlbum = live;
@@ -192,18 +352,35 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
                 const SizedBox(width: 8),
             ],
           ),
-          body: GridView.builder(
-            padding: const EdgeInsets.all(2),
-            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 4,
-              mainAxisSpacing: 2,
-              crossAxisSpacing: 2,
-            ),
-            itemCount: items.length,
-            // key 按组身份键:增长期间尾部追加、条目重排时元素正确复用
-            //(选中态与缩略图 Future 都按键控);渐进配对前后键稳定,
-            // RAW+JPG 后到的那份并入时 cell 不漂移。
-            itemBuilder: (_, i) => _cell(items[i], i, items, key: ValueKey(items[i].key)),
+          body: CustomScrollView(
+            slivers: [
+              for (final section in _sectionsOf(items)) ...[
+                SliverToBoxAdapter(
+                  child: _sectionHeader(section, items),
+                ),
+                SliverPadding(
+                  padding: const EdgeInsets.symmetric(horizontal: 2),
+                  sliver: SliverGrid.builder(
+                    gridDelegate:
+                        const SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: 4,
+                      mainAxisSpacing: 2,
+                      crossAxisSpacing: 2,
+                    ),
+                    itemCount: section.items.length,
+                    // key 按组身份键:增长期间尾部追加、条目重排时元素正确
+                    // 复用(选中态与缩略图 Future 都按键控);渐进配对前后
+                    // 键稳定,RAW+JPG 后到的那份并入时 cell 不漂移。
+                    itemBuilder: (_, i) => _cell(
+                      section.items[i],
+                      section.firstIndex + i,
+                      items,
+                      key: ValueKey(section.items[i].key),
+                    ),
+                  ),
+                ),
+              ],
+            ],
           ),
           bottomSheet: _selecting ? _actionBar(items) : null,
         );
@@ -211,13 +388,12 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
     );
   }
 
-  Widget _cell(PhotoGroup group, int index, List<PhotoGroup> items, {Key? key}) {
+  Widget _cell(PhotoGroup group, int index, List<PhotoGroup> items,
+      {Key? key}) {
     final selected = _selected.contains(group.key);
     return GestureDetector(
       key: key,
-      onTap: () => _selecting
-          ? _toggle(group)
-          : _openViewer(items, index),
+      onTap: () => _selecting ? _toggle(group) : _openViewer(items, index),
       onLongPress: () => _toggle(group),
       child: Stack(
         fit: StackFit.expand,
@@ -289,6 +465,37 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
                 child: Icon(Icons.videocam, size: 16, color: Colors.white),
               ),
             ),
+          // 评分角标(左上):有星才显示;星数并入角标文本。
+          if (_ratings.ratingOf(group) > 0)
+            Align(
+              alignment: Alignment.topLeft,
+              child: Padding(
+                padding: const EdgeInsets.all(4),
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: Colors.amber.withValues(alpha: 0.85),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.star, size: 9, color: Colors.white),
+                      const SizedBox(width: 2),
+                      Text(
+                        '${_ratings.ratingOf(group)}',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 9,
+                          height: 1.3,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
           if (_selecting)
             Positioned.fill(
               child: ColoredBox(
@@ -303,10 +510,10 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
               child: Padding(
                 padding: const EdgeInsets.all(4),
                 child: Icon(
-                  selected
-                      ? Icons.check_circle
-                      : Icons.radio_button_unchecked,
-                  color: selected ? Theme.of(context).colorScheme.primary : Colors.white,
+                  selected ? Icons.check_circle : Icons.radio_button_unchecked,
+                  color: selected
+                      ? Theme.of(context).colorScheme.primary
+                      : Colors.white,
                   size: 20,
                 ),
               ),
@@ -332,10 +539,17 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
             const SizedBox(width: 8),
             Expanded(
               child: FilledButton.tonalIcon(
-                onPressed: () => _downloadSelected(items, TransferDestination.app),
+                onPressed: () =>
+                    _downloadSelected(items, TransferDestination.app),
                 icon: const Icon(Icons.folder_outlined),
                 label: const Text('下载到应用'),
               ),
+            ),
+            const SizedBox(width: 8),
+            IconButton(
+              tooltip: '删除',
+              onPressed: () => _deleteSelected(items),
+              icon: const Icon(Icons.delete_outline),
             ),
           ],
         ),

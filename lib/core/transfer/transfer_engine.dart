@@ -15,6 +15,12 @@ import 'dart:async';
 import 'dart:io';
 
 import '../browser/object_entry.dart';
+import '../browser/photo_group.dart' show baseNameOf, isJpgFile;
+import '../media/motion_photo.dart' show splitMotionPhoto;
+import '../media/watermark.dart';
+import '../media/xmp_metadata.dart';
+import '../ptpip/object_format.dart' show ObjectKind;
+import '../../data/settings_store.dart' show WatermarkStyle;
 import '../../platform/gallery_saver.dart';
 import 'object_downloader.dart';
 import 'transfer_task.dart';
@@ -43,6 +49,7 @@ final class _Batch {
   final TransferDestination destination;
   final List<({String id, ObjectEntry entry})> members = [];
   final Map<String, ObjectDownload> downloads = {}; // id → 已完成落盘
+  final Map<String, String> liveVideos = {}; // id → 拆出的 MP4 临时文件
   final Set<String> terminalIds = {};
   var finished = false;
 
@@ -66,11 +73,26 @@ final class TransferEngineImpl implements TransferEngine {
     required this.downloader,
     required this.gallery,
     this.maxAttempts = 3,
+    this.metadataFor,
+    this.watermarkFor,
+    this.watermarkRaster,
     Duration Function(int retry)? backoffFor,
   }) : _backoffFor = backoffFor ?? _defaultBackoff;
 
   final ObjectDownloader downloader;
   final GallerySaver gallery;
+
+  /// 元数据提供器(TODO §四):JPG 下载落盘后按此注入 XMP
+  ///(版权/作者/评分/GPS);null 或返回 null = 不注入。注入失败
+  /// 不影响传输结果(文件在注入前已完整)。
+  final Future<XmpMetadata?> Function(ObjectEntry entry)? metadataFor;
+
+  /// 水印提供器(TODO §五 T4):JPG 下载落盘后、XMP 注入前合成水印
+  ///(重编码会丢段,顺序不能反);null 或返回 null = 不合成。
+  final Future<WatermarkOptions?> Function(ObjectEntry entry)? watermarkFor;
+
+  /// 水印文本光栅注入(测试用色块假实现);null = 生产 dart:ui 渲染。
+  final TextRaster? watermarkRaster;
 
   /// 失败重试上限(首跑之外的重试次数)。
   final int maxAttempts;
@@ -178,6 +200,9 @@ final class TransferEngineImpl implements TransferEngine {
         isCancelled: () => job.cancelRequested,
       );
       job.batch.downloads[job.task.id] = dl;
+      await _splitMotionPhoto(job, dl); // 先拆(水印重编码会毁内嵌视频段)
+      await _applyWatermark(job, dl.path); // 先水印(重编码丢段,XMP 后补)
+      await _injectMetadata(job, dl.path);
       job.task =
           job.task.copyWith(state: TransferState.completed, receivedBytes: dl.bytes);
     } on DownloadCancelledException {
@@ -201,8 +226,75 @@ final class TransferEngineImpl implements TransferEngine {
     await _finishBatchIfDone(job.batch);
   }
 
+  /// 运动照片拆分(TODO §五 LivePhoto 导出):尼康运动照片是 JPG 尾部
+  /// 内嵌 MP4 的单文件(Google Motion Photo 字节格式,标记语义待真机
+  /// 核对)。gallery 目的地才拆 —— 静帧照常走水印/XMP,视频段记到批次
+  /// 收尾配对导出;app 目的地保留相机原始单文件不动。拆不出(普通
+  /// JPG)不碰文件。
+  Future<void> _splitMotionPhoto(_Job job, ObjectDownload dl) async {
+    if (job.task.destination != TransferDestination.gallery) return;
+    try {
+      if (!isJpgFile(_entryOf(job))) return;
+      final file = File(dl.path);
+      final src = await file.readAsBytes();
+      final split = splitMotionPhoto(src);
+      if (split == null) return;
+      await file.writeAsBytes(split.image);
+      final videoPath = '${dl.path}_live.mp4';
+      await File(videoPath).writeAsBytes(split.video);
+      job.batch.liveVideos[job.task.id] = videoPath;
+    } on Exception {
+      // 读盘/写盘/拆分异常:按普通照片走,不挡传输
+    }
+  }
+
+  /// 下载成功后按需合成水印(见 [watermarkFor])。只对 JPG;失败静默跳过。
+  Future<void> _applyWatermark(_Job job, String path) async {
+    final watermarkFor = this.watermarkFor;
+    if (watermarkFor == null) return;
+    try {
+      final entry = _entryOf(job);
+      if (!isJpgFile(entry)) return;
+      final options = await watermarkFor(entry);
+      if (options == null || options.style == WatermarkStyle.off) return;
+      final file = File(path);
+      final src = await file.readAsBytes();
+      final out = await applyWatermark(src, options,
+          raster: watermarkRaster ?? defaultTextRaster);
+      if (identical(src, out)) return;
+      await file.writeAsBytes(out);
+    } on Exception {
+      // 水印失败不掩盖传输结果
+    }
+  }
+
+  /// 下载成功后按需注入 XMP(见 [metadataFor])。只对 JPG;失败静默跳过
+  ///(元数据是锦上添花,不能把传输拖成失败)。
+  Future<void> _injectMetadata(_Job job, String path) async {
+    final metadataFor = this.metadataFor;
+    if (metadataFor == null) return;
+    try {
+      final entry = _entryOf(job);
+      if (!isJpgFile(entry)) return; // RAW/视频不走 XMP APP1 路径
+      final meta = await metadataFor(entry);
+      if (meta == null || meta.isEmpty) return;
+      final file = File(path);
+      final src = await file.readAsBytes();
+      final out = injectXmpIntoJpeg(src, meta);
+      if (identical(src, out)) return; // 非 JPEG(字节级复核)等免写
+      await file.writeAsBytes(out);
+    } on Exception {
+      // 读盘/写盘/提供器异常:任务照常按已下载完成落定
+    }
+  }
+
   /// 批次全员落定后收尾:gallery 批次发起一次导入、回填 galleryUri、
   /// 删临时文件;app 批次无事可做(文件已直接落 downloadsDir)。
+  ///
+  /// 实况照片编排:静帧请求在前(同基名 MOV 成员或运动照片 JPG 拆出的
+  /// MP4 挂到 [GalleryImportRequest.videoPath] 配对导入,并入的视频成员
+  /// 不再单发、回填同一实况 Uri);其余文件按入队序在后。native 不识别
+  /// videoPath 时按普通图片落库。
   Future<void> _finishBatchIfDone(_Batch batch) async {
     if (batch.finished || batch.destination != TransferDestination.gallery) {
       return;
@@ -214,28 +306,63 @@ final class TransferEngineImpl implements TransferEngine {
         if (batch.downloads[m.id] != null) (m, batch.downloads[m.id]!),
     ];
     if (pairs.isEmpty) return; // 全取消/全失败:无文件可导
+
+    final requests = <GalleryImportRequest>[];
+    final owners = <List<String>>[]; // 请求 i 覆盖的成员 id(实况 = 静帧+视频)
+    final pairedAway = <String>{}; // 已并入实况请求的视频成员 id
+    for (final (m, dl) in pairs) {
+      if (m.entry.kind != ObjectKind.image || !isJpgFile(m.entry)) continue;
+      var videoPath = batch.liveVideos[m.id];
+      var videoOwnerId = '';
+      for (final (vm, vdl) in pairs) {
+        if (!pairedAway.contains(vm.id) &&
+            vm.entry.kind == ObjectKind.video &&
+            baseNameOf(vm.entry.name) == baseNameOf(m.entry.name)) {
+          videoPath = vdl.path;
+          videoOwnerId = vm.id;
+          pairedAway.add(vm.id);
+          break;
+        }
+      }
+      requests.add(GalleryImportRequest(
+        path: dl.path,
+        kind: m.entry.kind,
+        filename: m.entry.name,
+        videoPath: videoPath,
+      ));
+      owners.add([m.id, if (videoOwnerId.isNotEmpty) videoOwnerId]);
+    }
+    for (final (m, dl) in pairs) {
+      if (m.entry.kind == ObjectKind.image && isJpgFile(m.entry)) continue;
+      if (pairedAway.contains(m.id)) continue;
+      requests.add(GalleryImportRequest(
+          path: dl.path, kind: m.entry.kind, filename: m.entry.name));
+      owners.add([m.id]);
+    }
+
     var uris = const <Uri>[];
     try {
-      uris = await gallery.importFiles([
-        for (final (m, dl) in pairs)
-          GalleryImportRequest(
-              path: dl.path, kind: m.entry.kind, filename: m.entry.name),
-      ]);
+      uris = await gallery.importFiles(requests);
     } on Exception {
       uris = const <Uri>[]; // 导入通道异常 → 全员按「未导入」落定
     }
-    for (var i = 0; i < pairs.length; i++) {
-      final (m, _) = pairs[i];
-      final job = _jobs[m.id];
-      if (job == null) continue; // 历史已被清:只删文件,不回填
-      job.task = job.task.copyWith(
-          galleryUri: i < uris.length ? uris[i] : null); // null = 未导入
+    for (var i = 0; i < owners.length; i++) {
+      final uri = i < uris.length ? uris[i] : null;
+      for (final id in owners[i]) {
+        final job = _jobs[id];
+        if (job == null) continue; // 历史已被清:只删文件,不回填
+        job.task = job.task.copyWith(galleryUri: uri);
+      }
     }
     // 临时文件清理:导入成功(字节已进媒体库)与未导入都删,
     // 重试导入走重新入队(全新下载)。
-    for (final (_, dl) in pairs) {
+    final tempPaths = <String>[
+      for (final (_, dl) in pairs) dl.path,
+      ...batch.liveVideos.values,
+    ];
+    for (final path in tempPaths) {
       try {
-        final f = File(dl.path);
+        final f = File(path);
         if (await f.exists()) await f.delete();
       } on FileSystemException {
         // 清理失败不掩盖任务结果

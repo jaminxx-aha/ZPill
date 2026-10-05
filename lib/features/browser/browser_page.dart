@@ -1,5 +1,6 @@
 /// 相册页(TODO.md §三 相册视图):「全部照片」+ 各文件夹相册卡片
-/// (封面缩略图 / 张数 / 日期范围);点击进入缩略图网格。
+/// (封面缩略图 / 张数 / 日期范围);点击进入缩略图网格。顶栏下方
+/// 双卡槽余量卡(存储控制器连接成功即拉,见 StorageOverviewController)。
 ///
 /// 渐进加载:枚举期间不再全屏阻塞 —— 首块到达即显示内容,后续对象
 /// 后台同步(AppBar 细进度条推进,封面渐次点亮),支持下拉刷新。
@@ -12,6 +13,7 @@ import 'package:flutter/material.dart';
 import '../../app_services.dart';
 import '../../core/browser/album.dart';
 import '../../core/browser/object_entry.dart';
+import '../../core/browser/storage_info.dart';
 import '../../core/browser/thumbnail_cache.dart';
 import '../common/format.dart';
 import 'browser_controller.dart';
@@ -107,8 +109,7 @@ class _BrowserPageState extends State<BrowserPage> {
         );
       }
       return const Center(
-        child: Text('相机里还没有照片\n(未连接时请先在「相机」页连接)',
-            textAlign: TextAlign.center),
+        child: Text('相机里还没有照片\n(未连接时请先在「相机」页连接)', textAlign: TextAlign.center),
       );
     }
     // 有内容:同步中断仅软横幅(已显示内容可继续浏览),下拉刷新重枚举。
@@ -120,9 +121,10 @@ class _BrowserPageState extends State<BrowserPage> {
             onRefresh: controller.reload,
             child: ListView.builder(
               padding: const EdgeInsets.symmetric(vertical: 4),
-              itemCount: controller.albums.length,
+              itemCount: 1 + controller.albums.length,
               itemBuilder: (_, i) {
-                final album = controller.albums[i];
+                if (i == 0) return const _StoragePanel();
+                final album = controller.albums[i - 1];
                 return _AlbumTile(
                   key: ValueKey(album.folderHandle),
                   album: album,
@@ -179,6 +181,94 @@ class _BrowserPageState extends State<BrowserPage> {
   }
 }
 
+/// 双卡槽余量卡:每槽一行(名 + 剩余/总容量 + 余量进度条),点按手动
+/// 刷新(换卡不自动追新)。相机未上报容量只显示名字;无槽不占位。
+class _StoragePanel extends StatelessWidget {
+  const _StoragePanel();
+
+  @override
+  Widget build(BuildContext context) {
+    final overview = AppServices.instance.storageOverview;
+    return ListenableBuilder(
+      listenable: overview,
+      builder: (context, _) {
+        final storages = overview.storages;
+        if (storages.isEmpty) {
+          return const SizedBox.shrink();
+        }
+        return Card(
+          margin: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            child: Column(
+              children: [
+                for (final storage in storages)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: _StorageRow(storage: storage),
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _StorageRow extends StatelessWidget {
+  const _StorageRow({required this.storage});
+
+  final CameraStorage storage;
+
+  @override
+  Widget build(BuildContext context) {
+    final ratio = storage.freeRatio;
+    final colorScheme = Theme.of(context).colorScheme;
+    // 低余量(<10%)转警示色。
+    final barColor =
+        ratio != null && ratio < 0.1 ? colorScheme.error : colorScheme.primary;
+    return Row(
+      children: [
+        Icon(Icons.sd_card_outlined,
+            size: 20, color: colorScheme.onSurfaceVariant),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(storage.label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodyMedium),
+              if (ratio != null) ...[
+                const SizedBox(height: 4),
+                LinearProgressIndicator(
+                  value: 1 - ratio, // 已用占比
+                  minHeight: 4,
+                  borderRadius: BorderRadius.circular(2),
+                  backgroundColor: colorScheme.surfaceContainerHighest,
+                  color: barColor,
+                ),
+              ],
+            ],
+          ),
+        ),
+        const SizedBox(width: 12),
+        Text(
+          storage.maxCapacityBytes > 0
+              ? '${formatBytes(storage.freeSpaceBytes)} 可用 / ${formatBytes(storage.maxCapacityBytes)}'
+              : '容量未知',
+          style: Theme.of(context)
+              .textTheme
+              .bodySmall
+              ?.copyWith(color: colorScheme.onSurfaceVariant),
+        ),
+      ],
+    );
+  }
+}
+
 /// 相册卡片:封面缩略图(最新一张)+ 名称 + 张数 + 日期范围。
 class _AlbumTile extends StatelessWidget {
   const _AlbumTile({super.key, required this.album, required this.onTap});
@@ -200,7 +290,8 @@ class _AlbumTile extends StatelessWidget {
         child: SizedBox(
           width: 72,
           height: 72,
-          child: cover == null ? const _CoverPlaceholder() : _Cover(cover.primary),
+          child:
+              cover == null ? const _CoverPlaceholder() : _Cover(cover.primary),
         ),
       ),
       title: Row(
@@ -316,7 +407,8 @@ class _CoverPlaceholder extends StatelessWidget {
   Widget build(BuildContext context) {
     return const ColoredBox(
       color: Color(0x22808080),
-      child: Center(child: Icon(Icons.photo_outlined, color: Color(0xAAFFFFFF))),
+      child:
+          Center(child: Icon(Icons.photo_outlined, color: Color(0xAAFFFFFF))),
     );
   }
 }

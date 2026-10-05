@@ -2,8 +2,8 @@
 ///
 /// RAW+JPG 双格式(或双卡槽备份副本)对应多个文件,浏览层把它们合并成
 /// 一个条目,不再重复显示;下载以组为单位,双格式组由用户选格式
-/// (见 [PhotoDownloadFormat]),缺所选格式的组跳过。视频不存在双格式,
-/// 恒为单文件组。
+/// (见 [PhotoDownloadFormat]),缺所选格式的组跳过。视频不存在双格式;
+/// 同基名 JPG+MOV 双件(运动照片)按实况对处理([PhotoGroup.isMotionPair])。
 ///
 /// 配对规则见 [buildPhotoGroups]。
 library;
@@ -41,17 +41,34 @@ final class PhotoGroup {
   final List<ObjectEntry> members;
 
   /// 组内首个 JPG(备份副本等价,任取其一)。
-  late final ObjectEntry? jpg = _firstWhere(_isJpg);
+  late final ObjectEntry? jpg = _firstWhere(isJpgFile);
 
   /// 组内首个 RAW(NEF/NRW)。
-  late final ObjectEntry? raw = _firstWhere(_isRaw);
+  late final ObjectEntry? raw = _firstWhere(isRawFile);
+
+  /// 组内首个视频成员(同基名 MOV/MP4 与 JPG 同组 = 运动照片双件
+  /// 形态;尼康运动照片常态是单 JPG 内嵌视频,拆分见
+  /// core/media/motion_photo.dart,双件形态待真机核对)。
+  late final ObjectEntry? movie = _firstWhere(isVideoFile);
 
   bool get hasJpg => jpg != null;
   bool get hasRaw => raw != null;
 
+  /// 实况照片对:静帧 JPG + 独立视频件同组(同文件夹同基名第一遍
+  /// 配对必并组);下载时两者配对导入为一张实况(见传输引擎收尾)。
+  bool get isMotionPair => hasJpg && movie != null;
+
   /// 展示代表文件:优先 JPG(缩略图/预览走标准 JPEG 通路最稳,文件名也
   /// 更贴近用户熟悉的成片);无 JPG 用首成员(单 RAW/视频)。
   ObjectEntry get primary => jpg ?? members.first;
+
+  /// 组内不同基名数:RAW+JPG 孪生与双槽备份副本恒 1;≥2 = 连拍簇
+  ///(多张独立快门并成一条目,见 buildPhotoGroups 第三遍)。
+  late final int shotCount =
+      members.map((entry) => baseNameOf(entry.name)).toSet().length;
+
+  /// 连拍簇:一次快门序列的多张并成一条目(视频不参与连拍并组)。
+  bool get isBurst => !isVideo && shotCount > 1;
 
   /// 组身份键:成员最大句柄。
   ///
@@ -79,27 +96,52 @@ final class PhotoGroup {
   bool get isVideo => primary.kind == ObjectKind.video;
 
   /// 缩略图类型角标:双格式 'jpg+raw',纯 RAW 'raw',纯 JPG 'jpg';
-  /// 其他图像格式与视频无角标(视频由摄像机图标表达)。
+  /// 实况对追加 '+mov';连拍簇追加 '×N'(如 'jpg ×3');其他图像格式
+  /// 与视频无角标。
   String get typeLabel {
     if (isVideo) return '';
-    if (hasRaw && hasJpg) return 'jpg+raw';
-    if (hasRaw) return 'raw';
-    if (hasJpg) return 'jpg';
-    return '';
+    final base = switch ((hasRaw, hasJpg)) {
+      (true, true) => 'jpg+raw',
+      (true, false) => 'raw',
+      (false, true) => 'jpg',
+      (false, false) => '',
+    };
+    final live = isMotionPair ? '+mov' : '';
+    if (isBurst) {
+      return base.isEmpty ? '×$shotCount' : '$base$live ×$shotCount';
+    }
+    return '$base$live';
   }
 
   /// 按格式选择取下载文件。
   ///
-  /// 视频不受格式选择影响恒全量;[PhotoDownloadFormat.jpg]/[raw] 组内
-  /// 缺该格式返回空列表(调用方据此跳过该组);双格式副本(jpg/raw
-  /// 各取其一)不会重复入队。
+  /// 视频不受格式选择影响恒全量;实况对的视频件跟随静帧(选「仅 JPG」
+  /// 也带上 —— 它是这张照片的实况成分,不是另一张);[PhotoDownloadFormat
+  /// .jpg]/[raw] 同格式**按基名去重**取文件 —— 双槽备份副本(同基名)
+  /// 只取一份,连拍簇(每张各基名)每张各一份;组内缺该格式返回空列表
+  ///(调用方据此跳过)。
   List<ObjectEntry> membersFor(PhotoDownloadFormat format) {
     if (isVideo) return members;
     return switch (format) {
-      PhotoDownloadFormat.jpg => hasJpg ? [jpg!] : const <ObjectEntry>[],
-      PhotoDownloadFormat.raw => hasRaw ? [raw!] : const <ObjectEntry>[],
+      PhotoDownloadFormat.jpg => [
+          ..._onePerBaseName(isJpgFile),
+          ...members.where(isVideoFile),
+        ],
+      PhotoDownloadFormat.raw => _onePerBaseName(isRawFile),
       PhotoDownloadFormat.both => members,
     };
+  }
+
+  /// 同格式文件按基名去重(备份副本等价,任取其一)。
+  List<ObjectEntry> _onePerBaseName(bool Function(ObjectEntry) test) {
+    final seen = <String>{};
+    final out = <ObjectEntry>[];
+    for (final entry in members) {
+      if (test(entry) && seen.add(baseNameOf(entry.name))) {
+        out.add(entry);
+      }
+    }
+    return out;
   }
 
   ObjectEntry? _firstWhere(bool Function(ObjectEntry) test) {
@@ -108,25 +150,12 @@ final class PhotoGroup {
     }
     return null;
   }
+}
 
-  /// JPG 判定:EXIF/JFIF 格式码,或 .jpg/.jpeg/.jpe 扩展名兜底。
-  static bool _isJpg(ObjectEntry entry) {
-    final code = entry.formatCode;
-    if (code == ObjectFormatCode.exifJpeg || code == ObjectFormatCode.jfif) {
-      return true;
-    }
-    return _hasExt(entry.name, const {'jpg', 'jpeg', 'jpe'});
-  }
-
-  /// RAW 判定:尼康 NEF/NRW 扩展名(NEF 格式码 0x3000,只能靠文件名)。
-  static bool _isRaw(ObjectEntry entry) =>
-      _hasExt(entry.name, const {'nef', 'nrw'});
-
-  static bool _hasExt(String name, Set<String> exts) {
-    final dot = name.lastIndexOf('.');
-    if (dot < 0 || dot + 1 >= name.length) return false;
-    return exts.contains(name.substring(dot + 1).toLowerCase());
-  }
+bool _hasExt(String name, Set<String> exts) {
+  final dot = name.lastIndexOf('.');
+  if (dot < 0 || dot + 1 >= name.length) return false;
+  return exts.contains(name.substring(dot + 1).toLowerCase());
 }
 
 /// 跨文件夹配对时间窗:同基名跨文件夹(双槽 RAW/JPG 分存)须拍摄时刻
@@ -144,9 +173,35 @@ String baseNameOf(String name) {
   return dot > 0 ? name.substring(0, dot) : name;
 }
 
-/// 把枚举到的对象文件聚成相册条目(RAW+JPG 合并)。
+/// JPG 判定:EXIF/JFIF 格式码,或 .jpg/.jpeg/.jpe 扩展名兜底。
+bool isJpgFile(ObjectEntry entry) {
+  final code = entry.formatCode;
+  if (code == ObjectFormatCode.exifJpeg || code == ObjectFormatCode.jfif) {
+    return true;
+  }
+  return _hasExt(entry.name, const {'jpg', 'jpeg', 'jpe'});
+}
+
+/// RAW 判定:尼康 NEF/NRW 扩展名(NEF 格式码 0x3000,只能靠文件名)。
+bool isRawFile(ObjectEntry entry) => _hasExt(entry.name, const {'nef', 'nrw'});
+
+/// 视频文件判定:PTP 格式码(QuickTime/MPEG)或 .mov/.mp4 扩展名兜底。
+bool isVideoFile(ObjectEntry entry) {
+  if (entry.kind == ObjectKind.video) return true;
+  return _hasExt(entry.name, const {'mov', 'mp4', 'm4v'});
+}
+
+/// 连拍相邻张间隔窗:同一夹内相邻快门差 ≤ 此值才归连拍段
+///(Zf 高速连拍 ~14fps ≈ 71ms、低速 ~5fps ≈ 200ms,500ms 罩住两档,
+/// 又排除有意逐张补拍)。
+const Duration kBurstShotGap = Duration(milliseconds: 500);
+
+/// 连拍成段最少张数:不足此数的短序列不并(偶发两连拍保持独立)。
+const int kBurstMinShots = 3;
+
+/// 把枚举到的对象文件聚成相册条目(RAW+JPG 合并 + 连拍簇合并)。
 ///
-/// 两遍成组(2026-10-03 真机反馈修订:旧版要求两份拍摄时刻**同秒**,
+/// 三遍成组(2026-10-03 真机反馈修订:旧版要求两份拍摄时刻**同秒**,
 /// 连拍落盘时序会让两份差 1 秒以上,同夹也漏并):
 /// 1. **同文件夹同基名 → 无条件并**。DCF 规定文件夹内基名唯一,
 ///    `DSC_0001.NEF` 与 `DSC_0001.JPG` 必属同一次快门,无需看时间。
@@ -154,9 +209,12 @@ String baseNameOf(String name) {
 ///    100NIKON):拍摄时刻齐全且差 ≤ [kCrossFolderPairWindow] 判为同拍;
 ///    任一时刻缺失退回孪生句柄判定(低 24 位共享)。换卡重编号的同名
 ///    照片时刻差远超窗且不共享低位,不会误并。
+/// 3. **连拍段聚类**:同一文件夹内、相邻条目拍摄时刻差 ≤ [kBurstShotGap]
+///    的连续段,段长 ≥ [kBurstMinShots] 并成一个连拍簇([PhotoGroup.isBurst])。
+///    双格式组以整组入段;时刻缺失/视频不参与。
 ///
-/// 视频无双格式,自然单文件成组。渐进枚举每块用累积缓存全量重建,结果
-/// 只增不漂移([PhotoGroup.key] 取成员最大句柄)。
+/// 渐进枚举每块用累积缓存全量重建,结果只增不漂移([PhotoGroup.key]
+/// 取成员最大句柄 —— 倒序填充下簇内首到的必是最大句柄,后到只更小)。
 List<PhotoGroup> buildPhotoGroups(Iterable<ObjectEntry> entries) {
   // 第一遍:文件夹内按 (parentHandle, 基名) 成组 —— 无条件合并。
   final byFolderBase = <String, List<ObjectEntry>>{};
@@ -202,7 +260,48 @@ List<PhotoGroup> buildPhotoGroups(Iterable<ObjectEntry> entries) {
           : PhotoGroup([for (final g in cluster) ...g.members]));
     }
   }
-  return groups;
+  return _mergeBursts(groups);
+}
+
+/// 第三遍:连拍段聚类(见 buildPhotoGroups 注 3)。
+///
+/// 按代表文件所在夹分桶、拍摄时刻排序后线性扫描分段;段长达标的多组
+/// 并一簇,不足的保持原组。无时刻条目与视频无法判段,保持独立。
+List<PhotoGroup> _mergeBursts(List<PhotoGroup> groups) {
+  final byFolder = <int, List<PhotoGroup>>{};
+  final skipped = <PhotoGroup>[];
+  for (final group in groups) {
+    if (group.isVideo || group.capturedAt == null) {
+      skipped.add(group);
+      continue;
+    }
+    byFolder.putIfAbsent(group.primary.parentHandle, () => []).add(group);
+  }
+  final out = <PhotoGroup>[...skipped];
+  for (final folderGroups in byFolder.values) {
+    folderGroups.sort((a, b) {
+      final t = a.capturedAt!.compareTo(b.capturedAt!);
+      return t != 0 ? t : a.key.compareTo(b.key);
+    });
+    var start = 0;
+    for (var i = 1; i <= folderGroups.length; i++) {
+      final inGap = i < folderGroups.length &&
+          folderGroups[i]
+                  .capturedAt!
+                  .difference(folderGroups[i - 1].capturedAt!) <=
+              kBurstShotGap;
+      if (!inGap) {
+        final run = folderGroups.sublist(start, i);
+        if (run.length >= kBurstMinShots) {
+          out.add(PhotoGroup([for (final g in run) ...g.members]));
+        } else {
+          out.addAll(run);
+        }
+        start = i;
+      }
+    }
+  }
+  return out;
 }
 
 /// 两组间任一文件对佐证通过即视为同拍。

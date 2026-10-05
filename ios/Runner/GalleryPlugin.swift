@@ -5,11 +5,13 @@
 //   (缓存语义,系统可回收;缩略图 LRU 与下载临时落盘用);
 // - downloadsDir():Documents 下持久目录(「下载到应用」的目的地,
 //   Info.plist 已开 UIFileSharingEnabled,文件 App 可见);
-// - importFiles([{path, kind('image'|'video'), filename}]):PHPhotoLibrary
-//   add-only 批量导入。**授权拒绝/受限 → 空列表**(契约:空 = 未导入,
-//   不抛错,可重新发起);performChanges 失败 → FlutterError。
-//   返回 phassets://<localIdentifier>(对 Dart 是不透明 Uri;标识符在
-//   changes block 内取的是占位值,提交成功后即为正式资产 ID)。
+// - importFiles([{path, kind('image'|'video'), filename, videoPath?}]):
+//   PHPhotoLibrary add-only 批量导入。**授权拒绝/受限 → 空列表**(契约:
+//   空 = 未导入,不抛错,可重新发起);performChanges 失败 → FlutterError。
+//   videoPath 非空 = 实况照片:静帧 .photo + 配对视频 .pairedVideo 同一
+//   资产(视频来自相机运动照片拆分段,无苹果实况元数据,动画行为待真机
+//   核对)。返回 phassets://<localIdentifier>(对 Dart 是不透明 Uri;
+//   标识符在 changes block 内取的是占位值,提交成功后即为正式资产 ID)。
 
 import Flutter
 import Photos
@@ -63,7 +65,7 @@ public final class GalleryPlugin: NSObject, FlutterPlugin {
       result(FlutterError(code: "gallery_error", message: "importFiles 参数须为非空列表", details: nil))
       return
     }
-    var pairs: [(url: URL, isVideo: Bool, filename: String)] = []
+    var pairs: [(url: URL, isVideo: Bool, filename: String, videoURL: URL?)] = []
     for item in items {
       guard let path = item["path"] as? String, !path.isEmpty,
         let filename = item["filename"] as? String, !filename.isEmpty
@@ -72,7 +74,10 @@ public final class GalleryPlugin: NSObject, FlutterPlugin {
         return
       }
       let isVideo = (item["kind"] as? String) == "video"
-      pairs.append((URL(fileURLWithPath: path), isVideo, filename))
+      let videoPath = item["videoPath"] as? String
+      let videoURL = (videoPath?.isEmpty == false)
+        ? URL(fileURLWithPath: videoPath!) : nil
+      pairs.append((URL(fileURLWithPath: path), isVideo, filename, videoURL))
     }
 
     PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
@@ -86,8 +91,19 @@ public final class GalleryPlugin: NSObject, FlutterPlugin {
           let options = PHAssetResourceCreationOptions()
           options.originalFilename = pair.filename
           let request = PHAssetCreationRequest.forAsset()
-          request.addResource(
-            with: pair.isVideo ? .video : .photo, fileURL: pair.url, options: options)
+          if let videoURL = pair.videoURL {
+            // 实况照片(Dart 契约 videoPath 非空):静帧 + 配对视频资源
+            // 同一资产。相机运动照片拆出的 MP4 无苹果实况视频元数据,
+            // Photos 是否播放动画待真机核对 —— 静帧资产本身不受影响。
+            let videoOptions = PHAssetResourceCreationOptions()
+            videoOptions.originalFilename =
+              ((pair.filename as NSString).deletingPathExtension) + ".MOV"
+            request.addResource(with: .photo, fileURL: pair.url, options: options)
+            request.addResource(with: .pairedVideo, fileURL: videoURL, options: videoOptions)
+          } else {
+            request.addResource(
+              with: pair.isVideo ? .video : .photo, fileURL: pair.url, options: options)
+          }
           if let placeholder = request.placeholderForCreatedAsset {
             identifiers.append(placeholder.localIdentifier)
           }

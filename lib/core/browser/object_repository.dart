@@ -46,6 +46,10 @@ abstract interface class ObjectRepository {
 
   Future<ObjectEntry> entryFor(int handle);
 
+  /// 从缓存移除已删对象并立即重发布(相机删除后的本地同步,免全量
+  /// 重枚举)。空文件夹相册随之自然消失(相册由内容派生)。
+  void removeHandles(Iterable<int> handles);
+
   /// 丢弃缓存并废弃在途枚举(世代计数);断连/手动刷新用。
   void reset();
 
@@ -148,6 +152,18 @@ final class ObjectRepositoryImpl implements ObjectRepository {
     _byHandle = <int, ObjectEntry>{};
     _loaded = false;
     _loading = null; // 在途枚举由世代计数废弃;新调用立即开新一轮
+  }
+
+  @override
+  void removeHandles(Iterable<int> handles) {
+    var removed = false;
+    for (final h in handles.toSet()) {
+      if (_byHandle.remove(h) != null) removed = true;
+    }
+    if (removed) {
+      final n = _byHandle.length;
+      _publish(n, n, complete: true);
+    }
   }
 
   Future<void> _ensureLoaded() {

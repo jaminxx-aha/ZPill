@@ -11,6 +11,8 @@
 /// | `nikonpill/ble`      | BluetoothLeScanner     | CoreBluetooth          | @ohos.bluetooth.ble   |
 /// | `nikonpill/usb`      | UsbManager bulk        | ImageCaptureCore**     | @ohos.usb             |
 /// | `nikonpill/nsd`      | NsdManager             | NetServiceBrowser      | @ohos.net.mdns        |
+/// | `nikonpill/motion`   | SensorManager 重力     | CoreMotion             | @ohos.sensor          |
+/// | `nikonpill/location` | LocationManager        | CoreLocation           | geoLocationManager    |
 ///
 /// *iOS 普通应用拿不到当前 WiFi SSID(需 entitlement 且大多被拒),
 /// 实际策略:直接尝试默认网关直连,详见 docs/ARCHITECTURE.md。
@@ -22,6 +24,8 @@ library;
 import 'background_transfer.dart';
 import 'ble_scanner.dart';
 import 'gallery_saver.dart';
+import 'location_host.dart';
+import 'motion_host.dart';
 import 'network_monitor.dart';
 import 'nsd_scanner.dart';
 import 'usb/usb_host.dart';
@@ -39,6 +43,14 @@ final class PlatformServices {
   /// 编译过待真机验证,iOS 真机闭环)。
   static late final NsdScanner nsd;
 
+  /// 水平仪姿态(`nikonpill/motion`;三端已实现:iOS/ohos/Android 均
+  /// 编译过待真机验证,native 缺失时 listen 报错按「不可用」降级)。
+  static late final MotionHost motion;
+
+  /// 位置采样(`nikonpill/location`;三端已实现:iOS/ohos/Android 均
+  /// 编译过待真机验证,native 缺失时调用报错按「无位置」降级)。
+  static late final LocationHost location;
+
   static bool _bootstrapped = false;
 
   /// main() 中调用(幂等;测试直接 pumpWidget 时不经 main,由
@@ -54,5 +66,7 @@ final class PlatformServices {
     ble = MethodChannelBleScanner();
     usb = MethodChannelUsbHost();
     nsd = MethodChannelNsdScanner();
+    motion = MethodChannelMotionHost();
+    location = MethodChannelLocationHost();
   }
 }

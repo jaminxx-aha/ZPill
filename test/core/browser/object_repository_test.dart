@@ -232,6 +232,50 @@ void main() {
     expect(() => repo.entryFor(0xDEAD), throwsStateError);
   });
 
+  test('removeHandles:成功删除的句柄出缓存并重发布 complete 事件', () async {
+    final fake = FakePtpTransport();
+    final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
+    _replyTree(fake);
+    await repo.loadAlbums();
+    final updates = <AlbumsUpdate>[];
+    final sub = repo.updates.listen(updates.add);
+
+    repo.removeHandles([0x12]); // DSC_0001.NEF
+
+    expect(updates, hasLength(1));
+    expect(updates.single.complete, isTrue);
+    expect(updates.single.albums[0].items.map((g) => g.name), ['DSC_0002.JPG']);
+    expect(updates.single.albums.map((a) => a.name), ['全部照片', '100NIKON']);
+    await sub.cancel();
+  });
+
+  test('removeHandles:组的照片全删光 → 空文件夹相册自然消失', () async {
+    final fake = FakePtpTransport();
+    final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
+    _replyTree(fake);
+    await repo.loadAlbums();
+
+    repo.removeHandles([0x12, 0x13]); // 两张照片都删
+
+    final albums = await repo.loadAlbums(); // 缓存已建,直接快照
+    expect(albums.map((a) => a.name), ['全部照片']); // 100NIKON 无内容消失
+    expect(albums.single.items, isEmpty);
+  });
+
+  test('removeHandles:缓存里不存在的句柄不触发发布', () async {
+    final fake = FakePtpTransport();
+    final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
+    _replyTree(fake);
+    await repo.loadAlbums();
+    final updates = <AlbumsUpdate>[];
+    final sub = repo.updates.listen(updates.add);
+
+    repo.removeHandles([0xDEAD, 0xBEEF]);
+
+    expect(updates, isEmpty);
+    await sub.cancel();
+  });
+
   test('reset() 丢弃缓存,下次 loadAlbums 重新全量枚举', () async {
     final fake = FakePtpTransport();
     final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));

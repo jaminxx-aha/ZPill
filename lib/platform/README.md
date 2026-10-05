@@ -16,6 +16,8 @@ channel 契约表提供实现。
 
 usb / nsd / gallery 三通道三端均已实现 native(iOS 真机闭环;ohos USB/
 相册真机闭环,nsd 编译过待真机;Android 三者编译过待真机)。
-network / bg / ble 为纯契约通道(**三端均未实现**,native 缺失时
-上层按 MissingPluginException 降级);`PlatformServices.bootstrap()`
-在 main() 注入,测试可覆盖为 Fake。
+bg / motion / location 三端均已实现(iOS/ohos/Android 编译过,真机待验;
+Android bg = dataSync 前台服务,motion/location 见各插件头注)。
+network / ble 为纯契约通道(**三端均未实现**,
+native 缺失时上层按 MissingPluginException 降级);
+`PlatformServices.bootstrap()` 在 main() 注入,测试可覆盖为 Fake。

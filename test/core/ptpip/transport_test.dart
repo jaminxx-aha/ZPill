@@ -50,6 +50,31 @@ final class FakePtpIpChannel implements PtpIpChannel {
   void emitClosed() => unawaited(_frames.close());
 }
 
+/// 心跳节拍驱动:每次 delay 记一个 Completer,pump 按序解决。
+final class FakeDelay {
+  final pending = <Completer<void>>[];
+
+  Future<void> call(Duration d) {
+    final c = Completer<void>();
+    pending.add(c);
+    return c.future;
+  }
+
+  Future<void> pump() async {
+    expect(pending, isNotEmpty, reason: '心跳未在等待 delay(已停?)');
+    pending.removeAt(0).complete();
+    await Future<void>.value();
+    await Future<void>.value();
+    await Future<void>.value(); // 容纳 _send→pong 的异步链
+  }
+
+  Future<void> drain() async {
+    while (pending.isNotEmpty) {
+      await pump();
+    }
+  }
+}
+
 void main() {
   final codec = PtpIpCodecImpl();
 
@@ -527,6 +552,115 @@ void main() {
           transactionId: 0xFFFFFFFF)));
       await pumpEventQueue();
       expect(events.single.code, PtpEventCode.captureComplete);
+    });
+  });
+
+  group('心跳保活(真发真收)', () {
+    /// 心跳版握手:delay 注入驱动节拍,回声窗口 50ms(真实超时)。
+    Future<(PtpIpTransport, FakePtpIpChannel, FakePtpIpChannel, FakeDelay)>
+        connectKeepalive() async {
+      final command = FakePtpIpChannel();
+      final event = FakePtpIpChannel();
+      final channels = <PtpIpChannel>[command, event];
+      final delay = FakeDelay();
+      final transport = PtpIpTransport(
+        createChannel: () => channels.removeAt(0),
+        transactionTimeout: const Duration(milliseconds: 300),
+        enableKeepalive: true,
+        keepaliveInterval: const Duration(seconds: 15),
+        keepaliveMaxMissed: 3,
+        probeTimeout: const Duration(milliseconds: 50),
+        keepaliveDelay: delay.call,
+      );
+      final connecting = transport.connect('192.168.1.1');
+      await pumpEventQueue();
+      command.emit(frameOf(InitCommandResponsePacket(
+        connectionNumber: 0xC0DE,
+        cameraGuid: Uint8List(16),
+        cameraName: 'NIKON Z f',
+        protocolVersion: kPtpIpProtocolVersion,
+      )));
+      await pumpEventQueue();
+      event.emit(frameOf(const InitEventResponsePacket()));
+      await pumpEventQueue();
+      await connecting;
+      command.sent.clear();
+      event.sent.clear();
+      return (transport, command, event, delay);
+    }
+
+    test('握手后周期在 event 通道发 ProbeRequest;回声即活,不断链', () async {
+      final (t, command, event, delay) = await connectKeepalive();
+      final broke = <String>[];
+      t.breakages.listen(broke.add);
+
+      await delay.pump();
+      expect(event.sent, hasLength(1));
+      expect(event.sent.single.type, PtpIpPacketType.probeRequest);
+      event.emit(frameOf(const ProbeResponsePacket()));
+      await pumpEventQueue();
+      await Future<void>.delayed(
+          const Duration(milliseconds: 20)); // pong 到达窗口内
+
+      await delay.pump(); // 第二拍
+      expect(event.sent, hasLength(2));
+      event.emit(frameOf(const ProbeResponsePacket()));
+      await pumpEventQueue();
+
+      expect(broke, isEmpty);
+      // 心跳之外,事务照常
+      final future =
+          t.execute(const PtpRequest(opcode: PtpOperationCode.getDeviceInfo));
+      await pumpEventQueue();
+      final req = codec.decode(command.sent.last) as OperationRequestPacket;
+      command.emit(frameOf(OperationResponsePacket(
+          responseCode: PtpResponseCode.ok, transactionId: req.transactionId)));
+      expect((await future).responseCode, PtpResponseCode.ok);
+
+      await t.close();
+      await delay.drain();
+    });
+
+    test('连续 3 拍无回声 → breakage 广播 + 毒化', () async {
+      final (t, _, event, delay) = await connectKeepalive();
+      final broke = <String>[];
+      t.breakages.listen(broke.add);
+
+      for (var i = 0; i < 3; i++) {
+        await delay.pump();
+        expect(event.sent, hasLength(i + 1));
+        // 不回 ProbeResponse:等真实 50ms 超时把本拍判为无响应
+        await Future<void>.delayed(const Duration(milliseconds: 90));
+      }
+      await pumpEventQueue();
+      expect(broke, hasLength(1));
+      expect(broke.single, contains('心跳'));
+      await expectLater(
+          t.execute(const PtpRequest(opcode: PtpOperationCode.getDeviceInfo)),
+          throwsA(isA<PtpLinkException>()));
+      expect(event.closed, isTrue);
+      await delay.drain();
+    });
+
+    test('默认关:握手后 event 通道无心跳包(既有回放脚本不受扰)', () async {
+      final (t, _, event) = await connectTransport();
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+      expect(event.sent, isEmpty);
+      await t.close();
+    });
+
+    test('close 停心跳:不再发 ProbeRequest', () async {
+      final (t, _, event, delay) = await connectKeepalive();
+      await delay.pump();
+      expect(event.sent, hasLength(1));
+      event.emit(frameOf(const ProbeResponsePacket()));
+      await pumpEventQueue();
+
+      await t.close();
+      await delay.drain();
+      final sent = event.sent.length;
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+      expect(event.sent.length, sent, reason: 'close 后不得再发心跳');
     });
   });
 }

@@ -44,7 +44,8 @@ import kotlin.math.min
  * - bulkTransfer 同步阻塞:MethodChannel 回调在主线程,全部 bulk 收发
  *   投递到单线程 ExecutorService,结果经主线程 Handler 回传;
  * - AOSP 实现对 timeout 非零的 bulkTransfer 有 16384B 单次上限 →
- *   有限超时的读请求一律按 16KB 发(短读合法,Dart 循环补齐);
+ *   bulkRead 内部 16KB 分块循环组装,一次通道调用读满 maxLen
+ *   (Dart 1MB 流块不再退化为逐 16KB 通道往返;详见 bulkRead 头注);
  *   timeout=0(无限)路径不受此限,interrupt 轮询 64B 缓冲无影响;
  * - bulkTransfer 失败统一返回负值,**无法区分 STALL 与超时**:读路径按
  *   契约上报 usb_timeout(待真机核对;写路径按 ohos 实证走
@@ -465,9 +466,26 @@ class UsbHostPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHandl
         }
     }
 
-    /// bulk IN:单次读、短读合法;≥1 字节成功,否则按契约抛 usb_timeout/usb_error。
-    /// 有限超时的请求长度封顶 16KB(AOSP 限制),短读由 Dart 循环补齐;
-    /// 超出 maxLen 的字节暂存 leftover,下次调用先掏(对 Dart 是普通短读流)。
+    /// bulk IN:单次通道调用、短读合法;≥1 字节成功,否则按契约抛
+    /// usb_timeout/usb_error。
+    ///
+    /// AOSP 有限超时 bulkTransfer 单次 ≤16KB → native 内部 16KB 分块循环
+    /// 组装:一次通道调用最多读满 maxLen(1MB 块 = 64 次 syscall,省掉
+    /// 等量通道往返)。分块规则:
+    /// - 有限超时:每块 ≤16KB,单块超时 = 剩余窗口(绝不为 0),总窗口
+    ///   耗尽即止(与 Dart 看门狗的上限一致);无限超时:整块一次读
+    ///   (timeout=0 路径不受 16KB 限制,语义与旧单调用实现一致);
+    /// - 短读(n<callLen)= 相机突发结束 → 立即交付;满块继续;
+    /// - ZLB(n==0):已见数据 = 传输边界 → 交付;未见数据 = 耗窗口续等
+    ///   (ohos 真机实证存在 ZLB-先于-数据);
+    /// - n<0:已有部分数据则交付短读(数据是真实的,不丢),否则按
+    ///   超时/错误上报;
+    /// - 容器恰为 16KB 整数倍时靠尾随 ZLB 收尾(ZLB 在传输结束后即刻
+    ///   到达),极端时序下最多等到窗口耗尽才交付,数据不丢(待真机核对)。
+    ///
+    /// 小请求(maxLen<16KB)仍单次 16KB 超读:超出 maxLen 的字节暂存
+    /// leftover,下次调用先掏(对 Dart 是普通短读流),命令相位的多次
+    /// 小读可被一次超读吸收。
     private fun bulkRead(maxLen: Int, timeoutMs: Int, result: Result) {
         val s = session
         if (s == null) {
@@ -489,20 +507,52 @@ class UsbHostPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHandl
                         return@execute
                     }
                 }
-                val cap = if (timeoutMs > 0) BULK_IN_MIN_READ_BYTES else Int.MAX_VALUE
-                val buffer = ByteArray(min(max(maxLen, BULK_IN_MIN_READ_BYTES), cap))
+                val buffer = ByteArray(max(maxLen, BULK_IN_MIN_READ_BYTES))
+                // 后续分块先读草稿区再拼入 bulkTransfer 无偏移重载
+                // (minSdk 29,API 33 的 offset 重载不可无条件用)。
+                val scratch = ByteArray(BULK_IN_MIN_READ_BYTES)
                 val start = SystemClock.elapsedRealtime()
-                var n = s.connection.bulkTransfer(s.bulkIn, buffer, buffer.size, timeoutMs)
-                while (n == 0 && (timeoutMs <= 0 || SystemClock.elapsedRealtime() - start < timeoutMs)) {
-                    // 零长包:传输边界标记(容器恰为 wMaxPacketSize 整数倍时出现),
-                    // 真数据在下一个传输里 —— 耗掉剩余窗口继续等。
-                    // 下限 1ms:rest 若为 0 会变成无限等待,绝不可传 0。
-                    val rest = if (timeoutMs <= 0) {
-                        0
+                val deadline = if (timeoutMs > 0) start + timeoutMs else Long.MAX_VALUE
+                var filled = 0
+                var failed = false
+                loop@ while (filled < buffer.size) {
+                    val room = buffer.size - filled
+                    val callLen: Int
+                    val callTimeout: Int
+                    if (timeoutMs <= 0) {
+                        callLen = room
+                        callTimeout = 0
                     } else {
-                        max(1, timeoutMs - (SystemClock.elapsedRealtime() - start).toInt())
+                        val restMs = (deadline - SystemClock.elapsedRealtime()).toInt()
+                        if (restMs <= 0) {
+                            break@loop // 窗口耗尽:有数据交付短读,无数据走超时
+                        }
+                        callLen = min(room, BULK_IN_MIN_READ_BYTES)
+                        callTimeout = max(1, restMs)
                     }
-                    n = s.connection.bulkTransfer(s.bulkIn, buffer, buffer.size, rest)
+                    val n = if (filled == 0) {
+                        s.connection.bulkTransfer(s.bulkIn, buffer, callLen, callTimeout)
+                    } else {
+                        val got = s.connection.bulkTransfer(s.bulkIn, scratch, callLen, callTimeout)
+                        if (got > 0) {
+                            System.arraycopy(scratch, 0, buffer, filled, got)
+                        }
+                        got
+                    }
+                    when {
+                        n > 0 -> {
+                            filled += n
+                            if (n < callLen) break@loop // 短读 = 突发结束
+                        }
+                        n == 0 -> {
+                            if (filled > 0) break@loop // ZLB:边界,交付
+                            // 未见数据的 ZLB:继续耗窗口等真数据
+                        }
+                        else -> {
+                            if (filled == 0) failed = true
+                            break@loop // 部分数据优先交付
+                        }
+                    }
                 }
                 // 会话轮换守卫(关键):等待期间 teardown/重连会让 s 的连接失效,
                 // 而晚到的数据绝不能进 bulkInLeftover —— leftover 是共享字段,
@@ -512,21 +562,25 @@ class UsbHostPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHandl
                     postError(result, "usb_stale", "会话已轮换,旧链路读结果丢弃")
                     return@execute
                 }
-                if (n > 0) {
-                    if (n > maxLen) {
+                if (filled > 0) {
+                    if (filled > maxLen) {
                         synchronized(lock) {
-                            bulkInLeftover = buffer.copyOfRange(maxLen, n)
+                            bulkInLeftover = buffer.copyOfRange(maxLen, filled)
                         }
                         postSuccess(result, buffer.copyOf(maxLen))
                     } else {
-                        postSuccess(result, buffer.copyOf(n))
+                        postSuccess(result, buffer.copyOf(filled))
                     }
-                } else if (timeoutMs > 0) {
-                    // 窗口内无数据:对齐 Dart 的 TimeoutException 语义。
-                    // Android 无法区分 STALL/超时,按超时上报(待真机核对)。
-                    postError(result, "usb_timeout", "bulkTransfer ret=$n within ${timeoutMs}ms")
+                } else if (failed) {
+                    if (timeoutMs > 0) {
+                        // 窗口内无数据:对齐 Dart 的 TimeoutException 语义。
+                        // Android 无法区分 STALL/超时,按超时上报(待真机核对)。
+                        postError(result, "usb_timeout", "bulkTransfer 负值返回(有限超时窗口内无数据)")
+                    } else {
+                        postError(result, "usb_error", "bulkTransfer 负值返回(无限等待失败)")
+                    }
                 } else {
-                    postError(result, "usb_error", "bulkTransfer ret=$n")
+                    postError(result, "usb_timeout", "bulkRead ${timeoutMs}ms 窗口内无数据")
                 }
             } catch (e: Exception) {
                 postError(result, "usb_error", "bulkRead: $e")

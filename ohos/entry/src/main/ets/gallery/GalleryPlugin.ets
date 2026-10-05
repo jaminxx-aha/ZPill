@@ -5,11 +5,13 @@
  * - tempDir()/thumbsDir()/previewsDir():cacheDir 下专用子目录(缓存,
  *   系统可回收;缩略图 LRU 与下载临时落盘用);
  * - downloadsDir():filesDir 下持久目录(「下载到应用」的目的地);
- * - importFiles(paths, kinds, filenames):批量导入系统相册 ——
- *   SaveButton 安全控件路径(见 SaveSession/SaveSheet):importFiles
- *   只登记请求并亮面板,用户点保存按钮获得临时授权后由 native 侧
- *   createAsset + 拷字节,结果经回调异步回传。
+ * - importFiles([{path, kind('image'|'video'), filename, videoPath?}]):
+ *   批量导入系统相册 —— SaveButton 安全控件路径(见 SaveSession/
+ *   SaveSheet):importFiles 只登记请求并亮面板,用户点保存按钮获得
+ *   临时授权后由 native 侧 createAsset + 拷字节,结果经回调异步回传。
  *   用户取消 → 空列表 → Dart 侧任务标「未导入」。
+ *   videoPath 非空 = 实况照片配对段(静帧 + 运动视频):ohos 无实况
+ *   照片合成 API → 分开导入两个资产,详见 SaveSession.performSave。
  *
  * 面板挂在 Index.ets 的覆盖层上,需要 UIAbility 存活,插件实现
  * AbilityAware 拿 UIAbility 引用(EntryAbility 经
@@ -159,6 +161,14 @@ export class GalleryPlugin implements FlutterPlugin, AbilityAware {
           return;
         }
         const req: SaveRequest = { path: path, kind: kind, filename: filename };
+        const videoPath = this.strValue(item.get('videoPath'));
+        if (videoPath.length > 0) {
+          req.videoPath = videoPath;
+          // 显示名取路径末段(临时目录名无意义,title/扩展名才有)
+          const slash = videoPath.lastIndexOf('/');
+          req.videoFilename =
+            slash >= 0 ? videoPath.substring(slash + 1) : videoPath;
+        }
         requests.push(req);
       }
       if (SaveSession.isActive()) {

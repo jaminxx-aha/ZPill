@@ -39,3 +39,19 @@ String? formatDateRange(DateTime? newest, DateTime? oldest) {
   }
   return '$one – ${_two(b.month)}-${_two(b.day)}';
 }
+
+const List<String> _weekdays = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+
+/// 本地日期分段头(相册网格按日分段):'今天' / '昨天' /
+/// '10月2日 周五' / 跨年补年份 '2025年12月30日 周二'。
+String sectionDateLabel(DateTime d) {
+  final local = d.toLocal();
+  final now = DateTime.now();
+  final today = DateTime(now.year, now.month, now.day);
+  final day = DateTime(local.year, local.month, local.day);
+  final diffDays = today.difference(day).inDays;
+  if (diffDays == 0 && today.day == local.day) return '今天';
+  if (diffDays == 1) return '昨天';
+  final year = local.year == now.year ? '' : '${local.year}年';
+  return '$year${local.month}月${local.day}日 ${_weekdays[local.weekday - 1]}';
+}

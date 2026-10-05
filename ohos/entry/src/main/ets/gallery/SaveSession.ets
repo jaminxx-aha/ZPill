@@ -27,6 +27,11 @@ export interface SaveRequest {
   path: string;
   kind: string;
   filename: string;
+  /// 实况照片配对段(Dart 侧视频临时文件):非空 = path 为静帧 +
+  /// videoPath 为运动视频,分开导入两个资产(见 performSave)。
+  videoPath?: string;
+  /// videoPath 的显示名(取路径末段;createAsset 的 title/扩展名用)。
+  videoFilename?: string;
 }
 
 /** 保存结果回调:授权 URI 列表(与请求等长);空列表 = 用户取消。 */
@@ -105,6 +110,11 @@ export class SaveSession {
    * 任一文件失败即抛错,面板留在原地可再次点击重试(每次点击授予新的
    * 授权窗口);已拷入的部分会成为媒体库孤立文件,重试会产生重复 ——
    * 以此换取全有或全无的简单语义。
+   *
+   * 实况照片(videoPath 非空):photoAccessHelper 无三方实况照片合成
+   * API(loadMovingPhoto 只读)→ 分开导入:静帧 IMAGE 资产 + 运动
+   * VIDEO 资产各一个;返回 uri 仍是静帧(与 Dart 侧任务 1:1,视频是
+   * 静帧的伴生文件)。iOS 走 .pairedVideo 同资产,行为差异待真机核对。
    */
   static async performSave(
     context: common.Context,
@@ -125,24 +135,41 @@ export class SaveSession {
           ? photoAccessHelper.PhotoType.VIDEO
           : photoAccessHelper.PhotoType.IMAGE;
         const uri = await helper.createAsset(photoType, ext, options);
-        const src = fs.openSync(r.path, fs.OpenMode.READ_ONLY);
-        try {
-          const dst = fs.openSync(uri, fs.OpenMode.READ_WRITE);
-          try {
-            fs.copyFileSync(src.fd, dst.fd);
-          } finally {
-            fs.closeSync(dst);
-          }
-        } finally {
-          fs.closeSync(src);
-        }
+        SaveSession.copyInto(r.path, uri);
         uris.push(uri);
+        const videoPath = r.videoPath ?? '';
+        if (videoPath.length > 0) {
+          const videoName = r.videoFilename ?? '';
+          const vDot = videoName.lastIndexOf('.');
+          const vExt = vDot > 0 ? videoName.substring(vDot + 1) : 'mp4';
+          const vTitle = vDot > 0 ? videoName.substring(0, vDot) : videoName;
+          const vOptions: photoAccessHelper.CreateOptions = { title: vTitle };
+          const vUri = await helper.createAsset(
+            photoAccessHelper.PhotoType.VIDEO, vExt, vOptions);
+          SaveSession.copyInto(videoPath, vUri);
+          Log.i(TAG, `performSave: ${r.filename} 运动段分开导入 ${vUri}`);
+        }
         onProgress(i + 1, reqs.length);
         Log.i(TAG, `performSave: ${i + 1}/${reqs.length} ${r.filename}`);
       }
       return uris;
     } finally {
       SaveSession.performing = false;
+    }
+  }
+
+  /// 授权 URI 打开为可写文件并整段拷入(见 performSave 的失败语义)。
+  private static copyInto(srcPath: string, dstUri: string): void {
+    const src = fs.openSync(srcPath, fs.OpenMode.READ_ONLY);
+    try {
+      const dst = fs.openSync(dstUri, fs.OpenMode.READ_WRITE);
+      try {
+        fs.copyFileSync(src.fd, dst.fd);
+      } finally {
+        fs.closeSync(dst);
+      }
+    } finally {
+      fs.closeSync(src);
     }
   }
 }

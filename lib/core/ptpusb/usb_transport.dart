@@ -31,8 +31,9 @@ abstract interface class UsbBytePipe {
   /// bulk OUT:写整段字节(native 内部按平台上限分块循环)。
   Future<void> bulkOut(Uint8List bytes);
 
-  /// bulk IN:**单次**读,返回至多 [maxLen] 字节(短读合法,POSIX read()
-  /// 语义 —— 不为凑满 maxLen 而循环等待);窗口内一个字节都没到则抛
+  /// bulk IN:单次读,返回至多 [maxLen] 字节(短读合法;native 内部可
+  /// 按平台上限分块组装 —— 一次通道调用读满 maxLen,相机突发结束即返,
+  /// 不为凑满而无限等待)。窗口内一个字节都没到则抛
   /// [TimeoutException]。STALL 的 CLEAR_HALT 重试在 native 内部消化。
   Future<Uint8List> bulkRead(int maxLen, {required int timeoutMs});
 
@@ -40,8 +41,11 @@ abstract interface class UsbBytePipe {
   Stream<Uint8List> get interruptEvents;
 }
 
-/// 流式回调的单块上限(对齐探针;兼顾通道开销与内存)。
-const int kUsbStreamChunkBytes = 64 * 1024;
+/// 流式回调的单块上限:1MB(ohos 单次 bulkTransfer 直接吃满,通道往返
+/// 从 64KB 一次降到 1MB 一次;Android AOSP 有限超时 bulkTransfer 上限
+/// 16KB,native 内部分块循环组装,一次通道调用同样读满 1MB;iOS 容器
+/// 缓冲天然支持任意 maxLen)。
+const int kUsbStreamChunkBytes = 1024 * 1024;
 
 /// bulk 读缺省超时:相机忙(写卡/连拍清缓存)可能拖长,放宽到 15s。
 const int kUsbDefaultReadTimeoutMs = 15000;
