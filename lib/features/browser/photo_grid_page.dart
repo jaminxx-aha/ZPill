@@ -227,8 +227,9 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
 
   void _clearSelection() => setState(_selected.clear);
 
-  /// 批量下载:批次里有双格式组才弹格式选择(全是单一格式直接下,
-  /// 行为同旧版);按所选格式过滤,缺格式的组跳过并计数提示;取消
+  /// 批量下载:批次内容不单一才弹格式选择 —— 含双格式组(选 JPG/RAW)
+  /// 或照片视频混选(选「仅视频」可整批只要视频);纯单一格式直接下,
+  /// 行为同旧版;按所选格式过滤,缺格式的组跳过并计数提示;取消
   /// 选择面板则什么都不下,保留选中态(便于改选格式再下)。
   Future<void> _downloadSelected(
       List<PhotoGroup> items, TransferDestination destination) async {
@@ -240,9 +241,13 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
     PhotoDownloadFormat? format;
     final pairCount =
         groups.where((g) => !g.isVideo && g.hasJpg && g.hasRaw).length;
-    if (pairCount > 0) {
+    final mixedPhotoVideo =
+        groups.any((g) => g.isVideo) && groups.any((g) => !g.isVideo);
+    if (pairCount > 0 || mixedPhotoVideo) {
       format = await showDownloadFormatSheet(context,
-          subtitle: '已选 ${groups.length} 项,其中 $pairCount 项为双格式');
+          subtitle: pairCount > 0
+              ? '已选 ${groups.length} 项,其中 $pairCount 项为双格式'
+              : '已选 ${groups.length} 项(照片与视频混选)');
       if (format == null) {
         return;
       }
@@ -250,8 +255,7 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
         return;
       }
     }
-    // 面板只在批次含双格式组时弹出,而双格式组对任意选择都非空,
-    // entries 不可能为空(单格式组缺格式直接跳过)。
+    // 按所选格式收集;「仅视频」可能把整批照片全部筛掉(entries 空)。
     final entries = <ObjectEntry>[];
     var included = 0;
     for (final group in groups) {
@@ -261,6 +265,18 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
       }
       included++;
       entries.addAll(members);
+    }
+    if (entries.isEmpty) {
+      // 全批被格式筛空(如纯照片批次选「仅视频」):不下,只提示。
+      _clearSelection();
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+            SnackBar(content: Text('没有符合「${format!.label}」的文件,未开始下载')));
+      return;
     }
     await _engine.enqueue(entries, destination: destination);
     _clearSelection();
@@ -455,8 +471,7 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
         );
       }
       return const Center(
-        child: Text('相机里还没有照片\n(未连接时请先在「相机」页连接)',
-            textAlign: TextAlign.center),
+        child: Text('相机里还没有照片\n(未连接时请先在「相机」页连接)', textAlign: TextAlign.center),
       );
     }
     return Column(

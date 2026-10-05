@@ -2,10 +2,11 @@
 /// TransfersController 的 appFiles 数据源)。**不含**已导入系统相册的
 /// 文件 —— 那些归系统相册 App 管,这里只看应用自留的份。
 ///
-/// 网格按修改时间倒序(新下载在前);Flutter 可解码的图片直接铺格
-/// (cacheWidth 限内存),NEF 等原生格式落图标格;点图片进黑底查看器
-/// (双指缩放),查看器/长按格可删除,查看器可把文件补导入系统相册。
-/// AppBar 传输徽标(进行中任务数)→ 传输页(任务列表)。
+/// 网格按修改时间倒序(新下载在前);顶栏下格式过滤 chips(全部/RAW/
+/// JPG/视频,按文件名扩展名,与相机侧判定同源);Flutter 可解码的图片
+/// 直接铺格(cacheWidth 限内存),NEF 等原生格式落图标格;点图片进黑底
+/// 查看器(双指缩放),查看器/长按格可删除,查看器可把文件补导入系统
+/// 相册。AppBar 传输徽标(进行中任务数)→ 传输页(任务列表)。
 library;
 
 import 'dart:io';
@@ -13,10 +14,30 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 import '../../app_services.dart';
+import '../../core/browser/photo_group.dart';
 import '../../core/ptpip/object_format.dart';
 import '../../platform/gallery_saver.dart';
 import '../../platform/services.dart';
 import '../transfers/transfers_page.dart';
+
+/// 图库格式过滤:按扩展名分流,与相机侧条目判定同源。
+enum _LibFilter {
+  all('全部'),
+  raw('RAW'),
+  jpg('JPG'),
+  video('视频');
+
+  const _LibFilter(this.label);
+
+  final String label;
+
+  bool allows(String filename) => switch (this) {
+        all => true,
+        raw => isRawFilename(filename),
+        jpg => isJpgFilename(filename),
+        video => isVideoFilename(filename),
+      };
+}
 
 class LocalLibraryPage extends StatefulWidget {
   const LocalLibraryPage({super.key, this.controller, this.gallery});
@@ -35,11 +56,12 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   TransfersController get _controller =>
       widget.controller ?? AppServices.instance.transfersController;
 
-  GallerySaver get _gallery =>
-      widget.gallery ?? PlatformServices.gallery;
+  GallerySaver get _gallery => widget.gallery ?? PlatformServices.gallery;
 
   /// Flutter 可解码的图片扩展名(NEF 等原生格式走图标格)。
   static const _viewableExts = {'.jpg', '.jpeg', '.png', '.webp', '.gif'};
+
+  _LibFilter _filter = _LibFilter.all;
 
   @override
   void initState() {
@@ -59,10 +81,11 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
       builder: (context, _) {
         // 修改时间倒序:新下载在前。
         final files = List<File>.of(_controller.appFiles)
-          ..sort((a, b) =>
-              b.statSync().modified.compareTo(a.statSync().modified));
+          ..sort(
+              (a, b) => b.statSync().modified.compareTo(a.statSync().modified));
         final activeCount =
             _controller.tasks.where((t) => !t.isTerminal).length;
+        final filtered = _filtered(files);
         return Scaffold(
           appBar: AppBar(
             title: const Text('图库'),
@@ -82,21 +105,52 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
                   child: Text('应用内还没有文件\n(在相机相册里选择「下载到应用」)',
                       textAlign: TextAlign.center),
                 )
-              : GridView.builder(
-                  padding: const EdgeInsets.all(2),
-                  gridDelegate:
-                      const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 4,
-                    mainAxisSpacing: 2,
-                    crossAxisSpacing: 2,
-                  ),
-                  itemCount: files.length,
-                  itemBuilder: (_, i) => _cell(context, files[i]),
+              : Column(
+                  children: [
+                    // 格式过滤:切换不清文件,只按扩展名收窄网格。
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
+                      child: SegmentedButton<_LibFilter>(
+                        segments: [
+                          for (final f in _LibFilter.values)
+                            ButtonSegment(value: f, label: Text(f.label)),
+                        ],
+                        selected: {_filter},
+                        onSelectionChanged: (s) =>
+                            setState(() => _filter = s.first),
+                      ),
+                    ),
+                    Expanded(
+                      child: filtered.isEmpty
+                          ? Center(
+                              child: Text('没有${_filter.label}格式的文件',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                      color: Theme.of(context).hintColor)),
+                            )
+                          : GridView.builder(
+                              padding: const EdgeInsets.all(2),
+                              gridDelegate:
+                                  const SliverGridDelegateWithFixedCrossAxisCount(
+                                crossAxisCount: 4,
+                                mainAxisSpacing: 2,
+                                crossAxisSpacing: 2,
+                              ),
+                              itemCount: filtered.length,
+                              itemBuilder: (_, i) =>
+                                  _cell(context, filtered[i]),
+                            ),
+                    ),
+                  ],
                 ),
         );
       },
     );
   }
+
+  List<File> _filtered(List<File> files) => files
+      .where((f) => _filter.allows(f.uri.pathSegments.last))
+      .toList(growable: false);
 
   Widget _transfersBadge(BuildContext context, int activeCount) {
     return Stack(
@@ -104,8 +158,8 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
       children: [
         IconButton(
           tooltip: '传输',
-          onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(
-              builder: (_) => const TransfersPage())),
+          onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(builder: (_) => const TransfersPage())),
           icon: const Icon(Icons.swap_vert),
         ),
         if (activeCount > 0)
@@ -163,13 +217,19 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(Icons.insert_drive_file_outlined,
-                        size: 28,
-                        color: Theme.of(context).colorScheme.onSurfaceVariant),
+                    // 视频件用摄像机图标:与「视频」过滤 chips 视觉对上。
+                    Icon(
+                      isVideoFilename(name)
+                          ? Icons.videocam_outlined
+                          : Icons.insert_drive_file_outlined,
+                      size: 28,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
                     const SizedBox(height: 4),
                     Text(
                       name.contains('.')
-                          ? name.substring(name.lastIndexOf('.') + 1)
+                          ? name
+                              .substring(name.lastIndexOf('.') + 1)
                               .toUpperCase()
                           : 'FILE',
                       style: TextStyle(

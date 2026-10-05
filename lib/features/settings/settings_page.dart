@@ -147,7 +147,7 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
               ListTile(
                 title: const Text('速传格式'),
-                subtitle: const Text('双格式(RAW+JPG)照片按此选择下载哪个'),
+                subtitle: const Text('双格式(RAW+JPG)照片按此选择下载哪个;「仅视频」只速传视频'),
               ),
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),

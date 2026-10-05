@@ -117,8 +117,7 @@ void main() {
       settings: store,
       onSkip: skipped.add,
     );
-    await store.update(
-        const AppSettings().copyWith(autoTransfer: true));
+    await store.update(const AppSettings().copyWith(autoTransfer: true));
   });
 
   test('ObjectAdded → getObjectInfo → 入队 gallery', () async {
@@ -152,36 +151,75 @@ void main() {
 
   test('开关关闭:事件到、不取 Info、不入队', () async {
     await store.update(const AppSettings());
-    transport.eventsCtrl.add(
-        const PtpEvent(transactionId: 0xFFFFFFFF, code: PtpEventCode.objectAdded, params: [7]));
+    transport.eventsCtrl.add(const PtpEvent(
+        transactionId: 0xFFFFFFFF,
+        code: PtpEventCode.objectAdded,
+        params: [7]));
     await pumpEventQueue();
     expect(transport.requests, isEmpty);
     expect(engine.enqueued, isEmpty);
   });
 
   test('格式过滤:仅 JPG 时 NEF 跳过、JPG 放行;视频不受限', () async {
-    await store.update(const AppSettings()
-        .copyWith(autoTransfer: true, autoTransferFormat: PhotoDownloadFormat.jpg));
+    await store.update(const AppSettings().copyWith(
+        autoTransfer: true, autoTransferFormat: PhotoDownloadFormat.jpg));
     transport.reply(_ok(_infoDataset(
         format: 0x3000, parent: 0x11, size: 26843545, name: 'DSC_6162.NEF')));
-    transport.eventsCtrl.add(
-        const PtpEvent(transactionId: 0xFFFFFFFF, code: PtpEventCode.objectAdded, params: [8]));
+    transport.eventsCtrl.add(const PtpEvent(
+        transactionId: 0xFFFFFFFF,
+        code: PtpEventCode.objectAdded,
+        params: [8]));
     await pumpEventQueue();
     expect(engine.enqueued, isEmpty, reason: 'NEF 应被仅 JPG 过滤');
 
     transport.reply(_ok(_infoDataset(
         format: 0x3801, parent: 0x11, size: 900, name: 'DSC_6163.JPG')));
-    transport.eventsCtrl.add(
-        const PtpEvent(transactionId: 0xFFFFFFFF, code: PtpEventCode.objectAdded, params: [9]));
+    transport.eventsCtrl.add(const PtpEvent(
+        transactionId: 0xFFFFFFFF,
+        code: PtpEventCode.objectAdded,
+        params: [9]));
     await pumpEventQueue();
     expect(engine.enqueued, hasLength(1));
 
     transport.reply(_ok(_infoDataset(
         format: 0x300D, parent: 0x11, size: 5000000, name: 'DSC_6164.MOV')));
-    transport.eventsCtrl.add(
-        const PtpEvent(transactionId: 0xFFFFFFFF, code: PtpEventCode.objectAdded, params: [10]));
+    transport.eventsCtrl.add(const PtpEvent(
+        transactionId: 0xFFFFFFFF,
+        code: PtpEventCode.objectAdded,
+        params: [10]));
     await pumpEventQueue();
     expect(engine.enqueued, hasLength(2), reason: '视频不受格式选择影响');
+  });
+
+  test('仅视频速传:照片全跳过,视频放行', () async {
+    await store.update(const AppSettings().copyWith(
+        autoTransfer: true, autoTransferFormat: PhotoDownloadFormat.video));
+    transport.reply(_ok(_infoDataset(
+        format: 0x3801, parent: 0x11, size: 900, name: 'DSC_6167.JPG')));
+    transport.eventsCtrl.add(const PtpEvent(
+        transactionId: 0xFFFFFFFF,
+        code: PtpEventCode.objectAdded,
+        params: [14]));
+    await pumpEventQueue();
+    expect(engine.enqueued, isEmpty, reason: 'JPG 应被仅视频过滤');
+
+    transport.reply(_ok(_infoDataset(
+        format: 0x3000, parent: 0x11, size: 26843545, name: 'DSC_6168.NEF')));
+    transport.eventsCtrl.add(const PtpEvent(
+        transactionId: 0xFFFFFFFF,
+        code: PtpEventCode.objectAdded,
+        params: [15]));
+    await pumpEventQueue();
+    expect(engine.enqueued, isEmpty, reason: 'NEF 应被仅视频过滤');
+
+    transport.reply(_ok(_infoDataset(
+        format: 0x300D, parent: 0x11, size: 5000000, name: 'DSC_6169.MOV')));
+    transport.eventsCtrl.add(const PtpEvent(
+        transactionId: 0xFFFFFFFF,
+        code: PtpEventCode.objectAdded,
+        params: [16]));
+    await pumpEventQueue();
+    expect(engine.enqueued, hasLength(1), reason: '视频照常速传');
   });
 
   test('无关事件(ObjectAdded 之外)忽略', () async {
@@ -200,16 +238,20 @@ void main() {
   test('getObjectInfo 失败:丢当张、记 onSkip、服务继续', () async {
     transport.fail(const PtpResponseException(
         opcode: PtpOperationCode.getObjectInfo, responseCode: 0x200F));
-    transport.eventsCtrl.add(
-        const PtpEvent(transactionId: 0xFFFFFFFF, code: PtpEventCode.objectAdded, params: [11]));
+    transport.eventsCtrl.add(const PtpEvent(
+        transactionId: 0xFFFFFFFF,
+        code: PtpEventCode.objectAdded,
+        params: [11]));
     await pumpEventQueue();
     expect(skipped, hasLength(1));
     expect(engine.enqueued, isEmpty);
 
     transport.reply(_ok(_infoDataset(
         format: 0x3801, parent: 0x11, size: 10, name: 'DSC_6165.JPG')));
-    transport.eventsCtrl.add(
-        const PtpEvent(transactionId: 0xFFFFFFFF, code: PtpEventCode.objectAdded, params: [12]));
+    transport.eventsCtrl.add(const PtpEvent(
+        transactionId: 0xFFFFFFFF,
+        code: PtpEventCode.objectAdded,
+        params: [12]));
     await pumpEventQueue();
     expect(engine.enqueued, hasLength(1), reason: '失败后服务不得中断');
   });
@@ -219,8 +261,10 @@ void main() {
     service.transferred.listen(seen.add);
     transport.reply(_ok(_infoDataset(
         format: 0x3801, parent: 0x11, size: 10, name: 'DSC_6166.JPG')));
-    transport.eventsCtrl.add(
-        const PtpEvent(transactionId: 0xFFFFFFFF, code: PtpEventCode.objectAdded, params: [13]));
+    transport.eventsCtrl.add(const PtpEvent(
+        transactionId: 0xFFFFFFFF,
+        code: PtpEventCode.objectAdded,
+        params: [13]));
     await pumpEventQueue();
     expect(seen, [13]);
   });

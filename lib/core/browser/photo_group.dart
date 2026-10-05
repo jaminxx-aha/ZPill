@@ -11,7 +11,7 @@ library;
 import '../ptpip/object_format.dart';
 import 'object_entry.dart';
 
-/// 下载格式选择(仅对双格式照片组有意义)。
+/// 下载格式选择(双格式照片组与照片视频混选批次用)。
 enum PhotoDownloadFormat {
   /// 仅 JPG:组内没有 JPG → 该组跳过。
   jpg('仅 JPG', 'JPG'),
@@ -20,7 +20,10 @@ enum PhotoDownloadFormat {
   raw('仅 RAW', 'RAW'),
 
   /// JPG + RAW:有什么下什么(缺哪个格式就只下另一个)。
-  both('JPG + RAW', 'JPG+RAW');
+  both('JPG + RAW', 'JPG+RAW'),
+
+  /// 仅视频:视频组全量;照片组只取视频件(实况对),无视频件跳过。
+  video('仅视频', '视频');
 
   const PhotoDownloadFormat(this.label, this.short);
 
@@ -115,11 +118,12 @@ final class PhotoGroup {
 
   /// 按格式选择取下载文件。
   ///
-  /// 视频不受格式选择影响恒全量;实况对的视频件跟随静帧(选「仅 JPG」
+  /// 视频组不受格式选择影响恒全量;实况对的视频件跟随静帧(选「仅 JPG」
   /// 也带上 —— 它是这张照片的实况成分,不是另一张);[PhotoDownloadFormat
   /// .jpg]/[raw] 同格式**按基名去重**取文件 —— 双槽备份副本(同基名)
   /// 只取一份,连拍簇(每张各基名)每张各一份;组内缺该格式返回空列表
-  ///(调用方据此跳过)。
+  ///(调用方据此跳过)。「仅视频」照片组只取视频件 —— 实况对下视频侧,
+  /// 纯照片组空列表跳过。
   List<ObjectEntry> membersFor(PhotoDownloadFormat format) {
     if (isVideo) return members;
     return switch (format) {
@@ -129,6 +133,10 @@ final class PhotoGroup {
         ],
       PhotoDownloadFormat.raw => _onePerBaseName(isRawFile),
       PhotoDownloadFormat.both => members,
+      PhotoDownloadFormat.video => [
+          for (final entry in members)
+            if (isVideoFile(entry)) entry,
+        ],
     };
   }
 
@@ -179,17 +187,25 @@ bool isJpgFile(ObjectEntry entry) {
   if (code == ObjectFormatCode.exifJpeg || code == ObjectFormatCode.jfif) {
     return true;
   }
-  return _hasExt(entry.name, const {'jpg', 'jpeg', 'jpe'});
+  return isJpgFilename(entry.name);
 }
 
 /// RAW 判定:尼康 NEF/NRW 扩展名(NEF 格式码 0x3000,只能靠文件名)。
-bool isRawFile(ObjectEntry entry) => _hasExt(entry.name, const {'nef', 'nrw'});
+bool isRawFile(ObjectEntry entry) => isRawFilename(entry.name);
 
 /// 视频文件判定:PTP 格式码(QuickTime/MPEG)或 .mov/.mp4 扩展名兜底。
 bool isVideoFile(ObjectEntry entry) {
   if (entry.kind == ObjectKind.video) return true;
-  return _hasExt(entry.name, const {'mov', 'mp4', 'm4v'});
+  return isVideoFilename(entry.name);
 }
+
+/// 文件名级格式判定:本地图库过滤等没有 [ObjectEntry] 的场景按名分流,
+/// 扩展名集合与条目级判定同源,别处分叉会两边口径不一。
+bool isJpgFilename(String name) => _hasExt(name, const {'jpg', 'jpeg', 'jpe'});
+
+bool isRawFilename(String name) => _hasExt(name, const {'nef', 'nrw'});
+
+bool isVideoFilename(String name) => _hasExt(name, const {'mov', 'mp4', 'm4v'});
 
 /// 连拍相邻张间隔窗:同一夹内相邻快门差 ≤ 此值才归连拍段
 ///(Zf 高速连拍 ~14fps ≈ 71ms、低速 ~5fps ≈ 200ms,500ms 罩住两档,
