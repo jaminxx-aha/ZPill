@@ -106,14 +106,15 @@ Uint8List _propDescDataset(int code, PtpDataType type, int current,
 Uint8List _u32Bytes(int v) => Uint8List.fromList(
     [for (var i = 0; i < 4; i++) (v >> (8 * i)) & 0xFF]);
 
-/// 目录序全量应答(模式 A · f/2.8 · 1/100s · ISO 200 · EV+0.3 ·
+/// 目录序全量应答(模式 M · f/2.8 · 1/100s · ISO 200 · EV+0.3 ·
 /// 白平衡自动 · 色温 5500K · 闪光关闭 · 测光 2 · 对焦 AF-C · 对焦模式
 /// AF-S · 释放单张 · 画质 RAW · RAW 无损 · 尺寸 2 · 区域 FX · 校准标准,
-/// 均可写;快门/ISO 值走厂商读码裸值,与 remote_controller_test 同值)。
-void _scriptParams(_ScriptTransport t) {
+/// 均可写;快门/ISO 值走厂商读码裸值,末尾自动 ISO 状态(0xD054,关),
+/// 与 remote_controller_test 同值。[mode] 参数化曝光模式(默认 M)。
+void _scriptParams(_ScriptTransport t, {int mode = 1}) {
   t
     ..ok(data: _propDescDataset(PtpDevicePropCode.exposureProgramMode,
-        PtpDataType.uint16, 3,
+        PtpDataType.uint16, mode,
         enums: [1, 2, 3, 4, 5]))
     ..ok(data: _propDescDataset(
         PtpDevicePropCode.fNumber, PtpDataType.uint16, 280,
@@ -137,23 +138,18 @@ void _scriptParams(_ScriptTransport t) {
     ..ok(data: _propDescDataset(
         PtpDevicePropCode.exposureMeteringMode, PtpDataType.uint16, 2,
         enums: [1, 2, 3, 4, 5]))
-    ..ok(data: _propDescDataset(PtpDevicePropCode.focusMode,
-        PtpDataType.uint16, 1, enums: [0, 1, 2, 4]))
-    ..ok(data: _propDescDataset(PtpDevicePropCode.stillFocusMode,
-        PtpDataType.uint8, 0, enums: [0, 1, 4, 5]))
+    // 对焦模式 0xD061:pickValues 直供(不读 desc),值走裸读 u8 = 0(AF-S)
+    ..ok(data: Uint8List.fromList([0]))
     ..ok(data: _propDescDataset(PtpDevicePropCode.stillCaptureMode,
         PtpDataType.uint16, 1, enums: [1, 2, 0x8010, 0x8011]))
     ..ok(data: _propDescDataset(PtpDevicePropCode.compressionSetting,
         PtpDataType.uint8, 7, enums: [4, 5, 7, 12]))
-    ..ok(data: _propDescDataset(PtpDevicePropCode.rawCompressionType,
-        PtpDataType.uint8, 0, enums: [0, 3, 4]))
-    ..ok(data: _propDescDataset(
-        PtpDevicePropCode.imageSize, PtpDataType.uint16, 2,
-        enums: [1, 2, 3]))
-    ..ok(data: _propDescDataset(PtpDevicePropCode.captureAreaCrop,
-        PtpDataType.uint8, 0, enums: [0, 2, 4, 5]))
-    ..ok(data: _propDescDataset(PtpDevicePropCode.activePicCtrlItem,
-        PtpDataType.uint16, 1, enums: [1, 2, 3, 4]));
+    // pickValues 参数(不读 desc,值走裸读):RAW 压缩 0 / 图像区域 0 /
+    // 优化校准 1
+    ..ok(data: Uint8List.fromList([0])) // rawCompressionType u8
+    ..ok(data: Uint8List.fromList([0])) // captureAreaCrop u8
+    ..ok(data: Uint8List.fromList([1, 0])) // activePicCtrlItem u16
+    ..ok(data: Uint8List.fromList([0])); // 0xD054 自动 ISO:关
 }
 
 /// 挂起的 delay(永不完成):引擎帧轮询/AE 轮询在测试里驻停,
@@ -196,7 +192,7 @@ void main() {
     expect(find.text('ISO 200'), findsOneWidget);
     // 横滚行首屏(无需滚动即构建):模式/白平衡等
     expect(find.text('模式'), findsOneWidget);
-    expect(find.text('光圈优先 A'), findsOneWidget);
+    expect(find.text('手动 M'), findsOneWidget);
     expect(find.text('EV'), findsOneWidget);
     expect(find.text('+0.3'), findsOneWidget);
     expect(find.text('白平衡'), findsOneWidget);
@@ -210,16 +206,14 @@ void main() {
     await scroll('闪光');
     expect(find.text('关闭'), findsOneWidget);
     await scroll('测光');
-    expect(find.text('值 2'), findsWidgets, reason: '测光无值表,裸显');
-    await scroll('AF-C'); // 对焦(focusMode=1)值
-    await scroll('AF-S'); // 对焦模式(stillFocusMode=0)值
+    expect(find.text('中央重点'), findsOneWidget,
+        reason: '测光值表(尼康方言 2=中央重点)');
+    await scroll('AF-S'); // 对焦模式(0xD061 值 0)—— 单一对焦芯片
     await scroll('释放');
     expect(find.text('单张'), findsOneWidget);
     await scroll('画质');
     expect(find.text('RAW'), findsOneWidget);
     await scroll('无损压缩'); // RAW 压缩(rawCompressionType=0)值
-    await scroll('图像尺寸');
-    expect(find.text('值 2'), findsWidgets);
     await scroll('FX'); // 图像区域(captureAreaCrop=0)值
     await scroll('标准'); // 优化校准(activePicCtrlItem=1)值
     await scroll('对焦后拍'); // 行尾开关芯片
@@ -303,7 +297,7 @@ void main() {
     transport
       ..ok() // 0x90C2 [1] 启用接管
       ..ok() // 0x1016 写 0xD100 = (1<<16)|250
-      ..ok(data: _u32Bytes(1 << 16 | 250)); // 回读 0xD100 裸值
+      ..ok(data: _u32Bytes(1 << 16 | 125)); // 回读 0xD100 裸值
     await tester
         .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
     conn.statesCtrl.add(CameraLinkState.connected);
@@ -318,21 +312,21 @@ void main() {
     await tester.pumpAndSettle();
     expect(controller.takeoverActive, isTrue);
 
-    // 面板 = 目录标准档直供(0x500D 枚举弃用),非相机 PropDesc 枚举
-    expect(find.text('1/8000s'), findsOneWidget);
-    final sheetList = find.byWidgetPredicate(
-        (w) => w is Scrollable && w.axisDirection == AxisDirection.down);
-    await tester.scrollUntilVisible(find.text('1/250s'), 100,
-        scrollable: sheetList);
-    await tester.tap(find.text('1/250s'));
+    // 面板 = 目录标准档直供(0x500D 枚举弃用),非相机 PropDesc 枚举;
+    // **打开即定位到当前值**(1/100s,第 20 项 —— 不定位则列表头只有
+    // 1/8000s 一带,当前值 tile 根本不构建)
+    expect(find.text('1/100s'), findsNWidgets(2),
+        reason: '芯片 + 面板当前值条目(面板已定位到当前值)');
+    // 定位后可视区内点选相邻档(1/125s = 当前值上方两行)
+    await tester.tap(find.text('1/125s'));
     await tester.pumpAndSettle();
 
     final write = transport.requests.singleWhere(
         (r) => r.opcode == PtpOperationCode.setDevicePropValue);
     expect(write.params, [PtpDevicePropCode.stillShutterSpeed],
         reason: '快门写走 0xD100');
-    expect(write.dataOut, Uint8List.fromList([0xFA, 0x00, 0x01, 0x00]));
-    expect(find.text('1/250s'), findsOneWidget, reason: '回读更新上屏');
+    expect(write.dataOut, Uint8List.fromList([0x7D, 0x00, 0x01, 0x00]));
+    expect(find.text('1/125s'), findsOneWidget, reason: '回读更新上屏');
     final takeover =
         transport.requests.singleWhere((r) => r.opcode == NikonOperationCode.changeCameraMode);
     expect(takeover.params, [1]);
@@ -350,6 +344,9 @@ void main() {
 
     await tester.scrollUntilVisible(find.text('APP 接管'), 120,
         scrollable: _chipsRow);
+    // 行尾芯片可能只进缓存区未真入屏:滚到底再点
+    await tester.drag(_chipsRow, const Offset(-240, 0));
+    await tester.pump();
     transport.ok(); // 0x90C2 [1]
     await tester.tap(find.text('APP 接管'));
     await tester.pumpAndSettle();
@@ -370,6 +367,73 @@ void main() {
             .last
             .params,
         [0]);
+  });
+
+  testWidgets('A(光圈优先)模式:快门芯片标「(自动)」置灰,光圈照常',
+      (tester) async {
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = RemoteController(
+        session: PtpSession(transport: transport), connection: conn);
+    addTearDown(controller.dispose);
+    _scriptParams(transport, mode: 3); // 光圈优先 A:快门是自动曝光变量
+    await tester
+        .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
+    conn.statesCtrl.add(CameraLinkState.connected);
+    await tester.pumpAndSettle();
+
+    expect(find.text('1/100s(自动)'), findsOneWidget, reason: '标注自动');
+    expect(find.text('f/2.8'), findsOneWidget, reason: '光圈无标注');
+    final shutterChip = tester.widget<InkWell>(find
+        .ancestor(of: find.text('1/100s(自动)'), matching: find.byType(InkWell))
+        .first);
+    expect(shutterChip.onTap, isNull, reason: '模式门置灰,不弹接管确认');
+    expect(
+        transport.requests
+            .where((r) => r.opcode == NikonOperationCode.changeCameraMode),
+        isEmpty,
+        reason: '不可调参数不触发接管流程');
+  });
+
+  testWidgets('ISO 面板:「自动 ISO」开关置顶(0xD054;ISO 拨盘级参数'
+      '先过接管确认)', (tester) async {
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = RemoteController(
+        session: PtpSession(transport: transport), connection: conn);
+    addTearDown(controller.dispose);
+    _scriptParams(transport); // M 模式,自动 ISO 关
+    await tester
+        .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
+    conn.statesCtrl.add(CameraLinkState.connected);
+    await tester.pumpAndSettle();
+    expect(controller.isoAuto, isFalse);
+
+    transport.ok(); // 0x90C2 [1] ISO 为拨盘级参数 → 接管确认
+    await tester.tap(find.text('ISO')); // 三要素大芯片
+    await tester.pumpAndSettle();
+    expect(find.text('启用 APP 接管控制?'), findsOneWidget);
+    await tester.tap(find.text('启用'));
+    await tester.pumpAndSettle();
+    expect(controller.takeoverActive, isTrue);
+    expect(find.text('自动 ISO'), findsOneWidget);
+    expect(find.text('ISO 200'), findsWidgets,
+        reason: '面板枚举项照常(芯片 + 面板各一处)');
+
+    transport
+      ..ok() // 0xD054=1 开自动
+      ..ok(data: _propDescDataset(
+          PtpDevicePropCode.exposureIndex, PtpDataType.uint16, 800,
+          enums: [100, 200, 400, 800]))
+      ..ok(data: _u32Bytes(800)); // 0xD0B5 工作值
+    await tester.tap(find.text('自动 ISO'));
+    await tester.pumpAndSettle();
+    expect(controller.isoAuto, isTrue);
+    expect(controller.exposure?.iso, 800);
+    final write = transport.requests.singleWhere(
+        (r) => r.opcode == PtpOperationCode.setDevicePropValue);
+    expect(write.params, [PtpDevicePropCode.stillIsoAutoControl]);
+    expect(write.dataOut, [1]);
   });
 
   testWidgets('门禁开 + 域未知:面板出「取值域未知」只读提示(不炸不写)',
@@ -505,6 +569,9 @@ void main() {
     expect(controller.focusBeforeCapture, isFalse);
     await tester.scrollUntilVisible(find.text('对焦后拍'), 120,
         scrollable: _chipsRow);
+    // 行尾芯片可能只进缓存区未真入屏(滚动落点在边缘外):滚到底再点
+    await tester.drag(_chipsRow, const Offset(-240, 0));
+    await tester.pump();
     await tester.tap(find.text('对焦后拍'));
     await tester.pumpAndSettle();
     expect(controller.focusBeforeCapture, isTrue);

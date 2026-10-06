@@ -52,6 +52,7 @@ abstract final class NikonOperationCode {
   static const int changeAfArea = 0x9205; // 移动取景对焦区域:两 u32 参数 = 帧像素 x/y(候选,待真机核对)
   static const int afDriveCancel = 0x9206; // 取消自动对焦(候选,待真机核对)
   static const int initiateCaptureRecInMedia = 0x9207;
+  static const int terminateCapture = 0x920C; // 终止连拍/Bulb(参数 [0,0],已拍保留;源 = OpenZCine terminateStillCapture)
   static const int getPartialObjectHiSpeed = 0x9400; // handle + 块长 + 终止位
   static const int getEventEx = 0x941C; // 多参数事件
   static const int getObjectSize = 0x9421; // 64 位对象大小,data-in
@@ -177,6 +178,7 @@ abstract final class PtpDevicePropCode {
   static const int wbColorTemp = 0xD01E; // 白平衡色温(K),u16
   static const int captureAreaCrop = 0xD030; // 图像区域 FX/DX/1:1/16:9,u8
   static const int stillFocusMode = 0xD061; // 静照对焦模式 AF-S/AF-C/MF/AF-A,u8
+  static const int stillIsoAutoControl = 0xD054; // 静照自动 ISO 开关,u8(0=手动/1=自动;OpenZCine stillISOAutoControl)
   // 曝光写路径(Z 系真机口径,OpenZCine:静照 ISO/快门的标准码 0x500F/
   // 0x500D 只读不可写 —— 写要走厂商码;真机核对):
   static const int exposureIndexEx = 0xD0B4; // ISO 写,u32(值 = ISO 数)

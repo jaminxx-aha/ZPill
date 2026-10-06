@@ -139,12 +139,10 @@ const _kParamSpecs = <_ParamSpec>[
   (code: PtpDevicePropCode.wbColorTemp, type: PtpDataType.uint16, value: 5500, enums: [2700, 5500, 6500]),
   (code: PtpDevicePropCode.flashMode, type: PtpDataType.uint16, value: 2, enums: [2, 4, 0x8010, 0x8012]),
   (code: PtpDevicePropCode.exposureMeteringMode, type: PtpDataType.uint16, value: 2, enums: [1, 2, 3, 4, 5]),
-  (code: PtpDevicePropCode.focusMode, type: PtpDataType.uint16, value: 1, enums: [0, 1, 2, 4]),
   (code: PtpDevicePropCode.stillFocusMode, type: PtpDataType.uint8, value: 0, enums: [0, 1, 4, 5]),
   (code: PtpDevicePropCode.stillCaptureMode, type: PtpDataType.uint16, value: 1, enums: [1, 2, 0x8010, 0x8011]),
   (code: PtpDevicePropCode.compressionSetting, type: PtpDataType.uint8, value: 7, enums: [4, 5, 7, 12]),
   (code: PtpDevicePropCode.rawCompressionType, type: PtpDataType.uint8, value: 0, enums: [0, 3, 4]),
-  (code: PtpDevicePropCode.imageSize, type: PtpDataType.uint16, value: 2, enums: [1, 2, 3]),
   (code: PtpDevicePropCode.captureAreaCrop, type: PtpDataType.uint8, value: 0, enums: [0, 2, 4, 5]),
   (code: PtpDevicePropCode.activePicCtrlItem, type: PtpDataType.uint16, value: 1, enums: [1, 2, 3, 4]),
 ];
@@ -161,39 +159,65 @@ Uint8List _u32Bytes(int v) => Uint8List.fromList(
     [for (var i = 0; i < 4; i++) (v >> (8 * i)) & 0xFF]);
 
 /// 目录序全量应答:PropDesc(取值域直供表参数跳过 —— 快门不读标准码
-/// PropDesc)+ 值回读(路由参数读厂商码裸值;readonlyCodes 指定只读属性)。
-void _scriptParams(_ScriptTransport t, {Set<int> readonlyCodes = const {}}) {
+/// PropDesc)+ 值回读(路由参数读厂商码裸值)+ 末尾自动 ISO 状态
+/// (0xD054 裸读,u8)。[mode] 参数化曝光模式值(默认 M=1:快门/光圈/
+/// ISO 都可调;[modeUnreadable] 模拟模式读不到 → 不猜锁);
+/// readonlyCodes 指定只读属性。
+void _scriptParams(_ScriptTransport t,
+    {Set<int> readonlyCodes = const {},
+    int mode = 1,
+    int drive = 1,
+    bool modeUnreadable = false}) {
   for (final s in _kParamSpecs) {
+    var value = s.value;
+    if (s.code == PtpDevicePropCode.exposureProgramMode) value = mode;
+    if (s.code == PtpDevicePropCode.stillCaptureMode) value = drive;
     final param = shootingParamByCode[s.code]!;
+    if (s.code == PtpDevicePropCode.exposureProgramMode && modeUnreadable) {
+      t
+        ..reply(PtpResponseCode.operationNotSupported) // desc 拒
+        ..reply(PtpResponseCode.generalError); // 裸值也拒 → 值 null
+      continue;
+    }
     if (param.pickValues == null) {
-      t.ok(data: _propDescDataset(s.code, s.type, s.value,
+      t.ok(data: _propDescDataset(s.code, s.type, value,
           getSet: !readonlyCodes.contains(s.code), enums: s.enums));
+    } else if (_kVendorReadValues[s.code] == null) {
+      // 取值域直供参数:不读 desc,值走裸读 —— 裸值应答(有厂商读码
+      // 路由的由下方 vendor 应答覆盖)
+      t.ok(data: _rawValueBytes(s.type, value));
     }
     final vendor = _kVendorReadValues[s.code];
     if (vendor != null) {
       t.ok(data: _u32Bytes(vendor));
     }
   }
+  t.ok(data: Uint8List.fromList([0])); // 0xD054 自动 ISO:关
 }
 
 /// PropDesc 全拒的回退应答(值走裸读;路由参数读厂商码)。
-void _scriptParamsRawFallback(_ScriptTransport t) {
+void _scriptParamsRawFallback(_ScriptTransport t, {int mode = 1}) {
   for (final s in _kParamSpecs) {
+    final value = s.code == PtpDevicePropCode.exposureProgramMode ? mode : s.value;
     final param = shootingParamByCode[s.code]!;
     if (param.pickValues == null) {
       t.reply(PtpResponseCode.operationNotSupported); // 0x1014 拒
     }
     final vendor = _kVendorReadValues[s.code];
-    t.ok(data: vendor != null ? _u32Bytes(vendor) : _rawBytes(s));
+    if (vendor != null) {
+      t.ok(data: _u32Bytes(vendor));
+    } else {
+      t.ok(data: _rawValueBytes(s.type, value));
+    }
   }
+  t.ok(data: Uint8List.fromList([0])); // 0xD054 自动 ISO:关
 }
 
-/// 裸值应答字节(按类型宽度:u8 一字节 / u16 两字节 / u32 四字节;
-/// 供 0x1015 回退路径)。
-Uint8List _rawBytes(_ParamSpec s) {
-  final width = s.type.width!;
+/// 裸值应答字节(按类型宽度:u8 一字节 / u16 两字节 / u32 四字节)。
+Uint8List _rawValueBytes(PtpDataType type, int value) {
+  final width = type.width!;
   return Uint8List.fromList(
-      [for (var i = 0; i < width; i++) (s.value >> (8 * i)) & 0xFF]);
+      [for (var i = 0; i < width; i++) (value >> (8 * i)) & 0xFF]);
 }
 
 /// GetDeviceInfo 数据集(布局独立于被测代码;ops 可注入 —— 快门码
@@ -276,7 +300,7 @@ void main() {
         reason: '快门值 = 0xD100 打包分数(1/100s),标准码不跟厂商写');
     expect(controller.exposure?.iso, 200, reason: 'ISO 值 = 0xD0B5 有效 ISO');
     expect(controller.paramProps[PtpDevicePropCode.exposureProgramMode]?.value,
-        3, reason: '模式 = 光圈优先 A');
+        1, reason: '模式 = 手动 M(默认脚本:快门/光圈/ISO 都可调)');
     expect(controller.paramProps[PtpDevicePropCode.whiteBalance]?.value, 2);
     expect(controller.linkUp, isTrue);
   });
@@ -587,6 +611,228 @@ void main() {
         reason: '快门写走厂商码,同上');
   });
 
+  group('曝光变量模式门(OpenZCine stillAllows* 同款;真机:A 模式影控台'
+      '同样不能改快门)', () {
+    test('A(光圈优先):快门本地拒绝零流量,光圈可调;芯片标「自动」', () async {
+      _scriptParams(transport, mode: 3); // A
+      conn.statesCtrl.add(CameraLinkState.connected);
+      await pumpEventQueue();
+      expect(controller.shutterAdjustable, isFalse);
+      expect(controller.apertureAdjustable, isTrue);
+      expect(controller.paramAutoControlled(PtpDevicePropCode.exposureTime),
+          isTrue);
+      expect(controller.paramAutoControlled(PtpDevicePropCode.fNumber),
+          isFalse);
+      expect(controller.propWritable(PtpDevicePropCode.exposureTime), isFalse);
+
+      await controller.setParam(PtpDevicePropCode.exposureTime, 1 << 16 | 100);
+      expect(controller.error, contains('光圈优先 A'));
+      expect(controller.error, contains('由相机自动控制'));
+      expect(
+          transport.requests
+              .where((r) => r.opcode == PtpOperationCode.setDevicePropValue),
+          isEmpty,
+          reason: '模式门在本地拦下,不再撞 0x200F');
+    });
+
+    test('S(快门优先):光圈拒绝,快门可调', () async {
+      _scriptParams(transport, mode: 4); // S
+      conn.statesCtrl.add(CameraLinkState.connected);
+      await pumpEventQueue();
+      expect(controller.apertureAdjustable, isFalse);
+      expect(controller.shutterAdjustable, isTrue);
+      await controller.setParam(PtpDevicePropCode.fNumber, 320);
+      expect(controller.error, contains('快门优先 S'));
+      expect(controller.error, contains('光圈由相机自动控制'));
+    });
+
+    test('场景档:快门/光圈/ISO 全由相机拥有', () async {
+      _scriptParams(transport, mode: 0x8010); // 自动(场景段)
+      conn.statesCtrl.add(CameraLinkState.connected);
+      await pumpEventQueue();
+      expect(controller.shutterAdjustable, isFalse);
+      expect(controller.apertureAdjustable, isFalse);
+      expect(controller.isoManualAllowed, isFalse);
+      expect(controller.paramAutoControlled(PtpDevicePropCode.exposureIndex),
+          isTrue);
+    });
+
+    test('U 档/模式未读:不猜锁,交给相机应答', () async {
+      _scriptParams(transport, mode: 0x8050); // U1
+      conn.statesCtrl.add(CameraLinkState.connected);
+      await pumpEventQueue();
+      expect(controller.shutterAdjustable, isTrue, reason: 'U 档按内部程序跑');
+      expect(controller.apertureAdjustable, isTrue);
+
+      // 模式读不到(desc 与裸值双拒 → 值 null):同样不锁
+      final t2 = _ScriptTransport();
+      final conn2 = _FakeConnection();
+      final c2 = RemoteController(
+          session: PtpSession(transport: t2), connection: conn2);
+      addTearDown(c2.dispose);
+      _scriptParams(t2, modeUnreadable: true);
+      conn2.statesCtrl.add(CameraLinkState.connected);
+      await pumpEventQueue();
+      expect(
+          c2.paramProps[PtpDevicePropCode.exposureProgramMode]?.value, isNull);
+      expect(c2.shutterAdjustable, isTrue);
+      expect(c2.apertureAdjustable, isTrue);
+    });
+
+    test('自动 ISO 开:写 ISO 直发 0xD0B4(开关与手动值互不干扰,不联动)',
+        () async {
+      // 末尾 0xD054 应答改 [1](自动开)
+      _scriptParams(transport);
+      transport.script.removeLast();
+      transport.ok(data: Uint8List.fromList([1]));
+      conn.statesCtrl.add(CameraLinkState.connected);
+      await pumpEventQueue();
+      expect(controller.isoAuto, isTrue);
+      expect(controller.paramAutoControlled(PtpDevicePropCode.exposureIndex),
+          isTrue);
+      expect(controller.propWritable(PtpDevicePropCode.exposureIndex), isTrue,
+          reason: '自动开仍可调(开关与手动值互不干扰)');
+
+      transport
+        ..ok() // 0x1016 直接写 0xD0B4 = 400(不再先发 0xD054=0)
+        ..ok(data: _propDescDataset(PtpDevicePropCode.exposureIndex,
+            PtpDataType.uint16, 400,
+            enums: [100, 200, 400, 800]))
+        ..ok(data: _u32Bytes(400));
+      await controller.setParam(PtpDevicePropCode.exposureIndex, 400);
+      final writes = transport.requests
+          .where((r) => r.opcode == PtpOperationCode.setDevicePropValue)
+          .toList();
+      expect(writes, hasLength(1), reason: '只发 ISO 写,不动自动开关');
+      expect(writes[0].params, [PtpDevicePropCode.exposureIndexEx]);
+      expect(controller.isoAuto, isTrue, reason: '自动开关保持,互不干扰');
+      expect(controller.exposure?.iso, 400);
+    });
+
+    test('setIsoAuto(true):写 0xD054=1,ISO 工作值跟随刷新', () async {
+      _scriptParams(transport);
+      conn.statesCtrl.add(CameraLinkState.connected);
+      await pumpEventQueue();
+      expect(controller.isoAuto, isFalse);
+
+      transport
+        ..ok() // 0xD054=1
+        ..ok(data: _propDescDataset(
+            PtpDevicePropCode.exposureIndex, PtpDataType.uint16, 800,
+            enums: [100, 200, 400, 800]))
+        ..ok(data: _u32Bytes(800)); // 0xD0B5 工作值跟随
+      await controller.setIsoAuto(true);
+      final write = transport.requests
+          .singleWhere((r) => r.opcode == PtpOperationCode.setDevicePropValue);
+      expect(write.params, [PtpDevicePropCode.stillIsoAutoControl]);
+      expect(write.dataOut, [1]);
+      expect(controller.isoAuto, isTrue);
+      expect(controller.exposure?.iso, 800);
+    });
+  });
+
+  group('连拍按住(OpenZCine shutterPressLatchedBurst 同款)', () {
+    test('连续释放档按下:括持(0x90C2[1] + burstNumber 65535)+ 释放;'
+        '抬起:0x920C 终止 + 0x90C2[0] 解除', () async {
+      _scriptParams(transport, drive: 2); // 释放档 = 高速连拍
+      conn.statesCtrl.add(CameraLinkState.connected);
+      await pumpEventQueue();
+
+      transport
+        ..ok() // 0x90C2 [1] 括持
+        ..ok() // 0x1016 写 burstNumber 0x5018 = 65535
+        ..ok(); // 第 1 帧 0x9207
+      final press = controller.capturePressed();
+      await pumpEventQueue();
+      expect(controller.capturing, isTrue, reason: '按住中');
+
+      // 帧间等待挂起(gated delay);抬起 → 终止 + 解除括持
+      transport
+        ..ok() // 0x920C 终止
+        ..ok(); // 0x90C2 [0] 解除
+      await controller.captureReleased();
+      delay.release(); // 放行帧间等待 → 循环见锁已断,收尾
+      await press;
+
+      expect(controller.error, isNull);
+      expect(controller.capturing, isFalse);
+      expect(transport.count(NikonOperationCode.changeCameraMode), 2);
+      final modes = transport.requests
+          .where((r) => r.opcode == NikonOperationCode.changeCameraMode)
+          .toList();
+      expect(modes[0].params, [1], reason: '按下开括持');
+      expect(modes[1].params, [0], reason: '抬起解除');
+      final burst = transport.requests.singleWhere(
+          (r) => r.opcode == PtpOperationCode.setDevicePropValue);
+      expect(burst.params, [PtpDevicePropCode.burstNumber]);
+      expect(burst.dataOut, [0xFF, 0xFF], reason: '连拍上限 65535');
+      expect(transport.count(NikonOperationCode.initiateCaptureRecInMedia), 1);
+      expect(transport.count(NikonOperationCode.terminateCapture), 1);
+    });
+
+    test('单张释放档按下 = 原单张路径(无括持无终止);抬起静默', () async {
+      _scriptParams(transport); // 释放档 = 单张
+      conn.statesCtrl.add(CameraLinkState.connected);
+      await pumpEventQueue();
+
+      transport
+        ..ok() // 0x9207
+        ..ok(); // deviceReady
+      final press = controller.capturePressed();
+      await pumpEventQueue();
+      delay.release(); // DeviceReady 轮询放行
+      await press;
+      expect(controller.capturing, isFalse);
+      expect(transport.count(NikonOperationCode.changeCameraMode), 0);
+      expect(transport.count(NikonOperationCode.terminateCapture), 0);
+      await controller.captureReleased(); // 无锁:静默零流量
+      expect(transport.requests
+              .where((r) => r.opcode == NikonOperationCode.terminateCapture),
+          isEmpty);
+    });
+
+    test('断连即终止连拍状态(链发循环止步)', () async {
+      _scriptParams(transport, drive: 0x8010); // 低速连拍
+      conn.statesCtrl.add(CameraLinkState.connected);
+      await pumpEventQueue();
+
+      transport
+        ..ok() // 0x90C2 [1]
+        ..ok() // burstNumber
+        ..ok(); // 第 1 帧
+      final press = controller.capturePressed();
+      await pumpEventQueue();
+      conn.statesCtrl.add(CameraLinkState.disconnected);
+      delay.release();
+      await press;
+      expect(controller.capturing, isFalse);
+      expect(controller.linkUp, isFalse);
+    });
+  });
+
+  test('色温写入:先切 WB=色温档(0x8012)再写 0xD01E(WB 非色温档时联动)',
+      () async {
+    _scriptParams(transport); // WB desc value = 2(自动)
+    conn.statesCtrl.add(CameraLinkState.connected);
+    await pumpEventQueue();
+
+    transport
+      ..ok() // 0x1016 写 0x5005 = 0x8012
+      ..ok() // 0x1016 写 0xD01E = 5000
+      ..ok(data: _propDescDataset(
+          PtpDevicePropCode.wbColorTemp, PtpDataType.uint16, 5000));
+    await controller.setParam(PtpDevicePropCode.wbColorTemp, 5000);
+    final writes = transport.requests
+        .where((r) => r.opcode == PtpOperationCode.setDevicePropValue)
+        .toList();
+    expect(writes[0].params, [PtpDevicePropCode.whiteBalance],
+        reason: 'K 值只在 WB=色温档生效,先切档');
+    expect(writes[0].dataOut, [0x12, 0x80]);
+    expect(writes[1].params, [PtpDevicePropCode.wbColorTemp]);
+    expect(writes[1].dataOut, [0x88, 0x13]); // 5000 = 0x1388
+    expect(controller.error, isNull);
+  });
+
   test('ObjectAdded → 「已拍摄」提示 + 参数刷新;断连后迟到事件丢弃', () async {
     _scriptParams(transport);
     conn.statesCtrl.add(CameraLinkState.connected);
@@ -644,7 +890,7 @@ void main() {
         reason: '快门不读标准码(取值域直供),0xD100 裸值直达');
     expect(controller.exposure?.iso, 200);
     expect(controller.paramProps[PtpDevicePropCode.exposureProgramMode]?.value,
-        3);
+        1);
     expect(controller.paramProps[PtpDevicePropCode.fNumber]?.desc, isNull,
         reason: 'PropDesc 拒答后不得残留旧 desc');
   });
@@ -709,19 +955,43 @@ void main() {
     expect(controller.exposure?.shutterRaw, 1 << 16 | 100);
   });
 
-  test('模式(机顶转盘拥有):遥控只读,零流量', () async {
-    _scriptParams(transport);
+  test('模式(机顶转盘拥有 → dialOwned):相机报只读(getSet=false)仍可写'
+      ' —— 0x500E u16 标准码直发(接管锁转盘后写入,OpenZCine 同款)',
+      () async {
+    // 真机形态:0x500E 拨盘拥有,相机 PropDesc 上报 getSet=false
+    _scriptParams(transport, readonlyCodes: {PtpDevicePropCode.exposureProgramMode});
     conn.statesCtrl.add(CameraLinkState.connected);
     await pumpEventQueue();
     expect(controller.propWritable(PtpDevicePropCode.exposureProgramMode),
-        isFalse,
-        reason: '转盘参数不受 getSet 上报影响');
+        isTrue,
+        reason: 'dialOwned 参数绕过 getSet 门(相机报只读是拨盘语义,'
+            '接管后可写)—— 否则芯片置灰点不动(2026-10-06 真机)');
+
+    transport
+      ..ok() // 0x1016 写 0x500E = 4(S 档)
+      ..ok(data: _propDescDataset(
+          PtpDevicePropCode.exposureProgramMode, PtpDataType.uint16, 4,
+          getSet: false, enums: [1, 2, 3, 4, 5]));
     await controller.setParam(PtpDevicePropCode.exposureProgramMode, 4);
-    expect(controller.error, contains('机身转盘'));
+    final write = transport.requests
+        .singleWhere((r) => r.opcode == PtpOperationCode.setDevicePropValue);
+    expect(write.params, [PtpDevicePropCode.exposureProgramMode]);
+    expect(write.dataOut, Uint8List.fromList([0x04, 0x00]));
     expect(
-        transport.requests
-            .where((r) => r.opcode == PtpOperationCode.setDevicePropValue),
-        isEmpty);
+        controller.paramProps[PtpDevicePropCode.exposureProgramMode]?.value, 4);
+    expect(controller.error, isNull);
+  });
+
+  test('对焦单一芯片:0x500A 镜像移出目录,0xD061 可调(pickValues 直供)',
+      () async {
+    _scriptParams(transport);
+    conn.statesCtrl.add(CameraLinkState.connected);
+    await pumpEventQueue();
+    expect(shootingParamByCode.containsKey(PtpDevicePropCode.focusMode),
+        isFalse,
+        reason: '0x500A 只读镜像移出,避免「对焦/对焦模式」双芯片');
+    expect(controller.propWritable(PtpDevicePropCode.stillFocusMode), isTrue,
+        reason: '0xD061 pickValues 直供,PropDesc 拒答也可调');
   });
 
   test('总闸紧急关断:setParam 直接拒绝,零流量', () async {
@@ -752,8 +1022,8 @@ void main() {
     expect(controller.canAdjustParams, isTrue);
     expect(controller.propWritable(PtpDevicePropCode.fNumber), isTrue);
     expect(controller.propWritable(PtpDevicePropCode.exposureProgramMode),
-        isFalse,
-        reason: '模式由机顶转盘拥有,遥控只读(不受 getSet 上报影响)');
+        isTrue,
+        reason: '模式 dialOwned 可写(接管确认后写入,相机侧决定收否)');
 
     transport
       ..ok() // 0x1016 写 fNumber=320
@@ -771,7 +1041,8 @@ void main() {
     expect(controller.writing, isFalse);
   });
 
-  test('门禁开:相机上报只读(getSet=false)→ 拒写', () async {
+  test('门禁开:相机上报只读(getSet=false)→ 拒写(dialOwned 参数除外)',
+      () async {
     controller.dispose();
     controller = RemoteController(
       session: PtpSession(transport: transport),
@@ -782,18 +1053,23 @@ void main() {
       setPropGate: () => true,
     );
 
-    _scriptParams(transport,
-        readonlyCodes: {PtpDevicePropCode.fNumber}); // 光圈只读
+    // 白平衡(菜单级)报只读 → 拒写;光圈(dialOwned)报只读不拦
+    _scriptParams(transport, readonlyCodes: {
+      PtpDevicePropCode.whiteBalance,
+      PtpDevicePropCode.fNumber
+    });
     conn.statesCtrl.add(CameraLinkState.connected);
     await pumpEventQueue();
 
-    await controller.setParam(PtpDevicePropCode.fNumber, 320);
+    await controller.setParam(PtpDevicePropCode.whiteBalance, 4);
     expect(controller.error, contains('只读'));
     expect(
         transport.requests
             .where((r) => r.opcode == PtpOperationCode.setDevicePropValue),
         isEmpty);
-    expect(controller.propWritable(PtpDevicePropCode.fNumber), isFalse);
+    expect(controller.propWritable(PtpDevicePropCode.whiteBalance), isFalse);
+    expect(controller.propWritable(PtpDevicePropCode.fNumber), isTrue,
+        reason: '拨盘级参数的只读上报是拨盘语义,接管模型覆盖(不拦)');
   });
 
   test('门禁开:写失败(0x2019 忙)→ 报错,值不漂移', () async {

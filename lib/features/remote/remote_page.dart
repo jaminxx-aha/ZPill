@@ -23,6 +23,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 
 import '../../app_services.dart';
+import '../../core/ptp/operation_codes.dart';
 import '../../core/remote/frame_analysis.dart';
 import '../../core/remote/live_view_engine.dart';
 import '../../platform/motion_host.dart';
@@ -342,9 +343,12 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     );
   }
 
-  /// 曝光三要素大芯片(值 + 标签两行)。
+  /// 曝光三要素大芯片(值 + 标签两行)。模式门/自动 ISO 接管的变量
+  /// 标注「(自动)」并置灰(A 模式下快门是自动曝光变量,影控台同款
+  /// 不可调)。
   Widget _bigParamChip(BuildContext context, ShootingParam p) {
     final value = controller.paramProps[p.code]?.value;
+    final auto = controller.paramAutoControlled(p.code);
     final writable = controller.propWritable(p.code);
     return Expanded(
       child: Padding(
@@ -364,8 +368,10 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
               children: [
                 Text(p.label,
                     style: const TextStyle(fontSize: 12, color: Colors.grey)),
-                Text(p.display(value),
-                    style: const TextStyle(fontSize: 16)),
+                Text(
+                  '${p.display(value)}${auto ? '(自动)' : ''}',
+                  style: const TextStyle(fontSize: 16),
+                ),
               ],
             ),
           ),
@@ -402,64 +408,104 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     );
   }
 
-  /// 拍摄参数编辑面板:取值域 = 目录 pickValues 直供(快门:标准档
-  /// 打包表)或相机 PropDesc 枚举;范围域 → 滑条;域未知 → 只读提示。
-  /// 选中即写(0x1016)并按读码路由回读刷新,不额外确认 —— 相机侧可
-  /// 随时再调。拨盘拥有参数(快门)先过「APP 接管控制」确认。
+  /// 拍摄参数编辑面板:取值域 = 相机 PropDesc 枚举(权威)或目录
+  /// pickValues 直供(快门:标准档打包表等厂商码场景);范围域 → 滑条;
+  /// 域未知 → 只读提示。选中即写(0x1016)并按读码路由回读刷新,不额外
+  /// 确认 —— 相机侧可随时再调。拨盘拥有参数(快门/模式/ISO/光圈)先过
+  /// 「APP 接管控制」确认。**列表打开即定位到当前值**(不从列表头开始
+  /// —— 长列表如快门 54 档)。
   Future<void> _editParam(BuildContext context, ShootingParam p) async {
     if (p.dialOwned && !controller.takeoverActive) {
       if (!await _confirmTakeover(context) || !context.mounted) return;
     }
     final state = controller.paramProps[p.code];
     final desc = state?.desc;
-    final enums = p.pickValues ??
-        desc?.enumValues?.whereType<int>().toList(growable: false);
+    // 取值域:相机 PropDesc 枚举优先(权威),拒答/无 FORM 时目录
+    // pickValues 直供(快门/对焦模式/图像区域等厂商码场景)。
+    final enums = desc?.enumValues?.whereType<int>().toList(growable: false) ??
+        p.pickValues;
     final rangeMin = desc?.rangeMin as int?;
     final rangeMax = desc?.rangeMax as int?;
     final rangeStep = desc?.rangeStep as int? ?? 1;
-    return showModalBottomSheet<void>(
-      context: context,
-      showDragHandle: true,
-      builder: (sheetContext) => SafeArea(
-        child: AnimatedBuilder(
-          animation: controller,
-          builder: (context, _) {
-            final current =
-                controller.paramProps[p.code]?.value;
-            final writing = controller.writing; // 写中防连点
-            return Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
-                  child: Text(p.label,
-                      style: Theme.of(sheetContext)
-                          .textTheme
-                          .titleMedium
-                          ?.copyWith(color: Colors.grey)),
-                ),
-                if (enums != null && enums.isNotEmpty)
-                  Flexible(
-                    child: ListView(
-                      shrinkWrap: true,
-                      children: [
-                        for (final v in enums)
-                          ListTile(
-                            title: Text(p.display(v)),
-                            trailing: v == current
-                                ? const Icon(Icons.check)
-                                : null,
-                            onTap: writing
-                                ? null
-                                : () {
-                                    Navigator.of(sheetContext).pop();
-                                    controller.setParam(p.code, v);
-                                  },
-                          ),
-                      ],
-                    ),
-                  )
+    // 定位:当前值在列表中的序号(ISO 面板有置顶的「自动 ISO」条目,+1)
+    final hasIsoAutoTile =
+        p.code == PtpDevicePropCode.exposureIndex && controller.isoAuto != null;
+    final currentIndex = hasIsoAutoTile
+        ? (enums?.indexOf(state?.value ?? -1) ?? -1) + 1
+        : (enums?.indexOf(state?.value ?? -1) ?? -1);
+    final listCtrl = ScrollController();
+    var centered = false;
+    try {
+      await showModalBottomSheet<void>(
+        context: context,
+        showDragHandle: true,
+        builder: (sheetContext) => SafeArea(
+          child: AnimatedBuilder(
+            animation: controller,
+            builder: (context, _) {
+              final current =
+                  controller.paramProps[p.code]?.value;
+              final writing = controller.writing; // 写中防连点
+              if (!centered && currentIndex > 2) {
+                // 首帧布局后跳到当前值(顶上留两行上下文)
+                centered = true;
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (listCtrl.hasClients) {
+                    listCtrl.jumpTo((currentIndex - 2) * _paramSheetItemExtent);
+                  }
+                });
+              }
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
+                    child: Text(p.label,
+                        style: Theme.of(sheetContext)
+                            .textTheme
+                            .titleMedium
+                            ?.copyWith(color: Colors.grey)),
+                  ),
+                  if (enums != null && enums.isNotEmpty)
+                    Flexible(
+                      child: ListView(
+                        shrinkWrap: true,
+                        controller: listCtrl,
+                        itemExtent: _paramSheetItemExtent,
+                        children: [
+                          // ISO 面板置顶「自动 ISO」开关(0xD054;与手动
+                          // 值互不干扰 —— 开关只在这里显式控制)。
+                          if (hasIsoAutoTile)
+                            ListTile(
+                              title: const Text('自动 ISO'),
+                              trailing: controller.isoAuto == true
+                                  ? const Icon(Icons.check)
+                                  : null,
+                              onTap: writing
+                                  ? null
+                                  : () {
+                                      Navigator.of(sheetContext).pop();
+                                      controller
+                                          .setIsoAuto(!(controller.isoAuto!));
+                                    },
+                            ),
+                          for (final v in enums)
+                            ListTile(
+                              title: Text(p.display(v)),
+                              trailing: v == current
+                                  ? const Icon(Icons.check)
+                                  : null,
+                              onTap: writing
+                                  ? null
+                                  : () {
+                                      Navigator.of(sheetContext).pop();
+                                      controller.setParam(p.code, v);
+                                    },
+                            ),
+                        ],
+                      ),
+                    )
                 else if (rangeMin != null &&
                     rangeMax != null &&
                     rangeMax > rangeMin &&
@@ -497,8 +543,16 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
           },
         ),
       ),
-    );
+      );
+    } finally {
+      // 面板关闭后释放列表控制器(等一帧,避开退出动画中的惯性访问)
+      WidgetsBinding.instance.addPostFrameCallback((_) => listCtrl.dispose());
+    }
   }
+
+  /// 参数面板列表条目高(ListTile 单行 = 48;itemExtent 固定后
+  /// 「打开定位到当前值」的偏移量才可计算)。
+  static const _paramSheetItemExtent = 48.0;
 
   /// 「启用 APP 接管控制」确认(影控台同款语义):受机身物理拨盘控制
   /// 的参数需先接管(0x90C2 remote 模式)才能遥控调整;接管期间机身
@@ -626,20 +680,31 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         SizedBox(
           width: 80,
           height: 80,
-          child: FloatingActionButton(
-            heroTag: 'shutter',
-            backgroundColor: controller.linkUp ? null : Colors.grey,
-            onPressed:
-                controller.capturing || !controller.linkUp
-                    ? null
-                    : () => controller.capture(),
-            child: controller.capturing
-                ? const SizedBox(
-                    width: 28,
-                    height: 28,
-                    child: CircularProgressIndicator(strokeWidth: 3),
-                  )
-                : const Icon(Icons.photo_camera, size: 36),
+          // 按下即拍 + 按住连拍(onTapDown/onTapUp —— 连续释放档时
+          // 按住 = 连拍括持链发,抬起终止;普通档点按 = 单张)。
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTapDown: (_) {
+              if (controller.linkUp && !controller.capturing) {
+                unawaited(controller.capturePressed());
+              }
+            },
+            onTapUp: (_) => unawaited(controller.captureReleased()),
+            child: FloatingActionButton(
+              heroTag: 'shutter',
+              backgroundColor: controller.linkUp ? null : Colors.grey,
+              onPressed:
+                  controller.capturing || !controller.linkUp
+                      ? null
+                      : () => controller.capture(),
+              child: controller.capturing
+                  ? const SizedBox(
+                      width: 28,
+                      height: 28,
+                      child: CircularProgressIndicator(strokeWidth: 3),
+                    )
+                  : const Icon(Icons.photo_camera, size: 36),
+            ),
           ),
         ),
         const SizedBox(height: 4),

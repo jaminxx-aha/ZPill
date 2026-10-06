@@ -177,12 +177,13 @@ String _formatPicCtrl(int v) {
 final kShootingParams = <ShootingParam>[
   // 曝光模式:尼康方言(libgphoto2 exposure_program_modes 候选表;
   // ISO 标准表 2=自动/5=程序 对尼康是错的 —— 2=P、3=A、4=S)。
-  // readOnly:机顶转盘拥有(Z 系真机口径,OpenZCine 标 read-only
-  // "the dial owns it")—— 遥控只读展示。
+  // dialOwned:机顶模式转盘物理拥有 —— 遥控修改需 APP 接管(0x90C2
+  // remote 模式锁定转盘后写入;OpenZCine 有同款 0x500E u16 标准写路径,
+  // verify-on-HW)。场景段(0x801x)写入相机可能拒,以应答为准。
   ShootingParam(
     code: PtpDevicePropCode.exposureProgramMode,
     label: '模式',
-    readOnly: true,
+    dialOwned: true,
     enumLabels: {
       1: '手动 M',
       2: '程序 P',
@@ -204,11 +205,15 @@ final kShootingParams = <ShootingParam>[
       0x8053: 'U4',
     },
   ),
+  // 光圈:f 值 ×100(ISO 15740 定点,Zf 实际布局待真机核对)。
+  // dialOwned:指令拨盘拥有(A/M 档的主拨盘参数)—— 接管后可写
+  //(2026-10-06 真机:ISO 写 0x200F 实证拨盘级参数需接管,光圈同类)。
   ShootingParam(
       code: PtpDevicePropCode.fNumber,
       label: '光圈',
       format: _formatFNumber,
-      prominent: true),
+      prominent: true,
+      dialOwned: true),
   // 快门:读写全走 0xD100(u32 分数打包 num<<16|den,哨兵 Bulb/X 同步/
   // Time)—— 标准码 0x500D 只读且单位存疑(名义 0.0001s 连 1/8000s
   // 都无法整表,OpenZCine 弃用),取值域 = 目录标准档打包表。dialOwned:
@@ -226,12 +231,15 @@ final kShootingParams = <ShootingParam>[
       dialOwned: true),
   // ISO:值读走 0xD0B5(有效 ISO,Auto ISO 时 = 机身当前应用值;标准码
   // 0x500F 不跟厂商写,真机「改了不同步」根因)/ 写 0xD0B4(u32,值 =
-  // ISO 数);取值域仍用 0x500F PropDesc 相机自报枚举。
+  // ISO 数);取值域仍用 0x500F PropDesc 相机自报枚举。dialOwned:机身
+  // 上 ISO 由按键+指令拨盘调整(拨盘级)—— 接管后可写(2026-10-06
+  // 真机:0xD0B4 写 0x200F,同快门/模式的拨盘语义)。
   ShootingParam(
       code: PtpDevicePropCode.exposureIndex,
       label: 'ISO',
       format: _formatIso,
       prominent: true,
+      dialOwned: true,
       readCode: PtpDevicePropCode.isoControlSensitivity,
       writeCode: PtpDevicePropCode.exposureIndexEx,
       writeType: PtpDataType.uint32),
@@ -240,7 +248,8 @@ final kShootingParams = <ShootingParam>[
       label: 'EV',
       format: _formatEv),
   // 白平衡:尼康方言候选表(2=自动、4=直射阳光…;ISO 标准表 1=手动
-  // 对尼康不成立 —— 表外值裸显)。
+  // 对尼康不成立 —— 表外值裸显)。0x8012 = 色温档:WB 处于该档时
+  // 0xD01E 的开尔文值才生效(见色温条目)。
   ShootingParam(
     code: PtpDevicePropCode.whiteBalance,
     label: '白平衡',
@@ -257,6 +266,9 @@ final kShootingParams = <ShootingParam>[
       0x8016: '自然自动',
     },
   ),
+  // 色温 0xD01E(u16,2500-10000K 连续值;OpenZCine WhiteBalanceKelvin
+  // Policy)。**只在 WB=色温档(0x8012)时生效** —— 控制器写入前自动
+  // 先切 WB 模式(真机「改了没效果」根因)。
   ShootingParam(
       code: PtpDevicePropCode.wbColorTemp,
       label: '色温',
@@ -274,18 +286,27 @@ final kShootingParams = <ShootingParam>[
       0x8013: '防红眼慢速',
     },
   ),
-  // 测光/图像尺寸:无可靠值表(OpenZCine 亦无解码表),裸显「值 N」。
-  ShootingParam(code: PtpDevicePropCode.exposureMeteringMode, label: '测光'),
-  // 对焦 0x500A:视频口径方言表(AF-F 为视频全时 AF);静照权威源是
-  // 0xD061(OpenZCine 实测口径),两枚并陈互为对照。
+  // 测光:尼康方言值表(OpenZCine exposureMetering;ISO 标准表 2=中央
+  // 3=点 对尼康是错的 —— 3=矩阵、4=点)。
   ShootingParam(
-    code: PtpDevicePropCode.focusMode,
-    label: '对焦',
-    enumLabels: {0: 'AF-S', 1: 'AF-C', 2: 'AF-F', 4: 'MF'},
+    code: PtpDevicePropCode.exposureMeteringMode,
+    label: '测光',
+    enumLabels: {
+      2: '中央重点',
+      3: '矩阵',
+      4: '点测光',
+      0x8010: '高光',
+    },
   ),
+  // 对焦模式 0xD061(u8;静照权威源,单一芯片 —— 0x500A 是只读镜像已
+  // 移出,0x801x 值空间与这里完全不同):pickValues 直供,厂商码
+  // PropDesc 拒答时面板照常可调(0=AF-S/1=AF-C/4=MF/5=AF-A,OpenZCine
+  // stillFocusModeD061 同表)。
   ShootingParam(
     code: PtpDevicePropCode.stillFocusMode,
     label: '对焦模式',
+    writeType: PtpDataType.uint8,
+    pickValues: [0, 1, 4, 5],
     enumLabels: {0: 'AF-S', 1: 'AF-C', 4: 'MF', 5: 'AF-A'},
   ),
   // 释放:尼康方言全表(libgphoto2/OpenZCine StillDriveMode 候选;
@@ -328,10 +349,13 @@ final kShootingParams = <ShootingParam>[
     },
   ),
   // ---- 以下厂商候选区(0xD0xx/0xD2xx,不在 Zf 在册表,拒答显示「--」)----
-  // NEF(RAW)记录压缩:一代机身用 1/2,现役机身 0/3/4。
+  // NEF(RAW)记录压缩:一代机身用 1/2,现役机身 0/3/4。pickValues 直供
+  // + 显式 u8(厂商码 PropDesc 拒答时类型会错落到 u16 默认,写入无效)。
   ShootingParam(
     code: PtpDevicePropCode.rawCompressionType,
     label: 'RAW 压缩',
+    writeType: PtpDataType.uint8,
+    pickValues: [0, 3, 4],
     enumLabels: {
       0: '无损压缩',
       1: '压缩(旧型)',
@@ -340,15 +364,22 @@ final kShootingParams = <ShootingParam>[
       4: '高效率',
     },
   ),
-  ShootingParam(code: PtpDevicePropCode.imageSize, label: '图像尺寸'),
+  // 图像尺寸 0x5003:**STR 型**(OpenZCine stringFromPTPStringData),
+  // int 面板体系外 —— 移出目录(STR 支持留抓包项,TODO §二)。
+  // 图像区域 0xD030(u8):同 RAW 压缩,pickValues + 显式 u8。
   ShootingParam(
     code: PtpDevicePropCode.captureAreaCrop,
     label: '图像区域',
+    writeType: PtpDataType.uint8,
+    pickValues: [0, 2, 4, 5],
     enumLabels: {0: 'FX', 2: 'DX', 4: '1:1', 5: '16:9'},
   ),
+  // 优化校准 0xD200(u16):pickValues 直供内置组(1-11),创意组/云组
+  // 仍可读显示(段位格式化);厂商码 PropDesc 拒答时面板照常可调。
   ShootingParam(
     code: PtpDevicePropCode.activePicCtrlItem,
     label: '优化校准',
+    pickValues: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
     enumLabels: {
       1: '标准',
       2: '中性',
