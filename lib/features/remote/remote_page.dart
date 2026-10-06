@@ -64,9 +64,13 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   void didUpdateWidget(RemotePage oldWidget) {
     super.didUpdateWidget(oldWidget);
     // 切走 tab 即停取景(引擎单例持有,后台持续打链路不可取);
-    // 切回不自动重启 —— 取景是显式动作。
+    // 切回不自动重启 —— 取景是显式动作,但参数对表刷一次(机身侧
+    // 拨盘/菜单改动的事件不一定送达 app,切回即对表)。
     if (!widget.active && oldWidget.active && controller.liveViewActive) {
       unawaited(controller.toggleLiveView());
+    }
+    if (widget.active && !oldWidget.active && controller.linkUp) {
+      unawaited(controller.refreshParams());
     }
   }
 
@@ -99,6 +103,10 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     // 网络不保活(与下载页同款约束)。
     if (state == AppLifecycleState.paused && controller.liveViewActive) {
       unawaited(controller.toggleLiveView());
+    }
+    // 回前台:参数对表刷一次(后台期间机身侧改动兜底,同切回 tab)。
+    if (state == AppLifecycleState.resumed && controller.linkUp) {
+      unawaited(controller.refreshParams());
     }
   }
 

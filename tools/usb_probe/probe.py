@@ -396,11 +396,13 @@ def read_ptp_value(buf: bytes, off: int, dtype: int):
 def parse_prop_desc(d: bytes) -> dict:
     """DevicePropDesc 数据集(ISO 15740 §10.5.1.3)防御性解码。
 
-    布局(2026-10-05 真机修正):`u16 code + u16 type + u8 getSet +
-    当前值 + 出厂默认值 + u8 formFlag + FORM` —— 出厂默认值在 FORM
-    **之前**(旧版漏读它,把出厂值首字节当 formFlag,枚举域全丢)。
-    与 Dart PtpDevicePropDesc.parse 同策略:头部/当前值截断 → 保描述
-    弃 FORM;FORM 区异常 → 整组置空 + 整型属性扫描兜底
+    布局(2026-10-06 订正,gphoto2 ptp_unpack_DPD 权威顺序):
+    `u16 code + u16 type + u8 getSet + 出厂默认值 + 当前值 +
+    u8 formFlag + FORM` —— **出厂默认值在前,当前值在后**(旧版读反:
+    真机后果 = 光圈永远显示出厂默认 = 镜头最大光圈;更早版本漏读
+    出厂值,把出厂值首字节当 formFlag,枚举域全丢)。
+    与 Dart PtpDevicePropDesc.parse 同策略:值区截断 → 保描述弃 FORM;
+    FORM 区异常 → 整组置空 + 整型属性扫描兜底
     (「0x02 + u16 计数 + count×宽度恰好收尾」定位枚举段)。
     """
     r = {"dataType": None, "getSet": None, "current": None, "factory": None,
@@ -412,18 +414,18 @@ def parse_prop_desc(d: bytes) -> dict:
         if dtype not in PTP_DTYPES:
             return r  # 未知类型码:头部之外不再解读
         r["getSet"] = bool(d[4])
-        r["current"], off = read_ptp_value(d, 5, dtype)
+        r["factory"], off = read_ptp_value(d, 5, dtype)
     except (IndexError, struct.error, ValueError):
         return r
-    # 出厂默认值(标准布局:位于 FORM 之前;截断数据集可缺)
-    factory_intact = False
+    # 当前值(值区第二个;截断数据集可缺)
+    values_intact = False
     try:
         if off < len(d):
-            r["factory"], off = read_ptp_value(d, off, dtype)
-            factory_intact = True
+            r["current"], off = read_ptp_value(d, off, dtype)
+            values_intact = True
     except (IndexError, struct.error, ValueError):
-        r["factory"] = None
-    if factory_intact and off < len(d):
+        r["current"] = None
+    if values_intact and off < len(d):
         try:
             form_flag = d[off]
             off += 1

@@ -207,7 +207,8 @@ final class PtpDevicePropDesc {
 
   final Object? currentValue;
 
-  /// 出厂默认值(标准布局在 FORM 之前);截断/缺省为 null。
+  /// 出厂默认值(**值区第一个**;当前值第二个,见 [parse] 的顺序注);
+  /// 截断/缺省为 null。
   final Object? factoryValue;
 
   /// FORM=0x02 枚举域;FORM 截断或非枚举时为 null。
@@ -229,31 +230,33 @@ final class PtpDevicePropDesc {
     final dataType = PtpDataType.fromCode(r.u16());
     final getSet = r.u8() != 0;
 
-    Object? currentValue;
-    try {
-      currentValue = dataType.read(r);
-    } on Object {
-      currentValue = null; // 值区截断:保描述,FORM 不再可信
-    }
-    final valueIntact = currentValue != null || dataType == PtpDataType.string;
-
-    // 出厂默认值(ISO 15740:位于 FORM 之前;截断数据集可缺)。
-    // 字符串型 read 可能合法返回 null,用专属哨兵区分「读到了 null」
-    // 与「截断」:截断时后续 FORM 位置不可信,跳过定长解析。
+    // 值区两值的顺序(gphoto2 ptp_unpack_DPD 权威,2026-10-06 订正):
+    // **出厂默认值在前,当前值在后**。旧版读反 —— 真机后果:光圈永远
+    // 显示出厂默认(= 镜头最大光圈 f/2.0),应用写入/机身拨盘改动都
+    // 「不生效」。截断数据集:值读失败保描述,FORM 不再可信。
     Object? factoryValue;
-    var factoryIntact = false;
-    if (valueIntact && !r.eof) {
+    var valuesIntact = false;
+    try {
+      factoryValue = dataType.read(r);
+      valuesIntact = true;
+    } on Object {
+      factoryValue = null; // 值区截断
+    }
+    // 字符串型 read 可能合法返回 null,不能以 null 判截断 —— 以完成
+    // 标志为准。
+    Object? currentValue;
+    if (valuesIntact || dataType == PtpDataType.string) {
       try {
-        factoryValue = dataType.read(r);
-        factoryIntact = true;
+        currentValue = dataType.read(r);
       } on Object {
-        factoryValue = null;
+        currentValue = null;
+        valuesIntact = false; // 第二值截断:FORM 位置不可信
       }
     }
 
     List<Object?>? enumValues;
     Object? rangeMin, rangeMax, rangeStep;
-    if (valueIntact && factoryIntact && !r.eof) {
+    if (valuesIntact && !r.eof) {
       try {
         final formFlag = r.u8();
         switch (formFlag) {
