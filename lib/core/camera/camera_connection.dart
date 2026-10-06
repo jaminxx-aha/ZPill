@@ -85,9 +85,11 @@ abstract interface class CameraConnection {
 /// **无线配对**(2026-10-04,NiConn_DEMO/SnapBridge 语义):OpenSession
 /// 后查 [PairedCamerasStore],未配对则进入配对相 —— GetPtpIpPairingCode
 /// (0x952B)取验证码 → state = pairing 等用户确认 → CompletePairing
-/// (0x935A)→ 相机把本客户端 UUID 记为已配对设备并自行结束会话 →
-/// teardown 后全流程重连(免配对相)→ connected。「已配对」是纯客户端
-/// 记账(相机不回答配对状态),记录键 = GetDeviceInfo 序列号。
+/// (0x935A)→ 相机把本客户端 UUID 记为已配对设备并自行结束会话,机身
+/// 上弹「配对完成」等按 OK(按之前连接槽位不可用)→ teardown 后全流程
+/// 重连(免配对相;按退避节拍等机身按 OK,默认 ~60s 窗)→ connected。
+/// 「已配对」是纯客户端记账(相机不回答配对状态),记录键 =
+/// GetDeviceInfo 序列号。
 ///
 /// 会话层永远只见 [PtpLinkRouter];attach/detach 在 connect/teardown
 /// 里驱动,下游对象图(repository/下载器)不感知链路切换。
@@ -114,15 +116,15 @@ final class CameraConnectionImpl implements CameraConnection {
     required PtpSession session,
     Future<PtpIpTransport> Function()? createIpTransport,
     PairedCamerasStore? pairedCameras,
-    List<Duration> postPairingRetryDelays =
-        const [Duration(seconds: 1), Duration(seconds: 2)],
+    List<Duration>? postPairingRetryDelays,
   })  : _usb = usb,
         _usbTransport = usbTransport,
         _link = link,
         _session = session,
         _createIpTransport = createIpTransport ?? _defaultIpTransport,
         _pairedCameras = pairedCameras,
-        _postPairingRetryDelays = postPairingRetryDelays {
+        _postPairingRetryDelays =
+            postPairingRetryDelays ?? _defaultPostPairingDelays {
     // 断链事件只在 connected/pairing 态生效;connecting 态的失败由
     // connect() 自己的 catch 上报,failed/disconnected 已无会话可清。
     _usb.breakages.listen(_onLinkBreakage);
@@ -142,10 +144,18 @@ final class CameraConnectionImpl implements CameraConnection {
   /// 已配对相机记录;null = 不做配对相(纯链路测试装配)。
   final PairedCamerasStore? _pairedCameras;
 
-  /// 配对后重连的退避节拍(测试注入零延迟)。相机记录本设备后自收
-  /// 会话,立刻重连可能撞上单连接槽位尚未释放(Zf 真机 2026-10-06:
-  /// 配对确认后重连报连接失败)。
+  /// 配对后重连的退避节拍(测试注入零/短延迟)。相机记录本设备后在
+  /// 机身上弹「配对完成」画面等按 OK,按之前单连接槽位不可用(Zf
+  /// 真机 2026-10-06:不等按 OK 立刻重连必失败,旧节拍 1s/2s×2 远短于
+  /// 用户走过去按的时间)。默认 1s/2s 快试两拍后 3s 一拍,总窗 ~60s。
   final List<Duration> _postPairingRetryDelays;
+
+  /// 默认节拍:1 + 2 + 19×3 = 60s,共 21 次重试。
+  static final List<Duration> _defaultPostPairingDelays = [
+    const Duration(seconds: 1),
+    const Duration(seconds: 2),
+    ...List.filled(19, const Duration(seconds: 3)),
+  ];
 
   /// 当前无线链路实例(连接期间非 null);teardown 收尾后清空。
   PtpIpTransport? _wirelessTransport;
@@ -220,7 +230,11 @@ final class CameraConnectionImpl implements CameraConnection {
     }
   }
 
-  Future<void> _connectWireless(String ip, {String? instanceName}) async {
+  /// [silent] = true 供配对后的重试拍:失败不上报状态(teardown 后把
+  /// 异常抛回),由调用方的循环节拍决定去留 —— 整个等待窗保持
+  /// connecting 态安静重试,不闪失败横幅。
+  Future<void> _connectWireless(String ip,
+      {String? instanceName, bool silent = false}) async {
     final transport = await _createIpTransport();
     // 先登记:握手/会话任一步失败,catch 里的 teardown 都能收尾实例
     _wirelessTransport = transport;
@@ -237,24 +251,32 @@ final class CameraConnectionImpl implements CameraConnection {
       if (await _needsPairing(info)) {
         switch (await _runPairing(info, ip, instanceName)) {
           case _PairResult.newlyPaired:
-            // 相机记录本设备后自收会话(Z50II 实测;Zf 待核对):
-            // teardown 后全流程重连,免配对相。配对已成功,重连这最后
-            // 一步撞上槽位未释放时不直接踢回失败态 —— 按退避节拍重试;
-            // 期间用户主动断开/外部收口(离开 failed 态)则不再重试。
+            // 相机记录本设备后自收会话,并在机身上弹「配对完成」画面
+            // 等按 OK —— 按之前单连接槽位不可用(Zf 真机 2026-10-06:
+            // 立刻重连必失败,用户来不及按)。整个等待窗保持 connecting
+            // 态安静重试(silent 拍不闪失败横幅),窗口节奏见
+            // _postPairingRetryDelays;期间用户主动断开(disconnect 会
+            // 转走 connecting 态)即止,耗尽才报失败并给按 OK 指引。
             await _teardown();
+            _error = null;
             _transition(CameraLinkState.connecting);
             for (var attempt = 0;; attempt++) {
-              await _connectWireless(ip, instanceName: instanceName);
-              if (_state != CameraLinkState.failed ||
-                  attempt >= _postPairingRetryDelays.length) {
-                return;
+              try {
+                await _connectWireless(ip,
+                    instanceName: instanceName, silent: true);
+                return; // connected(或外部收口后的任意态)
+              } on Exception catch (e) {
+                if (attempt >= _postPairingRetryDelays.length) {
+                  await _failConnect('配对信息已发送,但相机迟迟未接受重连:'
+                      '请在相机屏幕上按「OK」完成配对后再点连接'
+                      '(最后错误:$e)');
+                  return;
+                }
+                await Future<void>.delayed(_postPairingRetryDelays[attempt]);
+                if (_state != CameraLinkState.connecting) {
+                  return; // 退避期间被外部收口(用户断开等)
+                }
               }
-              await Future<void>.delayed(_postPairingRetryDelays[attempt]);
-              if (_state != CameraLinkState.failed) {
-                return; // 退避期间被外部收口(用户断开等)
-              }
-              _error = null;
-              _transition(CameraLinkState.connecting);
             }
           case _PairResult.alreadyPaired:
           case _PairResult.declined:
@@ -278,8 +300,16 @@ final class CameraConnectionImpl implements CameraConnection {
       _error = null;
       _transition(CameraLinkState.connected);
     } on Exception catch (e) {
+      if (silent) {
+        await _teardown();
+        rethrow;
+      }
       await _failConnect(_wirelessErrorMessage(ip, e));
     } on Error catch (e) {
+      if (silent) {
+        await _teardown();
+        rethrow; // 上抛给外层 _connectWireless 的 on Error 收口
+      }
       await _failConnect('无线连接失败:$e');
     }
   }
@@ -433,12 +463,16 @@ final class CameraConnectionImpl implements CameraConnection {
           '请在其设备上断开或彻底关闭 SnapBridge 后重试';
     }
     if (e is SocketException) {
-      return '连不上 $ip:请先在系统 Wi-Fi 设置里加入相机热点'
-          '(相机菜单:网络 → 连接至智能设备),再点「无线连接」;'
-          '首次连接若失败,请在系统弹窗中允许访问本地网络后重试';
+      // 双模式通用(2026-10-06:手动 IP 连不上时旧文案只给 AP 热点
+      // 指引,STA 场景误导 —— 该地址上根本没有相机,Mac 侧 ARP 探测
+      // 实证手动 .5 从未入网)。
+      return '连不上 $ip:这个地址上没有相机响应。同一 Wi-Fi 模式请点'
+          '「扫描相机」确认相机当前地址(手填 IP 须与相机实际 IP 完全'
+          '一致);AP 热点模式请先在系统 Wi-Fi 设置里加入相机热点;'
+          '首次连接失败请在系统弹窗中允许访问本地网络后重试';
     }
     if (e is TimeoutException) {
-      return '连接 $ip 超时:相机 Wi-Fi 可能已关闭或 IP 不对';
+      return '连接 $ip 超时:相机不在线或 IP 不对,建议用「扫描相机」确认';
     }
     return '无线连接失败:$e';
   }

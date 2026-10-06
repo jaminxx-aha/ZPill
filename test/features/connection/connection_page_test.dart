@@ -182,7 +182,7 @@ void main() {
 
       conn.statesCtrl.add(CameraLinkState.pairing);
       await pumpEventQueue();
-      expect(controller.hint, '相机请求配对确认(见弹窗)');
+      expect(controller.hint, '正在配对(自动确认)');
 
       conn.statesCtrl.add(CameraLinkState.failed);
       await pumpEventQueue();
@@ -271,6 +271,26 @@ void main() {
       await controller.startScan();
 
       expect(controller.scanning, isFalse);
+    });
+
+    test('rescanIfScanning:扫描中停→起重启浏览;未扫描时不动', () async {
+      final scanner = _FakeScanner();
+      final controller =
+          ConnectionController(connection: _FakeConnection(), scanner: scanner);
+
+      // 未在扫描:后台恢复不触发浏览
+      await controller.rescanIfScanning();
+      expect(scanner.startCalls, 0);
+      expect(scanner.stopCalls, 0);
+
+      await controller.startScan();
+      expect(scanner.startCalls, 1);
+
+      // 扫描中后台恢复:重启一轮(挂起期间系统可能停掉 mDNS 查询)
+      await controller.rescanIfScanning();
+      expect(scanner.stopCalls, 1);
+      expect(scanner.startCalls, 2);
+      expect(controller.scanning, isTrue);
     });
 
     test('selectMethod:离开 STA 自动停扫;同方式空转不多发', () async {
@@ -456,7 +476,7 @@ void main() {
       expect(conn.disconnectCalls, 1);
     });
 
-    testWidgets('配对弹窗:展示验证码;确认 → confirmPairing,关窗', (tester) async {
+    testWidgets('无感配对:进 pairing 态自动确认,全程不弹窗', (tester) async {
       final conn = _FakeConnection()..code = '5077';
       final controller = ConnectionController(connection: conn);
       await tester
@@ -464,16 +484,30 @@ void main() {
 
       conn.statesCtrl.add(CameraLinkState.pairing);
       await tester.pumpAndSettle();
-      expect(find.text('配对确认'), findsOneWidget);
-      expect(find.text('5077'), findsOneWidget);
-
-      await tester.tap(find.text('确认配对'));
+      // 验证码不回传相机(0x935A 参数与码无关),自动确认与手动等价;
+      // 多次 notify 只确认一次(哨兵)。
+      expect(conn.confirmCalls, 1);
+      expect(find.text('配对确认'), findsNothing);
+      conn.statesCtrl.add(CameraLinkState.pairing); // 状态未离开的重复 notify
       await tester.pumpAndSettle();
       expect(conn.confirmCalls, 1);
-      expect(find.text('配对确认'), findsNothing); // 弹窗已关
     });
 
-    testWidgets('配对弹窗:跳过 → cancelPairing(相机不记录,下次再问)',
+    testWidgets('无感配对:等待期间断链 → 状态收口,无弹窗可滞留', (tester) async {
+      final conn = _FakeConnection()..code = '5077';
+      final controller = ConnectionController(connection: conn);
+      await tester
+          .pumpWidget(MaterialApp(home: ConnectionPage(controller: controller)));
+
+      conn.statesCtrl.add(CameraLinkState.pairing);
+      await tester.pumpAndSettle();
+      expect(conn.confirmCalls, 1);
+      conn.statesCtrl.add(CameraLinkState.failed);
+      await tester.pumpAndSettle();
+      expect(find.text('正在配对(自动确认)'), findsNothing);
+    });
+
+    testWidgets('配对后等待机身确认:专属状态卡/提示 + 可取消;耗尽转失败撤下',
         (tester) async {
       final conn = _FakeConnection()..code = '5077';
       final controller = ConnectionController(connection: conn);
@@ -482,28 +516,55 @@ void main() {
 
       conn.statesCtrl.add(CameraLinkState.pairing);
       await tester.pumpAndSettle();
+      expect(conn.confirmCalls, 1);
 
-      await tester.tap(find.text('跳过配对'));
+      // pairing → connecting 沿 = 机身确认等待窗(真机 2026-10-06:相机
+      // 弹「配对完成」等按 OK,应用整窗静默重试不闪失败)
+      conn.statesCtrl.add(CameraLinkState.connecting);
       await tester.pumpAndSettle();
-      expect(conn.cancelCalls, 1);
-      expect(conn.confirmCalls, 0);
-      expect(find.text('配对确认'), findsNothing);
-    });
+      expect(controller.awaitingCameraConfirm, isTrue);
+      expect(find.text('等待相机上确认配对…'), findsOneWidget);
+      expect(find.text('连接中…'), findsNothing);
+      expect(controller.hint, contains('按「OK」'));
+      expect(find.text('取消连接'), findsOneWidget, reason: '等待窗保留取消逃生口');
 
-    testWidgets('配对弹窗:等待期间断链(状态离开 pairing)自动关窗', (tester) async {
-      final conn = _FakeConnection()..code = '5077';
-      final controller = ConnectionController(connection: conn);
-      await tester
-          .pumpWidget(MaterialApp(home: ConnectionPage(controller: controller)));
-
-      conn.statesCtrl.add(CameraLinkState.pairing);
-      await tester.pumpAndSettle();
-      expect(find.text('配对确认'), findsOneWidget);
-
-      // 断链:连接层已把状态收口为 failed,弹窗必须自己关掉
+      // 窗口耗尽转 failed:等待文案撤下,回到真实错误
       conn.statesCtrl.add(CameraLinkState.failed);
       await tester.pumpAndSettle();
-      expect(find.text('配对确认'), findsNothing);
+      expect(controller.awaitingCameraConfirm, isFalse);
+      expect(find.text('等待相机上确认配对…'), findsNothing);
+      expect(controller.hint, '连接失败');
+    });
+
+    testWidgets('删除已保存相机:确认 → 清档案,列表即消(无感重配语义)',
+        (tester) async {
+      final conn = _FakeConnection();
+      final store = InMemoryPairedCamerasStore();
+      await store.save(const CameraInfo(
+          id: '012345678901',
+          name: 'Z_f_8014411',
+          lastIp: '192.168.1.4',
+          wirelessPaired: true));
+      // identityStore 不注入:regenerate 的真文件 IO 在 FakeAsync 域
+      // 不上浮,换新身份语义由 client_identity_store 单测覆盖。
+      final controller =
+          ConnectionController(connection: conn, pairedCameras: store);
+      await tester
+          .pumpWidget(MaterialApp(home: ConnectionPage(controller: controller)));
+      await tester.pump();
+
+      await tester.tap(find.text('同一 Wi-Fi'));
+      await tester.pump();
+      expect(find.text('上次:Z_f_8014411'), findsOneWidget);
+
+      await tester.tap(find.byTooltip('忘记这台相机'));
+      await tester.pumpAndSettle();
+      expect(find.text('忘记这台相机?'), findsOneWidget);
+      await tester.tap(find.text('删除'));
+      await tester.pumpAndSettle();
+
+      expect(await store.list(), isEmpty);
+      expect(find.text('上次:Z_f_8014411'), findsNothing);
     });
 
     testWidgets('connecting:分段切换禁用,各方式卡按钮禁用', (WidgetTester tester) async {

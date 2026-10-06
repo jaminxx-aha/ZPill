@@ -171,6 +171,7 @@ final class AppServices {
       connection: connection,
       scanner: PlatformServices.nsd,
       pairedCameras: pairedCameras,
+      identityStore: identityStore,
     );
     browserController = BrowserController(
       repository: repository,
