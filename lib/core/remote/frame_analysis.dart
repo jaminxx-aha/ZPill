@@ -18,6 +18,10 @@ final class FrameAnalysis {
     required this.maskCols,
     required this.maskRows,
     required this.lumaThreshold,
+    required this.falseColorCells,
+    required this.peakingMask,
+    required this.peakingCols,
+    required this.peakingRows,
   });
 
   final int width;
@@ -35,8 +39,35 @@ final class FrameAnalysis {
   /// 过曝判定的 luma 阈值(0-255)。
   final int lumaThreshold;
 
+  /// 伪色分类:与斑马纹同网格,每格 = 采样均值落入的亮度带索引
+  /// (见 [falseColorBandEdges];带色表在 UI 层)。
+  final Uint8List falseColorCells;
+
+  /// 对焦峰值掩码:peakingRows × peakingCols 行主序,1 = 该格处于强
+  /// 亮度梯度(相邻格均值差 ≥ [peakingGradientThreshold])。
+  final Uint8List peakingMask;
+  final int peakingCols;
+  final int peakingRows;
+
+  /// 峰值判定的相邻格亮度梯度阈值(0-255)。
+  static const int peakingGradientThreshold = 40;
+
+  /// 伪色亮度带边界(升序;带索引 = luma 落入的区间序号,共
+  /// 边界数 + 1 带)。UI 层按索引取色。
+  static const falseColorBandEdges = [16, 48, 96, 160, 216, 250];
+
+  /// luma → 伪色带索引。
+  static int falseColorBandOf(int luma) {
+    for (var i = 0; i < falseColorBandEdges.length; i++) {
+      if (luma < falseColorBandEdges[i]) return i;
+    }
+    return falseColorBandEdges.length;
+  }
+
   bool get hasOverexposure =>
       overexposedMask.any((c) => c != 0);
+
+  bool get hasPeaking => peakingMask.any((c) => c != 0);
 
   /// 直方图归一化(最大桶 = 1.0),画柱状图用。
   List<double> get normalizedHistogram {
@@ -89,14 +120,18 @@ final class FrameAnalysis {
 
 /// 解码 JPEG 帧并分析。解码失败/空帧返回 null(调用方保持上次结果)。
 ///
-/// 采样步长 = 一个掩码格的像素宽,保证每格至少被扫到;直方图与掩码
-/// 共用同一批采样。luma = 0.299R + 0.587G + 0.114B(Rec.601)。
+/// 采样步长 = 一个掩码格的像素宽,保证每格至少被扫到;直方图/斑马纹/
+/// 伪色(格均值 → 亮度带)共用同一批采样;对焦峰值用更细的
+/// [peakingCols]×[peakingRows] 均值网格做相邻梯度。luma =
+/// 0.299R + 0.587G + 0.114B(Rec.601)。
 FrameAnalysis? analyzeJpegFrame(
   Uint8List jpeg, {
   int histogramBins = 64,
   int maskCols = 32,
   int maskRows = 24,
   int lumaThreshold = 250,
+  int peakingCols = 64,
+  int peakingRows = 48,
 }) {
   // 解码器对畸形/截断字节可能抛 Error(image 包格式嗅探的越界读,
   // 实测 4B 垃圾触发 RangeError)—— 任何失败一律 null,不上抛。
@@ -111,10 +146,22 @@ FrameAnalysis? analyzeJpegFrame(
 
   final histogram = List<int>.filled(histogramBins, 0);
   final mask = Uint8List(maskCols * maskRows);
+  // 伪色:格内 luma 累加(采样数不定,最后取均值)
+  final lumaSums = List<int>.filled(maskCols * maskRows, 0);
+  final lumaCounts = List<int>.filled(maskCols * maskRows, 0);
+  // 峰值:细网格均值
+  final peakSums = List<int>.filled(peakingCols * peakingRows, 0);
+  final peakCounts = List<int>.filled(peakingCols * peakingRows, 0);
   final cellW = image.width / maskCols;
   final cellH = image.height / maskRows;
-  final stepX = cellW.ceil().clamp(1, image.width);
-  final stepY = cellH.ceil().clamp(1, image.height);
+  final peakCellW = image.width / peakingCols;
+  final peakCellH = image.height / peakingRows;
+  // 采样步长取两网格较细者:峰值网格(64×48)比斑马纹(32×24)细时,
+  // 按粗网格采样会在峰值格间留空(空格不参与梯度 → 边缘漏检)。
+  final stepX =
+      (cellW < peakCellW ? cellW : peakCellW).ceil().clamp(1, image.width);
+  final stepY =
+      (cellH < peakCellH ? cellH : peakCellH).ceil().clamp(1, image.height);
   final binScale = histogramBins / 256;
 
   for (var y = 0; y < image.height; y += stepY) {
@@ -122,11 +169,53 @@ FrameAnalysis? analyzeJpegFrame(
       final p = image.getPixel(x, y);
       final luma = (0.299 * p.r + 0.587 * p.g + 0.114 * p.b).round().clamp(0, 255);
       histogram[(luma * binScale).floor().clamp(0, histogramBins - 1)]++;
+      final col = (x / cellW).floor().clamp(0, maskCols - 1);
+      final row = (y / cellH).floor().clamp(0, maskRows - 1);
+      final cell = row * maskCols + col;
       if (luma >= lumaThreshold) {
-        final col = (x / cellW).floor().clamp(0, maskCols - 1);
-        final row = (y / cellH).floor().clamp(0, maskRows - 1);
-        mask[row * maskCols + col] = 1;
+        mask[cell] = 1;
       }
+      lumaSums[cell] += luma;
+      lumaCounts[cell]++;
+      final pcol = (x / peakCellW).floor().clamp(0, peakingCols - 1);
+      final prow = (y / peakCellH).floor().clamp(0, peakingRows - 1);
+      final pcell = prow * peakingCols + pcol;
+      peakSums[pcell] += luma;
+      peakCounts[pcell]++;
+    }
+  }
+
+  // 伪色:格均值 → 亮度带索引
+  final falseColor = Uint8List(maskCols * maskRows);
+  for (var i = 0; i < falseColor.length; i++) {
+    final n = lumaCounts[i];
+    if (n > 0) {
+      falseColor[i] = FrameAnalysis.falseColorBandOf(lumaSums[i] ~/ n);
+    }
+  }
+
+  // 峰值:细网格均值 → 相邻梯度(右/下);双方都有采样才比较
+  // (稀疏采样下的空格均值是 0,当真值比会满屏误报)
+  final peakMeans = List<double>.filled(peakingCols * peakingRows, 0);
+  for (var i = 0; i < peakMeans.length; i++) {
+    final n = peakCounts[i];
+    peakMeans[i] = n > 0 ? peakSums[i] / n : 0;
+  }
+  final peaking = Uint8List(peakingCols * peakingRows);
+  const grad = FrameAnalysis.peakingGradientThreshold;
+  for (var row = 0; row < peakingRows; row++) {
+    for (var col = 0; col < peakingCols; col++) {
+      final i = row * peakingCols + col;
+      if (peakCounts[i] == 0) continue; // 空格不参与
+      final m = peakMeans[i];
+      final strong =
+          (col + 1 < peakingCols &&
+                  peakCounts[i + 1] > 0 &&
+                  (peakMeans[i + 1] - m).abs() >= grad) ||
+              (row + 1 < peakingRows &&
+                  peakCounts[i + peakingCols] > 0 &&
+                  (peakMeans[i + peakingCols] - m).abs() >= grad);
+      if (strong) peaking[i] = 1;
     }
   }
 
@@ -138,5 +227,9 @@ FrameAnalysis? analyzeJpegFrame(
     maskCols: maskCols,
     maskRows: maskRows,
     lumaThreshold: lumaThreshold,
+    falseColorCells: falseColor,
+    peakingMask: peaking,
+    peakingCols: peakingCols,
+    peakingRows: peakingRows,
   );
 }

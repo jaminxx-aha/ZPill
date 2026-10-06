@@ -16,6 +16,7 @@ import 'core/browser/thumbnail_cache.dart';
 import 'core/camera/camera_connection.dart';
 import 'core/media/watermark.dart';
 import 'core/media/xmp_metadata.dart';
+import 'core/ptp/event_poller.dart';
 import 'core/ptp/ptp_link_router.dart';
 import 'core/ptp/ptp_session.dart';
 import 'core/ptpip/transport.dart';
@@ -212,6 +213,11 @@ final class AppServices {
           : PlatformServices.background.stop());
     });
 
+    // 尼康事件轮询(GetEventEx 0x941C):重要事件走厂商轮询通道而非
+    // 异步事件通道(OpenZCine/libgphoto2 口径)—— 连接期间定时拉取
+    // 并入 session.events;不支持/连续失败自动停(回退异步通道)。
+    eventPoller = NikonEventPoller(session: session);
+
     // 断开/失败 → 对象缓存与缩略图内存索引失效(缩略图磁盘缓存是
     // 内容键,跨会话稳定,保留;重连后重新全量枚举)。
     // 连接成功 → debug 构建自动跑一次 PTP 诊断序列(结果进 hilog,
@@ -221,8 +227,15 @@ final class AppServices {
       if (s == CameraLinkState.connected && !diagRan) {
         diagRan = true;
         PtpDiagnostics.run(session: session, repository: repository);
+        eventPoller.start();
+      }
+      if (s == CameraLinkState.connected) {
+        // 相机时钟校准(OpenZCine CameraClockSync 口径:漂移 > 5s 才写,
+        // 尽力而为不影响连接)。
+        unawaited(session.syncCameraClock());
       }
       if (s == CameraLinkState.disconnected || s == CameraLinkState.failed) {
+        eventPoller.stop();
         diagRan = false;
         repository.reset();
         thumbnails.reset();
@@ -246,6 +259,7 @@ final class AppServices {
   late final FilePairedCamerasStore pairedCameras;
   late final FileSettingsStore settingsStore;
   late final CameraConnectionImpl connection;
+  late final NikonEventPoller eventPoller;
   late final ObjectRepositoryImpl repository;
   late final CameraFileOps fileOps;
   late final FileRatingsStore ratingsStore;

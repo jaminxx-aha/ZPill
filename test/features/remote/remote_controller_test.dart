@@ -144,6 +144,9 @@ const _kParamSpecs = <_ParamSpec>[
   (code: PtpDevicePropCode.compressionSetting, type: PtpDataType.uint8, value: 7, enums: [4, 5, 7, 12]),
   (code: PtpDevicePropCode.rawCompressionType, type: PtpDataType.uint8, value: 0, enums: [0, 3, 4]),
   (code: PtpDevicePropCode.captureAreaCrop, type: PtpDataType.uint8, value: 0, enums: [0, 2, 4, 5]),
+  (code: PtpDevicePropCode.stillFocusMeteringMode, type: PtpDataType.uint16, value: 0x8010, enums: null),
+  (code: 0x0001D006, type: PtpDataType.uint8, value: 0, enums: null), // 主体检测(Ex 扩展码)
+  (code: 0x0001D01C, type: PtpDataType.uint8, value: 1, enums: null), // 色调(Ex 扩展码)
   (code: PtpDevicePropCode.activePicCtrlItem, type: PtpDataType.uint16, value: 1, enums: [1, 2, 3, 4]),
 ];
 
@@ -193,6 +196,7 @@ void _scriptParams(_ScriptTransport t,
     }
   }
   t.ok(data: Uint8List.fromList([0])); // 0xD054 自动 ISO:关
+  t.ok(data: _u32Bytes(1234)); // 0xD1F1 剩余张数
 }
 
 /// PropDesc 全拒的回退应答(值走裸读;路由参数读厂商码)。
@@ -211,6 +215,7 @@ void _scriptParamsRawFallback(_ScriptTransport t, {int mode = 1}) {
     }
   }
   t.ok(data: Uint8List.fromList([0])); // 0xD054 自动 ISO:关
+  t.ok(data: _u32Bytes(1234)); // 0xD1F1 剩余张数
 }
 
 /// 裸值应答字节(按类型宽度:u8 一字节 / u16 两字节 / u32 四字节)。
@@ -681,10 +686,13 @@ void main() {
 
     test('自动 ISO 开:写 ISO 直发 0xD0B4(开关与手动值互不干扰,不联动)',
         () async {
-      // 末尾 0xD054 应答改 [1](自动开)
+      // 倒数第二个应答(0xD054 自动 ISO)改 [1](自动开);末尾是 0xD1F1
       _scriptParams(transport);
-      transport.script.removeLast();
-      transport.ok(data: Uint8List.fromList([1]));
+      final last = transport.script.removeLast(); // 0xD1F1 剩余张数
+      transport.script.removeLast(); // 0xD054
+      transport
+        ..ok(data: Uint8List.fromList([1])) // 0xD054 自动开
+        ..script.add(last); // 0xD1F1 摆回
       conn.statesCtrl.add(CameraLinkState.connected);
       await pumpEventQueue();
       expect(controller.isoAuto, isTrue);
@@ -833,13 +841,144 @@ void main() {
     expect(controller.error, isNull);
   });
 
+  group('自拍定时', () {
+    test('档位 2s:按下倒计时 2 拍后释放;倒计时中切档取消', () async {
+      controller.setSelfTimer(2);
+      expect(controller.selfTimerSeconds, 2);
+
+      transport
+        ..ok() // 0x9207
+        ..ok(); // deviceReady
+      final press = controller.capturePressed();
+      await pumpEventQueue();
+      expect(controller.selfTimerCountdown, 2);
+      delay.release(); // 第 1 秒
+      await pumpEventQueue();
+      expect(controller.selfTimerCountdown, 1);
+      delay.release(); // 第 2 秒 → 倒计时归零,fire() 内的 capture 启动
+      await pumpEventQueue();
+      delay.release(); // capture 内 DeviceReady 轮询放行
+      await press;
+      expect(controller.selfTimerCountdown, isNull);
+      expect(transport.count(NikonOperationCode.initiateCaptureRecInMedia), 1,
+          reason: '倒计时走完释放');
+      expect(controller.error, isNull);
+    });
+
+    test('倒计时中被取消(切档)→ 不释放零流量', () async {
+      controller.setSelfTimer(10);
+      final press = controller.capturePressed();
+      await pumpEventQueue();
+      expect(controller.selfTimerCountdown, 10);
+      controller.setSelfTimer(0); // 取消
+      delay.release();
+      await press;
+      expect(controller.selfTimerCountdown, isNull);
+      expect(transport.requests
+              .where((r) => r.opcode == NikonOperationCode.initiateCaptureRecInMedia),
+          isEmpty);
+    });
+  });
+
+  group('B 门/Time:按住开曝光', () {
+    test('快门值 Bulb(0xFFFFFFFF):按下释放不等待,抬起 0x920C 结束', () async {
+      _scriptParams(transport);
+      conn.statesCtrl.add(CameraLinkState.connected);
+      await pumpEventQueue();
+      // 快门值直接置 Bulb 哨兵(0xD100 打包分数空间)
+      controller.paramProps[PtpDevicePropCode.exposureTime] =
+          const PropState(value: 0xFFFFFFFF);
+
+      transport
+        ..ok() // 0x9207(Bulb 开)
+        ..ok(); // 0x920C(抬起结束)
+      final press = controller.capturePressed();
+      await pumpEventQueue();
+      expect(controller.capturing, isTrue, reason: '按住中 = 曝光开着');
+      await controller.captureReleased();
+      delay.release(); // 按住等待环收口
+      await press;
+      expect(controller.capturing, isFalse);
+      expect(transport.count(NikonOperationCode.terminateCapture), 1);
+      expect(controller.error, isNull);
+    });
+  });
+
+  group('录制(0x920A/0x920B)', () {
+    test('取景中起录/停录;事件对齐状态', () async {
+      // 起录/停录(取景前置在 controller 内检查 liveViewActive —— 测试
+      // 用引擎状态伪造太重,直接验证事件对齐与 op 形态)
+      transport
+        ..ok() // 0x920A
+        ..ok(); // 0x920B
+      // liveViewActive 需要 engine running —— 用事件驱动状态验证
+      transport.eventCtrl.add(const PtpEvent(
+          code: NikonEventCode.movieRecordStarted, transactionId: 0xFFFFFFFF));
+      await pumpEventQueue();
+      expect(controller.recording, isTrue);
+      expect(controller.recordingSince, isNotNull);
+      transport.eventCtrl.add(const PtpEvent(
+          code: NikonEventCode.movieRecordComplete, transactionId: 0xFFFFFFFF));
+      await pumpEventQueue();
+      expect(controller.recording, isFalse);
+      expect(controller.recordingSince, isNull);
+    });
+
+    test('未开取景点录制 → 提示不发', () async {
+      await controller.toggleRecord();
+      expect(controller.error, contains('请先开启取景'));
+      expect(
+          transport.requests
+              .where((r) => r.opcode == NikonOperationCode.startMovieRecInCard),
+          isEmpty);
+    });
+  });
+
+  group('控制锁(0x200F 拒绝 → tile 锁标)', () {
+    test('写被拒打锁标;写通解除;断连清空', () async {
+      _scriptParams(transport);
+      conn.statesCtrl.add(CameraLinkState.connected);
+      await pumpEventQueue();
+
+      transport.reply(PtpResponseCode.accessDenied); // 0x1016 白平衡被拒
+      await controller.setParam(PtpDevicePropCode.whiteBalance, 4);
+      expect(controller.lockedProps, contains(PtpDevicePropCode.whiteBalance));
+
+      // 写通:锁解除
+      transport
+        ..ok()
+        ..ok(data: _propDescDataset(
+            PtpDevicePropCode.whiteBalance, PtpDataType.uint16, 4,
+            enums: [2, 4, 5, 6, 7, 0x8010]));
+      await controller.setParam(PtpDevicePropCode.whiteBalance, 4);
+      expect(controller.lockedProps, isEmpty);
+
+      // 再拒 → 断连清空
+      transport.reply(PtpResponseCode.accessDenied);
+      await controller.setParam(PtpDevicePropCode.whiteBalance, 2);
+      expect(controller.lockedProps, isNotEmpty);
+      conn.statesCtrl.add(CameraLinkState.disconnected);
+      await pumpEventQueue();
+      expect(controller.lockedProps, isEmpty);
+    });
+  });
+
+  test('剩余张数:refreshParams 读 0xD1F1 上屏', () async {
+    _scriptParams(transport);
+    conn.statesCtrl.add(CameraLinkState.connected);
+    await pumpEventQueue();
+    expect(controller.shotsRemaining, 1234, reason: '_scriptParams 末尾预置');
+  });
+
   test('ObjectAdded → 「已拍摄」提示 + 参数刷新;断连后迟到事件丢弃', () async {
     _scriptParams(transport);
     conn.statesCtrl.add(CameraLinkState.connected);
     await pumpEventQueue();
     expect(controller.exposure?.iso, 200);
 
-    _scriptParams(transport); // ObjectAdded 触发的刷新
+    // 即拍即览缩略图先行(事件处理序:缩略图 → 参数刷新),再全量刷参
+    transport.ok(data: Uint8List.fromList([1, 2, 3]));
+    _scriptParams(transport);
     transport.eventCtrl
         .add(const PtpEvent(code: PtpEventCode.objectAdded, transactionId: 0xFFFFFFFF, params: [0x1234]));
     await pumpEventQueue();

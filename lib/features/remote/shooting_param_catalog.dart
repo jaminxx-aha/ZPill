@@ -374,6 +374,52 @@ final kShootingParams = <ShootingParam>[
     pickValues: [0, 2, 4, 5],
     enumLabels: {0: 'FX', 2: 'DX', 4: '1:1', 5: '16:9'},
   ),
+  // AF 区域模式 0xD05D(u16;OpenZCine stillFocusArea 表):pickValues
+  // 直供 + 显式 u16。待真机核对(在册性/写入姿势)。
+  ShootingParam(
+    code: PtpDevicePropCode.stillFocusMeteringMode,
+    label: 'AF 区域',
+    writeType: PtpDataType.uint16,
+    pickValues: [0x8010, 2, 0x8012, 0x8013, 0x8014, 0x8017, 0x8011],
+    enumLabels: {
+      0x8010: '单点',
+      2: '动态S',
+      0x8012: '3D 追踪',
+      0x8013: '动态M',
+      0x8014: '动态L',
+      0x8017: '精确',
+      0x8011: '自动',
+    },
+  ),
+  // ---- Ex 扩展属性码(0x0001_xxxx,> u16;读写自动走 Gen-3 Ex ops
+  // 0x943B/0x943C,见 PtpSession.getDevicePropValue 路由)----
+  // 主体检测 AF(0x0001D006,u8;OpenZCine movieAFSubject 表 —— 标的
+  // 是 movie 属性,静照在册性待真机核对)。pickValues 直供。
+  ShootingParam(
+    code: 0x0001D006,
+    label: '主体检测',
+    writeType: PtpDataType.uint8,
+    pickValues: [0, 1, 2, 3, 4, 5, 6],
+    enumLabels: {
+      0: '关闭',
+      1: '自动',
+      2: '人',
+      3: '动物',
+      4: '车辆',
+      5: '鸟',
+      6: '飞机',
+    },
+  ),
+  // 色调模式(0x0001D01C,u8;OpenZCine:2 = HLG,其余 SDR)。此前因
+  // 超出 u16 属性码位宽不敢编码(截断会静默写错值),Ex ops 落地后
+  // 解锁。待真机核对值域。
+  ShootingParam(
+    code: 0x0001D01C,
+    label: '色调',
+    writeType: PtpDataType.uint8,
+    pickValues: [1, 2],
+    enumLabels: {1: 'SDR', 2: 'HLG'},
+  ),
   // 优化校准 0xD200(u16):pickValues 直供内置组(1-11),创意组/云组
   // 仍可读显示(段位格式化);厂商码 PropDesc 拒答时面板照常可调。
   ShootingParam(

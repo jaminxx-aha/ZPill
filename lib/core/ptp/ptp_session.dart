@@ -9,6 +9,7 @@
 /// (0x201E),此时发 CloseSession(响应可忽略)再重开即可。
 library;
 
+import 'dart:async';
 import 'dart:typed_data';
 
 import '../browser/storage_info.dart';
@@ -115,6 +116,23 @@ final class PtpDeviceInfo {
     final n = r.u32();
     return [for (var i = 0; i < n; i++) r.u16()];
   }
+}
+
+/// MfDrive(0x9204)的结果分类(OpenZCine MFDriveOutcome 口径):
+/// 行程尽头与步进量过小是**结果而非错误** —— 遥控跟焦 UI 据此提示,
+/// 不当失败弹错。
+enum MfDriveOutcome {
+  /// OK:一步驱动完成。
+  complete,
+
+  /// 0xA00C:步进行程尽头(再往这个方向没有更多行程)。
+  endOfTravel,
+
+  /// 0xA00E:步进量过小,镜头未动(提高单步脉冲数)。
+  stepTooSmall,
+
+  /// 链路/状态类拒绝(镜头不可遥控 —— 机械对焦环;或机身忙)。
+  refused,
 }
 
 /// PTP 会话:open/close 生命周期 + 浏览/下载操作封装。
@@ -348,8 +366,84 @@ final class PtpSession {
     return data;
   }
 
-  /// 异步事件流透传(ObjectAdded / CaptureComplete…)。
-  Stream<PtpEvent> get events => transport.events;
+  /// 事件流 = 异步通道(USB interrupt / PTP-IP 事件 socket)+ 轮询注入
+  /// ([emitPolledEvents],[NikonEventPoller] 用)的并流。尼康机身的重要
+  /// 事件(ObjectAdded/CaptureComplete/0x4006)可能只走 GetEventEx
+  /// 0x941C 轮询通道(OpenZCine/libgphoto2 实测口径),两路并存、
+  /// 消费端幂等。
+  late final Stream<PtpEvent> _events = _mergedStreams(
+      [transport.events, _eventInjections.stream]);
+  final _eventInjections = StreamController<PtpEvent>.broadcast();
+
+  Stream<PtpEvent> get events => _events;
+
+  /// 轮询事件注入([NikonEventPoller] 调用)。
+  void emitPolledEvents(Iterable<PtpEvent> polled) {
+    for (final e in polled) {
+      _eventInjections.add(e);
+    }
+  }
+
+  /// 广播并流(单订阅源 → 广播聚合;单监听者模型,close 后不再复听)。
+  static Stream<T> _mergedStreams<T>(List<Stream<T>> streams) {
+    late StreamController<T> ctrl;
+    final subs = <StreamSubscription<T>>[];
+    var pending = streams.length;
+    ctrl = StreamController<T>.broadcast(
+      onListen: () {
+        for (final s in streams) {
+          subs.add(s.listen(ctrl.add,
+              onError: ctrl.addError,
+              onDone: () {
+                if (--pending == 0) ctrl.close();
+              }));
+        }
+      },
+      onCancel: () {
+        for (final s in subs) {
+          s.cancel();
+        }
+        subs.clear();
+      },
+    );
+    return ctrl.stream;
+  }
+
+  /// Nikon GetEventEx(0x941C,Gen-3 事件轮询):拉取并清空厂商事件队列。
+  ///
+  /// 布局(OpenZCine PTPNikonEventList):`u32 元素数 + N ×
+  /// (u16 事件码 + u16 参数数 + 参数数 × u32)`;元素数上限 2048 防御。
+  /// 相机不支持(旧机身回 0x2005)时上抛,由 [NikonEventPoller] 停轮询。
+  Future<List<PtpEvent>> getEventEx() async {
+    final result = await _serialized(() => transport.execute(const PtpRequest(
+          opcode: NikonOperationCode.getEventEx,
+        )));
+    _ensureOk(result, NikonOperationCode.getEventEx);
+    final data = result.data ?? Uint8List(0);
+    if (data.length < 4) return const [];
+    var count = data[0] | (data[1] << 8) | (data[2] << 16) | (data[3] << 24);
+    if (count > 2048) count = 2048;
+    final events = <PtpEvent>[];
+    var offset = 4;
+    for (var i = 0; i < count; i++) {
+      if (offset + 4 > data.length) break;
+      final code = data[offset] | (data[offset + 1] << 8);
+      final paramCount = data[offset + 2] | (data[offset + 3] << 8);
+      offset += 4;
+      if (offset + paramCount * 4 > data.length) break;
+      final params = <int>[
+        for (var p = 0; p < paramCount; p++)
+          data[offset + p * 4] |
+              (data[offset + p * 4 + 1] << 8) |
+              (data[offset + p * 4 + 2] << 16) |
+              (data[offset + p * 4 + 3] << 24),
+      ];
+      offset += paramCount * 4;
+      events.add(PtpEvent(
+          code: code, transactionId: 0xFFFFFFFF, params: params));
+    }
+    return events;
+  }
 
   /// Nikon GetPtpIpPairingCode(0x952B):智能设备模式的配对验证码。
   ///
@@ -397,12 +491,18 @@ final class PtpSession {
   /// GetDevicePropValue(0x1015):当前值。响应是裸值数据集,解码类型
   /// 查标准表(见 [PtpDevicePropValue.parse]);方言偏离时改走
   /// [getDevicePropDesc] 拿自描述类型(待真机核对)。
+  ///
+  /// **扩展属性码(> 0xFFFF,0x0001_xxxx)自动改走 Gen-3 Ex 读**
+  /// (0x943B,OpenZCine 实测口径:2 字节码必须走标准 op,混用会拒)。
   Future<PtpDevicePropValue> getDevicePropValue(int propCode) async {
+    final op = propCode > 0xFFFF
+        ? NikonOperationCode.getDevicePropValueEx
+        : PtpOperationCode.getDevicePropValue;
     final result = await _serialized(() => transport.execute(PtpRequest(
-          opcode: PtpOperationCode.getDevicePropValue,
+          opcode: op,
           params: [propCode],
         )));
-    _ensureOk(result, PtpOperationCode.getDevicePropValue);
+    _ensureOk(result, op);
     return PtpDevicePropValue.parse(propCode, result.data ?? Uint8List(0));
   }
 
@@ -418,17 +518,22 @@ final class PtpSession {
   }
 
   /// SetDevicePropValue(0x1016,数据入相)。门禁 [kSetPropEnabled]。
+  /// 扩展属性码(> 0xFFFF)自动改走 Gen-3 Ex 写(0x943C,同
+  /// [getDevicePropValue] 的路由口径)。
   Future<void> setDevicePropValue(PtpDevicePropValue value) async {
     if (!kSetPropEnabled) {
       throw UnsupportedError(
           'SetDevicePropValue 已被总闸关断(kSetPropEnabled=false,紧急关断)');
     }
+    final op = value.code > 0xFFFF
+        ? NikonOperationCode.setDevicePropValueEx
+        : PtpOperationCode.setDevicePropValue;
     final result = await _serialized(() => transport.execute(PtpRequest(
-          opcode: PtpOperationCode.setDevicePropValue,
+          opcode: op,
           params: [value.code],
           dataOut: value.encode(),
         )));
-    _ensureOk(result, PtpOperationCode.setDevicePropValue);
+    _ensureOk(result, op);
   }
 
   /// 连接后切「应用模式」(Z 系真机口径,OpenZCine 实测:不切则相机对
@@ -536,6 +641,99 @@ final class PtpSession {
           params: [0, 0],
         )));
     _ensureOk(result, NikonOperationCode.terminateCapture);
+  }
+
+  /// Nikon MfDrive(0x9204):手动对焦步进(相对量,跟焦环语义 ——
+  /// 无绝对位置读出)。[towardNear] true = 向近对焦(参数 1)/false
+  /// = 向远(参数 2);[pulses] 步进量,钳到 1..32767。OpenZCine 同款:
+  /// 步进行程尽头(0xA00C)与步进量过小(0xA00E)是**结果而非错误**,
+  /// 以 [MfDriveOutcome] 返回;镜头不可遥控(机械环)回 invalid-status
+  /// 类 → refused。
+  Future<MfDriveOutcome> mfDrive(
+      {required bool towardNear, required int pulses}) async {
+    final clamped = pulses.clamp(1, 32767);
+    final PtpResult result;
+    try {
+      result = await _serialized(() => transport.execute(PtpRequest(
+            opcode: NikonOperationCode.mfDrive,
+            params: [towardNear ? 1 : 2, clamped],
+          )));
+    } on Exception {
+      return MfDriveOutcome.refused;
+    }
+    if (result.responseCode == PtpResponseCode.ok) {
+      return MfDriveOutcome.complete;
+    }
+    return switch (result.responseCode) {
+      NikonResponseCode.mfDriveStepEnd => MfDriveOutcome.endOfTravel,
+      NikonResponseCode.mfDriveStepInsufficiency => MfDriveOutcome.stepTooSmall,
+      _ => MfDriveOutcome.refused,
+    };
+  }
+
+  /// Nikon StartMovieRecInCard(0x920A,无参无数据):开始卡上录制
+  /// (取景开启为前置;OpenZCine 同款,真机核对)。
+  Future<void> startMovieRec() async {
+    final result = await _serialized(() => transport.execute(const PtpRequest(
+          opcode: NikonOperationCode.startMovieRecInCard,
+        )));
+    _ensureOk(result, NikonOperationCode.startMovieRecInCard);
+  }
+
+  /// Nikon EndMovieRec(0x920B,无参无数据):结束卡上录制。
+  Future<void> endMovieRec() async {
+    final result = await _serialized(() => transport.execute(const PtpRequest(
+          opcode: NikonOperationCode.endMovieRec,
+        )));
+    _ensureOk(result, NikonOperationCode.endMovieRec);
+  }
+
+  /// 相机时钟(0x5011,PTP 日期时间 STR 型 "YYYYMMDDTHHMMSS")。
+  /// 读:本地墙钟口径比较(相机值无时区,跨时区携带的机身按本地时间
+  /// 对齐是操作者预期 —— OpenZCine CameraClockSync 同款)。null = 读
+  /// 失败/畸形。
+  Future<DateTime?> getCameraClock() async {
+    try {
+      final v = await getDevicePropValue(PtpDevicePropCode.dateTime);
+      final s = v.value as String?;
+      if (s == null || s.length < 14) return null;
+      final y = int.tryParse(s.substring(0, 4));
+      final mo = int.tryParse(s.substring(4, 6));
+      final d = int.tryParse(s.substring(6, 8));
+      final h = int.tryParse(s.substring(9, 11));
+      final mi = int.tryParse(s.substring(11, 13));
+      final sec = int.tryParse(s.substring(13, 15));
+      if (y == null || mo == null || d == null || h == null || mi == null ||
+          sec == null) {
+        return null;
+      }
+      return DateTime(y, mo, d, h, mi, sec);
+    } on Exception {
+      return null;
+    }
+  }
+
+  /// 相机时钟校准:把相机时钟设为手机本地时间([now] 注入供测试)。
+  /// OpenZCine 口径:**只在漂移超过阈值时写**(事务延迟 + 线格式 1 秒
+  /// 粒度让小修正抖动;5 秒高于任何监看用途又必抓到抽屉里放一年的
+  /// 机身),且不await影响连接主流程(尽力而为)。
+  Future<void> syncCameraClock({DateTime? now, Duration threshold = const Duration(seconds: 5)}) async {
+    final phone = (now ?? DateTime.now());
+    final camera = await getCameraClock();
+    if (camera == null) return;
+    if (phone.difference(camera).abs() < threshold) return;
+    final t = phone.toLocal();
+    String two(int v) => v.toString().padLeft(2, '0');
+    final s = '${t.year}${two(t.month)}${two(t.day)}T'
+        '${two(t.hour)}${two(t.minute)}${two(t.second)}';
+    try {
+      await setDevicePropValue(PtpDevicePropValue(
+          code: PtpDevicePropCode.dateTime,
+          dataType: PtpDataType.string,
+          value: s));
+    } on Exception {
+      // 尽力而为:校时失败不影响连接
+    }
   }
 
   /// Nikon InitiateCaptureRecInSdram(0x90C0,候选码,待真机核对):

@@ -141,6 +141,76 @@ final class RemoteController extends ChangeNotifier {
 
   bool capturing = false;
 
+  /// 卡上录制中(0x920A/0x920B;事件 0xC10A/0xC108 与本状态双保险)。
+  bool recording = false;
+
+  /// 录制开始时刻(时长显示;null = 未在录)。
+  DateTime? recordingSince;
+
+  /// 剩余可拍张数(0xD1F1;null = 未读/拒答)。
+  int? shotsRemaining;
+
+  /// 即拍即览:最近一张的缩略图(0x100A,几秒后清;null = 无)。
+  Uint8List? reviewThumb;
+
+  /// 即拍即览清理计时(新照片到达即重置)。
+  Timer? _reviewTimer;
+
+  /// 本会话被相机拒绝过(0x200F)的参数 → 读出条锁标(OpenZCine
+  /// lockedControls 口径;写成功或断连即清)。
+  final lockedProps = <int>{};
+
+  // ---- 自拍定时 ----
+
+  /// 自拍档位:0 = 关;> 0 = 秒数(倒计时后释放,期间可再点取消)。
+  int selfTimerSeconds = 0;
+
+  /// 自拍倒计时剩余秒(null = 未在倒计时)。
+  int? get selfTimerCountdown => _selfTimerLeft;
+  int? _selfTimerLeft;
+  bool _selfTimerRunning = false;
+  static const _selfTimerTick = Duration(seconds: 1);
+
+  /// 选自拍档位(0/2/5/10s;正在倒计时时切换即取消当前倒计时)。
+  void setSelfTimer(int seconds) {
+    if (seconds == selfTimerSeconds && !_selfTimerRunning) return;
+    _cancelSelfTimer();
+    selfTimerSeconds = seconds;
+    notifyListeners();
+  }
+
+  void _cancelSelfTimer() {
+    _selfTimerRunning = false;
+    _selfTimerLeft = null;
+  }
+
+  /// 快门按下带自拍:倒计时(可取消)到点释放;档位 0 = 直接拍
+  /// ([fire] 是异步动作,统一 await —— 按下的 Future 才真正盖住整段)。
+  Future<void> _runSelfTimerThen(Future<void> Function() fire) async {
+    if (selfTimerSeconds <= 0) {
+      await fire();
+      return;
+    }
+    if (_selfTimerRunning) return;
+    _selfTimerRunning = true;
+    _selfTimerLeft = selfTimerSeconds;
+    notifyListeners();
+    for (;;) {
+      await _delay(_selfTimerTick);
+      if (!_selfTimerRunning) return; // 被取消(切档/再点/断连)
+      final left = _selfTimerLeft = _selfTimerLeft! - 1;
+      if (left > 0) {
+        notifyListeners();
+        continue;
+      }
+      _selfTimerRunning = false;
+      _selfTimerLeft = null;
+      notifyListeners();
+      await fire();
+      return;
+    }
+  }
+
   /// 拍摄参数写入中(编辑面板防连点)。
   bool writing = false;
 
@@ -481,18 +551,30 @@ final class RemoteController extends ChangeNotifier {
   bool get _driveContinuous => _continuousDriveValues
       .contains(paramProps[PtpDevicePropCode.stillCaptureMode]?.value);
 
-  /// 快门按钮**按下**(页面 onTapDown):普通释放档 = 一次 [capture];
-  /// 连续释放档 = 连拍括持(0x90C2 remote + burstNumber 65535 —— 不括持
-  /// 每次释放都会弹回单张,OpenZCine 同款)后释放,按住期间随 DeviceReady
-  /// 就绪链发(上限 30 帧);[captureReleased](抬起)终止并解除括持。
+  /// 快门当前值是否 Bulb/Time(0xD100 哨兵):**按住 = 开曝光,抬起
+  /// 结束**(0x920C;OpenZCine pendingStillTerminate 同款语义)。
+  bool get _shutterIsOpenShutter =>
+      paramProps[PtpDevicePropCode.exposureTime]?.value == 0xFFFFFFFF ||
+      paramProps[PtpDevicePropCode.exposureTime]?.value == 0xFFFFFFFD;
+
+  /// 快门按钮**按下**(页面 onTapDown):
+  /// - Bulb/Time:开曝光(按住中),[captureReleased] 抬起结束;
+  /// - 连续释放档:连拍括持(0x90C2 remote + burstNumber 65535 —— 不
+  ///   括持每次释放都会弹回单张,OpenZCine 同款)后释放,按住期间随
+  ///   DeviceReady 就绪链发(上限 30 帧),抬起终止;
+  /// - 普通档:自拍倒计时(档位 > 0)后一次 [capture]。
   Future<void> capturePressed() async {
     if (!_linkUp) {
       error = '未连接相机';
       notifyListeners();
       return;
     }
+    if (_shutterIsOpenShutter) {
+      await _openShutterPress();
+      return;
+    }
     if (!_driveContinuous) {
-      await capture(); // 普通档:点按单张(原有路径)
+      await _runSelfTimerThen(capture); // 自拍档 > 0 时倒计时
       return;
     }
     if (capturing || _burstLatched) return;
@@ -548,9 +630,48 @@ final class RemoteController extends ChangeNotifier {
     }
   }
 
-  /// 快门按钮**抬起**:终止进行中的连拍(0x920C,已拍帧保留;运行已
-  /// 自行结束时相机会拒绝,容忍)。普通档点按无副作用。
+  // ---- B 门 / Time:按住开曝光 ----
+
+  bool _openShutterHeld = false;
+
+  /// Bulb/Time 按下:开曝光(0x9207 直发,不等待落地 —— 曝光持续到
+  /// 抬起)。取景挂起防事务挤占。
+  Future<void> _openShutterPress() async {
+    if (capturing || _openShutterHeld) return;
+    _openShutterHeld = true;
+    capturing = true;
+    error = null;
+    notice = null;
+    notifyListeners();
+    final wasLive = liveViewActive;
+    if (wasLive) engine.pause();
+    try {
+      await _fireShutter();
+      // 按住中:等抬起(不轮询 settle —— 曝光开着,DeviceReady 恒忙)
+      while (_openShutterHeld) {
+        await _delay(const Duration(seconds: 1));
+      }
+    } on Exception catch (e) {
+      error = '快门释放失败:$e';
+    } finally {
+      if (wasLive) engine.resume();
+      capturing = false;
+      notifyListeners();
+    }
+  }
+
+  /// 快门按钮**抬起**:B 门结束曝光 / 终止进行中的连拍(0x920C,已拍
+  /// 帧保留;运行已自行结束时相机会拒绝,容忍)。普通档点按无副作用。
   Future<void> captureReleased() async {
+    if (_openShutterHeld) {
+      _openShutterHeld = false; // _openShutterPress 的等待环收口
+      try {
+        await session.terminateCapture();
+      } on Exception {
+        // 曝光已自行结束:预期内
+      }
+      return;
+    }
     if (!_burstLatched) return;
     _burstLatched = false;
     _burstRun++; // 打断链发循环
@@ -571,6 +692,82 @@ final class RemoteController extends ChangeNotifier {
       // 解除尽力而为
     }
   }
+
+  // ---- 录制(0x920A/0x920B)+ MF 步进(0x9204)----
+
+  /// 录制开关:取景开启为前置(机身口径)。录制中拍照会被机身拒,
+  /// 先提示。事件 0xC10A/0xC108 到达时对齐状态(双保险)。
+  Future<void> toggleRecord() async {
+    if (!_linkUp) {
+      error = '未连接相机';
+      notifyListeners();
+      return;
+    }
+    if (!liveViewActive) {
+      error = '请先开启取景再录制';
+      notifyListeners();
+      return;
+    }
+    if (capturing) return;
+    error = null;
+    notifyListeners();
+    try {
+      if (recording) {
+        await session.endMovieRec();
+        recording = false;
+        recordingSince = null;
+      } else {
+        await session.startMovieRec();
+        recording = true;
+        recordingSince = DateTime.now();
+      }
+    } on Exception catch (e) {
+      error = '录制控制失败:$e';
+    }
+    notifyListeners();
+  }
+
+  /// MF 步进(0x9204):向近/远驱动一步([pulses] 脉冲,默认 300)。
+  /// 取景挂起防事务挤占;结果转提示(行程尽头/步进过小是结果非错误,
+  /// OpenZCine 口径)。
+  Future<void> mfDriveStep({required bool towardNear, int pulses = 300}) async {
+    if (!_linkUp) {
+      error = '未连接相机';
+      notifyListeners();
+      return;
+    }
+    if (!liveViewActive) {
+      error = '请先开启取景';
+      notifyListeners();
+      return;
+    }
+    if (focusing) return;
+    error = null;
+    notifyListeners();
+    engine.pause();
+    try {
+      final outcome =
+          await session.mfDrive(towardNear: towardNear, pulses: pulses);
+      switch (outcome) {
+        case MfDriveOutcome.complete:
+          break;
+        case MfDriveOutcome.endOfTravel:
+          notice = '对焦行程尽头';
+        case MfDriveOutcome.stepTooSmall:
+          notice = '步进量过小,镜头未动';
+        case MfDriveOutcome.refused:
+          error = '手动对焦不可用(机械对焦环或机身忙)';
+      }
+    } finally {
+      engine.resume();
+      if (_linkUp) notifyListeners();
+    }
+  }
+
+  /// 录制时长(秒;未录制为 null)。
+  int? get recordingSeconds => recordingSince == null
+      ? null
+      : DateTime.now().difference(recordingSince!).inSeconds;
 
   /// DeviceReady 轮询兜底:300ms × 10(CaptureComplete 事件先到则提前)。
   static const _capturePollInterval = Duration(milliseconds: 300);
@@ -827,8 +1024,22 @@ final class RemoteController extends ChangeNotifier {
       await _refreshProp(param.code);
     }
     await _refreshIsoAuto();
+    await _refreshShotsRemaining();
     if (!_linkUp) return;
     notifyListeners();
+  }
+
+  /// 剩余可拍张数(0xD1F1 裸读;拒答 null 不猜)。
+  Future<void> _refreshShotsRemaining() async {
+    try {
+      final v =
+          await session.getDevicePropValue(PtpDevicePropCode.exposureRemaining);
+      if (!_linkUp) return;
+      shotsRemaining = v.value as int?;
+    } on Exception {
+      if (!_linkUp) return;
+      shotsRemaining = null;
+    }
   }
 
   /// 静照自动 ISO 状态(0xD054,u8 裸读;拒答 null 不猜)。
@@ -962,8 +1173,15 @@ final class RemoteController extends ChangeNotifier {
       }
       await session.setDevicePropValue(PtpDevicePropValue(
           code: writeCode, dataType: dataType, value: writeValue));
+      lockedProps.remove(propCode); // 写通:解除该参数的锁标
       await _refreshProp(propCode);
     } on Exception catch (e) {
+      if (e is PtpResponseException &&
+          e.responseCode == PtpResponseCode.accessDenied) {
+        // 控制锁(OpenZCine lockedControls 口径):相机拒绝这个参数
+        // 的遥控 → 读出条打锁标,直到写通或断连。
+        lockedProps.add(propCode);
+      }
       if (e is PtpResponseException && param?.dialOwned == true) {
         error = '参数写入失败:${_nikonHint(e.responseCode) ?? e}'
             '(${_takeoverActive ? '接管已开启仍被拒 —— 该模式下此参数由相机自动控制,请检查模式转盘' : '该参数受机身物理拨盘控制,请先启用「APP 接管」'})';
@@ -991,15 +1209,50 @@ final class RemoteController extends ChangeNotifier {
       case NikonEventCode.objectAddedInSdram:
         notice = '已拍摄';
         notifyListeners();
-        unawaited(refreshParams());
+        // 先缩略图(即拍即览要快)再全量刷参 —— 顺序确定,事务排队
+        // 不会与参数刷新交错。
+        unawaited(() async {
+          await _showInstantReview(
+              event.params.isNotEmpty ? event.params.first : null);
+          await refreshParams();
+        }());
       case PtpEventCode.devicePropChanged:
         // 机身侧拨盘/菜单改动(OpenZCine 口径):定向刷新被点名的参数,
         // 短窗合并(一次拨杆转动会连发一串)。
         if (event.params.isNotEmpty) {
           _schedulePropRefresh(event.params.first);
         }
+      case NikonEventCode.movieRecordStarted:
+        recording = true;
+        recordingSince ??= DateTime.now();
+        notifyListeners();
+      case NikonEventCode.movieRecordComplete:
+      case NikonEventCode.movieRecordInterrupted:
+        recording = false;
+        recordingSince = null;
+        notifyListeners();
       default:
         break; // 0xC10C 等:见类注,不消费
+    }
+  }
+
+  /// 即拍即览:新照片到达 → GetThumb 缩略图小卡,几秒后自动撤
+  /// (OpenZCine InstantReview 的轻量版;handle 缺失时跳过 ——
+  /// SD 卡写完前事件可能先到,拿不到就等下一张)。
+  Future<void> _showInstantReview(int? handle) async {
+    if (handle == null || handle == 0) return;
+    try {
+      final thumb = await session.getThumb(handle);
+      if (!_linkUp) return;
+      reviewThumb = thumb;
+      notifyListeners();
+      _reviewTimer?.cancel();
+      _reviewTimer = Timer(const Duration(seconds: 4), () {
+        reviewThumb = null;
+        if (!_disposed) notifyListeners();
+      });
+    } on Exception {
+      // 缩略图拿不到:即拍即览静默跳过
     }
   }
 
@@ -1031,6 +1284,13 @@ final class RemoteController extends ChangeNotifier {
     _burstLatched = false;
     _burstRun++;
     _burstBracketHeld = false;
+    _openShutterHeld = false;
+    _cancelSelfTimer();
+    recording = false;
+    recordingSince = null;
+    reviewThumb = null;
+    _reviewTimer?.cancel();
+    lockedProps.clear();
     if (_takeoverActive) {
       // 链路已死无法发 0x90C2 [0]:记悬挂,重连后防御性解除。
       _takeoverDangling = true;
@@ -1053,6 +1313,7 @@ final class RemoteController extends ChangeNotifier {
     _disposed = true;
     _aePolling = false;
     _aeRun++;
+    _reviewTimer?.cancel();
     _eventsSub?.cancel();
     _statesSub?.cancel();
     engine.status.removeListener(_onEngineStatus);

@@ -1,5 +1,6 @@
 /// 监看辅助覆盖层(TODO §二 Live View 监看辅助):三分网格 / 斑马纹 /
-/// 直方图 / 水平仪,全部画在取景画面上,随开关增减,不改帧数据。
+/// 直方图 / 水平仪 / 伪色 / 对焦峰值,全部画在取景画面上,随开关增减,
+/// 不改帧数据。
 ///
 /// 网格与斑马纹对齐**画面实际包含矩形**(BoxFit.contain 的 letterbox
 /// 数学),不是整个取景框 —— 斑马纹错位会误导曝光判断。
@@ -11,6 +12,19 @@ import 'package:flutter/material.dart';
 
 import '../../core/remote/frame_analysis.dart';
 import '../../platform/motion_host.dart';
+
+/// 伪色带色表(索引 = [FrameAnalysis.falseColorBandOf];OpenZCine
+/// ExposureScale 的视频监看惯例:紫=极暗,蓝=欠,绿=中灰附近,
+/// 黄/橙=高亮,红=过曝)。
+const kFalseColorBandColors = <Color>[
+  Color(0xFF7A1FA2), // < 16 紫:极暗(欠曝风险)
+  Color(0xFF1E88E5), // < 48 蓝:暗部
+  Color(0xFF00BCD4), // < 96 青:中暗
+  Color(0xFF43A047), // < 160 绿:中灰带
+  Color(0xFFFBC02D), // < 216 黄:高亮
+  Color(0xFFF57C00), // < 250 橙:接近削顶
+  Color(0xFFE53935), // ≥ 250 红:过曝
+];
 
 /// BoxFit.contain 的画面矩形(aspect = 帧宽高比;null = 未知,铺满)。
 Rect containRect(Size box, double? aspect) {
@@ -71,8 +85,7 @@ final class _GridPainter extends CustomPainter {
 }
 
 /// 过曝斑马纹(基于 [FrameAnalysis] 掩码,格间铺斜纹)。
-class ZebraOverlay extends StatelessWidget {
-  const ZebraOverlay({super.key, required this.analysis});
+class ZebraOverlay extends StatelessWidget {  const ZebraOverlay({super.key, required this.analysis});
 
   final FrameAnalysis? analysis;
 
@@ -123,6 +136,104 @@ final class _ZebraPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_ZebraPainter old) => old.analysis != analysis;
+}
+
+/// 伪色(False Color):按格均值亮度带整格铺色(带图见
+/// [kFalseColorBandColors]),亮度分布一眼可读 —— 中灰该落在绿带,
+/// 大面积紫/红即欠/过曝。
+class FalseColorOverlay extends StatelessWidget {
+  const FalseColorOverlay({super.key, required this.analysis});
+
+  final FrameAnalysis? analysis;
+
+  @override
+  Widget build(BuildContext context) {
+    return RepaintBoundary(
+      child: CustomPaint(
+        foregroundPainter: _FalseColorPainter(analysis),
+        size: Size.infinite,
+      ),
+    );
+  }
+}
+
+final class _FalseColorPainter extends CustomPainter {
+  const _FalseColorPainter(this.analysis);
+
+  final FrameAnalysis? analysis;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final a = analysis;
+    if (a == null) return;
+    final rect = containRect(size, a.width / a.height);
+    final cellW = rect.width / a.maskCols;
+    final cellH = rect.height / a.maskRows;
+    for (var row = 0; row < a.maskRows; row++) {
+      for (var col = 0; col < a.maskCols; col++) {
+        final band = a.falseColorCells[row * a.maskCols + col];
+        final color = band < kFalseColorBandColors.length
+            ? kFalseColorBandColors[band]
+            : kFalseColorBandColors.last;
+        canvas.drawRect(
+          Rect.fromLTWH(rect.left + col * cellW, rect.top + row * cellH,
+              cellW + 0.5, cellH + 0.5),
+          Paint()..color = color.withValues(alpha: 0.55),
+        );
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(_FalseColorPainter old) => old.analysis != analysis;
+}
+
+/// 对焦峰值(Peaking):强亮度梯度的细格描金边 —— 合焦面在画面里
+/// 通常正是细节最锐的地方,峰值高亮圈出“哪里实了”。
+class PeakingOverlay extends StatelessWidget {
+  const PeakingOverlay({super.key, required this.analysis});
+
+  final FrameAnalysis? analysis;
+
+  @override
+  Widget build(BuildContext context) {
+    return RepaintBoundary(
+      child: CustomPaint(
+        foregroundPainter: _PeakingPainter(analysis),
+        size: Size.infinite,
+      ),
+    );
+  }
+}
+
+final class _PeakingPainter extends CustomPainter {
+  const _PeakingPainter(this.analysis);
+
+  final FrameAnalysis? analysis;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final a = analysis;
+    if (a == null || !a.hasPeaking) return;
+    final rect = containRect(size, a.width / a.height);
+    final cellW = rect.width / a.peakingCols;
+    final cellH = rect.height / a.peakingRows;
+    final paint = Paint()
+      ..color = const Color(0xFFE9AC35).withValues(alpha: 0.8);
+    for (var row = 0; row < a.peakingRows; row++) {
+      for (var col = 0; col < a.peakingCols; col++) {
+        if (a.peakingMask[row * a.peakingCols + col] == 0) continue;
+        canvas.drawRect(
+          Rect.fromLTWH(rect.left + col * cellW, rect.top + row * cellH,
+              cellW + 0.5, cellH + 0.5),
+          paint,
+        );
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(_PeakingPainter old) => old.analysis != analysis;
 }
 
 /// 直方图(左下角小窗,64 桶亮度)。

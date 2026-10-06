@@ -24,6 +24,9 @@ void main() {
       PtpDevicePropCode.compressionSetting,
       PtpDevicePropCode.rawCompressionType,
       PtpDevicePropCode.captureAreaCrop,
+      PtpDevicePropCode.stillFocusMeteringMode,
+      0x0001D006, // 主体检测(Ex 扩展码)
+      0x0001D01C, // 色调(Ex 扩展码)
       PtpDevicePropCode.activePicCtrlItem,
     ]);
   });
