@@ -654,11 +654,10 @@ void main() {
       ]);
     });
 
-    test('配对后重连:首连被拒(槽位未释放 InitFail)→ 退避重试 → connected',
-        () async {
+    test('配对后重连:首连被拒(机身等按 OK)→ 整窗保持 connecting 安静重试 '
+        '→ connected', () async {
       final usb = FakeUsbHostChannel(const []);
       final paired = InMemoryPairedCamerasStore();
-      // 退避注入 30ms:failed 态要留出可观察窗口(零延迟会被重试瞬间覆盖)
       final (conn, _, session, command, event) = wirePairing(usb,
           paired: paired,
           connects: 3,
@@ -675,17 +674,18 @@ void main() {
       command[0].emitClosed();
       await pumpEventQueue();
 
-      // 重连 1:等它拨号到 command[1],再按「槽位未释放」拒之
-      // (2026-10-06 Zf 真机形态)
+      // 重连 1:等它拨号到 command[1],按「机身确认前槽位不可用」拒之
+      // (2026-10-06 Zf 真机形态:相机弹「配对完成」等按 OK)
       for (var i = 0; command[1].sent.isEmpty && i < 100; i++) {
         await Future<void>.delayed(const Duration(milliseconds: 1));
       }
       expect(command[1].sent, isNotEmpty, reason: '配对后重连已拨号');
       command[1].emit(_frameOf(const InitFailPacket(reason: 0x1)));
-      for (var i = 0; conn.state != CameraLinkState.failed && i < 100; i++) {
-        await Future<void>.delayed(const Duration(milliseconds: 1));
-      }
-      expect(conn.state, CameraLinkState.failed, reason: '首连被拒,瞬时失败');
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+
+      // silent 拍:失败不上报状态,等待机身按 OK 期间不闪失败横幅
+      expect(conn.state, CameraLinkState.connecting,
+          reason: '被拒不转 failed,整窗保持 connecting');
 
       // 退避(30ms)后重连 2:全流程成功
       await Future<void>.delayed(const Duration(milliseconds: 60));
@@ -695,16 +695,90 @@ void main() {
       expect(session.isSessionOpen, isTrue);
       final saved = await paired.list();
       expect(saved.single.wirelessPaired, isTrue);
-      // 状态序:connecting → pairing → connecting(重连1)→ failed →
-      // connecting(退避重连2)→ connected
+      // 状态序:connecting → pairing → connecting(等按 OK,含被拒的静默
+      // 重试拍)→ connected —— 无 failed 闪断
       expect(states, [
         CameraLinkState.connecting,
         CameraLinkState.pairing,
         CameraLinkState.connecting,
-        CameraLinkState.failed,
-        CameraLinkState.connecting,
         CameraLinkState.connected,
       ]);
+    });
+
+    test('配对后重连:整个等待窗全被拒 → failed + 机身按 OK 指引'
+        '(档案已落账,下次免配对)', () async {
+      final usb = FakeUsbHostChannel(const []);
+      final paired = InMemoryPairedCamerasStore();
+      // 两拍退避 → 1+2 = 3 次重试(连接 1=配对,2/3/4=重试拍)
+      final (conn, _, _, command, event) = wirePairing(usb,
+          paired: paired,
+          connects: 4,
+          retryDelays: const [
+            Duration(milliseconds: 30),
+            Duration(milliseconds: 30)
+          ]);
+      final connecting =
+          conn.connect(ip: '192.168.0.104', instanceName: 'Z_f_8014411');
+      await scriptHandshakeAndOpen(command[0], event[0]);
+      await scriptPairingCode(command[0]);
+      await conn.confirmPairing();
+      await scriptCompletePairing(command[0]);
+      command[0].emitClosed();
+      await pumpEventQueue();
+
+      // 三拍重试全按「槽位不可用」拒
+      for (var i = 1; i <= 3; i++) {
+        for (var k = 0; command[i].sent.isEmpty && k < 100; k++) {
+          await Future<void>.delayed(const Duration(milliseconds: 1));
+        }
+        expect(command[i].sent, isNotEmpty, reason: '重连拍 $i 已拨号');
+        command[i].emit(_frameOf(const InitFailPacket(reason: 0x1)));
+      }
+      for (var k = 0; conn.state != CameraLinkState.failed && k < 200; k++) {
+        await Future<void>.delayed(const Duration(milliseconds: 1));
+      }
+      await connecting;
+
+      expect(conn.state, CameraLinkState.failed);
+      expect(conn.error, contains('按「OK」完成配对'));
+      // 配对已成功落账(wirelessPaired=true):用户按完 OK 手动重点连接
+      // 即免配对直连,不再重走配对相
+      final saved = await paired.list();
+      expect(saved.single.wirelessPaired, isTrue);
+    });
+
+    test('配对后重连:等待期间用户断开 → 即止,不再拨号', () async {
+      final usb = FakeUsbHostChannel(const []);
+      final paired = InMemoryPairedCamerasStore();
+      // 长退避(200ms)给断开留窗口;connects=3 供第 2 拍(若误重试则
+      // command[2] 会收到拨号,断言捕获)
+      final (conn, _, _, command, event) = wirePairing(usb,
+          paired: paired,
+          connects: 3,
+          retryDelays: const [Duration(milliseconds: 200)]);
+      final connecting =
+          conn.connect(ip: '192.168.0.104', instanceName: 'Z_f_8014411');
+      await scriptHandshakeAndOpen(command[0], event[0]);
+      await scriptPairingCode(command[0]);
+      await conn.confirmPairing();
+      await scriptCompletePairing(command[0]);
+      command[0].emitClosed();
+      await pumpEventQueue();
+
+      // 重连拍 1 被拒 → 进入 200ms 退避
+      for (var i = 0; command[1].sent.isEmpty && i < 100; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 1));
+      }
+      command[1].emit(_frameOf(const InitFailPacket(reason: 0x1)));
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(conn.state, CameraLinkState.connecting);
+
+      // 退避期间用户主动断开 → 循环止步,不再有新拨号
+      await conn.disconnect();
+      await connecting;
+      expect(conn.state, CameraLinkState.disconnected);
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+      expect(command[2].sent, isEmpty, reason: '断开后不再重试');
     });
 
     test('已配对(档案在册):不问配对直连,链路上无 0x952B/0x935A', () async {

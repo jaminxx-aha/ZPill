@@ -54,4 +54,18 @@ void main() {
     expect(identity.name, 'NikonPill'); // 回落生成默认名
     expect(identity.uuid, hasLength(16));
   });
+
+  test('regenerate:换新身份(删文件+清缓存,下次 load 新 UUID)', () async {
+    final dir = await _tempDataDir();
+    final store = ClientIdentityStore(dataDir: () async => dir);
+    final before = await store.load();
+    await store.regenerate();
+    final after = await store.load();
+    expect(after.uuid, isNot(equals(before.uuid)),
+        reason: '相机眼里的全新客户端');
+    expect(after.name, before.name, reason: '名字不变(展示用)');
+    // 落盘的也是新身份:全新实例读同一文件
+    final reread = await ClientIdentityStore(dataDir: () async => dir).load();
+    expect(reread.uuid, after.uuid);
+  });
 }

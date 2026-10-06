@@ -72,4 +72,20 @@ final class ClientIdentityStore {
     }));
     return _cached = identity;
   }
+
+  /// 换新身份(删除已配对相机档案时用):相机眼里的**全新客户端** ——
+  /// 旧配对记录全部失配,下次连接走全新配对流程。清缓存 + 删文件,
+  /// 下次 [load] 自动生成新 UUID。多相机场景代价 = 其余相机下次连接
+  /// 重新(无感)配对一次。
+  Future<void> regenerate() async {
+    _cached = null;
+    final file = File('${await _dataDir()}/client_identity.json');
+    if (await file.exists()) {
+      try {
+        await file.delete();
+      } on FileSystemException {
+        // 删失败无妨:缓存已清,下次 load 生成新身份时落盘覆盖
+      }
+    }
+  }
 }

@@ -7,8 +7,9 @@
 /// Controller = ViewModel(ChangeNotifier);**所有按钮必须绑定到
 /// Controller 方法**,禁止 UI 层直连协议层(TODO.md §三 注意事项)。
 /// 无线流程(2026-10-04):扫描(mDNS `_ptp._tcp`)→ 点选相机 → 连接;
-/// 未配对相机在连接中弹配对码确认(相机记录本设备),已配对直连。
-/// AP 模式保留手动 IP 兜底(热点下广播未实证,默认 192.168.1.1)。
+/// 未配对相机在连接中自动配对(验证码不回传相机),相机侧弹「配对
+/// 完成」等按 OK,应用保持重连等它(见 awaitingCameraConfirm);已
+/// 配对直连。AP 模式保留手动 IP 兜底(默认 192.168.1.1)。
 library;
 
 import 'package:flutter/material.dart';
@@ -19,6 +20,7 @@ import '../../core/browser/storage_info.dart';
 import '../../core/camera/camera_connection.dart';
 import '../../core/camera/camera_discovery.dart';
 import '../../core/camera/camera_info.dart';
+import '../../data/client_identity_store.dart';
 import '../../data/paired_cameras_store.dart';
 import '../../platform/nsd_scanner.dart';
 import '../browser/photo_grid_page.dart';
@@ -35,6 +37,7 @@ class ConnectionController extends ChangeNotifier {
     this.connection,
     this.scanner,
     this.pairedCameras,
+    this.identityStore,
   }) {
     connection?.states.listen(_onState);
     // 常驻订阅:浏览期间增删相机,未浏览时静默无流。
@@ -45,9 +48,18 @@ class ConnectionController extends ChangeNotifier {
   final NsdScanner? scanner;
   final PairedCamerasStore? pairedCameras;
 
+  /// 客户端身份(删除已配对相机时换新,触发全新配对;见 [removeSaved])。
+  final ClientIdentityStore? identityStore;
+
   final ipController = TextEditingController(text: kDefaultCameraIp);
 
   CameraLinkState state = CameraLinkState.disconnected;
+
+  /// 配对后的机身确认等待窗:pairing → connecting 沿置位(连接层此窗
+  /// 保持 connecting 安静重试),离开 connecting 即清。真机(2026-10-06):
+  /// 0x935A 后相机弹「配对完成」等机身上按 OK,按之前重连全被拒 ——
+  /// UI 用此旗出「请在相机上按 OK」指引,不闪失败横幅。
+  bool awaitingCameraConfirm = false;
 
   /// 当前选中的连接方式(未连接视图分段;默认有线)。
   ConnectionMethod method = ConnectionMethod.usb;
@@ -78,6 +90,21 @@ class ConnectionController extends ChangeNotifier {
   /// 已配对/曾连接过的相机(最近优先),用于快速重连。
   List<CameraInfo> savedCameras = const [];
 
+  /// 删除已保存相机:清应用侧档案;若该相机完成过配对,同时换新
+  /// 客户端身份 —— 相机眼里的旧记录失配,下次连接走**全新配对**
+  /// (无感自动确认),即「忘记这台相机」。
+  Future<void> removeSaved(CameraInfo camera) async {
+    final store = pairedCameras;
+    if (store == null) {
+      return;
+    }
+    await store.remove(camera.id);
+    if (camera.wirelessPaired) {
+      await identityStore?.regenerate();
+    }
+    await _reloadSaved();
+  }
+
   /// 状态提示:失败原因(含插线/解锁/热点指引)、配对等待去向。
   /// 已连接不在此列 —— 已连接视图(信息卡组)自带全部信息。
   String? get hint {
@@ -85,14 +112,27 @@ class ConnectionController extends ChangeNotifier {
     if (c == null) {
       return null;
     }
+    if (awaitingCameraConfirm && state == CameraLinkState.connecting) {
+      return '配对信息已发送:请在相机屏幕上按「OK」完成配对,'
+          '应用将自动重连(最长约 1 分钟)';
+    }
     return switch (state) {
-      CameraLinkState.pairing => '相机请求配对确认(见弹窗)',
+      CameraLinkState.pairing => '正在配对(自动确认)',
       CameraLinkState.failed => c.error ?? '连接失败',
       _ => null,
     };
   }
 
   void _onState(CameraLinkState s) {
+    // pairing → connecting 只发生在配对后的重连等待窗(连接层语义),
+    // 以此沿识别机身确认等待;其余任何状态离开即清。
+    if (s == CameraLinkState.connecting) {
+      if (state == CameraLinkState.pairing) {
+        awaitingCameraConfirm = true;
+      }
+    } else {
+      awaitingCameraConfirm = false;
+    }
     state = s;
     notifyListeners();
   }
@@ -140,6 +180,25 @@ class ConnectionController extends ChangeNotifier {
       } on Exception {
         // 停止失败不致命(页面退出/断连路径都会走到)
       }
+    }
+  }
+
+  /// 后台恢复时重启浏览:挂起期间系统可能停掉 mDNS 查询(iOS 常见),
+  /// 浏览器名义上还在跑但收不到新服务 —— 停起一轮重新发查询。结果
+  /// 不清(还在网的相机会随 found 重播回来,按键去重不闪)。
+  Future<void> rescanIfScanning() async {
+    if (!scanning) {
+      return;
+    }
+    final s = scanner;
+    if (s == null) {
+      return;
+    }
+    try {
+      await s.stopBrowsing();
+      await s.startBrowsing();
+    } on Exception {
+      // 重启失败不致命:原浏览若还活着照常工作
     }
   }
 
@@ -255,15 +314,17 @@ class ConnectionPage extends StatefulWidget {
   State<ConnectionPage> createState() => _ConnectionPageState();
 }
 
-class _ConnectionPageState extends State<ConnectionPage> {
+class _ConnectionPageState extends State<ConnectionPage>
+    with WidgetsBindingObserver {
   ConnectionController get _controller =>
       widget.controller ?? AppServices.instance.connectionController;
 
   CameraOverviewController get _overview =>
       widget.overview ?? AppServices.instance.cameraOverview;
 
-  /// 配对弹窗只弹一次的哨兵(state 离开 pairing 即复位)。
-  bool _pairingDialogShown = false;
+  /// 无感配对哨兵:进 pairing 态自动确认一次(state 离开即复位,
+  /// 防多次 notify 重复触发)。
+  bool _pairingAutoConfirmed = false;
 
   /// 状态机上一拍(只在「连接 → 断开」沿上刷新档案列表,防通知循环)。
   CameraLinkState? _lastState;
@@ -271,25 +332,38 @@ class _ConnectionPageState extends State<ConnectionPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _controller.addListener(_onControllerChanged);
     _controller.loadSaved();
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _controller.removeListener(_onControllerChanged);
     super.dispose();
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState lifecycleState) {
+    // 后台恢复重启扫描:挂起期间系统可能停掉 mDNS 查询,浏览器名义
+    // 在跑但收不到新服务(「有时候扫不出来」的一种来源)。
+    if (lifecycleState == AppLifecycleState.resumed) {
+      _controller.rescanIfScanning();
+    }
+  }
+
   void _onControllerChanged() {
     final controller = _controller;
+    // 无感配对:验证码仅展示用(不回传相机,0x935A 参数与码无关),
+    // 进 pairing 态即自动确认 —— 用户全程不感知,状态卡橙灯一闪而过。
     if (controller.state == CameraLinkState.pairing) {
-      if (!_pairingDialogShown && mounted) {
-        _pairingDialogShown = true;
-        _showPairingDialog(controller);
+      if (!_pairingAutoConfirmed) {
+        _pairingAutoConfirmed = true;
+        controller.confirmPairing();
       }
     } else {
-      _pairingDialogShown = false;
+      _pairingAutoConfirmed = false;
     }
     // 回到连接卡时刷新快速重连列表(本次连接可能刚落账;只在
     // connected → disconnected/failed 的沿上刷,loadSaved 的
@@ -300,63 +374,6 @@ class _ConnectionPageState extends State<ConnectionPage> {
         (controller.state == CameraLinkState.disconnected ||
             controller.state == CameraLinkState.failed)) {
       _controller.loadSaved();
-    }
-  }
-
-  Future<void> _showPairingDialog(ConnectionController controller) async {
-    // 弹窗内容跟随控制器:等待期间链路死亡(状态离开 pairing)自动关窗。
-    final confirmed = await showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder: (dialogContext) => ListenableBuilder(
-        listenable: controller,
-        builder: (dialogContext, _) {
-          if (controller.state != CameraLinkState.pairing) {
-            // 断链/外部断开已收口:下一帧关窗(gate 已不在,
-            // confirm/cancel 均为 no-op)。
-            WidgetsBinding.instance.addPostFrameCallback(
-                (_) => Navigator.of(dialogContext).maybePop());
-            return const SizedBox.shrink();
-          }
-          final code = controller.connection?.pairingCode ?? '';
-          return AlertDialog(
-            title: const Text('配对确认'),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text('配对码', style: Theme.of(dialogContext).textTheme.bodySmall),
-                const SizedBox(height: 4),
-                Text(code,
-                    style: Theme.of(dialogContext)
-                        .textTheme
-                        .headlineLarge
-                        ?.copyWith(letterSpacing: 12)),
-                const SizedBox(height: 12),
-                const Text(
-                  '确认后相机会把「NikonPill」记为已配对设备,之后免配对直连;'
-                  '如相机屏幕出现提示,请在机身上按 OK 确认。',
-                  textAlign: TextAlign.start,
-                ),
-              ],
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(dialogContext).pop(false),
-                child: const Text('跳过配对'),
-              ),
-              FilledButton(
-                onPressed: () => Navigator.of(dialogContext).pop(true),
-                child: const Text('确认配对'),
-              ),
-            ],
-          );
-        },
-      ),
-    );
-    if (confirmed == true) {
-      await controller.confirmPairing();
-    } else {
-      await controller.cancelPairing();
     }
   }
 
@@ -391,8 +408,11 @@ class _ConnectionPageState extends State<ConnectionPage> {
         keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
         padding: const EdgeInsets.all(16),
         children: [
-          // 状态着色:disconnected 灰 / connecting 蓝 / pairing 橙 / failed 红
-          _StatusCard(state: controller.state),
+          // 状态着色:disconnected 灰 / connecting 蓝 / pairing 橙 /
+          // failed 红;配对后的机身确认等待窗显示专属文案(不闪失败)
+          _StatusCard(
+              state: controller.state,
+              waitingConfirm: controller.awaitingCameraConfirm),
           if (controller.hint != null)
             Padding(
               padding: const EdgeInsets.only(top: 8),
@@ -556,6 +576,19 @@ class _ConnectionPageState extends State<ConnectionPage> {
                         : controller.startScan),
               ),
             ),
+            // 空扫指引:相机只在「等待连接」画面广播(退出即停),刚
+            // 配对完的相机还停在确认画面 —— 两种都不广播,是「有时候
+            // 扫不出来」的主因(2026-10-06 真机)。
+            if (controller.scanning && controller.cameras.isEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  '未发现:相机须停留在「等待连接」画面才会广播(退出该'
+                  '画面即停止);若刚在相机上完成配对,先在相机上按 OK。'
+                  '也可在下方手填 IP 直连。',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
             for (final camera in controller.cameras)
               ListTile(
                 dense: true,
@@ -600,13 +633,57 @@ class _ConnectionPageState extends State<ConnectionPage> {
                   leading: const Icon(Icons.history),
                   title: Text('上次:${saved.name}'),
                   subtitle: Text(saved.lastIp ?? ''),
-                  trailing: const Icon(Icons.chevron_right),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // 删除 = 忘记这台相机:清档案;配对过的同时换新
+                      // 客户端身份,下次连接走全新配对(无感)。
+                      IconButton(
+                        icon: const Icon(Icons.delete_outline),
+                        tooltip: '忘记这台相机',
+                        onPressed: busy
+                            ? null
+                            : () => _confirmRemoveSaved(context, controller, saved),
+                      ),
+                      const Icon(Icons.chevron_right),
+                    ],
+                  ),
                   onTap: busy ? null : () => controller.connectSaved(saved),
                 ),
           ],
         ),
       ),
     );
+  }
+
+  /// 删除确认:忘记这台相机(清档案 + 配对过的换新身份 → 全新配对)。
+  Future<void> _confirmRemoveSaved(
+    BuildContext context,
+    ConnectionController controller,
+    CameraInfo saved,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('忘记这台相机?'),
+        content: Text(
+            '删除「${saved.name}」的连接记录。已配对的相机会同时换新配对身份,'
+            '下次连接重新配对(自动确认,无需操作)。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      await controller.removeSaved(saved);
+    }
   }
 
   Widget _methodTitle(BuildContext context, IconData icon, String text) {
@@ -773,15 +850,21 @@ class _ConnectionPageState extends State<ConnectionPage> {
 }
 
 class _StatusCard extends StatelessWidget {
-  const _StatusCard({required this.state});
+  const _StatusCard({required this.state, this.waitingConfirm = false});
 
   final CameraLinkState state;
+
+  /// 配对后的机身确认等待窗(真机:相机弹「配对完成」等按 OK)——
+  /// 期间状态保持 connecting,用专属文案替代「连接中…」。
+  final bool waitingConfirm;
 
   @override
   Widget build(BuildContext context) {
     final (label, color) = switch (state) {
       CameraLinkState.disconnected => ('未连接', Colors.grey),
       CameraLinkState.detecting => ('检测相机 WiFi…', Colors.blue),
+      CameraLinkState.connecting when waitingConfirm =>
+        ('等待相机上确认配对…', Colors.orange),
       CameraLinkState.connecting => ('连接中…', Colors.blue),
       CameraLinkState.pairing => ('等待配对确认…', Colors.orange),
       CameraLinkState.connected => ('已连接', Colors.green),
