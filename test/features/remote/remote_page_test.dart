@@ -100,10 +100,14 @@ Uint8List _propDescDataset(int code, PtpDataType type, int current,
   return w.takeBytes();
 }
 
-/// 目录序全量 PropDesc 应答(模式 A · f/2.8 · 1/100s · ISO 200 · EV+0.3 ·
+/// u32 裸值应答字节(小端;厂商读码路由用)。
+Uint8List _u32Bytes(int v) => Uint8List.fromList(
+    [for (var i = 0; i < 4; i++) (v >> (8 * i)) & 0xFF]);
+
+/// 目录序全量应答(模式 A · f/2.8 · 1/100s · ISO 200 · EV+0.3 ·
 /// 白平衡自动 · 色温 5500K · 闪光关闭 · 测光 2 · 对焦 AF-C · 对焦模式
 /// AF-S · 释放单张 · 画质 RAW · RAW 无损 · 尺寸 2 · 区域 FX · 校准标准,
-/// 均可写;与 remote_controller_test 的 _kParamSpecs 同值)。
+/// 均可写;快门/ISO 值走厂商读码裸值,与 remote_controller_test 同值)。
 void _scriptParams(_ScriptTransport t) {
   t
     ..ok(data: _propDescDataset(PtpDevicePropCode.exposureProgramMode,
@@ -112,11 +116,12 @@ void _scriptParams(_ScriptTransport t) {
     ..ok(data: _propDescDataset(
         PtpDevicePropCode.fNumber, PtpDataType.uint16, 280,
         enums: [280, 320, 400]))
-    ..ok(data: _propDescDataset(
-        PtpDevicePropCode.exposureTime, PtpDataType.uint32, 10000))
+    // 快门:取值域直供(不读 0x500D PropDesc),值 = 0xD100 打包 1/100s
+    ..ok(data: _u32Bytes(1 << 16 | 100))
     ..ok(data: _propDescDataset(
         PtpDevicePropCode.exposureIndex, PtpDataType.uint16, 200,
         enums: [100, 200, 400, 800]))
+    ..ok(data: _u32Bytes(200)) // ISO 值 = 0xD0B5 有效 ISO
     ..ok(data: _propDescDataset(
         PtpDevicePropCode.exposureBiasCompensation, PtpDataType.int16, 300))
     ..ok(data: _propDescDataset(
@@ -216,6 +221,7 @@ void main() {
     await scroll('FX'); // 图像区域(captureAreaCrop=0)值
     await scroll('标准'); // 优化校准(activePicCtrlItem=1)值
     await scroll('对焦后拍'); // 行尾开关芯片
+    await scroll('APP 接管'); // 接管状态芯片(开关之后)
   });
 
   testWidgets('总闸紧急关断:全部参数芯片只读不可点', (tester) async {
@@ -280,6 +286,90 @@ void main() {
     expect(find.text('自动'), findsNothing);
   });
 
+  testWidgets('快门(拨盘拥有):先弹「APP 接管」确认 → 0x90C2 启用 → '
+      '标准档面板直写打包值', (tester) async {
+    PtpSession.kSetPropEnabled = true;
+    addTearDown(() => PtpSession.kSetPropEnabled = true);
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = RemoteController(
+        session: PtpSession(transport: transport),
+        connection: conn,
+        setPropGate: () => true);
+    addTearDown(controller.dispose);
+    _scriptParams(transport);
+    transport
+      ..ok() // 0x90C2 [1] 启用接管
+      ..ok() // 0x1016 写 0xD100 = (1<<16)|250
+      ..ok(data: _u32Bytes(1 << 16 | 250)); // 回读 0xD100 裸值
+    await tester
+        .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
+    conn.statesCtrl.add(CameraLinkState.connected);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('快门').first); // 芯片标签(另一处为快门钮)
+    await tester.pumpAndSettle();
+    // 影控台同款确认:受机身拨盘控制的参数需先接管
+    expect(find.text('启用 APP 接管控制?'), findsOneWidget);
+    expect(find.text('取消'), findsOneWidget);
+    await tester.tap(find.text('启用'));
+    await tester.pumpAndSettle();
+    expect(controller.takeoverActive, isTrue);
+
+    // 面板 = 目录标准档直供(0x500D 枚举弃用),非相机 PropDesc 枚举
+    expect(find.text('1/8000s'), findsOneWidget);
+    final sheetList = find.byWidgetPredicate(
+        (w) => w is Scrollable && w.axisDirection == AxisDirection.down);
+    await tester.scrollUntilVisible(find.text('1/250s'), 100,
+        scrollable: sheetList);
+    await tester.tap(find.text('1/250s'));
+    await tester.pumpAndSettle();
+
+    final write = transport.requests.singleWhere(
+        (r) => r.opcode == PtpOperationCode.setDevicePropValue);
+    expect(write.params, [PtpDevicePropCode.stillShutterSpeed],
+        reason: '快门写走 0xD100');
+    expect(write.dataOut, Uint8List.fromList([0xFA, 0x00, 0x01, 0x00]));
+    expect(find.text('1/250s'), findsOneWidget, reason: '回读更新上屏');
+    final takeover =
+        transport.requests.singleWhere((r) => r.opcode == NikonOperationCode.changeCameraMode);
+    expect(takeover.params, [1]);
+  });
+
+  testWidgets('APP 接管芯片:未接管弹确认启用;已接管点按解除(0x90C2 [0])',
+      (tester) async {
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = RemoteController(
+        session: PtpSession(transport: transport), connection: conn);
+    addTearDown(controller.dispose);
+    await tester
+        .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
+
+    await tester.scrollUntilVisible(find.text('APP 接管'), 120,
+        scrollable: _chipsRow);
+    transport.ok(); // 0x90C2 [1]
+    await tester.tap(find.text('APP 接管'));
+    await tester.pumpAndSettle();
+    expect(find.text('启用 APP 接管控制?'), findsOneWidget);
+    await tester.tap(find.text('启用'));
+    await tester.pumpAndSettle();
+    expect(controller.takeoverActive, isTrue);
+    expect(find.text('APP 接管中'), findsOneWidget);
+
+    transport.ok(); // 0x90C2 [0]
+    await tester.tap(find.text('APP 接管中'));
+    await tester.pumpAndSettle();
+    expect(controller.takeoverActive, isFalse);
+    expect(find.text('APP 接管'), findsOneWidget);
+    expect(
+        transport.requests
+            .where((r) => r.opcode == NikonOperationCode.changeCameraMode)
+            .last
+            .params,
+        [0]);
+  });
+
   testWidgets('门禁开 + 域未知:面板出「取值域未知」只读提示(不炸不写)',
       (tester) async {
     PtpSession.kSetPropEnabled = true;
@@ -291,13 +381,14 @@ void main() {
         connection: conn,
         setPropGate: () => true);
     addTearDown(controller.dispose);
-    _scriptParams(transport); // 快门 PropDesc 无 FORM:无枚举无范围
+    _scriptParams(transport); // EV PropDesc 无 FORM:无枚举无范围
     await tester
         .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
     conn.statesCtrl.add(CameraLinkState.connected);
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('快门').first); // 芯片标签(另一处为快门钮)
+    await tester.scrollUntilVisible(find.text('EV'), 120, scrollable: _chipsRow);
+    await tester.tap(find.text('EV'));
     await tester.pumpAndSettle();
     expect(find.text('该属性的取值域未知,暂不可调(待真机核对)'),
         findsOneWidget);

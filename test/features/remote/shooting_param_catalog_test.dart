@@ -80,10 +80,17 @@ void main() {
     expect(_param(PtpDevicePropCode.activePicCtrlItem).display(305), '云 5');
   });
 
-  test('display:数值格式化(光圈/快门/ISO/EV)', () {
+  test('display:数值格式化(光圈/快门打包分数/ISO/EV)', () {
     expect(_param(PtpDevicePropCode.fNumber).display(280), 'f/2.8');
-    expect(_param(PtpDevicePropCode.exposureTime).display(10000), '1/100s');
-    expect(_param(PtpDevicePropCode.exposureTime).display(4000000), '4s');
+    // 快门值 = 0xD100 打包分数(num<<16|den)
+    expect(_param(PtpDevicePropCode.exposureTime).display(1 << 16 | 100),
+        '1/100s');
+    expect(_param(PtpDevicePropCode.exposureTime).display(4 << 16 | 1), '4s');
+    expect(_param(PtpDevicePropCode.exposureTime).display(13 << 16 | 10),
+        '13/10s');
+    expect(_param(PtpDevicePropCode.exposureTime).display(0xFFFFFFFF), 'Bulb');
+    expect(_param(PtpDevicePropCode.exposureTime).display(0xFFFFFFFE), 'X 同步');
+    expect(_param(PtpDevicePropCode.exposureTime).display(0xFFFFFFFD), 'Time');
     expect(_param(PtpDevicePropCode.exposureIndex).display(200), 'ISO 200');
     expect(
         _param(PtpDevicePropCode.exposureBiasCompensation).display(300), '+0.3');
@@ -101,16 +108,22 @@ void main() {
     expect(_param(PtpDevicePropCode.exposureProgramMode).display(null), '--');
   });
 
-  test('写路径路由:ISO/快门走厂商码,模式由转盘拥有只读', () {
-    // Z 系真机口径(OpenZCine):静照 ISO/快门的标准码只读不可写
+  test('读写路径路由:ISO/快门读写全走厂商码,模式由转盘拥有只读', () {
+    // Z 系真机口径(OpenZCine):静照 ISO/快门的标准码只读且不跟厂商写
+    // —— 写走 0xD0B4/0xD100,值读走 0xD0B5/0xD100。
     final iso = _param(PtpDevicePropCode.exposureIndex);
+    expect(iso.readCode, PtpDevicePropCode.isoControlSensitivity);
     expect(iso.writeCode, PtpDevicePropCode.exposureIndexEx);
     expect(iso.writeType, PtpDataType.uint32);
+    expect(iso.writeConvert, isNull, reason: 'ISO 裸数直写');
     final shutter = _param(PtpDevicePropCode.exposureTime);
+    expect(shutter.readCode, PtpDevicePropCode.stillShutterSpeed);
     expect(shutter.writeCode, PtpDevicePropCode.stillShutterSpeed);
     expect(shutter.writeType, PtpDataType.uint32);
-    expect(shutter.writeConvert, isNotNull);
-    // 其余参数无路由(写码 = 读码)
+    expect(shutter.writeConvert, isNull, reason: '面板值已是打包分数');
+    expect(shutter.dialOwned, isTrue, reason: '机顶快门拨盘拥有 → 接管后才可调');
+    expect(_param(PtpDevicePropCode.exposureIndex).dialOwned, isFalse);
+    // 其余参数无路由(读码 = 写码 = 展示码)
     for (final code in [
       PtpDevicePropCode.fNumber,
       PtpDevicePropCode.whiteBalance,
@@ -120,25 +133,23 @@ void main() {
       PtpDevicePropCode.activePicCtrlItem,
     ]) {
       expect(_param(code).writeCode, isNull, reason: '0x$code 无需路由');
+      expect(_param(code).readCode, isNull);
     }
-    // 模式:机顶转盘物理拥有(OpenZCine read-only 口径)
+    // 模式:机顶转盘物理拥有(OpenZCine read-only 口径),接管也不开放
     expect(_param(PtpDevicePropCode.exposureProgramMode).readOnly, isTrue);
+    expect(_param(PtpDevicePropCode.exposureProgramMode).dialOwned, isFalse);
     expect(_param(PtpDevicePropCode.fNumber).readOnly, isFalse);
   });
 
-  test('快门 µs → 0xD100 分数打包(标准档全命中 + 舍入容差 + 表外拒绝)',
-      () {
-    final pack = _param(PtpDevicePropCode.exposureTime).writeConvert!;
-    expect(pack(10000), 0x00010064, reason: '1/100');
-    expect(pack(1000000), 0x00010001, reason: '1s');
-    expect(pack(4000000), 0x00040001, reason: '4s');
-    expect(pack(30000000), 30 << 16 | 1, reason: '30s');
-    expect(pack(16667), 0x0001003C, reason: '1/60(µs=16667 舍入)');
-    expect(pack(156), 0x00011900, reason: '1/6400(156.25µs 舍入)');
-    expect(pack(1300000), 0x000D000A, reason: '1.3s = 13/10');
-    expect(pack(2500000), 0x00050002, reason: '2.5s = 5/2');
-    expect(pack(0), isNull, reason: '非法值');
-    expect(pack(137), isNull, reason: '表外(1/8000 与 1/6400 之间)');
+  test('快门取值域直供表:标准档打包值 + Bulb 哨兵(无 Time/X 同步)', () {
+    final pick = _param(PtpDevicePropCode.exposureTime).pickValues!;
+    expect(pick.first, 1 << 16 | 8000, reason: '1/8000s 打包');
+    expect(pick, containsAll(<int>[1 << 16 | 100, 13 << 16 | 10, 30 << 16 | 1]));
+    expect(pick.last, 0xFFFFFFFF, reason: 'Bulb');
+    expect(pick, isNot(contains(0xFFFFFFFD)), reason: 'Time 是机顶拨盘位');
+    expect(pick, isNot(contains(0xFFFFFFFE)), reason: 'X 同步是机顶拨盘位');
+    // 其余参数取值域仍走相机 PropDesc
+    expect(_param(PtpDevicePropCode.exposureIndex).pickValues, isNull);
   });
 
   test('曝光三要素标记 prominent(大芯片行),其余进横滚行', () {

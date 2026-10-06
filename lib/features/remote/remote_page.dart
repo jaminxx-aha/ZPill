@@ -1,10 +1,13 @@
 /// 拍摄页(底部导航 tab):Live View 监看 + 快门释放 + 拍摄参数展示与调节。
 ///
 /// PTP 操作:0x9201/0x9203/0x9202 取景三步(候选码,待真机核对)、
-/// InitiateCapture 0x100E 快门、GetDevicePropDesc 0x1014 拍摄参数
-/// (可写性/取值域驱动调节控件;参数表见 [kShootingParams])。
+/// 快门码按相机 op 表选(在册 0x9207 直用,见 RemoteController.
+/// [_fireShutter])、GetDevicePropDesc 0x1014 拍摄参数(可写性/取值域
+/// 驱动调节控件;参数表见 [kShootingParams])。
 /// SetDevicePropValue(0x1016)被 [PtpSession.kSetPropEnabled] 门禁 ——
 /// 真机实证已开(2026-10-05);总闸紧急关断时调节入口静默只读。
+/// 受机身拨盘控制的参数(快门)调节前弹「APP 接管控制」确认
+/// (0x90C2 remote 模式,影控台同款;接管期间机身拨盘锁定)。
 ///
 /// 对焦域(候选码,待真机核对):点取景画面 = 触控对焦(0x9205 移动
 /// 对焦区域 + 0x90C1 驱动,对焦框回投);「对焦」按钮单独驱动;
@@ -147,6 +150,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                             child: _smallParamChip(context, p),
                           ),
                         _focusBeforeCaptureChip(context),
+                        _takeoverChip(context),
                       ],
                     ),
                   ),
@@ -390,12 +394,17 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     );
   }
 
-  /// 拍摄参数编辑面板:枚举域 → 列表单选;范围域 → 滑条;域未知 → 只读
-  /// 提示。选中即写(0x1016)并回读刷新,不额外确认 —— 相机侧可随时再调。
-  Future<void> _editParam(BuildContext context, ShootingParam p) {
+  /// 拍摄参数编辑面板:取值域 = 目录 pickValues 直供(快门:标准档
+  /// 打包表)或相机 PropDesc 枚举;范围域 → 滑条;域未知 → 只读提示。
+  /// 选中即写(0x1016)并按读码路由回读刷新,不额外确认 —— 相机侧可
+  /// 随时再调。拨盘拥有参数(快门)先过「APP 接管控制」确认。
+  Future<void> _editParam(BuildContext context, ShootingParam p) async {
+    if (p.dialOwned && !controller.takeoverActive) {
+      if (!await _confirmTakeover(context) || !context.mounted) return;
+    }
     final state = controller.paramProps[p.code];
     final desc = state?.desc;
-    final enums =
+    final enums = p.pickValues ??
         desc?.enumValues?.whereType<int>().toList(growable: false);
     final rangeMin = desc?.rangeMin as int?;
     final rangeMax = desc?.rangeMax as int?;
@@ -478,6 +487,69 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
               ],
             );
           },
+        ),
+      ),
+    );
+  }
+
+  /// 「启用 APP 接管控制」确认(影控台同款语义):受机身物理拨盘控制
+  /// 的参数需先接管(0x90C2 remote 模式)才能遥控调整;接管期间机身
+  /// 拨盘可能被锁定、机身屏幕可能熄灭。返回是否已接管(含已激活直通)。
+  Future<bool> _confirmTakeover(BuildContext context) async {
+    if (controller.takeoverActive) return true;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('启用 APP 接管控制?'),
+        content: const Text('该设置项受相机物理拨盘控制,启用接管后应用才能调整。'
+            '接管期间机身拨盘可能被锁定、机身屏幕可能熄灭;'
+            '点按「APP 接管中」或断开连接可解除。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('启用'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return false;
+    return controller.enableTakeover();
+  }
+
+  /// APP 接管控制状态芯片:未接管 = 点按弹确认启用;已接管 = 点按解除
+  /// (0x90C2 remote 模式;机身拨盘锁定,host 写入保值)。
+  Widget _takeoverChip(BuildContext context) {
+    final active = controller.takeoverActive;
+    final color = active ? Colors.amber : Colors.grey;
+    return Padding(
+      padding: const EdgeInsets.only(right: 8),
+      child: InkWell(
+        onTap: !controller.linkUp
+            ? null
+            : (active
+                ? controller.releaseTakeover
+                : () => _confirmTakeover(context)),
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            border: Border.all(color: color),
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(active ? Icons.lock : Icons.lock_open,
+                  size: 14, color: color),
+              const SizedBox(width: 4),
+              Text(active ? 'APP 接管中' : 'APP 接管',
+                  style: TextStyle(fontSize: 13, color: color)),
+            ],
+          ),
         ),
       ),
     );

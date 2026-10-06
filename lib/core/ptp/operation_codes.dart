@@ -38,6 +38,11 @@ abstract final class PtpOperationCode {
 abstract final class NikonOperationCode {
   static const int initiateCaptureRecInSdram = 0x90C0; // 往 SDRAM 拍一张
   static const int afDrive = 0x90C1; // 自动对焦
+  // 切换「remote / PC-camera」模式(p1=1 remote / 0 PC-camera):remote
+  // 即「APP 接管控制」—— 机身拨盘锁定,host 写入的会话值(连拍上限等)
+  // 仅在持有期保值;释放/AF/清洁中会被拒(0xA003)。源 = OpenZCine
+  // (全系在册)与 libgphoto2 同码;真机核对。
+  static const int changeCameraMode = 0x90C2;
   static const int getLargeThumb = 0x90C4;
   static const int getEvent = 0x90C7; // 事件轮询,data-in(旧名 CheckEvent)
   static const int deviceReady = 0x90C8; // 忙等探针
@@ -87,11 +92,13 @@ abstract final class PtpResponseCode {
   static const int invalidTransactionId = 0x2004;
   static const int operationNotSupported = 0x2005;
   static const int parameterNotSupported = 0x2006;
-  static const int sessionAlreadyOpen = 0x201E; // probe ensure_session 真机验证:上次会话残留时的 OpenSession 响应
+  static const int storeNotAvailable = 0x2013; // ISO 15740 标准码(存储不可用/无卡;2026-10-06 真机:0x100E 报过此码)
+  static const int accessDenied = 0x200F; // ISO 15740 标准码(未切应用模式/拨盘拥有时遥控写被拒,真机实证)
   static const int deviceBusy = 0x2019; // ISO 15740 标准码;尼康忙等探针 0x90C8 的语义响应(Zf 待真机核对)
+  static const int invalidParameter = 0x201D; // ISO 15740 标准码(参数域拒;2026-10-06 真机:0x9207 的 [0,0] CaptureSort 在应用模式/接管态被拒)
+  static const int sessionAlreadyOpen = 0x201E; // probe ensure_session 真机验证:上次会话残留时的 OpenSession 响应
 
-  // TODO(P1): 按需补充(存储不可用 / 对象不存在等),
-  // 以 ISO 15740 §13.4 响应码表为准,禁止臆造。
+  // TODO(P1): 按需补充(对象不存在等),以 ISO 15740 §13.4 响应码表为准,禁止臆造。
 }
 
 /// 尼康厂商响应码(0xA0xx;名称镜像 libgphoto2 PTP_RC_NIKON_* 符号,
