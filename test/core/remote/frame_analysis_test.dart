@@ -104,6 +104,28 @@ void main() {
       final n = a!.normalizedHistogram;
       expect(n.reduce((x, y) => x > y ? x : y), 1.0);
     });
+
+    test('伪色:渐变帧铺满多带,暗端/亮端带不同;带索引与边界表一致', () {
+      final a = analyzeJpegFrame(_gradientJpeg(), maskCols: 8, maskRows: 6);
+      final bands = a!.falseColorCells.toSet();
+      expect(bands.length, greaterThan(2), reason: '渐变应跨多个亮度带');
+      // 带分类与边界表对齐
+      expect(FrameAnalysis.falseColorBandOf(0), 0);
+      expect(FrameAnalysis.falseColorBandOf(15), 0);
+      expect(FrameAnalysis.falseColorBandOf(16), 1);
+      expect(FrameAnalysis.falseColorBandOf(249), 5);
+      expect(FrameAnalysis.falseColorBandOf(250), 6);
+    });
+
+    test('对焦峰值:白角帧右上有强边缘,纯色帧无', () {
+      final corner = analyzeJpegFrame(_whiteCornerJpeg(),
+          maskCols: 8, maskRows: 6, peakingCols: 16, peakingRows: 12);
+      expect(corner!.hasPeaking, isTrue, reason: '黑底到白角的陡变是强边缘');
+      // 渐变帧相邻格差远低于阈值:无峰值
+      final gradient =
+          analyzeJpegFrame(_gradientJpeg(), maskCols: 8, maskRows: 6);
+      expect(gradient!.hasPeaking, isFalse);
+    });
   });
 
   group('FrameAnalyzer', () {

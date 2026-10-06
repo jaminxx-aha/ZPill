@@ -360,8 +360,153 @@ void main() {
       expect(fake.requests.length, 1, reason: 'cachedDeviceInfo 不发事务');
     });
 
-    test('changeCameraMode:0x90C2 params=[mode](APP 接管控制);非 OK 抛异常',
+    test('getEventEx:0x941C 事件列表解析(u32 计数 + N×(u16 码 + u16 参数数 + 参数))', () async {
+      final w = ByteWriter()
+        ..u32(2)
+        // 0x4006 DevicePropChanged,1 参数(0x5007)
+        ..u16(PtpEventCode.devicePropChanged)
+        ..u16(1)
+        ..u32(PtpDevicePropCode.fNumber)
+        // 0x4002 ObjectAdded,1 参数(handle)
+        ..u16(PtpEventCode.objectAdded)
+        ..u16(1)
+        ..u32(0x1234);
+      final fake = FakePtpTransport()
+        ..reply(PtpResult(responseCode: PtpResponseCode.ok, data: w.takeBytes()));
+      final session = PtpSession(transport: fake);
+      final events = await session.getEventEx();
+      expect(fake.requests.single.opcode, NikonOperationCode.getEventEx);
+      expect(events, hasLength(2));
+      expect(events[0].code, PtpEventCode.devicePropChanged);
+      expect(events[0].params, [PtpDevicePropCode.fNumber]);
+      expect(events[1].code, PtpEventCode.objectAdded);
+      expect(events[1].params, [0x1234]);
+    });
+
+    test('事件并流:轮询注入与异步通道同时可达消费者', () async {
+      final fake = FakePtpTransport();
+      final session = PtpSession(transport: fake);
+      final seen = <int>[];
+      final sub = session.events.listen((e) => seen.add(e.code));
+      fake._eventCtrl.add(const PtpEvent(
+          code: PtpEventCode.captureComplete, transactionId: 0xFFFFFFFF));
+      session.emitPolledEvents([
+        const PtpEvent(
+            code: PtpEventCode.objectAdded, transactionId: 0xFFFFFFFF, params: [1]),
+      ]);
+      await pumpEventQueue();
+      expect(seen, containsAll(
+          [PtpEventCode.captureComplete, PtpEventCode.objectAdded]));
+      await sub.cancel();
+    });
+
+    test('mfDrive:0x9204 params [方向, 脉冲](钳 1..32767);结果分类',
         () async {
+      final fake = FakePtpTransport()
+        ..reply(const PtpResult(responseCode: PtpResponseCode.ok))
+        ..reply(const PtpResult(responseCode: NikonResponseCode.mfDriveStepEnd))
+        ..reply(const PtpResult(
+            responseCode: NikonResponseCode.mfDriveStepInsufficiency))
+        ..reply(const PtpResult(responseCode: PtpResponseCode.generalError));
+      final session = PtpSession(transport: fake);
+      expect(
+          await session.mfDrive(towardNear: true, pulses: 999999),
+          MfDriveOutcome.complete,
+          reason: 'OK:完成');
+      expect(fake.requests.first.params, [1, 32767], reason: '钳到上限');
+      expect(await session.mfDrive(towardNear: false, pulses: 300),
+          MfDriveOutcome.endOfTravel);
+      expect(fake.requests.last.params, [2, 300], reason: '向远 = 2');
+      expect(await session.mfDrive(towardNear: true, pulses: 1),
+          MfDriveOutcome.stepTooSmall);
+      expect(await session.mfDrive(towardNear: true, pulses: 0),
+          MfDriveOutcome.refused,
+          reason: '0 钳到 1,但响应 invalidStatus → refused');
+    });
+
+    test('录制双 op:0x920A 无参起录 / 0x920B 无参停录', () async {
+      final fake = FakePtpTransport()
+        ..reply(const PtpResult(responseCode: PtpResponseCode.ok))
+        ..reply(const PtpResult(responseCode: PtpResponseCode.ok));
+      final session = PtpSession(transport: fake);
+      await session.startMovieRec();
+      await session.endMovieRec();
+      expect(fake.requests.map((r) => r.opcode), [
+        NikonOperationCode.startMovieRecInCard,
+        NikonOperationCode.endMovieRec,
+      ]);
+      expect(fake.requests.first.params, isEmpty);
+    });
+
+    test('Ex 属性码路由:>0xFFFF 读走 0x943B / 写走 0x943C,标准码不变',
+        () async {
+      final fake = FakePtpTransport()
+        ..reply(PtpResult(
+            responseCode: PtpResponseCode.ok,
+            data: Uint8List.fromList([2]))) // 主体检测读:u8 = 2(人)
+        ..reply(const PtpResult(responseCode: PtpResponseCode.ok));
+      final session = PtpSession(transport: fake);
+      final v = await session.getDevicePropValue(0x0001D006);
+      expect(v.value, 2);
+      expect(fake.requests.first.opcode, NikonOperationCode.getDevicePropValueEx);
+      expect(fake.requests.first.params, [0x0001D006]);
+      await session.setDevicePropValue(PtpDevicePropValue(
+          code: 0x0001D006, dataType: PtpDataType.uint8, value: 3));
+      expect(fake.requests.last.opcode, NikonOperationCode.setDevicePropValueEx);
+      // 标准码不受影响
+      fake.reply(const PtpResult(responseCode: PtpResponseCode.ok));
+      await session.setDevicePropValue(PtpDevicePropValue(
+          code: PtpDevicePropCode.fNumber,
+          dataType: PtpDataType.uint16,
+          value: 280));
+      expect(fake.requests.last.opcode, PtpOperationCode.setDevicePropValue);
+    });
+
+    test('相机时钟:读 0x5011(PTP STR);漂移 > 5s 写回,≤ 5s 不写', () async {
+      String strOf(DateTime t) {
+        String two(int v) => v.toString().padLeft(2, '0');
+        return '${t.year}${two(t.month)}${two(t.day)}T'
+            '${two(t.hour)}${two(t.minute)}${two(t.second)}';
+      }
+
+      final now = DateTime(2026, 10, 6, 12, 0, 0);
+      // PTP 字符串数据集:u8 字符数(含结尾 NUL)+ UTF16LE + NUL
+      ByteWriter clockBytes(DateTime t) {
+        final w = ByteWriter()..u8(16); // 15 字符 + NUL
+        for (final c in strOf(t).codeUnits) {
+          w.u16(c);
+        }
+        w.u16(0);
+        return w;
+      }
+
+      // 相机慢 10 秒:测试自读一次 + sync 内部再读一次 + 写
+      final slowBytes =
+          clockBytes(now.subtract(const Duration(seconds: 10))).takeBytes();
+      final fake = FakePtpTransport()
+        ..reply(PtpResult(responseCode: PtpResponseCode.ok, data: slowBytes))
+        ..reply(PtpResult(responseCode: PtpResponseCode.ok, data: slowBytes))
+        ..reply(const PtpResult(responseCode: PtpResponseCode.ok));
+      final session = PtpSession(transport: fake);
+      final read = await session.getCameraClock();
+      expect(read, DateTime(2026, 10, 6, 11, 59, 50));
+      await session.syncCameraClock(now: now);
+      expect(fake.requests, hasLength(3), reason: '自读 + sync 读 + 写');
+      expect(fake.requests.last.opcode, PtpOperationCode.setDevicePropValue);
+      expect(fake.requests.last.params, [PtpDevicePropCode.dateTime]);
+
+      // 相机只慢 2 秒:读后不写
+      final fake2 = FakePtpTransport()
+        ..reply(PtpResult(
+            responseCode: PtpResponseCode.ok,
+            data:
+                clockBytes(now.subtract(const Duration(seconds: 2))).takeBytes()));
+      final session2 = PtpSession(transport: fake2);
+      await session2.syncCameraClock(now: now);
+      expect(fake2.requests, hasLength(1), reason: '漂移在阈内:只读不写');
+    });
+
+    test('changeCameraMode:0x90C2 params=[mode](APP 接管控制);非 OK 抛异常',        () async {
       final fake = FakePtpTransport()..reply(PtpResult(responseCode: PtpResponseCode.ok));
       final session = PtpSession(transport: fake);
       await session.changeCameraMode(1);

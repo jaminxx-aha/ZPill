@@ -73,6 +73,8 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   bool _showZebra = false;
   bool _showHistogram = false;
   bool _showLevel = false;
+  bool _showFalseColor = false;
+  bool _showPeaking = false;
 
   /// 读出条中当前打开面板的参数(金高亮 tile)。
   int? _activeParam;
@@ -110,10 +112,12 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     super.dispose();
   }
 
-  /// 斑马纹/直方图共享同一份帧分析:任一开启即启用分析器。
+  /// 斑马纹/直方图/伪色/峰值共享同一份帧分析:任一开启即启用分析器。
   void _syncAnalyzerEnabled() {
-    if (controller.analyzer.enabled.value != (_showZebra || _showHistogram)) {
-      controller.analyzer.enabled.value = _showZebra || _showHistogram;
+    final want =
+        _showZebra || _showHistogram || _showFalseColor || _showPeaking;
+    if (controller.analyzer.enabled.value != want) {
+      controller.analyzer.enabled.value = want;
     }
   }
 
@@ -178,6 +182,24 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
             linked ? (name ?? '已连接') : '未连接相机',
             style: const TextStyle(fontSize: 12, color: _LiveDesign.text),
           ),
+          if (linked && controller.shotsRemaining != null) ...[
+            const SizedBox(width: 10),
+            Text('${controller.shotsRemaining} 张',
+                style: const TextStyle(
+                    fontSize: 12,
+                    color: _LiveDesign.muted,
+                    fontFeatures: [FontFeature.tabularFigures()])),
+          ],
+          if (controller.recording) ...[
+            const SizedBox(width: 10),
+            Icon(Icons.circle, size: 8, color: _LiveDesign.bad),
+            const SizedBox(width: 4),
+            Text('REC ${_recDurationLabel()}',
+                style: const TextStyle(
+                    fontSize: 12,
+                    color: _LiveDesign.bad,
+                    fontFeatures: [FontFeature.tabularFigures()])),
+          ],
           const Spacer(),
           if (controller.takeoverActive) ...[
             Icon(Icons.lock, size: 13, color: _LiveDesign.accent),
@@ -189,6 +211,14 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         ],
       ),
     );
+  }
+
+  /// 录制时长标签(m:ss;展示就近取值,事件/交互驱动刷新)。
+  String _recDurationLabel() {
+    final s = controller.recordingSeconds ?? 0;
+    final m = s ~/ 60;
+    final r = s % 60;
+    return '$m:${r.toString().padLeft(2, '0')}';
   }
 
   // ── 取景区:帧 + 监看叠层 + 底边横幅 ────────────────────────────
@@ -244,6 +274,37 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                 valueListenable: controller.analyzer.analysis,
                 builder: (context, FrameAnalysis? analysis, _) =>
                     ZebraOverlay(analysis: analysis),
+              ),
+            if (_showFalseColor)
+              ValueListenableBuilder(
+                valueListenable: controller.analyzer.analysis,
+                builder: (context, FrameAnalysis? analysis, _) =>
+                    FalseColorOverlay(analysis: analysis),
+              ),
+            if (_showPeaking)
+              ValueListenableBuilder(
+                valueListenable: controller.analyzer.analysis,
+                builder: (context, FrameAnalysis? analysis, _) =>
+                    PeakingOverlay(analysis: analysis),
+              ),
+            // 即拍即览:新照片缩略图小卡(几秒后自动撤)
+            if (controller.reviewThumb != null)
+              Align(
+                alignment: Alignment.topLeft,
+                child: Container(
+                  margin: const EdgeInsets.all(10),
+                  padding: const EdgeInsets.all(3),
+                  decoration: BoxDecoration(
+                    color: _LiveDesign.glass,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: _LiveDesign.hairline),
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(6),
+                    child: Image.memory(controller.reviewThumb!,
+                        width: 96, height: 64, fit: BoxFit.cover),
+                  ),
+                ),
               ),
             if (_showHistogram)
               Align(
@@ -346,6 +407,8 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         children: [
           _liveViewToggle(context),
           _focusButton(context),
+          _recordButton(context),
+          _mfNearFarButtons(context),
           _shutterButton(context),
         ],
       ),
@@ -371,6 +434,59 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       label: controller.focusing ? '对焦中' : '对焦',
       onTap: usable && !controller.focusing ? controller.afDriveNow : null,
       spinning: controller.focusing,
+    );
+  }
+
+  /// 录制钮(0x920A/0x920B):红点起录 / 红方块停录;取景开启为前置。
+  Widget _recordButton(BuildContext context) {
+    final usable = controller.linkUp && controller.liveViewActive;
+    final rec = controller.recording;
+    return _actionButton(
+      icon: rec ? Icons.stop : Icons.fiber_manual_record,
+      label: rec ? _recDurationLabel() : '录制',
+      dimmed: !usable,
+      onTap: usable && !controller.capturing ? controller.toggleRecord : null,
+    );
+  }
+
+  /// MF 步进(0x9204):向近/向远两粒竖排小钮(跟焦环语义,相对量)。
+  Widget _mfNearFarButtons(BuildContext context) {
+    final usable = controller.linkUp && controller.liveViewActive;
+    Widget step(IconData icon, bool towardNear, String tip) {
+      return Tooltip(
+        message: tip,
+        child: SizedBox(
+          width: 40,
+          height: 32,
+          child: Material(
+            color: _LiveDesign.glass,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(9),
+              side: const BorderSide(color: _LiveDesign.hairline),
+            ),
+            child: InkWell(
+              onTap: usable
+                  ? () => controller.mfDriveStep(towardNear: towardNear)
+                  : null,
+              child: Icon(icon,
+                  size: 18,
+                  color: usable ? _LiveDesign.text : _LiveDesign.faint),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        step(Icons.add, false, 'MF 向远(步进)'),
+        const SizedBox(height: 4),
+        step(Icons.remove, true, 'MF 向近(步进)'),
+        const SizedBox(height: 4),
+        const Text('MF',
+            style: TextStyle(fontSize: 10, color: _LiveDesign.faint)),
+      ],
     );
   }
 
@@ -413,16 +529,23 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                       ? Colors.white.withValues(alpha: 0.5)
                       : Colors.white,
                 ),
-                child: controller.capturing
-                    ? const Center(
-                        child: SizedBox(
-                          width: 22,
-                          height: 22,
-                          child: CircularProgressIndicator(
-                              strokeWidth: 2.4, color: _LiveDesign.background),
-                        ),
-                      )
-                    : null,
+                child: Center(
+                  child: controller.selfTimerCountdown != null
+                      ? Text('${controller.selfTimerCountdown}',
+                          style: const TextStyle(
+                              fontSize: 24,
+                              fontWeight: FontWeight.bold,
+                              color: _LiveDesign.background))
+                      : controller.capturing
+                          ? const SizedBox(
+                              width: 22,
+                              height: 22,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2.4,
+                                  color: _LiveDesign.background),
+                            )
+                          : null,
+                ),
               ),
             ],
           ),
@@ -542,6 +665,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                       writable: controller.propWritable(p.code),
                       active: _activeParam == p.code,
                       writing: controller.writing,
+                      locked: controller.lockedProps.contains(p.code),
                       onTap: () => _editParam(context, p),
                     ),
                 ],
@@ -603,7 +727,9 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: _LiveDesign.hairline),
       ),
-      child: Row(
+      child: Wrap(
+        spacing: 2,
+        runSpacing: 4,
         children: [
           toggle(Icons.grid_on, '网格', _showGrid, (v) => setState(() => _showGrid = v)),
           toggle(Icons.warning_amber, '斑马纹', _showZebra,
@@ -612,6 +738,10 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
               (v) => setState(() => _showHistogram = v)),
           toggle(Icons.linear_scale, '水平仪', _showLevel,
               (v) => setState(() => _showLevel = v)),
+          toggle(Icons.palette_outlined, '伪色', _showFalseColor,
+              (v) => setState(() => _showFalseColor = v)),
+          toggle(Icons.blur_on, '峰值', _showPeaking,
+              (v) => setState(() => _showPeaking = v)),
           const SizedBox(width: 6),
           _smallChip(
             label: '对焦后拍',
@@ -620,12 +750,25 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                 !controller.focusBeforeCapture,
             tooltip: '释放快门前先自动对焦(半按-全按;候选参数,待真机核对)',
           ),
+          _smallChip(
+            label: controller.selfTimerSeconds == 0
+                ? '自拍'
+                : '自拍 ${controller.selfTimerSeconds}s',
+            selected: controller.selfTimerSeconds > 0,
+            onTap: () {
+              const cycle = [0, 2, 5, 10];
+              final next = cycle[(cycle.indexOf(controller.selfTimerSeconds) +
+                      1) %
+                  cycle.length];
+              controller.setSelfTimer(next);
+            },
+            tooltip: '自拍定时:关 → 2s → 5s → 10s 循环;倒计时中再点取消',
+          ),
           _takeoverChip(context),
         ],
       ),
     );
   }
-
   /// 辅助条小芯片(对焦后拍 / APP 接管)。
   Widget _smallChip({
     required String label,
@@ -880,6 +1023,7 @@ class _CaptureTile extends StatelessWidget {
     required this.writable,
     required this.active,
     required this.writing,
+    required this.locked,
     required this.onTap,
   });
 
@@ -889,6 +1033,7 @@ class _CaptureTile extends StatelessWidget {
   final bool writable;
   final bool active;
   final bool writing;
+  final bool locked;
   final VoidCallback onTap;
 
   @override
@@ -913,15 +1058,24 @@ class _CaptureTile extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.center,
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              Text(
-                param.label,
-                style: TextStyle(
-                  fontSize: 9,
-                  fontWeight: FontWeight.w600,
-                  color: active
-                      ? _LiveDesign.accent.withValues(alpha: 0.85)
-                      : _LiveDesign.faint,
-                ),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    param.label,
+                    style: TextStyle(
+                      fontSize: 9,
+                      fontWeight: FontWeight.w600,
+                      color: active
+                          ? _LiveDesign.accent.withValues(alpha: 0.85)
+                          : _LiveDesign.faint,
+                    ),
+                  ),
+                  if (locked) ...[
+                    const SizedBox(width: 2),
+                    Icon(Icons.lock, size: 8, color: _LiveDesign.accent),
+                  ],
+                ],
               ),
               const SizedBox(height: 2),
               Text(

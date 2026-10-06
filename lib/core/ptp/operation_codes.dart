@@ -51,7 +51,11 @@ abstract final class NikonOperationCode {
   static const int getLiveViewImage = 0x9203;
   static const int changeAfArea = 0x9205; // 移动取景对焦区域:两 u32 参数 = 帧像素 x/y(候选,待真机核对)
   static const int afDriveCancel = 0x9206; // 取消自动对焦(候选,待真机核对)
+  static const int mfDrive = 0x9204; // 手动对焦步进:params [方向(1=近/2=远), 脉冲数 1..32767](OpenZCine 同款;相对量,无绝对位置读出)
   static const int initiateCaptureRecInMedia = 0x9207;
+  static const int startMovieRecInCard = 0x920A // 开始卡上录制(无参无数据;OpenZCine 同款)
+      ;
+  static const int endMovieRec = 0x920B; // 结束卡上录制(无参无数据)
   static const int terminateCapture = 0x920C; // 终止连拍/Bulb(参数 [0,0],已拍保留;源 = OpenZCine terminateStillCapture)
   static const int getPartialObjectHiSpeed = 0x9400; // handle + 块长 + 终止位
   static const int getEventEx = 0x941C; // 多参数事件
@@ -62,6 +66,11 @@ abstract final class NikonOperationCode {
   // 回 0x200F AccessDenied(OpenZCine:USB 握手在 OpenSession 后必发,
   // 无线 SnapBridge 方言握手同样内置;真机核对)。
   static const int changeApplicationMode = 0x9435;
+  // Gen-3 Ex 属性 ops(0x0001_xxxx 扩展属性码专用;2 字节码用标准 ops,
+  // 混用会拒/断连 —— OpenZCine 实测口径):读描述/读值/写值。
+  static const int getDevicePropDescEx = 0x943A;
+  static const int getDevicePropValueEx = 0x943B;
+  static const int setDevicePropValueEx = 0x943C;
   // 智能设备配对双op(STA 模式 op 表在册,2026-10-04 Zf 真机;语义按
   // NiConn_DEMO 对 SnapBridge 的抓包分析,真机流程待核对):
   static const int completePairing = 0x935A; // 配对确认(param 0x2001),相机记录本客户端
@@ -111,6 +120,8 @@ abstract final class NikonResponseCode {
   static const int hardwareError = 0xA001;
   static const int outOfFocus = 0xA002;
   static const int changeCameraModeFailed = 0xA003;
+  static const int mfDriveStepEnd = 0xA00C; // MF 步进行程尽头(OpenZCine:结果而非错误)
+  static const int mfDriveStepInsufficiency = 0xA00E; // MF 步进量过小未动
   static const int invalidStatus = 0xA004;
   static const int shutterSpeedBulb = 0xA008;
   static const int cameraModeNotAdjustFnumber = 0xA00A;
@@ -179,6 +190,9 @@ abstract final class PtpDevicePropCode {
   static const int captureAreaCrop = 0xD030; // 图像区域 FX/DX/1:1/16:9,u8
   static const int stillFocusMode = 0xD061; // 静照对焦模式 AF-S/AF-C/MF/AF-A,u8
   static const int stillIsoAutoControl = 0xD054; // 静照自动 ISO 开关,u8(0=手动/1=自动;OpenZCine stillISOAutoControl)
+  static const int stillFocusMeteringMode = 0xD05D; // 静照 AF 区域模式,u16(单点/动态/3D/精确;OpenZCine stillFocusArea)
+  static const int exposureRemaining = 0xD1F1 // 剩余可拍张数(OpenZCine exposureRemaining;读出用)
+      ;
   // 曝光写路径(Z 系真机口径,OpenZCine:静照 ISO/快门的标准码 0x500F/
   // 0x500D 只读不可写 —— 写要走厂商码;真机核对):
   static const int exposureIndexEx = 0xD0B4; // ISO 写,u32(值 = ISO 数)

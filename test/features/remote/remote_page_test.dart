@@ -145,11 +145,15 @@ void _scriptParams(_ScriptTransport t, {int mode = 1}) {
     ..ok(data: _propDescDataset(PtpDevicePropCode.compressionSetting,
         PtpDataType.uint8, 7, enums: [4, 5, 7, 12]))
     // pickValues 参数(不读 desc,值走裸读):RAW 压缩 0 / 图像区域 0 /
-    // 优化校准 1
+    // AF 区域 0x8010 / 主体检测 0 / 色调 1 / 优化校准 1
     ..ok(data: Uint8List.fromList([0])) // rawCompressionType u8
     ..ok(data: Uint8List.fromList([0])) // captureAreaCrop u8
+    ..ok(data: Uint8List.fromList([0x10, 0x80])) // stillFocusMeteringMode u16
+    ..ok(data: Uint8List.fromList([0])) // 主体检测 u8(Ex 码 0x0001D006)
+    ..ok(data: Uint8List.fromList([1])) // 色调 u8(Ex 码 0x0001D01C)
     ..ok(data: Uint8List.fromList([1, 0])) // activePicCtrlItem u16
-    ..ok(data: Uint8List.fromList([0])); // 0xD054 自动 ISO:关
+    ..ok(data: Uint8List.fromList([0])) // 0xD054 自动 ISO:关
+    ..ok(data: _u32Bytes(1234)); // 0xD1F1 剩余张数
 }
 
 /// 挂起的 delay(永不完成):引擎帧轮询/AE 轮询在测试里驻停,
