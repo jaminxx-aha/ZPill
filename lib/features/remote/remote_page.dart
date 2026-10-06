@@ -4,7 +4,7 @@
 /// InitiateCapture 0x100E 快门、GetDevicePropDesc 0x1014 拍摄参数
 /// (可写性/取值域驱动调节控件;参数表见 [kShootingParams])。
 /// SetDevicePropValue(0x1016)被 [PtpSession.kSetPropEnabled] 门禁 ——
-/// 真机核对前调节入口静默只读,翻开后台同一 UI 即可写。
+/// 真机实证已开(2026-10-05);总闸紧急关断时调节入口静默只读。
 ///
 /// 对焦域(候选码,待真机核对):点取景画面 = 触控对焦(0x9205 移动
 /// 对焦区域 + 0x90C1 驱动,对焦框回投);「对焦」按钮单独驱动;

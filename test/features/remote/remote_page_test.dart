@@ -77,7 +77,8 @@ final class _FakeConnection implements CameraConnection {
   Future<void> disconnect() async {}
 }
 
-/// PropDesc 数据集(无 FORM 变体即取值域未知)。
+/// PropDesc 数据集(u16 code + u16 type + u8 getSet + 当前值 + 出厂
+/// 默认值 + FORM;ISO 15740 标准布局 —— 出厂值在 FORM 之前)。
 Uint8List _propDescDataset(int code, PtpDataType type, int current,
     {bool getSet = true, List<int>? enums}) {
   final w = ByteWriter()
@@ -85,6 +86,7 @@ Uint8List _propDescDataset(int code, PtpDataType type, int current,
     ..u16(type.code)
     ..u8(getSet ? 1 : 0);
   type.write(w, current);
+  type.write(w, current); // 出厂默认值
   if (enums != null) {
     w
       ..u8(0x02) // FORM=0x02 枚举域
@@ -216,7 +218,9 @@ void main() {
     await scroll('对焦后拍'); // 行尾开关芯片
   });
 
-  testWidgets('门禁关(生产默认):全部参数芯片只读不可点', (tester) async {
+  testWidgets('总闸紧急关断:全部参数芯片只读不可点', (tester) async {
+    PtpSession.kSetPropEnabled = false; // 生产已开,显式关断走分支
+    addTearDown(() => PtpSession.kSetPropEnabled = true);
     final transport = _ScriptTransport();
     final conn = _FakeConnection();
     final controller = RemoteController(
@@ -241,7 +245,7 @@ void main() {
   testWidgets('门禁开 + 可写:点小芯片 → 枚举单选 → 0x1016 写 + 回读上屏',
       (tester) async {
     PtpSession.kSetPropEnabled = true; // 翻 session 总闸(controller 闸注入)
-    addTearDown(() => PtpSession.kSetPropEnabled = false);
+    addTearDown(() => PtpSession.kSetPropEnabled = true);
     final transport = _ScriptTransport();
     final conn = _FakeConnection();
     final controller = RemoteController(
@@ -250,36 +254,36 @@ void main() {
         setPropGate: () => true);
     addTearDown(controller.dispose);
     _scriptParams(transport);
-    // 写路径脚本:0x1016 成功 + 回读 PropDesc(相机收下 4 = 快门优先 S)
+    // 写路径脚本:0x1016 成功 + 回读 PropDesc(相机收下 4 = 直射阳光)
     transport
       ..ok()
-      ..ok(data: _propDescDataset(PtpDevicePropCode.exposureProgramMode,
+      ..ok(data: _propDescDataset(PtpDevicePropCode.whiteBalance,
           PtpDataType.uint16, 4,
-          enums: [1, 2, 3, 4, 5]));
+          enums: [2, 4, 5, 6, 7, 0x8010]));
     await tester
         .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
     conn.statesCtrl.add(CameraLinkState.connected);
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('模式')); // 此时面板未开,芯片是唯一「模式」
+    await tester.tap(find.text('白平衡')); // 横滚行首屏内的芯片
     await tester.pumpAndSettle();
-    expect(find.text('快门优先 S'), findsOneWidget); // 面板枚举项
+    expect(find.text('直射阳光'), findsOneWidget); // 面板枚举项
 
-    await tester.tap(find.text('快门优先 S'));
+    await tester.tap(find.text('直射阳光'));
     await tester.pumpAndSettle();
 
     final write = transport.requests.singleWhere(
         (r) => r.opcode == PtpOperationCode.setDevicePropValue);
-    expect(write.params, [PtpDevicePropCode.exposureProgramMode]);
+    expect(write.params, [PtpDevicePropCode.whiteBalance]);
     expect(write.dataOut, Uint8List.fromList([4, 0])); // u16 裸值
-    expect(find.text('快门优先 S'), findsOneWidget); // 芯片已回读更新
-    expect(find.text('光圈优先 A'), findsNothing);
+    expect(find.text('直射阳光'), findsOneWidget); // 芯片已回读更新
+    expect(find.text('自动'), findsNothing);
   });
 
   testWidgets('门禁开 + 域未知:面板出「取值域未知」只读提示(不炸不写)',
       (tester) async {
     PtpSession.kSetPropEnabled = true;
-    addTearDown(() => PtpSession.kSetPropEnabled = false);
+    addTearDown(() => PtpSession.kSetPropEnabled = true);
     final transport = _ScriptTransport();
     final conn = _FakeConnection();
     final controller = RemoteController(

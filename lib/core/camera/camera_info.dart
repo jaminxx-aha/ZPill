@@ -10,6 +10,7 @@ final class CameraInfo {
     this.wifiSsid,
     this.lastIp,
     this.lastConnectedAt,
+    this.wirelessPaired = false,
   });
 
   final String id;
@@ -20,6 +21,11 @@ final class CameraInfo {
   final String? lastIp; // 最近一次无线连接的 IP(快速重连)
   final DateTime? lastConnectedAt;
 
+  /// 相机侧已完成配对记录(0x935A 应答 OK)。false = 仅应用侧记住
+  /// (STA「连接至计算机」模式相机不答配对 op 的形态)—— 下次连接
+  /// 仍会尝试配对,直到相机侧记录为止。
+  final bool wirelessPaired;
+
   CameraInfo copyWith({
     String? name,
     String? model,
@@ -27,6 +33,7 @@ final class CameraInfo {
     String? wifiSsid,
     String? lastIp,
     DateTime? lastConnectedAt,
+    bool? wirelessPaired,
   }) =>
       CameraInfo(
         id: id,
@@ -36,5 +43,6 @@ final class CameraInfo {
         wifiSsid: wifiSsid ?? this.wifiSsid,
         lastIp: lastIp ?? this.lastIp,
         lastConnectedAt: lastConnectedAt ?? this.lastConnectedAt,
+        wirelessPaired: wirelessPaired ?? this.wirelessPaired,
       );
 }

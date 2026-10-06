@@ -92,7 +92,8 @@ final class _GatedDelay {
   void release() => _gates.removeFirst().complete();
 }
 
-/// PropDesc 数据集(u16 code + u16 type + u8 getSet + 当前值 + FORM)。
+/// PropDesc 数据集(u16 code + u16 type + u8 getSet + 当前值 + 出厂
+/// 默认值 + FORM;ISO 15740 标准布局 —— 出厂值在 FORM 之前)。
 Uint8List _propDescDataset(int code, PtpDataType type, int current,
     {bool getSet = true, List<int>? enums}) {
   final w = ByteWriter()
@@ -100,6 +101,7 @@ Uint8List _propDescDataset(int code, PtpDataType type, int current,
     ..u16(type.code)
     ..u8(getSet ? 1 : 0);
   type.write(w, current);
+  type.write(w, current); // 出厂默认值
   if (enums != null) {
     w
       ..u8(0x02) // FORM=0x02 枚举域
@@ -374,16 +376,117 @@ void main() {
         reason: 'PropDesc 拒答后不得残留旧 desc');
   });
 
-  test('门禁关(生产默认):setParam 直接拒绝,零流量', () async {
+  test('门禁开:ISO 写走厂商码 0xD0B4(u32),回读仍读 0x500F', () async {
+    PtpSession.kSetPropEnabled = true;
+    addTearDown(() => PtpSession.kSetPropEnabled = true);
+    controller.dispose();
+    controller = RemoteController(
+      session: PtpSession(transport: transport),
+      connection: conn,
+      engine: LiveViewEngine(
+          session: PtpSession(transport: transport), delay: delay.call),
+      delay: delay.call,
+      setPropGate: () => true,
+    );
+    _scriptParams(transport);
+    conn.statesCtrl.add(CameraLinkState.connected);
+    await pumpEventQueue();
+
+    transport
+      ..ok() // 0x1016 写 0xD0B4 = 400(u32)
+      ..ok(data: _propDescDataset(
+          PtpDevicePropCode.exposureIndex, PtpDataType.uint16, 400,
+          enums: [100, 200, 400, 800])); // 回读 0x500F
+    await controller.setParam(PtpDevicePropCode.exposureIndex, 400);
+    final write = transport.requests
+        .singleWhere((r) => r.opcode == PtpOperationCode.setDevicePropValue);
+    expect(write.params, [PtpDevicePropCode.exposureIndexEx],
+        reason: 'Z 系 ISO 写走厂商码');
+    expect(write.dataOut, Uint8List.fromList([0x90, 0x01, 0x00, 0x00]));
+    expect(controller.exposure?.iso, 400, reason: '屏显以回读为准');
+    expect(controller.error, isNull);
+  });
+
+  test('门禁开:快门写 µs 换算 0xD100 分数打包(1/100s)', () async {
+    PtpSession.kSetPropEnabled = true;
+    addTearDown(() => PtpSession.kSetPropEnabled = true);
+    controller.dispose();
+    controller = RemoteController(
+      session: PtpSession(transport: transport),
+      connection: conn,
+      engine: LiveViewEngine(
+          session: PtpSession(transport: transport), delay: delay.call),
+      delay: delay.call,
+      setPropGate: () => true,
+    );
+    _scriptParams(transport);
+    conn.statesCtrl.add(CameraLinkState.connected);
+    await pumpEventQueue();
+
+    transport
+      ..ok() // 0x1016 写 0xD100 = (1<<16)|100
+      ..ok(data: _propDescDataset(
+          PtpDevicePropCode.exposureTime, PtpDataType.uint32, 10000));
+    await controller.setParam(PtpDevicePropCode.exposureTime, 10000);
+    final write = transport.requests
+        .singleWhere((r) => r.opcode == PtpOperationCode.setDevicePropValue);
+    expect(write.params, [PtpDevicePropCode.stillShutterSpeed],
+        reason: 'Z 系快门写走厂商码');
+    expect(write.dataOut, Uint8List.fromList([0x64, 0x00, 0x01, 0x00]));
+    expect(controller.exposure?.shutterUs, 10000);
+  });
+
+  test('门禁开:表外快门值拒绝发送(宁失败不错值)', () async {
+    PtpSession.kSetPropEnabled = true;
+    addTearDown(() => PtpSession.kSetPropEnabled = true);
+    controller.dispose();
+    controller = RemoteController(
+      session: PtpSession(transport: transport),
+      connection: conn,
+      engine: LiveViewEngine(
+          session: PtpSession(transport: transport), delay: delay.call),
+      delay: delay.call,
+      setPropGate: () => true,
+    );
+    _scriptParams(transport);
+    conn.statesCtrl.add(CameraLinkState.connected);
+    await pumpEventQueue();
+
+    await controller.setParam(PtpDevicePropCode.exposureTime, 137);
+    expect(controller.error, contains('无法换算'));
+    expect(
+        transport.requests
+            .where((r) => r.opcode == PtpOperationCode.setDevicePropValue),
+        isEmpty);
+  });
+
+  test('模式(机顶转盘拥有):遥控只读,零流量', () async {
+    _scriptParams(transport);
+    conn.statesCtrl.add(CameraLinkState.connected);
+    await pumpEventQueue();
+    expect(controller.propWritable(PtpDevicePropCode.exposureProgramMode),
+        isFalse,
+        reason: '转盘参数不受 getSet 上报影响');
+    await controller.setParam(PtpDevicePropCode.exposureProgramMode, 4);
+    expect(controller.error, contains('机身转盘'));
+    expect(
+        transport.requests
+            .where((r) => r.opcode == PtpOperationCode.setDevicePropValue),
+        isEmpty);
+  });
+
+  test('总闸紧急关断:setParam 直接拒绝,零流量', () async {
+    PtpSession.kSetPropEnabled = false; // 生产已开,显式关断走分支
+    addTearDown(() => PtpSession.kSetPropEnabled = true);
     await controller.setParam(PtpDevicePropCode.fNumber, 320);
-    expect(controller.error, contains('参数调节未启用'));
+    expect(controller.error, contains('总闸关断'));
     expect(transport.requests, isEmpty);
     expect(controller.writing, isFalse);
   });
 
   test('门禁开:0x1016 裸值写出 + 回读刷新(相机 clamp 以回读为准)', () async {
     PtpSession.kSetPropEnabled = true; // 翻 session 总闸(controller 闸已注入)
-    addTearDown(() => PtpSession.kSetPropEnabled = false);
+    addTearDown(() => PtpSession.kSetPropEnabled = true);
     controller.dispose();
     controller = RemoteController(
       session: PtpSession(transport: transport),
@@ -400,7 +503,8 @@ void main() {
     expect(controller.canAdjustParams, isTrue);
     expect(controller.propWritable(PtpDevicePropCode.fNumber), isTrue);
     expect(controller.propWritable(PtpDevicePropCode.exposureProgramMode),
-        isTrue);
+        isFalse,
+        reason: '模式由机顶转盘拥有,遥控只读(不受 getSet 上报影响)');
 
     transport
       ..ok() // 0x1016 写 fNumber=320
@@ -445,7 +549,7 @@ void main() {
 
   test('门禁开:写失败(0x2019 忙)→ 报错,值不漂移', () async {
     PtpSession.kSetPropEnabled = true; // 翻 session 总闸(controller 闸已注入)
-    addTearDown(() => PtpSession.kSetPropEnabled = false);
+    addTearDown(() => PtpSession.kSetPropEnabled = true);
     controller.dispose();
     controller = RemoteController(
       session: PtpSession(transport: transport),

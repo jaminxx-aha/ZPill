@@ -177,21 +177,26 @@ final class PtpDevicePropValue {
 
 /// 0x1014 GetDevicePropDesc 响应数据集。
 ///
-/// 布局(ISO 15740 §10.5.1.3):
-/// `u16 propCode + u16 dataType + u8 getSet + 当前值 + FORM`;
-/// MTP 方言在 FORM 后可跟「出厂默认值组」(u16 个数 + N 值),防御性
-/// 可选解析,截断/不识别一律降级为 null 不上抛。
+/// 布局(ISO 15740 §10.5.1.3,2026-10-05 真机修正):
+/// `u16 propCode + u16 dataType + u8 getSet + 当前值 + 出厂默认值 +
+/// u8 formFlag + FORM`。出厂默认值位于 FORM **之前** —— 旧版漏读了
+/// 它,把出厂值首字节当 formFlag,枚举/范围域全丢(Zf 真机「所有属性
+/// 取值域未知」的根因;OpenZCine Z 系真机代码同样在 FORM 前跳过两个
+/// 值)。FORM 区解析失败时,整型属性再做「0x02 + u16 计数 + N 值恰好
+/// 收尾」扫描兜底,容忍缺出厂值/值区多字段的方言数据集(OpenZCine
+/// devicePropDescEnumValues 同款)。防御性可选解析,截断/不识别一律
+/// 降级为 null 不上抛。
 final class PtpDevicePropDesc {
   PtpDevicePropDesc({
     required this.code,
     required this.dataType,
     required this.getSet,
     this.currentValue,
+    this.factoryValue,
     this.enumValues,
     this.rangeMin,
     this.rangeMax,
     this.rangeStep,
-    this.factoryValues,
   });
 
   final int code;
@@ -202,6 +207,9 @@ final class PtpDevicePropDesc {
 
   final Object? currentValue;
 
+  /// 出厂默认值(标准布局在 FORM 之前);截断/缺省为 null。
+  final Object? factoryValue;
+
   /// FORM=0x02 枚举域;FORM 截断或非枚举时为 null。
   final List<Object?>? enumValues;
 
@@ -209,9 +217,6 @@ final class PtpDevicePropDesc {
   final Object? rangeMin;
   final Object? rangeMax;
   final Object? rangeStep;
-
-  /// MTP 出厂默认值组;标准 PTP 固件通常没有(null)。
-  final List<Object?>? factoryValues;
 
   /// 防御性解析:头部三字段 + 当前值缺失时其余字段可全空,不抛异常
   /// (相机方言的截断数据集仍可显示「存在但未知」)。
@@ -232,10 +237,23 @@ final class PtpDevicePropDesc {
     }
     final valueIntact = currentValue != null || dataType == PtpDataType.string;
 
+    // 出厂默认值(ISO 15740:位于 FORM 之前;截断数据集可缺)。
+    // 字符串型 read 可能合法返回 null,用专属哨兵区分「读到了 null」
+    // 与「截断」:截断时后续 FORM 位置不可信,跳过定长解析。
+    Object? factoryValue;
+    var factoryIntact = false;
+    if (valueIntact && !r.eof) {
+      try {
+        factoryValue = dataType.read(r);
+        factoryIntact = true;
+      } on Object {
+        factoryValue = null;
+      }
+    }
+
     List<Object?>? enumValues;
     Object? rangeMin, rangeMax, rangeStep;
-    List<Object?>? factoryValues;
-    if (valueIntact && !r.eof) {
+    if (valueIntact && factoryIntact && !r.eof) {
       try {
         final formFlag = r.u8();
         switch (formFlag) {
@@ -249,21 +267,17 @@ final class PtpDevicePropDesc {
               for (var i = 0; i < count; i++) dataType.read(r),
             ];
           default:
-            break; // 0x00 无 FORM / 方言旗标:忽略
+            break; // 0x00 无 FORM:正常收尾
         }
       } on Object {
-        // FORM 区截断/越界:整组降级为 null(防御性,见类注)
+        // FORM 区截断/越界:整组降级为 null,走扫描兜底
       }
     }
-    if (valueIntact && !r.eof && r.remaining >= 2) {
-      try {
-        final count = r.u16();
-        factoryValues = [
-          for (var i = 0; i < count && !r.eof; i++) dataType.read(r),
-        ];
-      } on Object {
-        factoryValues = null;
-      }
+    // 扫描兜底:定长路径没解出 FORM 时,整型属性按「u8 0x02 + u16
+    // 计数 + count×宽度恰好填满缓冲」定位枚举段(缺出厂值/值区多
+    // 字段的方言数据集也能救回;误报面被「恰好收尾」约束到极小)。
+    if (enumValues == null && rangeMin == null) {
+      enumValues = _scanEnumForm(data, dataType);
     }
 
     return PtpDevicePropDesc(
@@ -271,12 +285,31 @@ final class PtpDevicePropDesc {
       dataType: dataType,
       getSet: getSet,
       currentValue: currentValue,
+      factoryValue: factoryValue,
       enumValues: enumValues,
       rangeMin: rangeMin,
       rangeMax: rangeMax,
       rangeStep: rangeStep,
-      factoryValues: factoryValues,
     );
+  }
+
+  /// 枚举段扫描:全缓冲找「u8 0x02 + u16 计数 + count×宽度 恰好
+  /// 填满到结尾」的候选(第一个命中即用)。宽度未知(字符串型)返回
+  /// null —— 字符串枚举各值自述长度,没有可用的收尾约束。
+  static List<Object?>? _scanEnumForm(Uint8List data, PtpDataType type) {
+    final width = type.width;
+    if (width == null) return null;
+    final b = data;
+    final n = b.length;
+    for (var i = 0; i + 2 < n; i++) {
+      if (b[i] != 0x02) continue;
+      final count = b[i + 1] | (b[i + 2] << 8);
+      final start = i + 3;
+      if (count == 0 || start + count * width != n) continue;
+      final r = ByteReader(b, start);
+      return [for (var k = 0; k < count; k++) type.read(r)];
+    }
+    return null;
   }
 
   @override

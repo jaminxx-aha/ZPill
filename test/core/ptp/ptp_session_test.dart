@@ -479,7 +479,49 @@ void main() {
       expect(d.getSet, isTrue);
     });
 
-    test('setDevicePropValue:门禁关闭抛 UnsupportedError 且不发请求', () async {
+    test('enableAppControl:0x9435 ok → true,单发无属性回退', () async {
+      final fake = FakePtpTransport()
+        ..reply(const PtpResult(responseCode: PtpResponseCode.ok));
+      final session = PtpSession(transport: fake);
+      expect(await session.enableAppControl(), isTrue);
+      expect(fake.requests.single.opcode,
+          NikonOperationCode.changeApplicationMode);
+      expect(fake.requests.single.params, [1]);
+    });
+
+    test('enableAppControl:0x9435 被拒 → 回退写 ApplicationMode 0xD1F0=1',
+        () async {
+      final fake = FakePtpTransport()
+        ..reply(const PtpResult(
+            responseCode: PtpResponseCode.operationNotSupported))
+        ..reply(const PtpResult(responseCode: PtpResponseCode.ok));
+      final session = PtpSession(transport: fake);
+      expect(await session.enableAppControl(), isTrue);
+      expect(fake.requests.map((r) => r.opcode), [
+        NikonOperationCode.changeApplicationMode,
+        PtpOperationCode.setDevicePropValue,
+      ]);
+      expect(
+          fake.requests[1].params, [PtpDevicePropCode.applicationMode]);
+      expect(fake.requests[1].dataOut, Uint8List.fromList([1]));
+    });
+
+    test('enableAppControl:双拒 → false 不抛;不受拍摄参数总闸约束',
+        () async {
+      PtpSession.kSetPropEnabled = false; // 应用模式切换非拍摄参数写
+      addTearDown(() => PtpSession.kSetPropEnabled = true);
+      final fake = FakePtpTransport()
+        ..reply(const PtpResult(
+            responseCode: PtpResponseCode.operationNotSupported))
+        ..reply(const PtpResult(responseCode: PtpResponseCode.generalError));
+      final session = PtpSession(transport: fake);
+      expect(await session.enableAppControl(), isFalse);
+    });
+
+    test('setDevicePropValue:总闸紧急关断抛 UnsupportedError 且不发请求',
+        () async {
+      PtpSession.kSetPropEnabled = false; // 生产已开,这里显式关断走分支
+      addTearDown(() => PtpSession.kSetPropEnabled = true);
       final fake = FakePtpTransport();
       final session = PtpSession(transport: fake);
       final v = PtpDevicePropValue(
@@ -489,6 +531,23 @@ void main() {
       await expectLater(
           session.setDevicePropValue(v), throwsA(isA<UnsupportedError>()));
       expect(fake.requests, isEmpty);
+    });
+
+    test('setDevicePropValue:总闸开(生产默认)→ 0x1016 带码参数与裸值数据',
+        () async {
+      final fake = FakePtpTransport()
+        ..reply(const PtpResult(responseCode: PtpResponseCode.ok));
+      final session = PtpSession(transport: fake);
+      final v = PtpDevicePropValue(
+          code: PtpDevicePropCode.fNumber,
+          dataType: PtpDataType.uint16,
+          value: 320);
+      await session.setDevicePropValue(v);
+      expect(fake.requests, hasLength(1));
+      expect(fake.requests.single.opcode,
+          PtpOperationCode.setDevicePropValue);
+      expect(fake.requests.single.params, [PtpDevicePropCode.fNumber]);
+      expect(fake.requests.single.dataOut, Uint8List.fromList([0x40, 0x01]));
     });
 
     test('startLiveView/endLiveView:候选码直发,无参数', () async {

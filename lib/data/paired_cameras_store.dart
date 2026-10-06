@@ -95,6 +95,7 @@ final class FilePairedCamerasStore implements PairedCamerasStore {
         if (c.lastIp != null) 'lastIp': c.lastIp,
         if (c.lastConnectedAt != null)
           'lastConnectedAt': c.lastConnectedAt!.toIso8601String(),
+        if (c.wirelessPaired) 'wirelessPaired': true,
       };
 
   static CameraInfo _fromJson(Map<String, Object?> j) => CameraInfo(
@@ -107,6 +108,7 @@ final class FilePairedCamerasStore implements PairedCamerasStore {
         lastConnectedAt: j['lastConnectedAt'] == null
             ? null
             : DateTime.parse(j['lastConnectedAt'] as String),
+        wirelessPaired: j['wirelessPaired'] == true, // 旧档案缺省 false
       );
 }
 

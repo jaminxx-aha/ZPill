@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:nikon_pill/core/ptp/device_prop.dart';
 import 'package:nikon_pill/core/ptp/operation_codes.dart';
 import 'package:nikon_pill/features/remote/shooting_param_catalog.dart';
 
@@ -98,6 +99,46 @@ void main() {
     expect(_param(PtpDevicePropCode.imageSize).display(3), '值 3');
     expect(_param(PtpDevicePropCode.whiteBalance).display(3), '值 3'); // 表外枚举
     expect(_param(PtpDevicePropCode.exposureProgramMode).display(null), '--');
+  });
+
+  test('写路径路由:ISO/快门走厂商码,模式由转盘拥有只读', () {
+    // Z 系真机口径(OpenZCine):静照 ISO/快门的标准码只读不可写
+    final iso = _param(PtpDevicePropCode.exposureIndex);
+    expect(iso.writeCode, PtpDevicePropCode.exposureIndexEx);
+    expect(iso.writeType, PtpDataType.uint32);
+    final shutter = _param(PtpDevicePropCode.exposureTime);
+    expect(shutter.writeCode, PtpDevicePropCode.stillShutterSpeed);
+    expect(shutter.writeType, PtpDataType.uint32);
+    expect(shutter.writeConvert, isNotNull);
+    // 其余参数无路由(写码 = 读码)
+    for (final code in [
+      PtpDevicePropCode.fNumber,
+      PtpDevicePropCode.whiteBalance,
+      PtpDevicePropCode.stillCaptureMode,
+      PtpDevicePropCode.compressionSetting,
+      PtpDevicePropCode.rawCompressionType,
+      PtpDevicePropCode.activePicCtrlItem,
+    ]) {
+      expect(_param(code).writeCode, isNull, reason: '0x$code 无需路由');
+    }
+    // 模式:机顶转盘物理拥有(OpenZCine read-only 口径)
+    expect(_param(PtpDevicePropCode.exposureProgramMode).readOnly, isTrue);
+    expect(_param(PtpDevicePropCode.fNumber).readOnly, isFalse);
+  });
+
+  test('快门 µs → 0xD100 分数打包(标准档全命中 + 舍入容差 + 表外拒绝)',
+      () {
+    final pack = _param(PtpDevicePropCode.exposureTime).writeConvert!;
+    expect(pack(10000), 0x00010064, reason: '1/100');
+    expect(pack(1000000), 0x00010001, reason: '1s');
+    expect(pack(4000000), 0x00040001, reason: '4s');
+    expect(pack(30000000), 30 << 16 | 1, reason: '30s');
+    expect(pack(16667), 0x0001003C, reason: '1/60(µs=16667 舍入)');
+    expect(pack(156), 0x00011900, reason: '1/6400(156.25µs 舍入)');
+    expect(pack(1300000), 0x000D000A, reason: '1.3s = 13/10');
+    expect(pack(2500000), 0x00050002, reason: '2.5s = 5/2');
+    expect(pack(0), isNull, reason: '非法值');
+    expect(pack(137), isNull, reason: '表外(1/8000 与 1/6400 之间)');
   });
 
   test('曝光三要素标记 prominent(大芯片行),其余进横滚行', () {

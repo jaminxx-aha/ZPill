@@ -115,36 +115,36 @@ void main() {
   });
 
   group('PtpDevicePropDesc.parse', () {
-    test('完整布局:枚举 FORM(u16 计数 + N 值)+ MTP 出厂默认组', () {
-      // fNumber:u16 类型,当前 280(ƒ/2.8),枚举域 [180,280,400,560],
-      // 出厂 [280](ISO 15740 ×100 标度)
+    test('标准布局:出厂默认值在 FORM 前,枚举域完整解析', () {
+      // fNumber:u16 类型,当前 280(ƒ/2.8),出厂 280,枚举域
+      // [180,280,400,560](ISO 15740 ×100 标度)
       final w = propDescHeader(
         propCode: PtpDevicePropCode.fNumber,
         dataType: PtpDataType.uint16,
         getSet: true,
         value: 280,
       )
+        ..u16(280) // 出厂默认值(标准布局:位于 FORM 之前)
         ..u8(0x02) // FORM = Enumeration
         ..u16(4)
-        ..u16(180)..u16(280)..u16(400)..u16(560)
-        ..u16(1) // MTP factory group:个数 + 值
-        ..u16(280);
+        ..u16(180)..u16(280)..u16(400)..u16(560);
       final d = PtpDevicePropDesc.parse(w.takeBytes());
       expect(d.code, PtpDevicePropCode.fNumber);
       expect(d.dataType, PtpDataType.uint16);
       expect(d.getSet, isTrue);
       expect(d.currentValue, 280);
+      expect(d.factoryValue, 280);
       expect(d.enumValues, [180, 280, 400, 560]);
-      expect(d.factoryValues, [280]);
     });
 
-    test('范围 FORM:min/max/step 三元组', () {
+    test('范围 FORM:min/max/step 三元组(含出厂默认值)', () {
       final w = propDescHeader(
         propCode: PtpDevicePropCode.exposureIndex,
         dataType: PtpDataType.uint16,
         getSet: true,
         value: 200,
       )
+        ..u16(100) // 出厂默认值
         ..u8(0x01) // FORM = Range
         ..u16(100)..u16(25600)..u16(100);
       final d = PtpDevicePropDesc.parse(w.takeBytes());
@@ -154,18 +154,54 @@ void main() {
       expect(d.enumValues, isNull);
     });
 
-    test('FORM=0x00 无形式 + 无出厂组:字段全 null', () {
+    test('FORM=0x00 无形式:字段可空,出厂默认值照读', () {
       final w = propDescHeader(
         propCode: PtpDevicePropCode.batteryLevel,
         dataType: PtpDataType.uint8,
         getSet: false,
         value: 80,
-      )..u8(0x00);
+      )
+        ..u8(80) // 出厂默认值
+        ..u8(0x00); // 无 FORM
       final d = PtpDevicePropDesc.parse(w.takeBytes());
       expect(d.getSet, isFalse);
       expect(d.currentValue, 80);
+      expect(d.factoryValue, 80);
       expect(d.enumValues, isNull);
-      expect(d.factoryValues, isNull);
+    });
+
+    test('方言缺出厂默认值:扫描兜底救回枚举(OpenZCine 同款收尾约束)',
+        () {
+      // 布局 = 当前值后直接 0x02 + 计数 + 值(无出厂值)。定长路径把
+      // 旗标读错,扫描按「恰好收尾」定位真枚举段。
+      final w = propDescHeader(
+        propCode: PtpDevicePropCode.fNumber,
+        dataType: PtpDataType.uint16,
+        getSet: true,
+        value: 280,
+      )
+        ..u8(0x02)
+        ..u16(3)
+        ..u16(280)..u16(400)..u16(560);
+      final d = PtpDevicePropDesc.parse(w.takeBytes());
+      expect(d.currentValue, 280);
+      expect(d.enumValues, [280, 400, 560]);
+    });
+
+    test('枚举段后补齐字节:定长路径照常解出(不要求恰好收尾)', () {
+      final w = propDescHeader(
+        propCode: PtpDevicePropCode.fNumber,
+        dataType: PtpDataType.uint16,
+        getSet: true,
+        value: 280,
+      )
+        ..u16(280)
+        ..u8(0x02)
+        ..u16(2)
+        ..u16(280)..u16(400)
+        ..u16(0); // 尾部补齐
+      final d = PtpDevicePropDesc.parse(w.takeBytes());
+      expect(d.enumValues, [280, 400]);
     });
 
     test('截断容错:值区完好 FORM 截断 → 降级 null 不抛', () {
@@ -175,6 +211,7 @@ void main() {
         getSet: true,
         value: 280,
       )
+        ..u16(280) // 出厂默认值
         ..u8(0x02) // FORM = Enumeration,但计数被截断
         ..u8(0x04); // 只有半个 u16
       final d = PtpDevicePropDesc.parse(w.takeBytes());

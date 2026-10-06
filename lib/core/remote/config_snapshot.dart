@@ -4,9 +4,9 @@
 /// (类型/当前值/可写性一次拿全)→ 命名 JSON 落盘([ConfigSnapshotStore]);
 /// 恢复 = 逐属性复查可写性与类型一致后 SetDevicePropValue。
 ///
-/// 写路径受 [PtpSession.kSetPropEnabled] 总闸(真机核对前恒关,恢复
-/// 直接 UnsupportedError);快照本身纯读,不受闸。单属性失败跳过不
-/// 中断(快照尽力而为,恢复计 failed 继续后面的属性)。
+/// 写路径受 [PtpSession.kSetPropEnabled] 总闸(2026-10-05 生产已开,
+/// 紧急关断时恢复直接 UnsupportedError);快照本身纯读,不受闸。单属性
+/// 失败跳过不中断(快照尽力而为,恢复计 failed 继续后面的属性)。
 library;
 
 import '../ptp/device_prop.dart';
@@ -159,7 +159,7 @@ final class CameraConfigSnapshotter {
   static Future<RestoreReport> restore(
       PtpSession session, CameraConfigSnapshot snapshot) async {
     if (!PtpSession.kSetPropEnabled) {
-      throw UnsupportedError('恢复未启用:待真机核对可写域后翻开 kSetPropEnabled');
+      throw UnsupportedError('恢复已被总闸关断(kSetPropEnabled=false,紧急关断)');
     }
     var applied = 0, skipped = 0, failed = 0;
     var modelMismatch = false;

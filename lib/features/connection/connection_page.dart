@@ -187,6 +187,10 @@ class ConnectionController extends ChangeNotifier {
     await c.connect(ip: ip, instanceName: camera.name);
   }
 
+  /// STA 手动 IP(扫描兜底):独立控制器,**不预填** —— AP 卡默认的
+  /// 192.168.1.1 在 STA 网段多半是路由器,预填即误拨。
+  final manualIpController = TextEditingController();
+
   /// AP 连接(手动 IP 兜底):输入为空时回落默认网关地址。
   Future<void> connectWireless() async {
     final c = connection;
@@ -196,6 +200,19 @@ class ConnectionController extends ChangeNotifier {
     var ip = ipController.text.trim();
     if (ip.isEmpty) {
       ip = kDefaultCameraIp;
+    }
+    activeIp = ip;
+    await c.connect(ip: ip);
+  }
+
+  /// STA 手动 IP 连接(扫描不到时的兜底):**不回落默认地址** ——
+  /// 192.168.1.1 在 STA 网络里多半是路由器,连它只会得到一个莫名的
+  /// 超时失败;空输入直接不动作。
+  Future<void> connectManualIp() async {
+    final c = connection;
+    final ip = manualIpController.text.trim();
+    if (c == null || ip.isEmpty) {
+      return;
     }
     activeIp = ip;
     await c.connect(ip: ip);
@@ -220,6 +237,7 @@ class ConnectionController extends ChangeNotifier {
   @override
   void dispose() {
     ipController.dispose();
+    manualIpController.dispose();
     super.dispose();
   }
 }
@@ -247,6 +265,9 @@ class _ConnectionPageState extends State<ConnectionPage> {
   /// 配对弹窗只弹一次的哨兵(state 离开 pairing 即复位)。
   bool _pairingDialogShown = false;
 
+  /// 状态机上一拍(只在「连接 → 断开」沿上刷新档案列表,防通知循环)。
+  CameraLinkState? _lastState;
+
   @override
   void initState() {
     super.initState();
@@ -269,6 +290,16 @@ class _ConnectionPageState extends State<ConnectionPage> {
       }
     } else {
       _pairingDialogShown = false;
+    }
+    // 回到连接卡时刷新快速重连列表(本次连接可能刚落账;只在
+    // connected → disconnected/failed 的沿上刷,loadSaved 的
+    // notifyListeners 会再进本监听,靠沿判定终止级联)。
+    final prev = _lastState;
+    _lastState = controller.state;
+    if (prev == CameraLinkState.connected &&
+        (controller.state == CameraLinkState.disconnected ||
+            controller.state == CameraLinkState.failed)) {
+      _controller.loadSaved();
     }
   }
 
@@ -366,6 +397,17 @@ class _ConnectionPageState extends State<ConnectionPage> {
             Padding(
               padding: const EdgeInsets.only(top: 8),
               child: Text(controller.hint!),
+            ),
+          // connecting 逃生口:输入框/按钮全禁用期间(死 IP 的 TCP 超时
+          // 最长 ~5s,握手阶段更长),用户得有取消手段,否则像「卡死」。
+          if (controller.state == CameraLinkState.connecting)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: OutlinedButton.icon(
+                icon: const Icon(Icons.close),
+                label: const Text('取消连接'),
+                onPressed: controller.disconnect,
+              ),
             ),
           const SizedBox(height: 16),
 
@@ -524,6 +566,32 @@ class _ConnectionPageState extends State<ConnectionPage> {
                 trailing: const Icon(Icons.chevron_right),
                 onTap: busy ? null : () => controller.connectDiscovered(camera),
               ),
+            // 扫描兜底:mDNS 发现依赖相机主动广播(菜单在「等待连接」
+            // 状态才广播);已知 IP 时手填直连(独立控制器,不预填 ——
+            // 预填 AP 默认地址会误拨路由器)。
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: controller.manualIpController,
+                    keyboardType: TextInputType.url,
+                    enabled: !busy,
+                    decoration: const InputDecoration(
+                      labelText: '相机 IP(扫描不到时手填)',
+                      hintText: '如 192.168.1.4',
+                      border: OutlineInputBorder(),
+                      isDense: true,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                FilledButton(
+                  onPressed: busy ? null : controller.connectManualIp,
+                  child: const Text('连接'),
+                ),
+              ],
+            ),
             if (controller.savedCameras.isNotEmpty)
               for (final saved in controller.savedCameras)
                 ListTile(
