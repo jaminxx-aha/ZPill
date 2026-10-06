@@ -527,6 +527,17 @@ final class PtpSession {
     _ensureOk(result, NikonOperationCode.initiateCaptureRecInMedia);
   }
 
+  /// Nikon TerminateCapture(0x920C,params [0,0]):终止进行中的连拍/
+  /// Bulb 曝光,已拍帧保留(OpenZCine terminateStillCapture 同款;运行
+  /// 已自行结束时相机会拒绝,调用方容忍)。真机核对。
+  Future<void> terminateCapture() async {
+    final result = await _serialized(() => transport.execute(PtpRequest(
+          opcode: NikonOperationCode.terminateCapture,
+          params: [0, 0],
+        )));
+    _ensureOk(result, NikonOperationCode.terminateCapture);
+  }
+
   /// Nikon InitiateCaptureRecInSdram(0x90C0,候选码,待真机核对):
   /// 无卡拍进机身缓存(速传场景的对象随后经 ObjectAddedInSdram 事件流出)。
   Future<void> initiateCaptureRecInSdram() async {

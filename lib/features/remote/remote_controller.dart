@@ -170,16 +170,120 @@ final class RemoteController extends ChangeNotifier {
   /// 拍摄参数调节总开关(生产 = [PtpSession.kSetPropEnabled],真机实证已开)。
   bool get canAdjustParams => _setPropEnabled();
 
-  /// 该属性当前是否可调:总门禁 + 目录 readOnly(机身件拥有)+ 相机
-  /// getSet 上报三过。厂商写路由参数(writeCode != null)跳过 getSet:
-  /// 标准码的 getSet 不代表厂商写码可写性(2026-10-06 真机:0x500D/
-  /// 0x500F 报只读,0xD100/0xD0B4 照常可写)。
+  /// 该属性当前是否可调:总门禁 + 目录 readOnly(机身件拥有)+ 模式门
+  /// (曝光变量:机身在 M/S 之外拥有快门、M/A 之外拥有光圈 —— A/P 下
+  /// 快门自动、S/P 下光圈自动,影控台同状态同样不可调,2026-10-06 真机
+  /// 实证)+ 相机 getSet 上报。厂商写路由参数(writeCode != null)跳过
+  /// getSet:标准码的 getSet 不代表厂商写码可写性(真机:0x500D/0x500F
+  /// 报只读,0xD100/0xD0B4 照常可写)。
   bool propWritable(int propCode) {
     if (!_setPropEnabled()) return false;
     final param = shootingParamByCode[propCode];
     if (param == null || param.readOnly) return false;
-    if (param.writeCode != null) return true;
+    if (_autoControlled(propCode)) return false;
+    // 厂商写路由 / 取值域直供 / 拨盘拥有参数:标准码的 getSet 与 desc
+    // 都不作数(真机:0x500F/0x500D 报只读但 0xD0B4/0xD100 可写;
+    // 0x500E 拨盘拥有报只读 —— 接管(0x90C2 锁转盘)后可写;厂商码
+    // PropDesc 拒答时 desc 为空但 pickValues 面板照常可用)。
+    if (param.writeCode != null ||
+        param.pickValues != null ||
+        param.dialOwned) {
+      return true;
+    }
     return paramProps[propCode]?.desc?.getSet ?? false;
+  }
+
+  // ---- 曝光变量模式门(OpenZCine stillAllows* 同款)----
+
+  /// 静照自动 ISO(0xD0B5 读到的有效 ISO 是机身应用值);null = 未读/
+  /// 拒答,不猜。与手动 ISO 值互不干扰(用户口径:开关只由面板的
+  /// 「自动 ISO」控制,选手动值不联动开关)。
+  bool? isoAuto;
+
+  /// 模式值(U 档 0x805x 段):U 档按内部程序跑,不猜锁交给相机应答。
+  static bool _isUserMode(int mode) =>
+      mode >= 0x8050 && mode <= 0x8053;
+
+  /// 模式门判定:模式未读(null)或 U 档 → 不锁;否则看 [allowed]。
+  bool _modeAllows(Set<int> allowed) {
+    final mode = paramProps[PtpDevicePropCode.exposureProgramMode]?.value;
+    if (mode == null || _isUserMode(mode)) return true;
+    return allowed.contains(mode);
+  }
+
+  /// 快门可调:M/S(其余模式机身拥有,A 下快门是自动曝光变量)。
+  bool get shutterAdjustable =>
+      _modeAllows({1, 4}); // M / S
+
+  /// 光圈可调:M/A。
+  bool get apertureAdjustable => _modeAllows({1, 3});
+
+  /// 手动 ISO 可调:P/S/A/M(场景档拥有感光度,OpenZCine 同款门)。
+  bool get isoManualAllowed => _modeAllows({1, 2, 3, 4});
+
+  /// 该参数当前是否被写入门拦下(芯片置灰):模式门锁定的快门/光圈
+  /// + 场景档锁定的 ISO(自动 ISO 开着**不拦** —— 开关与手动值互不
+  /// 干扰,见 [isoAuto];显示标注照打,由「自动 ISO」开关显式控制)。
+  bool _autoControlled(int propCode) {
+    switch (propCode) {
+      case PtpDevicePropCode.exposureTime:
+        return !shutterAdjustable;
+      case PtpDevicePropCode.fNumber:
+        return !apertureAdjustable;
+      case PtpDevicePropCode.exposureIndex:
+        return !isoManualAllowed;
+      default:
+        return false;
+    }
+  }
+
+  /// 该参数当前是否由相机自动控制(页面芯片「(自动)」标注):模式门
+  /// 锁定 + 自动 ISO 开启(此时显示的是 0xD0B5 工作值)。
+  bool paramAutoControlled(int propCode) {
+    if (propCode == PtpDevicePropCode.exposureIndex && isoAuto == true) {
+      return true;
+    }
+    return _autoControlled(propCode);
+  }
+
+  /// 当前模式的中文名(错误提示用;未读为 null)。
+  String? get _modeLabel {
+    final mode = paramProps[PtpDevicePropCode.exposureProgramMode]?.value;
+    if (mode == null) return null;
+    return shootingParamByCode[PtpDevicePropCode.exposureProgramMode]
+        ?.display(mode);
+  }
+
+  /// 自动 ISO 开关(0xD054,u8):开 = ISO 面板「自动」项;关后手动值
+  /// 生效。开关后 ISO 值随即回读(0xD0B5 工作值跟随)。
+  Future<void> setIsoAuto(bool enabled) async {
+    if (!_linkUp) {
+      error = '未连接相机';
+      notifyListeners();
+      return;
+    }
+    writing = true;
+    error = null;
+    notifyListeners();
+    try {
+      await session.setDevicePropValue(PtpDevicePropValue(
+          code: PtpDevicePropCode.stillIsoAutoControl,
+          dataType: PtpDataType.uint8,
+          value: enabled ? 1 : 0));
+      isoAuto = enabled;
+      await _refreshProp(PtpDevicePropCode.exposureIndex);
+    } on Exception catch (e) {
+      if (e is PtpResponseException &&
+          e.responseCode == PtpResponseCode.accessDenied) {
+        error = '自动 ISO 设置失败:该开关受机身控制,请先启用「APP 接管」'
+            '后重试($e)';
+      } else {
+        error = '自动 ISO 设置失败:$e';
+      }
+    } finally {
+      writing = false;
+      if (_linkUp) notifyListeners();
+    }
   }
 
   // ---- APP 接管控制(0x90C2 remote 模式)----
@@ -349,6 +453,123 @@ final class RemoteController extends ChangeNotifier {
       }
     }
     throw lastError!; // 全部形态皆被拒:抛最后一个(上层转提示)
+  }
+
+  // ---- 连拍按住(OpenZCine shutterPressLatchedBurst 同款)----
+
+  /// 按住中(释放档为连续):期间随就绪链发,抬起 [captureReleased] 终止。
+  bool _burstLatched = false;
+
+  /// 连拍括持已开(0x90C2 remote + burstNumber 65535)。
+  bool _burstBracketHeld = false;
+  int _burstRun = 0;
+  int _burstFrames = 0;
+
+  /// 链发上限(OpenZCine chainedBurstFrames < 30 同款,防失控)。
+  static const int _burstFrameCap = 30;
+
+  /// 释放档当前值是否连续(高速连拍/低速连拍/C15-C120)。
+  static const _continuousDriveValues = {
+    2, // 高速连拍
+    0x8010, // 低速连拍
+    0x810F, // C15
+    0x811E, // C30
+    0x813C, // C60
+    0x8178, // C120
+  };
+
+  bool get _driveContinuous => _continuousDriveValues
+      .contains(paramProps[PtpDevicePropCode.stillCaptureMode]?.value);
+
+  /// 快门按钮**按下**(页面 onTapDown):普通释放档 = 一次 [capture];
+  /// 连续释放档 = 连拍括持(0x90C2 remote + burstNumber 65535 —— 不括持
+  /// 每次释放都会弹回单张,OpenZCine 同款)后释放,按住期间随 DeviceReady
+  /// 就绪链发(上限 30 帧);[captureReleased](抬起)终止并解除括持。
+  Future<void> capturePressed() async {
+    if (!_linkUp) {
+      error = '未连接相机';
+      notifyListeners();
+      return;
+    }
+    if (!_driveContinuous) {
+      await capture(); // 普通档:点按单张(原有路径)
+      return;
+    }
+    if (capturing || _burstLatched) return;
+    _burstLatched = true;
+    _burstFrames = 0;
+    capturing = true;
+    error = null;
+    notice = null;
+    notifyListeners();
+    final wasLive = liveViewActive;
+    if (wasLive) engine.pause();
+    try {
+      // 括持(尽力而为:失败不阻断 —— 释放档本身在机身上,可能仍连拍)
+      try {
+        await session.changeCameraMode(1);
+        await session.setDevicePropValue(PtpDevicePropValue(
+            code: PtpDevicePropCode.burstNumber,
+            dataType: PtpDataType.uint16,
+            value: 65535));
+        _burstBracketHeld = true;
+      } on Exception {
+        // 括持失败:按单发链继续
+      }
+      final run = ++_burstRun;
+      while (_burstLatched &&
+          run == _burstRun &&
+          _burstFrames < _burstFrameCap) {
+        await _fireShutter();
+        _burstFrames++;
+        var ready = false;
+        for (var i = 0;
+            i < _capturePolls && _burstLatched && run == _burstRun && !ready;
+            i++) {
+          await _delay(_capturePollInterval);
+          if (!_burstLatched || run != _burstRun) break;
+          try {
+            ready = await session.deviceReady();
+          } on Exception {
+            break; // DeviceReady 非忙错误:不再链发
+          }
+        }
+        if (!ready) break; // 就绪超时:停链(用户可再按)
+      }
+    } on Exception catch (e) {
+      error = '快门释放失败:$e';
+    } finally {
+      await _endBurstBracket();
+      _burstLatched = false;
+      _burstRun++;
+      if (wasLive) engine.resume();
+      capturing = false;
+      notifyListeners();
+    }
+  }
+
+  /// 快门按钮**抬起**:终止进行中的连拍(0x920C,已拍帧保留;运行已
+  /// 自行结束时相机会拒绝,容忍)。普通档点按无副作用。
+  Future<void> captureReleased() async {
+    if (!_burstLatched) return;
+    _burstLatched = false;
+    _burstRun++; // 打断链发循环
+    try {
+      await session.terminateCapture();
+    } on Exception {
+      // 运行已自行结束:预期内(OpenZCine 同款容忍)
+    }
+  }
+
+  Future<void> _endBurstBracket() async {
+    if (!_burstBracketHeld) return;
+    _burstBracketHeld = false;
+    if (_takeoverActive) return; // 用户接管还持有:remote 模式保持
+    try {
+      await session.changeCameraMode(0);
+    } on Exception {
+      // 解除尽力而为
+    }
   }
 
   /// DeviceReady 轮询兜底:300ms × 10(CaptureComplete 事件先到则提前)。
@@ -605,8 +826,22 @@ final class RemoteController extends ChangeNotifier {
     for (final param in kShootingParams) {
       await _refreshProp(param.code);
     }
+    await _refreshIsoAuto();
     if (!_linkUp) return;
     notifyListeners();
+  }
+
+  /// 静照自动 ISO 状态(0xD054,u8 裸读;拒答 null 不猜)。
+  Future<void> _refreshIsoAuto() async {
+    try {
+      final v = await session
+          .getDevicePropValue(PtpDevicePropCode.stillIsoAutoControl);
+      if (!_linkUp) return;
+      isoAuto = (v.value as int?) != 0;
+    } on Exception {
+      if (!_linkUp) return;
+      isoAuto = null;
+    }
   }
 
   Future<void> _refreshProp(int propCode) async {
@@ -647,11 +882,11 @@ final class RemoteController extends ChangeNotifier {
 
   /// 拍摄参数调节(0x1016,数据入相)。
   ///
-  /// 三重门禁:总开关([canAdjustParams],生产已开/紧急关断收口)、
-  /// 目录 readOnly(模式转盘)/相机 getSet(厂商路由跳过)、链路在。
-  /// 写成功后按读码路由回读 —— 相机对域外值可能 clamp,屏显一律以
-  /// 回读为准。拨盘拥有参数([ShootingParam.dialOwned])的写被拒时
-  /// 提示启用 APP 接管(0x90C2 remote 模式)。
+  /// 门禁:总开关、目录 readOnly(模式转盘)、**模式门**(曝光变量:
+  /// A/P 下快门自动、S/P 下光圈自动 —— 本地拒绝零流量,不再撞 0x200F
+  /// 报「启用接管」的误导)、相机 getSet(厂商路由跳过)、链路在。
+  /// 写成功后按读码路由回读。拨盘拥有参数写被拒时,提示按接管状态分
+  /// (接管已开 → 指向模式;未开 → 提示接管)。
   Future<void> setParam(int propCode, int value) async {
     if (!_linkUp) {
       error = '未连接相机';
@@ -669,8 +904,26 @@ final class RemoteController extends ChangeNotifier {
       notifyListeners();
       return;
     }
+    if (_autoControlled(propCode)) {
+      final mode = _modeLabel ?? '当前模式';
+      switch (propCode) {
+        case PtpDevicePropCode.exposureTime:
+          error = '$mode 下快门由相机自动控制,不可手调 —— 可调 EV 或切到 S/M 档';
+        case PtpDevicePropCode.fNumber:
+          error = '$mode 下光圈由相机自动控制,不可手调 —— 可调 EV 或切到 A/M 档';
+        case PtpDevicePropCode.exposureIndex:
+          error = '$mode 下 ISO 由相机自动控制,不可手调';
+        default:
+          error = '该参数当前由相机自动控制,不可手调';
+      }
+      notifyListeners();
+      return;
+    }
     final desc = paramProps[propCode]?.desc;
-    if (param?.writeCode == null && desc != null && !desc.getSet) {
+    if (param?.writeCode == null &&
+        param?.dialOwned != true &&
+        desc != null &&
+        !desc.getSet) {
       error = '相机上报该属性为只读';
       notifyListeners();
       return;
@@ -698,13 +951,22 @@ final class RemoteController extends ChangeNotifier {
     error = null;
     notifyListeners();
     try {
+      // 色温只在 WB=色温档(0x8012)生效:写入前自动切档(真机
+      // 「改了没效果」根因 —— 机身语义,K 值跟随 WB 模式)。
+      if (propCode == PtpDevicePropCode.wbColorTemp &&
+          paramProps[PtpDevicePropCode.whiteBalance]?.value != 0x8012) {
+        await session.setDevicePropValue(PtpDevicePropValue(
+            code: PtpDevicePropCode.whiteBalance,
+            dataType: PtpDataType.uint16,
+            value: 0x8012));
+      }
       await session.setDevicePropValue(PtpDevicePropValue(
           code: writeCode, dataType: dataType, value: writeValue));
       await _refreshProp(propCode);
     } on Exception catch (e) {
       if (e is PtpResponseException && param?.dialOwned == true) {
         error = '参数写入失败:${_nikonHint(e.responseCode) ?? e}'
-            '(该参数受机身物理拨盘控制,请先启用「APP 接管」)';
+            '(${_takeoverActive ? '接管已开启仍被拒 —— 该模式下此参数由相机自动控制,请检查模式转盘' : '该参数受机身物理拨盘控制,请先启用「APP 接管」'})';
       } else if (e is PtpResponseException) {
         error = '参数写入失败:${_nikonHint(e.responseCode) ?? e}';
       } else {
@@ -766,6 +1028,9 @@ final class RemoteController extends ChangeNotifier {
   /// 断连/失败:停引擎、清状态;迟到的参数值/事件被门闩挡住。
   void _invalidate() {
     _linkUp = false;
+    _burstLatched = false;
+    _burstRun++;
+    _burstBracketHeld = false;
     if (_takeoverActive) {
       // 链路已死无法发 0x90C2 [0]:记悬挂,重连后防御性解除。
       _takeoverDangling = true;

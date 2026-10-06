@@ -19,12 +19,10 @@ void main() {
       PtpDevicePropCode.wbColorTemp,
       PtpDevicePropCode.flashMode,
       PtpDevicePropCode.exposureMeteringMode,
-      PtpDevicePropCode.focusMode,
       PtpDevicePropCode.stillFocusMode,
       PtpDevicePropCode.stillCaptureMode,
       PtpDevicePropCode.compressionSetting,
       PtpDevicePropCode.rawCompressionType,
-      PtpDevicePropCode.imageSize,
       PtpDevicePropCode.captureAreaCrop,
       PtpDevicePropCode.activePicCtrlItem,
     ]);
@@ -101,11 +99,14 @@ void main() {
         _param(PtpDevicePropCode.exposureBiasCompensation).display(0), '0.0');
   });
 
-  test('display:表外值裸显 + 未读占位(测光/图像尺寸无值表)', () {
-    expect(_param(PtpDevicePropCode.exposureMeteringMode).display(2), '值 2');
-    expect(_param(PtpDevicePropCode.imageSize).display(3), '值 3');
+  test('display:表外值裸显 + 未读占位', () {
+    expect(_param(PtpDevicePropCode.exposureMeteringMode).display(7), '值 7',
+        reason: '测光表外值(2/3/4/0x8010 在表)');
     expect(_param(PtpDevicePropCode.whiteBalance).display(3), '值 3'); // 表外枚举
     expect(_param(PtpDevicePropCode.exposureProgramMode).display(null), '--');
+    expect(kShootingParams.any((p) => p.code == PtpDevicePropCode.imageSize),
+        isFalse,
+        reason: '图像尺寸(0x5003 STR 型)已移出目录');
   });
 
   test('读写路径路由:ISO/快门读写全走厂商码,模式由转盘拥有只读', () {
@@ -122,7 +123,10 @@ void main() {
     expect(shutter.writeType, PtpDataType.uint32);
     expect(shutter.writeConvert, isNull, reason: '面板值已是打包分数');
     expect(shutter.dialOwned, isTrue, reason: '机顶快门拨盘拥有 → 接管后才可调');
-    expect(_param(PtpDevicePropCode.exposureIndex).dialOwned, isFalse);
+    expect(_param(PtpDevicePropCode.exposureIndex).dialOwned, isTrue,
+        reason: 'ISO 按键+指令拨盘调整(2026-10-06 真机 0x200F)→ 接管后才可调');
+    expect(_param(PtpDevicePropCode.fNumber).dialOwned, isTrue,
+        reason: '光圈为指令拨盘参数(A/M 主拨盘)→ 接管后才可调');
     // 其余参数无路由(读码 = 写码 = 展示码)
     for (final code in [
       PtpDevicePropCode.fNumber,
@@ -135,9 +139,16 @@ void main() {
       expect(_param(code).writeCode, isNull, reason: '0x$code 无需路由');
       expect(_param(code).readCode, isNull);
     }
-    // 模式:机顶转盘物理拥有(OpenZCine read-only 口径),接管也不开放
-    expect(_param(PtpDevicePropCode.exposureProgramMode).readOnly, isTrue);
-    expect(_param(PtpDevicePropCode.exposureProgramMode).dialOwned, isFalse);
+    // 模式:机顶转盘物理拥有 → dialOwned(接管后可写,OpenZCine 同款
+    // 0x500E u16 标准写路径);对焦只留 0xD061 单一芯片(0x500A 只读
+    // 镜像已移出,避免「对焦/对焦模式」双芯片)。
+    expect(_param(PtpDevicePropCode.exposureProgramMode).readOnly, isFalse);
+    expect(_param(PtpDevicePropCode.exposureProgramMode).dialOwned, isTrue);
+    expect(kShootingParams.any((p) => p.code == PtpDevicePropCode.focusMode),
+        isFalse,
+        reason: '0x500A 只读镜像移出目录');
+    expect(_param(PtpDevicePropCode.exposureMeteringMode).display(3), '矩阵',
+        reason: '尼康方言:3=矩阵(ISO 标准表 3=点是错的)');
     expect(_param(PtpDevicePropCode.fNumber).readOnly, isFalse);
   });
 
