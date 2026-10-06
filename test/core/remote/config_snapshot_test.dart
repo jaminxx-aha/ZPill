@@ -78,8 +78,10 @@ Uint8List _propDescDataset(int code, PtpDataType type, int current,
     ..u16(type.code)
     ..u8(getSet ? 1 : 0);
   if (!truncateValue) {
-    type.write(w, current);
-    type.write(w, current); // 出厂默认值(ISO 15740:FORM 之前)
+    // 值区顺序(gphoto2 权威):出厂默认值在前,当前值在后 —— 不同值
+    // 锁死顺序(读反立刻炸)。
+    type.write(w, current + 1); // 出厂默认值
+    type.write(w, current); // 当前值
   }
   w.u8(0x00); // 无 FORM
   return w.takeBytes();

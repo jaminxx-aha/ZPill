@@ -491,7 +491,8 @@ void main() {
         ..u16(PtpDevicePropCode.exposureIndex)
         ..u16(PtpDataType.uint16.code)
         ..u8(1)
-        ..u16(200)
+        ..u16(100) // 出厂默认值(值区第一个,gphoto2 权威顺序)
+        ..u16(200) // 当前值(值区第二个)
         ..u8(0x02) // FORM 枚举
         ..u16(2)
         ..u16(100)..u16(6400);
@@ -500,6 +501,7 @@ void main() {
       final session = PtpSession(transport: fake);
       final d = await session.getDevicePropDesc(PtpDevicePropCode.exposureIndex);
       expect(d.currentValue, 200);
+      expect(d.factoryValue, 100);
       expect(d.enumValues, [100, 6400]);
       expect(d.getSet, isTrue);
     });

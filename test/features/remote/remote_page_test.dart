@@ -85,8 +85,10 @@ Uint8List _propDescDataset(int code, PtpDataType type, int current,
     ..u16(code)
     ..u16(type.code)
     ..u8(getSet ? 1 : 0);
-  type.write(w, current);
-  type.write(w, current); // 出厂默认值
+  // 值区顺序:gphoto2 权威 —— 出厂默认值在前,当前值在后;不同值
+  // 锁死顺序(读反立刻炸)。
+  type.write(w, current + 1); // 出厂默认值
+  type.write(w, current); // 当前值
   if (enums != null) {
     w
       ..u8(0x02) // FORM=0x02 枚举域
@@ -396,6 +398,34 @@ void main() {
         transport.requests
             .where((r) => r.opcode == PtpOperationCode.setDevicePropValue),
         isEmpty);
+  });
+
+  testWidgets('切回拍摄 tab / 回前台 → 参数对表刷新(机身侧改动兜底)',
+      (tester) async {
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = RemoteController(
+        session: PtpSession(transport: transport), connection: conn);
+    addTearDown(controller.dispose);
+    _scriptParams(transport); // 连接时全量
+    await tester.pumpWidget(
+        MaterialApp(home: RemotePage(controller: controller, active: false)));
+    conn.statesCtrl.add(CameraLinkState.connected);
+    await tester.pumpAndSettle();
+    expect(controller.exposure?.fNumber, 280);
+
+    // 切回 tab:对表刷一次(脚本耗尽会以 StateError 炸出 —— 刷了才消费)
+    _scriptParams(transport);
+    await tester.pumpWidget(
+        MaterialApp(home: RemotePage(controller: controller, active: true)));
+    await tester.pumpAndSettle();
+    expect(controller.exposure?.fNumber, 280);
+
+    // 回前台:同样对表
+    _scriptParams(transport);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pumpAndSettle();
+    expect(controller.exposure?.fNumber, 280);
   });
 
   testWidgets('点按取景画面 → 触控对焦(0x9205 帧像素坐标 + 对焦框回投)',

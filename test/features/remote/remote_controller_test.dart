@@ -101,8 +101,11 @@ Uint8List _propDescDataset(int code, PtpDataType type, int current,
     ..u16(code)
     ..u16(type.code)
     ..u8(getSet ? 1 : 0);
-  type.write(w, current);
-  type.write(w, current); // 出厂默认值
+  // 值区顺序(gphoto2 ptp_unpack_DPD 权威):出厂默认值在前,当前值
+  // 在后 —— 两者写不同值,解析器读反时 currentValue 会拿到出厂值,
+  // 断言立刻炸(2026-10-06 光圈卡死 f/2.0 的教训)。
+  type.write(w, current + 1); // 出厂默认值(值区第一个)
+  type.write(w, current); // 当前值(值区第二个)
   if (enums != null) {
     w
       ..u8(0x02) // FORM=0x02 枚举域
