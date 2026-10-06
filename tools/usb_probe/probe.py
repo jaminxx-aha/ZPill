@@ -115,6 +115,8 @@ NIKON_OC_CANDIDATES = {
     0x9421: "GetObjectSize(64 位对象大小)",
     0x9431: "GetPartialObjectEx(64 位偏移+长度 —— Z 系断点续传主力)",
     0x9434: "GetObjectsMetaData(批量 ObjectInfo —— 渐进式相册快路候选)",
+    0x9435: "ChangeApplicationMode(切应用模式,p1=1;不切遥控写被 0x200F 拒)",
+    0x9435: "ChangeApplicationMode(切应用模式,p1=1;不切遥控写被 0x200F 拒)",
 }
 NIKON_EVENT_CANDIDATES = {
     0x4002: "ObjectAdded(标准)", 0x400D: "CaptureComplete(标准)",
@@ -122,6 +124,10 @@ NIKON_EVENT_CANDIDATES = {
     0xC125: "?(gphoto 未收录,待真机事件核对)", 0xC700: "?(gphoto 未收录)",
 }
 NIKON_PROP_CANDIDATES = {
+    # 曝光写路径(OpenZCine Z 系口径:标准码 0x500D/0x500F 只读,写走厂商码)
+    0xD0B4: "ExposureIndexEx(ISO 写,u32)", 0xD0B5: "IsoControlSensitivity(有效 ISO 读,u32)",
+    0xD100: "StillShutterSpeed(快门读写,u32 分数打包 num<<16|den)",
+    0xD1F0: "ApplicationMode(u8,一代机身切应用模式回退)",
     0x5001: "BatteryLevel", 0x5005: "WhiteBalance", 0x5007: "FNumber",
     0x500D: "ExposureTime", 0x500F: "ExposureIndex(ISO)",
     0x5010: "ExposureBiasCompensation", 0x5013: "StillCaptureMode",
@@ -390,11 +396,16 @@ def read_ptp_value(buf: bytes, off: int, dtype: int):
 def parse_prop_desc(d: bytes) -> dict:
     """DevicePropDesc 数据集(ISO 15740 §10.5.1.3)防御性解码。
 
-    与 Dart PtpDevicePropDesc.parse 同策略:头部/当前值截断 → 保描述弃
-    FORM;FORM 区异常 → 整组置空;值区完好才尝试 MTP 出厂组。
+    布局(2026-10-05 真机修正):`u16 code + u16 type + u8 getSet +
+    当前值 + 出厂默认值 + u8 formFlag + FORM` —— 出厂默认值在 FORM
+    **之前**(旧版漏读它,把出厂值首字节当 formFlag,枚举域全丢)。
+    与 Dart PtpDevicePropDesc.parse 同策略:头部/当前值截断 → 保描述
+    弃 FORM;FORM 区异常 → 整组置空 + 整型属性扫描兜底
+    (「0x02 + u16 计数 + count×宽度恰好收尾」定位枚举段)。
     """
     r = {"dataType": None, "getSet": None, "current": None, "factory": None,
-         "rangeMin": None, "rangeMax": None, "rangeStep": None, "enumValues": None}
+         "rangeMin": None, "rangeMax": None, "rangeStep": None, "enumValues": None,
+         "enumFromScan": False}
     try:
         (_prop, dtype) = struct.unpack_from("<HH", d, 0)
         r["dataType"] = dtype
@@ -404,8 +415,16 @@ def parse_prop_desc(d: bytes) -> dict:
         r["current"], off = read_ptp_value(d, 5, dtype)
     except (IndexError, struct.error, ValueError):
         return r
+    # 出厂默认值(标准布局:位于 FORM 之前;截断数据集可缺)
+    factory_intact = False
     try:
         if off < len(d):
+            r["factory"], off = read_ptp_value(d, off, dtype)
+            factory_intact = True
+    except (IndexError, struct.error, ValueError):
+        r["factory"] = None
+    if factory_intact and off < len(d):
+        try:
             form_flag = d[off]
             off += 1
             if form_flag == 0x01:  # Range FORM:最小 / 最大 / 步长
@@ -420,22 +439,30 @@ def parse_prop_desc(d: bytes) -> dict:
                     v, off = read_ptp_value(d, off, dtype)
                     vals.append(v)
                 r["enumValues"] = vals
-    except (IndexError, struct.error, ValueError):
-        r["rangeMin"] = r["rangeMax"] = r["rangeStep"] = None
-        r["enumValues"] = None
-    # MTP 出厂默认值组(u16 个数 + N 值);标准 PTP 固件通常没有,失败置空
-    try:
-        if off + 2 <= len(d):
-            (count,) = struct.unpack_from("<H", d, off)
-            off += 2
-            vals = []
-            for _ in range(count):
-                v, off = read_ptp_value(d, off, dtype)
-                vals.append(v)
-            if vals:
-                r["factory"] = vals
-    except (IndexError, struct.error, ValueError):
-        r["factory"] = None
+        except (IndexError, struct.error, ValueError):
+            r["rangeMin"] = r["rangeMax"] = r["rangeStep"] = None
+            r["enumValues"] = None
+    # 扫描兜底:FORM 没解出来时,整型属性按「u8 0x02 + u16 计数 +
+    # count×宽度恰好填满缓冲」定位枚举段(OpenZCine 真机同款)。
+    if r["enumValues"] is None and r["rangeMin"] is None:
+        entry = PTP_DTYPES.get(dtype)
+        if entry and entry[1] is not None:
+            width = entry[1]
+            for i in range(max(len(d) - 2, 0)):
+                if d[i] != 0x02:
+                    continue
+                count = d[i + 1] | (d[i + 2] << 8)
+                start = i + 3
+                if count == 0 or start + count * width != len(d):
+                    continue
+                vals = []
+                off2 = start
+                for _ in range(count):
+                    v, off2 = read_ptp_value(d, off2, dtype)
+                    vals.append(v)
+                r["enumValues"] = vals
+                r["enumFromScan"] = True
+                break
     return r
 
 

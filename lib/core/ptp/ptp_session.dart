@@ -14,6 +14,7 @@ import 'dart:typed_data';
 import '../browser/storage_info.dart';
 import '../ptpip/object_info.dart';
 import '../utils/byte_reader.dart';
+import '../utils/byte_writer.dart';
 import 'device_prop.dart';
 import 'operation_codes.dart';
 import 'ptp_transport.dart';
@@ -382,11 +383,12 @@ final class PtpSession {
 
   // ---- 遥控域:曝光参数 / Live View / 快门释放 ----
 
-  /// SetDevicePropValue(0x1016)总开关。真机验证可写域之前恒为 false
-  /// (0xD406「写过即回弹」的教训:未验证的写操作一律不落到相机),
-  /// 翻开前 setDevicePropValue 直接抛 UnsupportedError。非常量 static:
-  /// 真机核对后(或测试)直接翻此旗,不改动调用方。
-  static bool kSetPropEnabled = false;
+  /// SetDevicePropValue(0x1016)总开关。2026-10-05 生产翻开:Zf 真机
+  /// 已实证 0x1016 可写(probe 写 0xD406 成功、回读生效),且 app 的
+  /// 写入值域一律取自相机自报 PropDesc(枚举域/getSet/类型),不发
+  /// 臆造值。旗标保留作紧急关断:写路径真机出问题时置回 false,
+  /// setDevicePropValue 直接抛 UnsupportedError、UI 调节入口静默只读。
+  static bool kSetPropEnabled = true;
 
   /// GetDevicePropValue(0x1015):当前值。响应是裸值数据集,解码类型
   /// 查标准表(见 [PtpDevicePropValue.parse]);方言偏离时改走
@@ -415,7 +417,7 @@ final class PtpSession {
   Future<void> setDevicePropValue(PtpDevicePropValue value) async {
     if (!kSetPropEnabled) {
       throw UnsupportedError(
-          'SetDevicePropValue 未启用:待真机核对可写域后翻开 kSetPropEnabled');
+          'SetDevicePropValue 已被总闸关断(kSetPropEnabled=false,紧急关断)');
     }
     final result = await _serialized(() => transport.execute(PtpRequest(
           opcode: PtpOperationCode.setDevicePropValue,
@@ -423,6 +425,36 @@ final class PtpSession {
           dataOut: value.encode(),
         )));
     _ensureOk(result, PtpOperationCode.setDevicePropValue);
+  }
+
+  /// 连接后切「应用模式」(Z 系真机口径,OpenZCine 实测:不切则相机对
+  /// 遥控写回 0x200F AccessDenied)。链路:0x9435 ChangeApplicationMode
+  /// p1=1(二代+);一代机身 op 缺席 → 回退写 ApplicationMode 属性
+  /// 0xD1F0=1(u8)。**不走 [kSetPropEnabled] 门禁** —— 它是连接模式
+  /// 控制而非拍摄参数写,且发生在任何参数面板之前;连双失败也只返回
+  /// false 不抛(尽力而为,拍照/读参数不依赖它,真机核对)。
+  Future<bool> enableAppControl() async {
+    try {
+      final result = await _serialized(() => transport.execute(PtpRequest(
+            opcode: NikonOperationCode.changeApplicationMode,
+            params: [1],
+          )));
+      if (result.responseCode == PtpResponseCode.ok) return true;
+    } on Object {
+      // op 缺席/链路类(含脚本耗尽类 StateError):走属性回退。
+      // 尽力而为步骤,on Object 兜底 —— 它失败不得影响连接主流程。
+    }
+    try {
+      final w = ByteWriter()..u8(1);
+      final result = await _serialized(() => transport.execute(PtpRequest(
+            opcode: PtpOperationCode.setDevicePropValue,
+            params: [PtpDevicePropCode.applicationMode],
+            dataOut: w.takeBytes(),
+          )));
+      return result.responseCode == PtpResponseCode.ok;
+    } on Object {
+      return false;
+    }
   }
 
   /// Nikon StartLiveView(0x9201,候选码,待真机核对)。

@@ -77,7 +77,10 @@ Uint8List _propDescDataset(int code, PtpDataType type, int current,
     ..u16(code)
     ..u16(type.code)
     ..u8(getSet ? 1 : 0);
-  if (!truncateValue) type.write(w, current);
+  if (!truncateValue) {
+    type.write(w, current);
+    type.write(w, current); // 出厂默认值(ISO 15740:FORM 之前)
+  }
   w.u8(0x00); // 无 FORM
   return w.takeBytes();
 }
@@ -161,7 +164,9 @@ void main() {
   });
 
   group('restore', () {
-    test('总闸未开 → UnsupportedError,零流量', () async {
+    test('总闸紧急关断 → UnsupportedError,零流量', () async {
+      PtpSession.kSetPropEnabled = false; // 生产已开,显式关断走分支
+      addTearDown(() => PtpSession.kSetPropEnabled = true);
       final snap = CameraConfigSnapshot(
         model: 'TestModel',
         deviceVersion: 'V1.00',
@@ -178,7 +183,7 @@ void main() {
 
     test('可写写入;当下只读/类型漂移跳过;写失败计入且继续', () async {
       PtpSession.kSetPropEnabled = true;
-      addTearDown(() => PtpSession.kSetPropEnabled = false);
+      addTearDown(() => PtpSession.kSetPropEnabled = true);
 
       transport
         ..ok(data: _deviceInfoDataset([])) // 型号比对(getDeviceInfo 缓存空)
@@ -226,7 +231,7 @@ void main() {
 
     test('型号不一致:不拦截,报告标记', () async {
       PtpSession.kSetPropEnabled = true;
-      addTearDown(() => PtpSession.kSetPropEnabled = false);
+      addTearDown(() => PtpSession.kSetPropEnabled = true);
 
       transport
         ..ok(data: _deviceInfoDataset([])) // model = TestModel
@@ -248,7 +253,7 @@ void main() {
 
     test('快照时只读的属性:预过滤跳过,零流量', () async {
       PtpSession.kSetPropEnabled = true;
-      addTearDown(() => PtpSession.kSetPropEnabled = false);
+      addTearDown(() => PtpSession.kSetPropEnabled = true);
 
       transport.ok(data: _deviceInfoDataset([]));
       final snap = CameraConfigSnapshot(

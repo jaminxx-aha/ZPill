@@ -1,6 +1,6 @@
 /// 拍摄配置快照控制器(TODO §三 菜单预设):拍当前配置 / 列表 / 恢复 /
 /// 删除。快照纯读随时可用;恢复走 0x1016 写路径,总闸
-/// [PtpSession.kSetPropEnabled] 未开时按错误提示(不臆造流量)。
+/// [PtpSession.kSetPropEnabled] 紧急关断时按错误提示(不臆造流量)。
 library;
 
 import 'dart:async';
@@ -86,7 +86,7 @@ final class SnapshotController extends ChangeNotifier {
       return;
     }
     if (!PtpSession.kSetPropEnabled) {
-      error = '恢复未启用:待真机核对可写域后开放';
+      error = '恢复已被总闸关断(紧急关断)';
       notifyListeners();
       return;
     }

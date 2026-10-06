@@ -173,6 +173,7 @@ Future<void> scriptWirelessConnect(
 }) async {
   await scriptHandshakeAndOpen(command, event,
       deviceInfoOperations: deviceInfoOperations);
+  await scriptAppMode(command); // 连接转正前切应用模式
   await connecting;
 }
 
@@ -206,6 +207,18 @@ Future<void> scriptCompletePairing(FakePtpIpChannel command) async {
   await pumpEventQueue(); // 泵到 0x935A 应答送达、配对后续(落账/重连)启动
 }
 
+/// 脚本化 0x9435 切应用模式应答(连接转正前的最后一步)并断言请求
+/// 形态(p1=1)。配对相走完后的直连路径同样会发它。
+Future<void> scriptAppMode(FakePtpIpChannel command) async {
+  await pumpEventQueue();
+  final req = _codec.decode(command.sent.last) as OperationRequestPacket;
+  expect(req.opcode, NikonOperationCode.changeApplicationMode);
+  expect(req.params, [1]);
+  command.emit(_frameOf(OperationResponsePacket(
+      responseCode: PtpResponseCode.ok, transactionId: req.transactionId)));
+  await pumpEventQueue();
+}
+
 /// 配对测试装配:每次无线连接新建传输实例(同生产语义),通道从池里
 /// 顺序出队 —— 连接 1 用 command[0]/event[0],配对后重连(连接 2)用
 /// command[1]/event[1]。[connects] 为预置连接数。
@@ -215,6 +228,7 @@ Future<void> scriptCompletePairing(FakePtpIpChannel command) async {
   FakeUsbHostChannel usb, {
   required PairedCamerasStore paired,
   int connects = 2,
+  List<Duration> retryDelays = const [Duration(seconds: 1), Duration(seconds: 2)],
 }) {
   final command = List.generate(connects, (_) => FakePtpIpChannel());
   final event = List.generate(connects, (_) => FakePtpIpChannel());
@@ -230,6 +244,7 @@ Future<void> scriptCompletePairing(FakePtpIpChannel command) async {
       link: link,
       session: session,
       pairedCameras: paired,
+      postPairingRetryDelays: retryDelays,
       createIpTransport: () async => PtpIpTransport(
         createChannel: () => pool.removeAt(0),
         transactionTimeout: const Duration(milliseconds: 500),
@@ -311,6 +326,7 @@ void main() {
         responseCode: PtpResponseCode.sessionAlreadyOpen)); // OpenSession ①
     fake.reply(_ok()); // CloseSession(残留)
     fake.reply(_ok()); // OpenSession ②
+    fake.reply(_ok()); // 0x9435 切应用模式
 
     await conn.connect();
 
@@ -322,6 +338,7 @@ void main() {
         PtpOperationCode.openSession,
         PtpOperationCode.closeSession,
         PtpOperationCode.openSession,
+        NikonOperationCode.changeApplicationMode,
       ],
     );
   });
@@ -333,7 +350,8 @@ void main() {
     final (conn, _, session) = wireUsb(usb, fake);
 
     fake.reply(_ok(data: buildDeviceInfoDataset()));
-    fake.reply(_ok());
+    fake.reply(_ok()); // OpenSession
+    fake.reply(_ok()); // 0x9435 切应用模式
     await conn.connect();
 
     await conn.disconnect();
@@ -343,10 +361,11 @@ void main() {
     expect(session.isSessionOpen, isFalse);
     expect(usb.closeCalls, 1);
     // teardown 顺序定案:detach 先行挡住 CloseSession(相机侧残留由
-    // 0x201E 自愈处理),链路上只见过连接期的两个请求
+    // 0x201E 自愈处理),链路上只见过连接期的三个请求
     expect(fake.requests.map((r) => r.opcode), [
       PtpOperationCode.getDeviceInfo,
       PtpOperationCode.openSession,
+      NikonOperationCode.changeApplicationMode,
     ]);
   });
 
@@ -389,6 +408,7 @@ void main() {
     // 相机重启翻回全量画像后重连:force 刷新不吃受限缓存,正常连上。
     fake.reply(_ok(data: buildDeviceInfoDataset())); // GetDeviceInfo(force)
     fake.reply(_ok()); // OpenSession
+    fake.reply(_ok()); // 0x9435 切应用模式
     await conn.connect();
     expect(conn.state, CameraLinkState.connected);
     expect(conn.deviceName, 'TestModel');
@@ -403,6 +423,7 @@ void main() {
 
     fake.reply(_ok(data: buildDeviceInfoDataset()));
     fake.reply(_ok()); // OpenSession
+    fake.reply(_ok()); // 0x9435 切应用模式
     await conn.connect();
     expect(conn.state, CameraLinkState.connected);
 
@@ -417,6 +438,7 @@ void main() {
     expect(fake.requests.map((r) => r.opcode), [
       PtpOperationCode.getDeviceInfo,
       PtpOperationCode.openSession,
+      NikonOperationCode.changeApplicationMode,
     ]);
     expect(states, [
       CameraLinkState.connecting,
@@ -632,6 +654,59 @@ void main() {
       ]);
     });
 
+    test('配对后重连:首连被拒(槽位未释放 InitFail)→ 退避重试 → connected',
+        () async {
+      final usb = FakeUsbHostChannel(const []);
+      final paired = InMemoryPairedCamerasStore();
+      // 退避注入 30ms:failed 态要留出可观察窗口(零延迟会被重试瞬间覆盖)
+      final (conn, _, session, command, event) = wirePairing(usb,
+          paired: paired,
+          connects: 3,
+          retryDelays: const [Duration(milliseconds: 30)]);
+      final states = <CameraLinkState>[];
+      conn.states.listen(states.add);
+
+      final connecting =
+          conn.connect(ip: '192.168.0.104', instanceName: 'Z_f_8014411');
+      await scriptHandshakeAndOpen(command[0], event[0]);
+      await scriptPairingCode(command[0]);
+      await conn.confirmPairing();
+      await scriptCompletePairing(command[0]);
+      command[0].emitClosed();
+      await pumpEventQueue();
+
+      // 重连 1:等它拨号到 command[1],再按「槽位未释放」拒之
+      // (2026-10-06 Zf 真机形态)
+      for (var i = 0; command[1].sent.isEmpty && i < 100; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 1));
+      }
+      expect(command[1].sent, isNotEmpty, reason: '配对后重连已拨号');
+      command[1].emit(_frameOf(const InitFailPacket(reason: 0x1)));
+      for (var i = 0; conn.state != CameraLinkState.failed && i < 100; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 1));
+      }
+      expect(conn.state, CameraLinkState.failed, reason: '首连被拒,瞬时失败');
+
+      // 退避(30ms)后重连 2:全流程成功
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      await scriptWirelessConnect(command[2], event[2], connecting);
+      expect(conn.state, CameraLinkState.connected);
+      expect(conn.error, isNull);
+      expect(session.isSessionOpen, isTrue);
+      final saved = await paired.list();
+      expect(saved.single.wirelessPaired, isTrue);
+      // 状态序:connecting → pairing → connecting(重连1)→ failed →
+      // connecting(退避重连2)→ connected
+      expect(states, [
+        CameraLinkState.connecting,
+        CameraLinkState.pairing,
+        CameraLinkState.connecting,
+        CameraLinkState.failed,
+        CameraLinkState.connecting,
+        CameraLinkState.connected,
+      ]);
+    });
+
     test('已配对(档案在册):不问配对直连,链路上无 0x952B/0x935A', () async {
       final usb = FakeUsbHostChannel(const []);
       final paired = InMemoryPairedCamerasStore();
@@ -640,6 +715,7 @@ void main() {
         name: 'Z_f_8014411',
         model: 'TestModel',
         lastIp: '192.168.0.104',
+        wirelessPaired: true,
       ));
       final (conn, _, _, command, event) = wirePairing(usb, paired: paired);
 
@@ -652,7 +728,11 @@ void main() {
           .whereType<OperationRequestPacket>()
           .map((p) => p.opcode)
           .toList();
-      expect(ops, [PtpOperationCode.getDeviceInfo, PtpOperationCode.openSession]);
+      expect(ops, [
+        PtpOperationCode.getDeviceInfo,
+        PtpOperationCode.openSession,
+        NikonOperationCode.changeApplicationMode,
+      ]);
     });
 
     test('取码被拒(裸错误响应):当前会话照常转正,不落档案(下次再问)',
@@ -669,12 +749,34 @@ void main() {
       command[0].emit(_frameOf(OperationResponsePacket(
           responseCode: PtpResponseCode.generalError,
           transactionId: req.transactionId)));
+      await scriptAppMode(command[0]); // 会话照常转正的最后一拍
       await connecting;
 
       expect(conn.state, CameraLinkState.connected);
       expect(conn.pairingCode, isNull);
       expect(command[1].connected, isFalse); // 未发生重连
-      expect(await paired.list(), isEmpty); // 不误记「已配对」
+      // STA「连接至计算机」形态:0x952B 拒答也要落连接档案(快速重连
+      // 可用),但 wirelessPaired=false —— 下次连接仍问配对,不误记。
+      final saved = await paired.list();
+      expect(saved, hasLength(1));
+      expect(saved.single.id, '012345678901');
+      expect(saved.single.lastIp, '192.168.1.1');
+      expect(saved.single.wirelessPaired, isFalse);
+
+      // 重连:配对未完成(旗标 false)→ 再问 0x952B(再拒)→ 转正
+      await conn.disconnect();
+      final reconnect = conn.connect(ip: '192.168.1.1');
+      await scriptHandshakeAndOpen(command[1], event[1]);
+      await pumpEventQueue();
+      final req2 =
+          _codec.decode(command[1].sent.last) as OperationRequestPacket;
+      expect(req2.opcode, NikonOperationCode.getPtpIpPairingCode);
+      command[1].emit(_frameOf(OperationResponsePacket(
+          responseCode: PtpResponseCode.generalError,
+          transactionId: req2.transactionId)));
+      await scriptAppMode(command[1]);
+      await reconnect;
+      expect(conn.state, CameraLinkState.connected);
     });
 
     test('跳过配对:当前会话转正,相机不记录,无重连', () async {
@@ -689,10 +791,15 @@ void main() {
       expect(conn.state, CameraLinkState.pairing);
 
       await conn.cancelPairing();
+      await scriptAppMode(command[0]); // 转正前切应用模式
       await connecting;
 
       expect(conn.state, CameraLinkState.connected);
-      expect(await paired.list(), isEmpty);
+      // 用户跳过:连接档案照落(应用侧记住),但相机侧未记录 → 旗标
+      // false,下次连接再问配对。
+      final saved = await paired.list();
+      expect(saved, hasLength(1));
+      expect(saved.single.wirelessPaired, isFalse);
       expect(command[1].connected, isFalse);
       // 0x935A 未发出:链路上只有 GetDeviceInfo/OpenSession/取码
       final ops = command[0].sent
@@ -704,6 +811,7 @@ void main() {
         PtpOperationCode.getDeviceInfo,
         PtpOperationCode.openSession,
         NikonOperationCode.getPtpIpPairingCode,
+        NikonOperationCode.changeApplicationMode,
       ]);
     });
 
@@ -745,10 +853,14 @@ void main() {
       command[0].emit(_frameOf(OperationResponsePacket(
           responseCode: PtpResponseCode.generalError,
           transactionId: req.transactionId)));
+      await scriptAppMode(command[0]); // 按跳过处理后的转正一拍
       await connecting;
 
       expect(conn.state, CameraLinkState.connected);
-      expect(await paired.list(), isEmpty);
+      // 拒答按跳过处理:档案落账但旗标 false,下次再问。
+      final saved = await paired.list();
+      expect(saved, hasLength(1));
+      expect(saved.single.wirelessPaired, isFalse);
       expect(command[1].connected, isFalse);
     });
 

@@ -114,12 +114,15 @@ final class CameraConnectionImpl implements CameraConnection {
     required PtpSession session,
     Future<PtpIpTransport> Function()? createIpTransport,
     PairedCamerasStore? pairedCameras,
+    List<Duration> postPairingRetryDelays =
+        const [Duration(seconds: 1), Duration(seconds: 2)],
   })  : _usb = usb,
         _usbTransport = usbTransport,
         _link = link,
         _session = session,
         _createIpTransport = createIpTransport ?? _defaultIpTransport,
-        _pairedCameras = pairedCameras {
+        _pairedCameras = pairedCameras,
+        _postPairingRetryDelays = postPairingRetryDelays {
     // 断链事件只在 connected/pairing 态生效;connecting 态的失败由
     // connect() 自己的 catch 上报,failed/disconnected 已无会话可清。
     _usb.breakages.listen(_onLinkBreakage);
@@ -138,6 +141,11 @@ final class CameraConnectionImpl implements CameraConnection {
 
   /// 已配对相机记录;null = 不做配对相(纯链路测试装配)。
   final PairedCamerasStore? _pairedCameras;
+
+  /// 配对后重连的退避节拍(测试注入零延迟)。相机记录本设备后自收
+  /// 会话,立刻重连可能撞上单连接槽位尚未释放(Zf 真机 2026-10-06:
+  /// 配对确认后重连报连接失败)。
+  final List<Duration> _postPairingRetryDelays;
 
   /// 当前无线链路实例(连接期间非 null);teardown 收尾后清空。
   PtpIpTransport? _wirelessTransport;
@@ -230,16 +238,42 @@ final class CameraConnectionImpl implements CameraConnection {
         switch (await _runPairing(info, ip, instanceName)) {
           case _PairResult.newlyPaired:
             // 相机记录本设备后自收会话(Z50II 实测;Zf 待核对):
-            // teardown 后全流程重连,免配对相。
+            // teardown 后全流程重连,免配对相。配对已成功,重连这最后
+            // 一步撞上槽位未释放时不直接踢回失败态 —— 按退避节拍重试;
+            // 期间用户主动断开/外部收口(离开 failed 态)则不再重试。
             await _teardown();
             _transition(CameraLinkState.connecting);
-            return await _connectWireless(ip, instanceName: instanceName);
+            for (var attempt = 0;; attempt++) {
+              await _connectWireless(ip, instanceName: instanceName);
+              if (_state != CameraLinkState.failed ||
+                  attempt >= _postPairingRetryDelays.length) {
+                return;
+              }
+              await Future<void>.delayed(_postPairingRetryDelays[attempt]);
+              if (_state != CameraLinkState.failed) {
+                return; // 退避期间被外部收口(用户断开等)
+              }
+              _error = null;
+              _transition(CameraLinkState.connecting);
+            }
           case _PairResult.alreadyPaired:
           case _PairResult.declined:
             break; // 当前会话照常转正
           case _PairResult.aborted:
             return; // 外部 disconnect / 断链已收口状态
         }
+      }
+      // 切应用模式(同 USB 路径;SnapBridge 方言握手本就含此步,
+      // 我们补齐 —— OpenZCine 无线握手序列在 OpenSession 后必发)。
+      await _session.enableAppControl();
+      // 连接档案落账(不管相机侧配对是否完成):扫描出的 IP/展示名进
+      // 快速重连列表 —— STA「连接至计算机」模式相机不答 0x952B,旧
+      // 逻辑只配对成功才落账 → 该模式永远存不下来(2026-10-06 真机
+      // 反馈)。写盘失败不拦连接(档案是便利功能,非连接前置)。
+      try {
+        await _rememberCamera(info, ip, instanceName);
+      } on Exception {
+        // 档案写盘失败:连接照常
       }
       _error = null;
       _transition(CameraLinkState.connected);
@@ -293,7 +327,7 @@ final class CameraConnectionImpl implements CameraConnection {
     // _pairingCompleting 不复位:离开 pairing 态那一刻统一清(见
     // _transition)—— 0x935A 之后到重连转 connecting 之前,相机收线
     // 都是预期行为,不得按断链失败处理。
-    await _markPaired(info, ip, instanceName);
+    await _rememberCamera(info, ip, instanceName, pairedOnCamera: true);
     return _PairResult.newlyPaired;
   }
 
@@ -301,12 +335,22 @@ final class CameraConnectionImpl implements CameraConnection {
     final store = _pairedCameras;
     if (store == null) return false;
     final id = _cameraId(info);
-    return !(await store.list()).any((c) => c.id == id);
+    // 只认 wirelessPaired(相机侧已完成 0x935A):STA「连接至计算机」
+    // 模式相机不答配对 op,应用侧虽已记住(连接即落账),相机侧没
+    // 记录 —— 每次连接重问 0x952B(拒答不可见,一发 op 的代价),
+    // 直到某次相机答了码走完配对为止。
+    return !(await store.list()).any((c) => c.id == id && c.wirelessPaired);
   }
 
-  /// 记配对档案(键 = 序列号,稳定;补全最近 IP 与展示名,方便快速重连)。
-  Future<void> _markPaired(
-      PtpDeviceInfo info, String ip, String? instanceName) async {
+  /// 记连接档案(键 = 序列号,稳定;补全最近 IP 与展示名,方便快速
+  /// 重连)。[pairedOnCamera] = 相机侧已记录本设备(0x935A 完成)——
+  /// true 置位后不再重问配对;false 只更新连接信息,保留旧旗标。
+  Future<void> _rememberCamera(
+    PtpDeviceInfo info,
+    String ip,
+    String? instanceName, {
+    bool pairedOnCamera = false,
+  }) async {
     final store = _pairedCameras;
     if (store == null) return;
     final id = _cameraId(info);
@@ -316,6 +360,7 @@ final class CameraConnectionImpl implements CameraConnection {
       model: info.model,
       lastIp: ip,
       lastConnectedAt: DateTime.now(),
+      wirelessPaired: pairedOnCamera,
     );
     for (final existing in await store.list()) {
       if (existing.id == id) {
@@ -324,6 +369,7 @@ final class CameraConnectionImpl implements CameraConnection {
           model: info.model,
           lastIp: ip,
           lastConnectedAt: DateTime.now(),
+          wirelessPaired: pairedOnCamera ? true : null,
         );
         break;
       }
@@ -353,6 +399,10 @@ final class CameraConnectionImpl implements CameraConnection {
       return;
     }
     await _session.open();
+    // 切应用模式(Z 系真机口径:不切则遥控写被 0x200F AccessDenied 拒;
+    // 尽力而为,失败不拦连接 —— 拍照/读参数不依赖它,OpenZCine 同款
+    // 降级策略)。真机核对。
+    await _session.enableAppControl();
     _deviceName = info.model;
     _error = null;
     _transition(CameraLinkState.connected);

@@ -6,15 +6,24 @@
 ///   Zf 在册表内 —— 在册表不是真相的全部(与 STA 9-op 小表同理),
 ///   相机可能照常应答;PropDesc 拒答时置空显示「--」,无害。
 ///
+/// **写路径路由(2026-10-06,Z 系真机口径,源 = OpenZCine)**:静照
+/// ISO/快门的标准码 0x500F/0x500D **只读不可写** —— Z 机身写 ISO 走
+/// 0xD0B4(u32,值 = ISO 数)、写快门走 0xD100(u32 分数打包
+/// num<<16|den);标准码仍用于读/展示(0x500D 读出的 µs 由
+/// [ShootingParam.writeConvert] 换算成打包分数,表外值拒绝发送 ——
+/// 宁失败不错值)。曝光模式 0x500E 由机顶转盘拥有,遥控不可改
+/// (只读展示)。真机核对。
+///
 /// 枚举值标签:尼康方言值表(源 = OpenZCine PTPCameraPropertyDecoders,
 /// 其又源出 libgphoto2 config.c;**全部标 verify-on-HW,Zf 待真机核对**)。
 /// 表外值回退格式化/「值 N」,回读真机后如有出入只改标签表。
 /// 优化校准的创意组(101-120)/自定义(201-209)/云(301-309)按段格式化。
 library;
 
+import '../../core/ptp/device_prop.dart';
 import '../../core/ptp/operation_codes.dart';
 
-/// 单个拍摄参数:属性码 + 中文名 + 值展示规则。
+/// 单个拍摄参数:属性码 + 中文名 + 值展示规则 + 写路径路由。
 final class ShootingParam {
   const ShootingParam({
     required this.code,
@@ -22,9 +31,13 @@ final class ShootingParam {
     this.enumLabels = const {},
     this.format,
     this.prominent = false,
+    this.writeCode,
+    this.writeType,
+    this.writeConvert,
+    this.readOnly = false,
   });
 
-  /// PTP DevicePropCode(0x5004/0x5005/…)。
+  /// PTP DevicePropCode(0x5004/0x5005/…)—— 读/展示/回读用。
   final int code;
 
   /// 中文参数名(芯片标签)。
@@ -39,6 +52,21 @@ final class ShootingParam {
   /// 曝光三要素(大号芯片行);其余进参数横滚行小芯片。
   final bool prominent;
 
+  /// 写路径属性码:缺省同 [code];Z 系 ISO/快门的标准码只读,
+  /// 写走厂商码(0xD0B4/0xD100)。
+  final int? writeCode;
+
+  /// 写数据类型:缺省用相机 PropDesc 自报类型;写码与读码类型不同时
+  /// 显式指定(如 ISO:读 0x500F u16 / 写 0xD0B4 u32)。
+  final PtpDataType? writeType;
+
+  /// 写值换算:读码值 → 写码值;null 返回值 = 无法换算,拒绝发送
+  /// (宁失败不错值)。快门 0x500D µs → 0xD100 分数打包。
+  final int? Function(int v)? writeConvert;
+
+  /// 机身物理件拥有的参数(模式转盘等):遥控只读,面板不开放。
+  final bool readOnly;
+
   /// 当前值展示:null = 未读;枚举表外 → 格式化 → 原始数字。
   String display(int? value) {
     if (value == null) {
@@ -47,6 +75,11 @@ final class ShootingParam {
     return enumLabels[value] ?? format?.call(value) ?? '值 $value';
   }
 }
+
+/// 目录码 → 参数(写路由/只读判定用)。
+final shootingParamByCode = <int, ShootingParam>{
+  for (final p in kShootingParams) p.code: p,
+};
 
 /// 光圈:f 值 ×100(ISO 15740 定点,Zf 实际布局待真机核对)。
 String _formatFNumber(int v) => 'f/${(v / 100).toStringAsFixed(1)}';
@@ -74,6 +107,38 @@ String _formatShutter(int us) {
 /// 白平衡色温 0xD01E:开尔文裸值。
 String _formatColorTemp(int v) => '${v}K';
 
+/// 尼康标准快门档(分子, 分母;1/8000s … 30s)。0x500D 的 µs 是分数的
+/// 舍入编码(1/60s = 16667µs),换算按「最近标准档 + 容差」匹配,不做
+/// 通用分数逼近 —— 表外值宁可拒绝也不发错值(宁失败不错值)。
+const _shutterStops = <(int, int)>[
+  (1, 8000), (1, 6400), (1, 5000), (1, 4000), (1, 3200), (1, 2500),
+  (1, 2000), (1, 1600), (1, 1250), (1, 1000), (1, 800), (1, 640),
+  (1, 500), (1, 400), (1, 320), (1, 250), (1, 200), (1, 160),
+  (1, 125), (1, 100), (1, 80), (1, 60), (1, 50), (1, 40),
+  (1, 30), (1, 25), (1, 20), (1, 15), (1, 13), (1, 10),
+  (1, 8), (1, 6), (1, 5), (1, 4), (1, 3), (2, 5), (1, 2),
+  (3, 5), (4, 5), (1, 1), (13, 10), (8, 5), (2, 1), (5, 2),
+  (3, 1), (4, 1), (5, 1), (6, 1), (8, 1), (10, 1), (13, 1),
+  (15, 1), (20, 1), (25, 1), (30, 1),
+];
+
+/// 快门写值换算:0x500D 读出的 µs → 0xD100 分数打包(num<<16|den,
+/// OpenZCine stillShutterRaw 同款)。µs 与最近标准档偏差超过 2.5%
+/// (µs 编码舍入之外)视为表外值 → null(调用方拒绝发送)。
+int? _packShutterUs(int us) {
+  if (us <= 0) return null;
+  var best = 0;
+  var bestErr = double.infinity;
+  for (final (n, d) in _shutterStops) {
+    final err = (us - n * 1000000 / d).abs();
+    if (err < bestErr) {
+      bestErr = err;
+      best = (n << 16) | d;
+    }
+  }
+  return bestErr <= us * 0.025 + 1 ? best : null;
+}
+
 /// 优化校准 0xD200 段位:101-120 创意组 / 201-209 自定义 / 301-309 云下载
 /// (内置 1-11 与创意组成员走枚举表)。
 String _formatPicCtrl(int v) {
@@ -88,9 +153,12 @@ String _formatPicCtrl(int v) {
 const kShootingParams = <ShootingParam>[
   // 曝光模式:尼康方言(libgphoto2 exposure_program_modes 候选表;
   // ISO 标准表 2=自动/5=程序 对尼康是错的 —— 2=P、3=A、4=S)。
+  // readOnly:机顶转盘拥有(Z 系真机口径,OpenZCine 标 read-only
+  // "the dial owns it")—— 遥控只读展示。
   ShootingParam(
     code: PtpDevicePropCode.exposureProgramMode,
     label: '模式',
+    readOnly: true,
     enumLabels: {
       1: '手动 M',
       2: '程序 P',
@@ -117,16 +185,25 @@ const kShootingParams = <ShootingParam>[
       label: '光圈',
       format: _formatFNumber,
       prominent: true),
+  // 快门:读 0x500D(µs,展示)/ 写 0xD100(分数打包 u32)—— Z 系
+  // 标准码只读,写走厂商码(OpenZCine 实测口径)。
   ShootingParam(
       code: PtpDevicePropCode.exposureTime,
       label: '快门',
       format: _formatShutter,
-      prominent: true),
+      prominent: true,
+      writeCode: PtpDevicePropCode.stillShutterSpeed,
+      writeType: PtpDataType.uint32,
+      writeConvert: _packShutterUs),
+  // ISO:读 0x500F(展示)/ 写 0xD0B4(u32,值 = ISO 数)—— 同上,
+  // Z 系标准码只读。
   ShootingParam(
       code: PtpDevicePropCode.exposureIndex,
       label: 'ISO',
       format: _formatIso,
-      prominent: true),
+      prominent: true,
+      writeCode: PtpDevicePropCode.exposureIndexEx,
+      writeType: PtpDataType.uint32),
   ShootingParam(
       code: PtpDevicePropCode.exposureBiasCompensation,
       label: 'EV',

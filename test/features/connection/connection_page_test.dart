@@ -386,6 +386,76 @@ void main() {
       expect(scanner.stopCalls, 1);
     });
 
+    testWidgets('断开后快速重连列表刷新(connected → disconnected 沿上重拉档案)',
+        (tester) async {
+      final conn = _FakeConnection();
+      final store = InMemoryPairedCamerasStore();
+      await store.save(const CameraInfo(
+          id: '012345678901', name: 'Z_f_8014411', lastIp: '192.168.1.4'));
+      final controller =
+          ConnectionController(connection: conn, pairedCameras: store);
+      await tester
+          .pumpWidget(MaterialApp(home: ConnectionPage(controller: controller)));
+      await tester.pump();
+
+      // 首帧档案:STA 分段下「上次」列表可见
+      await tester.tap(find.text('同一 Wi-Fi'));
+      await tester.pump();
+      expect(find.text('上次:Z_f_8014411'), findsOneWidget);
+
+      // 连接期间档案新增(另一台);断开的沿上要重拉到
+      await store.save(
+          const CameraInfo(id: '99', name: 'Z_8_ABC', lastIp: '192.168.1.9'));
+      conn.statesCtrl.add(CameraLinkState.connected);
+      await tester.pump();
+      conn.statesCtrl.add(CameraLinkState.disconnected);
+      await tester.pumpAndSettle();
+      expect(find.text('上次:Z_8_ABC'), findsOneWidget,
+          reason: '断开沿上重拉连接档案');
+      expect(find.text('上次:Z_f_8014411'), findsOneWidget);
+    });
+
+    testWidgets('STA 卡手填 IP:扫描不到时直连已知地址', (tester) async {
+      final conn = _FakeConnection();
+      final controller = ConnectionController(connection: conn);
+      await tester.pumpWidget(
+          MaterialApp(home: ConnectionPage(controller: controller)));
+
+      await tester.tap(find.text('同一 Wi-Fi'));
+      await tester.pump();
+      expect(find.text('STA 连接(同一 Wi-Fi)'), findsOneWidget);
+      // 独立控制器:空预填(AP 默认地址在 STA 网段是路由器,预填即误拨)
+      expect(controller.manualIpController.text, isEmpty);
+
+      // mDNS 依赖相机主动广播;扫不到但已知 IP 时手填直连
+      await tester.enterText(find.byType(TextField), '192.168.1.5');
+      await tester.tap(find.widgetWithText(FilledButton, '连接'));
+      await tester.pump();
+      expect(conn.connectIp, '192.168.1.5');
+    });
+
+    testWidgets('connecting 态:输入禁用但可取消(死 IP 超时逃生口)',
+        (tester) async {
+      final conn = _FakeConnection();
+      final controller = ConnectionController(connection: conn);
+      await tester.pumpWidget(
+          MaterialApp(home: ConnectionPage(controller: controller)));
+
+      // 先切到 STA 分段(连接中分段被锁,切不了)
+      await tester.tap(find.text('同一 Wi-Fi'));
+      await tester.pump();
+      conn.statesCtrl.add(CameraLinkState.connecting);
+      await tester.pump();
+
+      expect(find.text('取消连接'), findsOneWidget);
+      final field = tester.widget<TextField>(find.byType(TextField));
+      expect(field.enabled, isFalse, reason: '连接中输入禁用');
+
+      await tester.tap(find.text('取消连接'));
+      await tester.pump();
+      expect(conn.disconnectCalls, 1);
+    });
+
     testWidgets('配对弹窗:展示验证码;确认 → confirmPairing,关窗', (tester) async {
       final conn = _FakeConnection()..code = '5077';
       final controller = ConnectionController(connection: conn);

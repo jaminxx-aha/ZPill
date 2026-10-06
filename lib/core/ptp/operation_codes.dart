@@ -52,6 +52,10 @@ abstract final class NikonOperationCode {
   static const int getObjectSize = 0x9421; // 64 位对象大小,data-in
   static const int getPartialObjectEx = 0x9431; // 64 位偏移+长度 —— Z 系断点续传主力
   static const int getObjectsMetaData = 0x9434;
+  // 连接后切「应用模式」(p1=1):Z 系真机口径,不切则相机对遥控写/控制
+  // 回 0x200F AccessDenied(OpenZCine:USB 握手在 OpenSession 后必发,
+  // 无线 SnapBridge 方言握手同样内置;真机核对)。
+  static const int changeApplicationMode = 0x9435;
   // 智能设备配对双op(STA 模式 op 表在册,2026-10-04 Zf 真机;语义按
   // NiConn_DEMO 对 SnapBridge 的抓包分析,真机流程待核对):
   static const int completePairing = 0x935A; // 配对确认(param 0x2001),相机记录本客户端
@@ -166,6 +170,12 @@ abstract final class PtpDevicePropCode {
   static const int wbColorTemp = 0xD01E; // 白平衡色温(K),u16
   static const int captureAreaCrop = 0xD030; // 图像区域 FX/DX/1:1/16:9,u8
   static const int stillFocusMode = 0xD061; // 静照对焦模式 AF-S/AF-C/MF/AF-A,u8
+  // 曝光写路径(Z 系真机口径,OpenZCine:静照 ISO/快门的标准码 0x500F/
+  // 0x500D 只读不可写 —— 写要走厂商码;真机核对):
+  static const int exposureIndexEx = 0xD0B4; // ISO 写,u32(值 = ISO 数)
+  static const int isoControlSensitivity = 0xD0B5; // 有效 ISO 读(含 Auto ISO),u32
+  static const int stillShutterSpeed = 0xD100; // 快门读写,u32 分数打包(num<<16|den)
+  static const int applicationMode = 0xD1F0; // 应用模式,u8(一代机身 op 缺席时的写回退)
   static const int activePicCtrlItem = 0xD200; // 优化校准(Picture Control),u16
   // Zf 另报 MTP 标准属性 0xD303/0xD406/0xD407(UseDeviceStageFlag /
   // SessionInitiatorInfo / PerceivedDeviceType,与拍摄无关,不入册)。

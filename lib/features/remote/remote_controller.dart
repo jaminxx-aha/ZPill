@@ -13,8 +13,8 @@
 /// 拍摄参数目录驱动([kShootingParams]):PropDesc(0x1014)自描述
 /// (可写性/枚举域/范围域),裸值 0x1015 只作 PropDesc 不可用时的回退。
 /// 写路径(0x1016)三重门禁:[PtpSession.kSetPropEnabled] 总开关
-/// (真机核对前恒关)+ 相机 getSet 上报 + 值域(枚举/范围外的值由
-/// 相机 clamp,回读为准)。
+/// (2026-10-05 生产已开,真机实证;保留作紧急关断)+ 相机 getSet
+/// 上报 + 值域(枚举/范围外的值由相机 clamp,回读为准)。
 ///
 /// 对焦域(候选码,待真机核对):点取景画面 → 0x9205 移动对焦区域 +
 /// 0x90C1 驱动对焦(对焦按钮单独驱动);「对焦后拍」开关把快门 0x9207
@@ -115,8 +115,8 @@ final class RemoteController extends ChangeNotifier {
   /// AE 拍与忙退避会互抢放行次序);默认与 [_delay] 同源。
   final Future<void> Function(Duration) _aeDelay;
 
-  /// 写门禁:生产恒取 [PtpSession.kSetPropEnabled];测试注入覆写以
-  /// 覆盖写路径(总开关本身是编译期常量,测试不可翻转)。
+  /// 写门禁:生产恒取 [PtpSession.kSetPropEnabled](真机实证已开,
+  /// 紧急关断时这里同步收口);测试注入覆写以覆盖写路径。
   final bool Function() _setPropEnabled;
 
   bool capturing = false;
@@ -147,12 +147,14 @@ final class RemoteController extends ChangeNotifier {
   /// 链路是否在(断连/失败后闩上,页面据此显示连接指引)。
   bool get linkUp => _linkUp;
 
-  /// 拍摄参数调节总开关(生产 = [PtpSession.kSetPropEnabled],恒关待真机核对)。
+  /// 拍摄参数调节总开关(生产 = [PtpSession.kSetPropEnabled],真机实证已开)。
   bool get canAdjustParams => _setPropEnabled();
 
-  /// 该属性当前是否可调:总门禁 + 相机 getSet 上报双过。
+  /// 该属性当前是否可调:总门禁 + 目录 readOnly(机身件拥有)+ 相机
+  /// getSet 上报三过。
   bool propWritable(int propCode) {
     if (!_setPropEnabled()) return false;
+    if (shootingParamByCode[propCode]?.readOnly ?? false) return false;
     return paramProps[propCode]?.desc?.getSet ?? false;
   }
 
@@ -486,7 +488,7 @@ final class RemoteController extends ChangeNotifier {
 
   /// 拍摄参数调节(0x1016,数据入相)。
   ///
-  /// 三重门禁:总开关([canAdjustParams],真机核对前恒关)、相机
+  /// 三重门禁:总开关([canAdjustParams],生产已开/紧急关断收口)、相机
   /// getSet 上报、链路在。写成功后回读当键 —— 相机对域外值可能 clamp,
   /// 屏显一律以回读为准。
   Future<void> setParam(int propCode, int value) async {
@@ -496,7 +498,13 @@ final class RemoteController extends ChangeNotifier {
       return;
     }
     if (!_setPropEnabled()) {
-      error = '参数调节未启用:待真机核对可写域后开放';
+      error = '参数写入已被总闸关断(kSetPropEnabled=false,紧急关断)';
+      notifyListeners();
+      return;
+    }
+    final param = shootingParamByCode[propCode];
+    if (param?.readOnly ?? false) {
+      error = '该参数由机身转盘控制,不支持遥控修改';
       notifyListeners();
       return;
     }
@@ -506,15 +514,31 @@ final class RemoteController extends ChangeNotifier {
       notifyListeners();
       return;
     }
-    final dataType = desc?.dataType ??
+    // 写路径路由(目录 [ShootingParam.writeCode]):Z 系 ISO/快门的标准
+    // 码只读,写走厂商码;值域仍取读码的相机自报枚举,换算失败不发
+    // (宁失败不错值)。
+    var writeValue = value;
+    final convert = param?.writeConvert;
+    if (convert != null) {
+      final packed = convert(value);
+      if (packed == null) {
+        error = '该值无法换算为机身写码(0x100),未发送';
+        notifyListeners();
+        return;
+      }
+      writeValue = packed;
+    }
+    final writeCode = param?.writeCode ?? propCode;
+    final dataType = param?.writeType ??
+        desc?.dataType ??
         kStandardPropDataType[propCode] ??
         PtpDataType.uint16;
     writing = true;
     error = null;
     notifyListeners();
     try {
-      await session.setDevicePropValue(
-          PtpDevicePropValue(code: propCode, dataType: dataType, value: value));
+      await session.setDevicePropValue(PtpDevicePropValue(
+          code: writeCode, dataType: dataType, value: writeValue));
       await _refreshProp(propCode);
     } on Exception catch (e) {
       error = '参数写入失败:$e';
