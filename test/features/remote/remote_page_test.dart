@@ -185,39 +185,33 @@ void main() {
     conn.statesCtrl.add(CameraLinkState.connected);
     await tester.pumpAndSettle();
 
-    // 三要素大芯片
-    expect(find.text('光圈'), findsOneWidget);
-    expect(find.text('f/2.8'), findsOneWidget);
-    expect(find.text('1/100s'), findsOneWidget);
-    expect(find.text('ISO 200'), findsOneWidget);
-    // 横滚行首屏(无需滚动即构建):模式/白平衡等
+    // 读出条首屏(OpenZCine 顺序:模式/ISO/快门/光圈/释放/对焦模式…)
     expect(find.text('模式'), findsOneWidget);
     expect(find.text('手动 M'), findsOneWidget);
-    expect(find.text('EV'), findsOneWidget);
-    expect(find.text('+0.3'), findsOneWidget);
-    expect(find.text('白平衡'), findsOneWidget);
-    expect(find.text('自动'), findsOneWidget);
+    expect(find.text('ISO 200'), findsOneWidget);
+    expect(find.text('1/100s'), findsOneWidget);
+    expect(find.text('f/2.8'), findsOneWidget);
+    expect(find.text('单张'), findsOneWidget, reason: '释放');
+    expect(find.text('AF-S'), findsOneWidget, reason: '对焦模式(单一对焦芯片)');
 
-    // 横滚行懒构建:逐个滚到可见再断言(目录序,单向滚到底)
+    // 读出条懒构建:按条内顺序单向滚到底逐个断言
+    // (模式/ISO/快门/光圈/释放/对焦模式/白平衡/色温/测光/EV/闪光/
+    // 画质/RAW压缩/图像区域/优化校准)
     Future<void> scroll(String text) =>
         tester.scrollUntilVisible(find.text(text), 120, scrollable: _chipsRow);
-    await scroll('色温');
-    expect(find.text('5500K'), findsOneWidget);
-    await scroll('闪光');
-    expect(find.text('关闭'), findsOneWidget);
-    await scroll('测光');
-    expect(find.text('中央重点'), findsOneWidget,
-        reason: '测光值表(尼康方言 2=中央重点)');
-    await scroll('AF-S'); // 对焦模式(0xD061 值 0)—— 单一对焦芯片
-    await scroll('释放');
-    expect(find.text('单张'), findsOneWidget);
-    await scroll('画质');
-    expect(find.text('RAW'), findsOneWidget);
-    await scroll('无损压缩'); // RAW 压缩(rawCompressionType=0)值
-    await scroll('FX'); // 图像区域(captureAreaCrop=0)值
-    await scroll('标准'); // 优化校准(activePicCtrlItem=1)值
-    await scroll('对焦后拍'); // 行尾开关芯片
-    await scroll('APP 接管'); // 接管状态芯片(开关之后)
+    await scroll('自动'); // 白平衡
+    await scroll('5500K'); // 色温
+    await scroll('中央重点'); // 测光值表(尼康方言 2=中央重点)
+    await scroll('EV');
+    expect(find.text('+0.3'), findsOneWidget);
+    await scroll('关闭'); // 闪光
+    await scroll('RAW'); // 画质
+    await scroll('无损压缩'); // RAW 压缩值
+    await scroll('FX'); // 图像区域值
+    await scroll('标准'); // 优化校准值
+    // 辅助条(固定行,无需滚动):对焦后拍 + APP 接管
+    expect(find.text('对焦后拍'), findsOneWidget);
+    expect(find.text('APP 接管'), findsOneWidget);
   });
 
   testWidgets('总闸紧急关断:全部参数芯片只读不可点', (tester) async {
@@ -354,10 +348,11 @@ void main() {
     await tester.tap(find.text('启用'));
     await tester.pumpAndSettle();
     expect(controller.takeoverActive, isTrue);
-    expect(find.text('APP 接管中'), findsOneWidget);
+    // 「APP 接管中」两处:信息胶囊徽标 + 辅助条芯片
+    expect(find.text('APP 接管中'), findsNWidgets(2));
 
     transport.ok(); // 0x90C2 [0]
-    await tester.tap(find.text('APP 接管中'));
+    await tester.tap(find.text('APP 接管中').last); // 辅助条芯片(可点)
     await tester.pumpAndSettle();
     expect(controller.takeoverActive, isFalse);
     expect(find.text('APP 接管'), findsOneWidget);
@@ -510,10 +505,8 @@ void main() {
       ..ok(data: _realJpeg()); // 首帧(真实 JPEG,Image.memory 要解码)
     await tester
         .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
-    // FAB 的 heroTag 定位(下方「取景」文字标签不可点)
-    final lvFab = find.byWidgetPredicate(
-        (w) => w is FloatingActionButton && w.heroTag == 'liveview');
-    await tester.tap(lvFab);
+    // 取景开关 = 动作行按钮(点其「取景」标签)
+    await tester.tap(find.text('取景'));
     await tester.pumpAndSettle();
     expect(controller.liveViewActive, isTrue);
     expect(controller.frameSize.value, (width: 32, height: 24));
