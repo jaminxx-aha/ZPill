@@ -144,6 +144,10 @@ final class PtpSession {
 
   PtpDeviceInfo? _deviceInfo;
 
+  /// 上次 GetDeviceInfo 的缓存(纯读,不发事务;未取过为 null)——
+  /// 快门码选择等只需 op 表的调用方用它,避免无谓往返。
+  PtpDeviceInfo? get cachedDeviceInfo => _deviceInfo;
+
   /// GetDeviceInfo;会话内缓存([force] 强制刷新)。
   /// 唯一可在 OpenSession 之前调用的操作。
   Future<PtpDeviceInfo> getDeviceInfo({bool force = false}) async {
@@ -457,6 +461,19 @@ final class PtpSession {
     }
   }
 
+  /// Nikon ChangeCameraMode(0x90C2,源 = OpenZCine 全系在册):切换
+  /// 「remote / PC-camera」模式。[mode] 1 = remote(**APP 接管控制**:
+  /// 机身拨盘锁定、屏幕可能熄灭,host 写入的会话值仅在持有期保值),
+  /// 0 = 解除。可在释放/AF/清洁中被拒(0xA003),调用方容忍。
+  /// 真机核对。
+  Future<void> changeCameraMode(int mode) async {
+    final result = await _serialized(() => transport.execute(PtpRequest(
+          opcode: NikonOperationCode.changeCameraMode,
+          params: [mode],
+        )));
+    _ensureOk(result, NikonOperationCode.changeCameraMode);
+  }
+
   /// Nikon StartLiveView(0x9201,候选码,待真机核对)。
   Future<void> startLiveView() async {
     final result = await _serialized(() => transport.execute(
@@ -495,16 +512,17 @@ final class PtpSession {
   }
 
   /// Nikon InitiateCaptureRecInMedia(0x9207):落卡拍。
-  /// 参数姿势 [0,0] 对齐 probe --capture-op 9207(**Zf 真机已实证**,
-  /// libgphoto2 ptp_nikon_capture2 双参形态);[focusBeforeCapture] 走
-  /// OpenZCine CaptureSort 语义(StillCapture.swift 候选,待真机核对):
-  /// true → 首参 0xFFFFFFFE = 先驱动 AF 再释放(半按-全按),
-  /// false → 保持已实证的 0x0000。参数在 USB/PTP-IP 容器里都是 u32,
-  /// 0xFFFFFFFE 两条链路均可完整传输。
-  Future<void> initiateCaptureRecInMedia({bool focusBeforeCapture = false}) async {
+  /// 参数 [captureSort, 0x0000] 对齐 OpenZCine initiateStillCapture
+  /// (libgphoto2 ptp_nikon_capture2 双参形态):[captureSort] 缺省
+  /// 0xFFFFFFFF = 直接释放不动焦点(preserveFocus 形态);0xFFFFFFFE =
+  /// 先驱动 AF 再释放(半按-全按);0x0000 为旧实证形(2026-10-05 Zf
+  /// 真机通过,但 2026-10-06 应用模式/接管态被 0x201D InvalidParameter
+  /// 拒 —— 上层 [RemoteController] 按候选序回退)。参数在 USB/PTP-IP
+  /// 容器里都是 u32,哨兵值两条链路均可完整传输。
+  Future<void> initiateCaptureRecInMedia({int captureSort = 0xFFFFFFFF}) async {
     final result = await _serialized(() => transport.execute(PtpRequest(
           opcode: NikonOperationCode.initiateCaptureRecInMedia,
-          params: [focusBeforeCapture ? 0xFFFFFFFE : 0, 0],
+          params: [captureSort, 0],
         )));
     _ensureOk(result, NikonOperationCode.initiateCaptureRecInMedia);
   }

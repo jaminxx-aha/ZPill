@@ -349,6 +349,31 @@ void main() {
       expect(fake.requests.length, 1);
     });
 
+    test('cachedDeviceInfo:未取为 null,取后可读(纯读零流量)', () async {
+      final fake = FakePtpTransport()
+        ..reply(PtpResult(
+            responseCode: PtpResponseCode.ok, data: buildDeviceInfoDataset()));
+      final session = PtpSession(transport: fake);
+      expect(session.cachedDeviceInfo, isNull);
+      await session.getDeviceInfo();
+      expect(session.cachedDeviceInfo?.model, 'TestModel');
+      expect(fake.requests.length, 1, reason: 'cachedDeviceInfo 不发事务');
+    });
+
+    test('changeCameraMode:0x90C2 params=[mode](APP 接管控制);非 OK 抛异常',
+        () async {
+      final fake = FakePtpTransport()..reply(PtpResult(responseCode: PtpResponseCode.ok));
+      final session = PtpSession(transport: fake);
+      await session.changeCameraMode(1);
+      expect(fake.requests.single.opcode, NikonOperationCode.changeCameraMode);
+      expect(fake.requests.single.params, [1]);
+
+      fake.reply(PtpResult(responseCode: NikonResponseCode.changeCameraModeFailed));
+      await expectLater(session.changeCameraMode(0),
+          throwsA(isA<PtpResponseException>()));
+      expect(fake.requests.last.params, [0]);
+    });
+
     test('getStorageIds:u32 计数 + N 个 u32(双卡槽)', () async {
       final fake = FakePtpTransport()
         ..reply(PtpResult(
@@ -587,7 +612,7 @@ void main() {
       expect(fake.requests.single.params, [0, 0]);
     });
 
-    test('无卡拍/落卡拍候选码直发;CaptureSort 首参(语义待真机核对)', () async {
+    test('无卡拍/落卡拍候选码直发;CaptureSort 首参(OpenZCine 形态)', () async {
       final fake = FakePtpTransport()
         ..reply(const PtpResult(responseCode: PtpResponseCode.ok))
         ..reply(const PtpResult(responseCode: PtpResponseCode.ok))
@@ -595,14 +620,14 @@ void main() {
       final session = PtpSession(transport: fake);
       await session.initiateCaptureRecInSdram();
       await session.initiateCaptureRecInMedia();
-      await session.initiateCaptureRecInMedia(focusBeforeCapture: true);
+      await session.initiateCaptureRecInMedia(captureSort: 0xFFFFFFFE);
       expect(fake.requests.map((r) => r.opcode), [
         NikonOperationCode.initiateCaptureRecInSdram,
         NikonOperationCode.initiateCaptureRecInMedia,
         NikonOperationCode.initiateCaptureRecInMedia,
       ]);
-      // 默认保持 Zf 真机已实证的 [0,0];对焦后拍换 CaptureSort 首参
-      expect(fake.requests[1].params, [0, 0]);
+      // 默认 0xFFFFFFFF 直接释放(preserveFocus 形态);显式 0xFFFFFFFE 先 AF
+      expect(fake.requests[1].params, [0xFFFFFFFF, 0]);
       expect(fake.requests[2].params, [0xFFFFFFFE, 0]);
     });
 
