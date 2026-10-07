@@ -205,7 +205,7 @@ abstract final class PtpDevicePropCode {
   static const int isoControlSensitivity = 0xD0B5; // 有效 ISO 读(含 Auto ISO),u32
   static const int stillShutterSpeed = 0xD100; // 快门读写,u32 分数打包(num<<16|den)
   static const int applicationMode = 0xD1F0; // 应用模式,u8(一代机身 op 缺席时的写回退)
-  static const int sessionInitiatorInfo = 0xD406; // 会话发起者身份(MTP 标准;USB 人设身份门,见 PtpSession.enableAppControl)
+  static const int sessionInitiatorInfo = 0xD406; // 会话发起者身份(MTP 标准;USB 人设身份门,自愈末级用,见 LiveViewEngine._startLiveViewHealing)
   static const int activePicCtrlItem = 0xD200; // 优化校准(Picture Control),u16
   // Zf 另报 MTP 标准属性 0xD303/0xD407(UseDeviceStageFlag /
   // PerceivedDeviceType,与拍摄无关,不入册)。
