@@ -616,56 +616,82 @@ void main() {
       expect(controller.exposure?.fNumber, 280, reason: '解除后照常刷参');
     });
 
-    test('USB 连接流兜底进 remote 模式 → connected 沿静默对齐接管态'
-        '(OpenZCine 同款:免确认弹窗、拨盘级参数直调)', () async {
+    test('USB 连接流括号 1→0 全通 → 接管从 OFF 起步(连接即及时取景)'
+        '(OpenZCine 效果,2026-10-07 v8/v9 真机定案)', () async {
       // 生产链建模:USB 连接流 enableAppControl(usbRemoteFallback) 的
-      // 0x90C2(1) 兜底已通(0x9435 在 USB 人设下恒拒,Zf 由此退出
-      // 上传优先模式返回及时取景,2026-10-07 真机对照)。
+      // 0x90C2(1)→(0) 开闩括号 —— 闩单向,退步不关门;remote 持有态
+      // 才是机身停「已连接到计算机」屏的元凶,开闩即还身(已连接屏只
+      // 闪一次往返的宽度,机身直回自己的取景屏)。
       transport.reply(PtpResponseCode.operationNotSupported); // 0x9435 拒
-      transport.ok(); // 0x90C2 [1] 兜底通
+      transport.ok(); // 0x90C2 [1] 开闩兜底通
+      transport.ok(); // 0x90C2 [0] 括号退步通(还身)
       await controller.session.enableAppControl(usbRemoteFallback: true);
-      expect(controller.session.remoteModeActive, isTrue);
+      expect(controller.session.remoteModeActive, isFalse,
+          reason: '开闩即还身,remote 不持有');
 
       _scriptParams(transport);
       conn.statesCtrl.add(CameraLinkState.connected);
       await pumpEventQueue();
-      expect(controller.takeoverActive, isTrue,
-          reason: '连接流已进 remote 模式,接管芯片直接显示已启用');
+      expect(controller.takeoverActive, isFalse,
+          reason: '连接流已还身,接管芯片从 OFF 起步');
       expect(controller.exposure?.fNumber, 280, reason: '照常刷参');
 
-      // 已激活:enableTakeover 幂等直通,不再发 0x90C2;也不发 [0] 解除。
+      // 未激活:enableTakeover 真发 0x90C2 [1](接管是用户的显式动作)。
+      transport.ok();
       expect(await controller.enableTakeover(), isTrue);
-      final modes = transport.requests
-          .where((r) => r.opcode == NikonOperationCode.changeCameraMode)
-          .toList();
-      expect(modes, hasLength(1));
-      expect(modes.single.params, [1]);
+      expect(
+          transport.requests
+              .where((r) => r.opcode == NikonOperationCode.changeCameraMode)
+              .map((r) => r.params),
+          [
+            [1],
+            [0],
+            [1]
+          ],
+          reason: '连接括号 [1][0] + 用户接管 [1]');
     });
 
-    test('断链悬挂 + 新链连接流已进 remote 模式 → 跳过防御性解除'
-        '(不拆刚抬的门)', () async {
+    test('断链悬挂 + 新链括号退步被拒 → 静默对齐接管,不发防御性解除'
+        '(不与括号退步重复)', () async {
       transport.ok(); // 启用接管
       await controller.enableTakeover();
       conn.statesCtrl.add(CameraLinkState.disconnected);
       await pumpEventQueue();
       await controller.session.close(); // teardown 建模(旗标复位)
 
-      // 新链:连接流又进了 remote 模式(USB 兜底)
+      // 新链:连接流括号的退步被拒(边沿:机身正忙/模式切换中)→
+      // remote 仍持有 —— connected 沿静默对齐接管态;防御性解除不再发
+      // (对齐分支先于悬挂分支,重复 [0] 无益;闩已开,门不会丢)。
       transport.reply(PtpResponseCode.operationNotSupported); // 0x9435 拒
-      transport.ok(); // 0x90C2 [1] 兜底通
+      transport.ok(); // 0x90C2 [1] 开闩通
+      transport.reply(NikonResponseCode.changeCameraModeFailed); // [0] 退步被拒
       await controller.session.enableAppControl(usbRemoteFallback: true);
+      expect(controller.session.remoteModeActive, isTrue,
+          reason: '退步被拒 → remote 仍持有');
       _scriptParams(transport);
       conn.statesCtrl.add(CameraLinkState.connected);
       await pumpEventQueue();
       expect(controller.takeoverActive, isTrue,
-          reason: '新链的 remote 模式是连接流抬的,不是悬挂残留');
+          reason: '新链的 remote 是连接括号抬的,不是悬挂残留');
       expect(
           transport.requests
               .where((r) => r.opcode == NikonOperationCode.changeCameraMode)
               .map((r) => r.params),
-          everyElement([1]),
-          reason: '全程无 0x90C2 [0] —— 防御性解除不得拆新链刚抬的门');
+          [
+            [1],
+            [1],
+            [0]
+          ],
+          reason: '旧链接管 [1] + 新链括号 [1][0];无防御性解除的第 4 发');
       expect(controller.exposure?.fNumber, 280, reason: '照常刷参');
+
+      // 已激活:enableTakeover 幂等直通,不再发 0x90C2。
+      expect(await controller.enableTakeover(), isTrue);
+      expect(
+          transport.requests
+              .where((r) => r.opcode == NikonOperationCode.changeCameraMode)
+              .length,
+          3);
     });
 
     test('拨盘参数写被拒(0x200F)→ 提示先启用 APP 接管', () async {

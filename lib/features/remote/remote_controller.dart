@@ -122,10 +122,11 @@ final class RemoteController extends ChangeNotifier {
           _picCtrlNamesBroken = false;
         }
         if (session.remoteModeActive) {
-          // USB 连接流已兜底进 remote 模式(0x9435 恒拒 → 0x90C2(1),
-          // OpenZCine 连接脚本同款):静默对齐接管态 —— 芯片显示已启用、
-          // 拨盘级参数免确认直调,可随时解除。也覆盖悬挂解除:本链已在
-          // remote 模式,再发 0x90C2(0) 反而会拆掉刚抬的门。
+          // 连接流的开闩括号(0x90C2(1)→(0),enableAppControl)正常
+          // 已退 remote:接管从 OFF 起步,机身回自己的取景屏。落到本
+          // 分支 = 括号的退步被拒、remote 仍持有(拨盘锁定)—— 静默
+          // 对齐接管态,芯片如实显示;可随时解除。门不会因此丢(单向
+          // 闩,2026-10-07 v9 定案:退 remote 不关已开的 0x9201 门)。
           _takeoverDangling = false;
           _takeoverActive = true;
         } else if (_takeoverDangling) {

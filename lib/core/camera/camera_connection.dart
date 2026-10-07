@@ -429,10 +429,12 @@ final class CameraConnectionImpl implements CameraConnection {
       return;
     }
     await _session.open();
-    // 切应用模式(Z 系真机口径:不切则遥控写被 0x200F AccessDenied 拒;
-    // 尽力而为,失败不拦连接)。USB 额外带 remote 模式兜底:0x9435 在
-    // USB 人设下恒拒,0x90C2(1) 是 OpenZCine 的 USB 兜底 —— Zf 收到即
-    // 退出上传优先模式返回及时取景(2026-10-07 真机对照)。真机核对。
+    // 切应用模式 + 进 remote(Z 系真机口径:不切则遥控写被 0x200F
+    // AccessDenied 拒)。USB 一律进 remote 模式:2026-10-07 归因梯
+    // (macOS-IC 真机)定案 —— 0x9435 回 OK 也是假钥匙,唯一实证解锁
+    // 取景门 = 0x90C2(1);remote + 连接即取景 = 机身及时取景
+    // (OpenZCine 效果)。尽力而为,失败不拦连接(梯记入
+    // session.connectLadder,取景失败时浮出)。
     await _session.enableAppControl(usbRemoteFallback: true);
     _deviceName = info.model;
     _error = null;
@@ -509,6 +511,19 @@ final class CameraConnectionImpl implements CameraConnection {
     _deviceName = null;
     await _wirelessBreakageSub?.cancel();
     _wirelessBreakageSub = null;
+    // remote 持有的镜像收尾:连接流的开闩括号(enableAppControl
+    // 0x90C2(1)→(0))与取景自愈均已配对退出,这里兜的是用户「接管」
+    // /括号退步被拒等仍持有的情形 —— 干净断开(用户点断开/连接失败
+    // 回滚)先退 remote 再拆链,不退则机身停「已连接到计算机」屏
+    // (2026-10-07 真机:remote 态跨拔插保持,半按快门才退)。链路已死
+    // 时必然失败,尽力而为。
+    if (_session.remoteModeActive) {
+      try {
+        await _session.changeCameraMode(0);
+      } on Object {
+        // 尽力而为:本地持有态由 close() 收口
+      }
+    }
     _link.detach(); // 1. 挡新请求(会话清理不再往链路发指令)
     final wireless = _wirelessTransport;
     _wirelessTransport = null;
