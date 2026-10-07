@@ -9,6 +9,7 @@ import 'package:nikon_pill/core/ptp/operation_codes.dart';
 import 'package:nikon_pill/core/ptp/ptp_session.dart';
 import 'package:nikon_pill/core/ptp/ptp_transport.dart';
 import 'package:nikon_pill/core/remote/live_view_engine.dart';
+import 'package:nikon_pill/core/remote/live_view_header.dart';
 
 /// 按序回放的假传输层(与 ptp_session_test 同构,精简版)。
 final class _ScriptTransport implements PtpTransport {
@@ -38,8 +39,11 @@ final class _ScriptTransport implements PtpTransport {
   @override
   Future<void> close() async {}
 
-  int get liveViewFetches =>
-      requests.where((r) => r.opcode == NikonOperationCode.getLiveViewImage).length;
+  int get liveViewFetches => requests
+      .where((r) =>
+          r.opcode == NikonOperationCode.getLiveViewImageEx ||
+          r.opcode == NikonOperationCode.getLiveViewImage)
+      .length;
 }
 
 /// 手动放行的 delay:记录时长并挂门,测试逐个 release 控制循环节拍。
@@ -59,6 +63,29 @@ final class _GatedDelay {
 
 Uint8List _frame(int marker) =>
     Uint8List.fromList([0xFF, 0xD8, marker, 0xFF, 0xD9]);
+
+/// 1024B display-info 头(坐标系 6048×3400、一框、@828 录制中)+ SOI 尾。
+Uint8List _headerFrame() {
+  final b = Uint8List(1024 + 8);
+  void be16(int o, int v) {
+    b[o] = (v >> 8) & 0xFF;
+    b[o + 1] = v & 0xFF;
+  }
+
+  be16(16, 6048);
+  be16(18, 3400);
+  b[42] = 2; // 合焦
+  b[44] = 1; // areaCount
+  be16(48, 240);
+  be16(50, 240);
+  be16(52, 3024);
+  be16(54, 1700);
+  b[828] = 1; // 机身正在录制
+  b[1024] = 0xFF;
+  b[1025] = 0xD8;
+  b[1026] = 0xFF;
+  return b;
+}
 
 void main() {
   test('帧序列发布:StartLiveView → 逐帧 → stop 转 idle,迟到帧不发布', () async {
@@ -168,6 +195,37 @@ void main() {
     await pumpEventQueue();
     expect(transport.liveViewFetches, 2);
     expect(engine.frame.value![2], 2);
+  });
+
+  test('头+JPEG 帧:header 与剥离 JPEG 同步发布;裸 JPEG → header 置 null',
+      () async {
+    final raw = _headerFrame();
+    final transport = _ScriptTransport()
+      ..ok() // startLiveView
+      ..ok(data: raw)
+      ..ok(data: _frame(9)); // 裸 JPEG(无头)
+    final delay = _GatedDelay();
+    final engine = LiveViewEngine(
+      session: PtpSession(transport: transport),
+      delay: delay.call,
+    );
+
+    await engine.start();
+    await pumpEventQueue();
+    final h = engine.header.value!;
+    expect(h.coordinateWidth, 6048);
+    expect(h.focusResult, LiveViewFocusResult.focused);
+    expect(h.recording, isTrue);
+    expect(h.boxes.single.width, 240);
+    // JPEG 从 1024 处剥离,不带头
+    expect(engine.frame.value![0], 0xFF);
+    expect(engine.frame.value![1], 0xD8);
+    expect(engine.frame.value!.length, 8);
+
+    delay.release();
+    await pumpEventQueue();
+    expect(engine.header.value, isNull); // 裸帧覆盖头状态
+    expect(engine.frame.value![2], 9);
   });
 
   test('StartLiveView 失败:直接转 failed 不进轮询', () async {

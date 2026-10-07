@@ -690,6 +690,68 @@ void main() {
       expect(await session.enableAppControl(), isFalse);
     });
 
+    test('enableAppControl:0x200F(USB 人设)→ 写 initiator 0xD406 → 重试通',
+        () async {
+      final fake = FakePtpTransport()
+        ..reply(const PtpResult(responseCode: PtpResponseCode.accessDenied))
+        ..reply(const PtpResult(responseCode: PtpResponseCode.ok))
+        ..reply(const PtpResult(responseCode: PtpResponseCode.ok));
+      final session = PtpSession(transport: fake);
+      expect(await session.enableAppControl(), isTrue);
+      expect(fake.requests.map((r) => r.opcode), [
+        NikonOperationCode.changeApplicationMode,
+        PtpOperationCode.setDevicePropValue,
+        NikonOperationCode.changeApplicationMode,
+      ]);
+      expect(fake.requests[1].params,
+          [PtpDevicePropCode.sessionInitiatorInfo]);
+      // 'NikonPill' PTP 字符串:u8 计数(字符数,不含 NUL)+ UTF-16LE,
+      // 无终止符 —— 与探针 ptp_str 同款(Zf USB 实证载荷,2026-10-07)。
+      final expected = <int>[9];
+      for (final cu in 'NikonPill'.codeUnits) {
+        expected.addAll([cu & 0xFF, cu >> 8]);
+      }
+      expect(fake.requests[1].dataOut, Uint8List.fromList(expected));
+    });
+
+    test('enableAppControl:USB 人设全链(initiator 通但 0x9435 仍拒 → 0xD1F0 兜底)',
+        () async {
+      final fake = FakePtpTransport()
+        ..reply(const PtpResult(responseCode: PtpResponseCode.accessDenied))
+        ..reply(const PtpResult(responseCode: PtpResponseCode.ok))
+        ..reply(const PtpResult(responseCode: PtpResponseCode.accessDenied))
+        ..reply(const PtpResult(responseCode: PtpResponseCode.ok));
+      final session = PtpSession(transport: fake);
+      expect(await session.enableAppControl(), isTrue);
+      expect(fake.requests.map((r) => r.opcode), [
+        NikonOperationCode.changeApplicationMode,
+        PtpOperationCode.setDevicePropValue,
+        NikonOperationCode.changeApplicationMode,
+        PtpOperationCode.setDevicePropValue,
+      ]);
+      expect(fake.requests[1].params,
+          [PtpDevicePropCode.sessionInitiatorInfo]);
+      expect(fake.requests[3].params, [PtpDevicePropCode.applicationMode]);
+    });
+
+    test('enableAppControl:0x200F 但 initiator 写被拒 → 直落 0xD1F0', () async {
+      final fake = FakePtpTransport()
+        ..reply(const PtpResult(responseCode: PtpResponseCode.accessDenied))
+        ..reply(const PtpResult(
+            responseCode: PtpResponseCode.operationNotSupported))
+        ..reply(const PtpResult(responseCode: PtpResponseCode.ok));
+      final session = PtpSession(transport: fake);
+      expect(await session.enableAppControl(), isTrue);
+      expect(fake.requests.map((r) => r.opcode), [
+        NikonOperationCode.changeApplicationMode,
+        PtpOperationCode.setDevicePropValue,
+        PtpOperationCode.setDevicePropValue,
+      ]);
+      expect(fake.requests[1].params,
+          [PtpDevicePropCode.sessionInitiatorInfo]);
+      expect(fake.requests[2].params, [PtpDevicePropCode.applicationMode]);
+    });
+
     test('setDevicePropValue:总闸紧急关断抛 UnsupportedError 且不发请求',
         () async {
       PtpSession.kSetPropEnabled = false; // 生产已开,这里显式关断走分支
@@ -747,6 +809,77 @@ void main() {
       final frame = await session.getLiveViewImage();
       expect(frame, [0xFF, 0xD8, 0xFF, 0xE0, 0x00]);
       expect(fake.requests.single.opcode, NikonOperationCode.getLiveViewImage);
+    });
+
+    test('getLiveViewObject:默认 0x9428 取帧,原样返回(帧头解析留给上层)',
+        () async {
+      final raw = Uint8List.fromList(
+          [0x00, 0x64, 0x00, 0x00, 0xFF, 0xD8, 0xFF, 0xE0, 0x00]);
+      final fake = FakePtpTransport()
+        ..reply(PtpResult(responseCode: PtpResponseCode.ok, data: raw));
+      final session = PtpSession(transport: fake);
+      final object = await session.getLiveViewObject();
+      expect(object, same(raw));
+      expect(fake.requests.single.opcode,
+          NikonOperationCode.getLiveViewImageEx);
+    });
+
+    test('getLiveViewObject:0x9428 被拒 → 本拍抛错,下一拍起走 0x9203',
+        () async {
+      final raw = Uint8List.fromList([0xFF, 0xD8, 0xFF, 0xE0, 0x00]);
+      final fake = FakePtpTransport()
+        ..fail(const PtpResponseException(
+            opcode: NikonOperationCode.getLiveViewImageEx,
+            responseCode: 0x2005)) // OperationNotSupported
+        ..reply(PtpResult(responseCode: PtpResponseCode.ok, data: raw));
+      final session = PtpSession(transport: fake);
+      await expectLater(
+          session.getLiveViewObject(), throwsA(isA<PtpResponseException>()));
+      final object = await session.getLiveViewObject();
+      expect(object, same(raw));
+      expect(fake.requests.map((r) => r.opcode), [
+        NikonOperationCode.getLiveViewImageEx,
+        NikonOperationCode.getLiveViewImage,
+      ]);
+    });
+
+    test('getLiveViewObject:0x2019 忙不置回退旗标(继续 0x9428 重试)',
+        () async {
+      final raw = Uint8List.fromList([0xFF, 0xD8, 0xFF, 0xE0, 0x00]);
+      final fake = FakePtpTransport()
+        ..reply(const PtpResult(responseCode: PtpResponseCode.deviceBusy))
+        ..reply(PtpResult(responseCode: PtpResponseCode.ok, data: raw));
+      final session = PtpSession(transport: fake);
+      await expectLater(
+          session.getLiveViewObject(), throwsA(isA<PtpResponseException>()));
+      await session.getLiveViewObject();
+      // 忙是瞬时态,两次都必须是 Ex 码(忙即降级会永久锁死旧码)
+      expect(fake.requests
+          .every((r) => r.opcode == NikonOperationCode.getLiveViewImageEx), isTrue);
+    });
+
+    test('getLiveViewObject:startLiveView 重置回退旗标(换机自愈)',
+        () async {
+      final raw = Uint8List.fromList([0xFF, 0xD8, 0xFF, 0xE0, 0x00]);
+      final fake = FakePtpTransport()
+        ..fail(const PtpResponseException(
+            opcode: NikonOperationCode.getLiveViewImageEx,
+            responseCode: 0x2005))
+        ..reply(PtpResult(responseCode: PtpResponseCode.ok, data: raw)) // 0x9203
+        ..reply(const PtpResult(responseCode: PtpResponseCode.ok)) // start
+        ..reply(PtpResult(responseCode: PtpResponseCode.ok, data: raw)); // Ex
+      final session = PtpSession(transport: fake);
+      await expectLater(
+          session.getLiveViewObject(), throwsA(isA<PtpResponseException>()));
+      await session.getLiveViewObject(); // 走 0x9203
+      await session.startLiveView(); // 重置旗标
+      await session.getLiveViewObject(); // 回到 0x9428
+      expect(fake.requests.map((r) => r.opcode), [
+        NikonOperationCode.getLiveViewImageEx,
+        NikonOperationCode.getLiveViewImage,
+        NikonOperationCode.startLiveView,
+        NikonOperationCode.getLiveViewImageEx,
+      ]);
     });
 
     test('initiateCapture:params 恒 [0, 0];0x2019 忙按异常上抛', () async {

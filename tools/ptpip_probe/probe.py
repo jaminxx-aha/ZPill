@@ -11,7 +11,9 @@ lib/core/ptpip/codec.dart。参考:libgphoto2 ptpip 后端。
     python3 probe.py --setprop 0xd406= --setprop-layout data 192.168.1.1
     遥控域回归(无线对照 usb_probe 同款):
     python3 probe.py --propdesc 5007,500d,500f 192.168.0.104
-    python3 probe.py --liveview 10 192.168.0.104
+    python3 probe.py --liveview 10 192.168.0.104                    # 0x9203 老码
+    python3 probe.py --liveview 10 --liveview-op 9428 192.168.0.104 # Ex 码(带头)
+    python3 probe.py --liveview 3 --liveview-op 9428 --afarea 3024,1700 192.168.0.104
     python3 probe.py --capture 192.168.0.104                    # 0x100E 标准
     python3 probe.py --capture --capture-op 9207 192.168.0.104  # 尼康候选落卡拍
     python3 probe.py --events 30 192.168.0.104                  # 事件监听窗口
@@ -136,6 +138,10 @@ NIKON_INITIATE_CAPTURE_REC_IN_SDRAM = 0x90C0
 NIKON_START_LIVEVIEW = 0x9201
 NIKON_END_LIVEVIEW = 0x9202
 NIKON_GET_LIVEVIEW_IMG = 0x9203
+NIKON_GET_LIVEVIEW_IMG_EX = 0x9428  # OpenZCine 全系取帧码(ZR dump 实证带 display-info 头)
+NIKON_CHANGE_AF_AREA = 0x9205  # p1/p2 = whole-size 坐标(OpenZCine PTPIPClientSession)
+NIKON_AF_DRIVE = 0x90C1
+NIKON_CHANGE_APPLICATION_MODE = 0x9435  # Z 系方言:遥控 op 前须切应用模式(app enableAppControl 同款)
 NIKON_DEVICE_READY = 0x90C8
 DEVICE_BUSY = 0x2019  # ISO 15740 标准响应码(设备忙)
 
@@ -570,6 +576,58 @@ def drain_evt_events(evt: socket.socket, t0: float, timeout: float = 0.2) -> int
     evt.settimeout(READ_TIMEOUT)
     return n
 
+# ── LiveViewObject 帧头解码(布局源 = OpenZCine PTPLiveViewObject.swift,
+#    ZR/Z7 raw dump 实证;Zf 是否同族正是本解码要回答的问题) ──────────
+
+def _be16(p: bytes, o: int) -> int:
+    return struct.unpack_from(">H", p, o)[0]
+
+def _be32(p: bytes, o: int) -> int:
+    return struct.unpack_from(">I", p, o)[0]
+
+def _angle(p: bytes, o: int) -> str:
+    """BE 有符号 16.16 定点角度(度);0xFFFFFFFF = 机身报不可靠。"""
+    raw = _be32(p, o)
+    if raw == 0xFFFFFFFF:
+        return "unreliable"
+    v = raw - (1 << 32) if raw >= (1 << 31) else raw
+    return f"{v / 65536.0:.3f}°"
+
+def decode_lv_header(p: bytes) -> None:
+    """逐域打印 OpenZCine 布局的头字段 + 头部 hex(前 96B 与关键窗口)。"""
+    soi = p.find(b"\xff\xd8")
+    print(f"      [头解码] len={len(p)} SOI@{soi}")
+    if len(p) < 56:
+        print("      [头解码] < 56B,无 display-info 头")
+        return
+    print(f"        jpegLen(BE u32@12)={_be32(p, 12)}"
+          f"  wholeSize(BE u16@16/18)={_be16(p, 16)}x{_be16(p, 18)}")
+    print(f"        focusResult@42={p[42]} subjectActive@43={p[43]}"
+          f" areaCount@44={p[44]} selectedIndex@45={p[45]}"
+          f" trackingAF@46={p[46] if len(p) > 46 else '-'}")
+    slots = min(max(p[44], 1), 96)
+    for i in range(slots):
+        base = 48 + i * 8
+        if base + 8 > len(p):
+            break
+        w, h, cx, cy = struct.unpack_from(">HHHH", p, base)
+        if w or h:
+            print(f"        box[{i}] w={w} h={h} c=({cx},{cy})")
+    if len(p) > 828:
+        print(f"        recording@828={p[828]} tcOn@831={p[831]}"
+              f" tc@832-835={p[832]:02d}:{p[833]:02d}:{p[834]:02d}:{p[835]:02d}"
+              f" rotation@839={p[839]}")
+    if len(p) >= 852:
+        print(f"        level roll@840={_angle(p, 840)} pitch@844={_angle(p, 844)}"
+              f" yaw@848={_angle(p, 848)}")
+    for lo, hi in ((0, 96), (40, 64), (816, 852)):
+        if len(p) < hi:
+            continue
+        print(f"        hex[{lo:#05x}:{hi:#05x}]:")
+        for off in range(lo, min(hi, len(p)), 16):
+            row = p[off:off + 16]
+            print(f"          {off:04x}  {row.hex(' ')}")
+
 # ── 步骤 5:OpenSession(含 0x201E 自愈,照抄 usb_probe ensure_session) ──
 
 def open_session_with_heal(cmd: socket.socket, tid: Tid, session_id: int = 1) -> int:
@@ -680,9 +738,18 @@ def main() -> int:
                          " 的类型表/长度嗅探/FORM/MTP 出厂组,打印类型来源)"
                          "—— 曝光三属性回归:--propdesc 5007,500d,500f")
     ap.add_argument("--liveview", type=int, metavar="帧数", default=0,
-                    help="步骤 9v:Live View 摸底 0x9201 → 0x9203 轮询 N 帧"
+                    help="步骤 9v:Live View 摸底 0x9201 → 取帧轮询 N 帧"
                          "(间隔 200ms 对齐 app;连续 5 帧失败收口)→ 0x9202;"
                          "帧率/字节数/SOI 偏移/单帧往返延迟 + evt 事件时间线")
+    ap.add_argument("--liveview-op", type=lambda s: int(s, 16), metavar="hex",
+                    default=NIKON_GET_LIVEVIEW_IMG,
+                    help="取帧操作码:0x9203(默认,老 GetLiveViewImage)/"
+                         "0x9428(GetLiveViewImageEx,OpenZCine 全系取帧码,"
+                         "应答带 display-info 头:对焦框/水平仪/录制态)")
+    ap.add_argument("--afarea", type=str, metavar="x,y", default=None,
+                    help="步骤 9v 内:取完 N 帧后发 0x9205 ChangeAfArea(x,y),"
+                         "再取 8 帧看对焦框移动(0x9205 坐标系实证;"
+                         "whole-size 空间如 6048x3400 的中心 = 3024,1700)")
     ap.add_argument("--capture", action="store_true",
                     help="步骤 9c:快门释放摸底(--capture-op 换码)+ evt 事件"
                          "时间线 + 0x90C8 DeviceReady 忙等收口")
@@ -932,12 +999,35 @@ def main() -> int:
                 print(f"  0x{prop:04X} Value <- 0x{code:04X}")
 
     # 步骤 9v(可选,--liveview N):Live View 轮询摸底(无线对照)。
-    # 0x9201 → 0x9203 轮询直到 N 帧成功(间隔 200ms 对齐 app;连续 5 帧
+    # 0x9201 → 取帧轮询直到 N 帧成功(间隔 200ms 对齐 app;连续 5 帧
     # 失败收口,LiveViewEngine 同策略)→ 0x9202。帧率/字节数/SOI 偏移/
     # 单帧往返延迟 + evt 事件时间线(0xC10C 取景态变迁语义在此落定)。
-    # STA 的 9 op 小表不含 0x920x —— 按表拒连即误杀的教训,直发摸底。
+    # 取帧码 --liveview-op:0x9203(老码,历史实证应答)vs 0x9428
+    # (GetLiveViewImageEx,OpenZCine 全系取帧码,应答带 display-info
+    # 头 = 对焦框/水平仪/录制态的唯一数据源)—— 2026-10-07 真机
+    # 「0x9203 帧头解析全 null」后加,对拍两码的应答形态。
+    # STA 的 9 op 小表不含 0x920x/0x9428 —— 按表拒连即误杀的教训,直发摸底。
+    # 步骤 9v 前量:Z 系方言 —— 遥控 op(0x9201/0x9205/0x9207…)前须发
+    # 0x9435(1) 切应用模式,否则相机对遥控 op 直接关闭连接(2026-10-07
+    # Zf STA 实证:无 0x9435 的 0x9201 一发即断链;app 连接流同款先发)。
+    app_mode_sent = False
+
+    def ensure_app_mode():
+        nonlocal app_mode_sent
+        if app_mode_sent:
+            return
+        app_mode_sent = True
+        try:
+            _t, _p, _s, (c, e, _) = cmd_xact(
+                cmd, tid, NIKON_CHANGE_APPLICATION_MODE, [1], dp=DP_NO_DATA)
+            print(f"    ChangeApplicationMode(0x9435,1) <- 0x{c:04X} 回显 tid={e}")
+        except (ConnectionError, socket.timeout, ProtocolError) as ex:
+            print(f"    ChangeApplicationMode(0x9435,1):链路异常({ex})")
+
     if args.liveview:
-        print(f"[9v] Live View 摸底(0x9201 → 0x9203 ×{args.liveview} 帧 → 0x9202):")
+        fetch_op = args.liveview_op
+        print(f"[9v] Live View 摸底(0x9201 → 0x{fetch_op:04X} ×{args.liveview} 帧 → 0x9202):")
+        ensure_app_mode()
         t0 = time.monotonic()
         try:
             t, payload, stats, (code, echoed, _) = cmd_xact(
@@ -956,7 +1046,7 @@ def main() -> int:
                 t_x = time.monotonic()
                 try:
                     t, payload, stats, (code, echoed, _) = cmd_xact(
-                        cmd, tid, NIKON_GET_LIVEVIEW_IMG, dp=DP_DATA_IN)
+                        cmd, tid, fetch_op, dp=DP_DATA_IN)
                 except (ConnectionError, socket.timeout, ProtocolError) as e:
                     print(f"    尝试 #{attempt} <- 链路异常({e})—— 停止轮询")
                     break
@@ -981,6 +1071,7 @@ def main() -> int:
                     with open(out, "wb") as f:
                         f.write(payload)
                     print(f"      头 32B: {payload[:32].hex(' ')}  原始帧已存:{out}")
+                    decode_lv_header(payload)
             elapsed = max(time.monotonic() - t0, 1e-6)
             print(f"    小结:取得 {got}/{args.liveview} 帧(失败 {fails} 连击即止)"
                   f"  用时 {elapsed:.1f}s  实测帧率 {got / elapsed:.1f}fps")
@@ -994,6 +1085,41 @@ def main() -> int:
             if soi_hist:
                 print("    SOI 偏移直方图: "
                       + "  ".join(f"@{k}×{v}" for k, v in sorted(soi_hist.items())))
+
+            # 9v-a(可选,--afarea x,y):0x9205 ChangeAfArea 坐标系实证 ——
+            # 发指定坐标,取 8 帧看对焦框(box[0])是否移动到位。whole-size
+            # 空间(头 @16/18)与 SOF 帧像素空间各试一次即可分辨坐标系。
+            if args.afarea and got > 0:
+                ax, ay = (int(v) for v in args.afarea.split(","))
+                print(f"    [9v-a] ChangeAfArea(0x9205) x={ax} y={ay}:")
+                try:
+                    t, payload, stats, (code, echoed, _) = cmd_xact(
+                        cmd, tid, NIKON_CHANGE_AF_AREA, [ax & 0xFFFFFFFF, ay & 0xFFFFFFFF],
+                        dp=DP_NO_DATA)
+                    print(f"      ChangeAfArea <- 0x{code:04X} 回显 tid={echoed}")
+                except (ConnectionError, socket.timeout, ProtocolError) as e:
+                    print(f"      ChangeAfArea:链路异常({e})")
+                    code = -1
+                if code == PTP_OK:
+                    for i in range(8):
+                        time.sleep(0.25)
+                        try:
+                            t, payload, stats, (code, echoed, _) = cmd_xact(
+                                cmd, tid, fetch_op, dp=DP_DATA_IN)
+                        except (ConnectionError, socket.timeout, ProtocolError) as e:
+                            print(f"      帧 a#{i + 1} <- 链路异常({e})")
+                            break
+                        if code != PTP_OK:
+                            print(f"      帧 a#{i + 1} <- 0x{code:04X}")
+                            continue
+                        soi = payload.find(b"\xff\xd8")
+                        if len(payload) >= 56:
+                            w, h, cx, cy = struct.unpack_from(">HHHH", payload, 48)
+                            print(f"      帧 a#{i + 1}: box[0] w={w} h={h} c=({cx},{cy})"
+                                  f" focusResult@42={payload[42]} areaCount@44={payload[44]}"
+                                  f" SOI@{soi}")
+                        else:
+                            print(f"      帧 a#{i + 1}: {len(payload)}B SOI@{soi}(无头)")
             try:
                 t, payload, stats, (code, echoed, _) = cmd_xact(
                     cmd, tid, NIKON_END_LIVEVIEW, dp=DP_NO_DATA)
@@ -1015,6 +1141,7 @@ def main() -> int:
                      "InitiateCaptureRecInSdram 0x90C0(候选)"}
         label = names.get(args.capture_op, f"0x{args.capture_op:04X}")
         print(f"[9c] 快门释放摸底({label},参数 0,0):")
+        ensure_app_mode()
         t0 = time.monotonic()
         try:
             t, payload, stats, (code, echoed, _) = cmd_xact(

@@ -11,6 +11,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../../core/remote/frame_analysis.dart';
+import '../../core/remote/live_view_header.dart';
 import '../../platform/motion_host.dart';
 
 /// 伪色带色表(索引 = [FrameAnalysis.falseColorBandOf];OpenZCine
@@ -285,6 +286,69 @@ final class _HistogramPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_HistogramPainter old) => old.analysis != analysis;
+}
+
+/// 相机自报的 AF 框组(帧头 display-info):框 0 = 当前 AF 区域
+/// (**真实尺寸** —— 单点小框/动态 L 大框随相机设置),合焦变绿;主体
+/// 检测开着时后续框 = 人脸/眼睛(琥珀)。框在 whole-size 坐标系,按
+/// 归一化坐标投到画面实际包含矩形(与触控对焦同一份映射)。
+class AfAreasOverlay extends StatelessWidget {
+  const AfAreasOverlay({super.key, required this.header, required this.imageRect});
+
+  final LiveViewHeader header;
+  final Rect imageRect;
+
+  @override
+  Widget build(BuildContext context) {
+    return RepaintBoundary(
+      child: CustomPaint(
+        foregroundPainter: _AfAreasPainter(header, imageRect),
+        size: Size.infinite,
+      ),
+    );
+  }
+}
+
+final class _AfAreasPainter extends CustomPainter {
+  const _AfAreasPainter(this.header, this.imageRect);
+
+  final LiveViewHeader header;
+  final Rect imageRect;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (header.coordinateWidth <= 0 || header.coordinateHeight <= 0) return;
+    final sx = imageRect.width / header.coordinateWidth;
+    final sy = imageRect.height / header.coordinateHeight;
+    for (var i = 0; i < header.boxes.length; i++) {
+      final b = header.boxes[i];
+      final isAfPoint = i == 0;
+      // 框 0 = AF 区域:合焦绿、未合焦金;主体检测框(人脸/眼)= 琥珀。
+      final color = isAfPoint
+          ? (header.focusResult == LiveViewFocusResult.focused
+              ? const Color(0xFF2EC76B)
+              : const Color(0xFFE9AC35))
+          : const Color(0xFFFFC107);
+      final paint = Paint()
+        ..color = color.withValues(alpha: 0.9)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = isAfPoint ? 2 : 1.5;
+      final rect = Rect.fromCenter(
+        center: Offset(
+            imageRect.left + b.centerX * sx, imageRect.top + b.centerY * sy),
+        width: b.width * sx,
+        height: b.height * sy,
+      );
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(rect, const Radius.circular(3)),
+        paint,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(_AfAreasPainter old) =>
+      old.header != header || old.imageRect != imageRect;
 }
 
 /// 水平仪:固定参考线 + 随姿态转动的地平线(pitch 平移,roll 旋转)。

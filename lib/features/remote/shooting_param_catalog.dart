@@ -348,7 +348,8 @@ final kShootingParams = <ShootingParam>[
       13: 'RAW+JPEG 精细★',
     },
   ),
-  // ---- 以下厂商候选区(0xD0xx/0xD2xx,不在 Zf 在册表,拒答显示「--」)----
+  // ---- 厂商候选区(0xD0xx/0xD2xx;0xD05D AF 区域 2026-10-07 USB 实证
+  // 在册可读写,其余不在 Zf 在册表,拒答显示「--」)----
   // NEF(RAW)记录压缩:一代机身用 1/2,现役机身 0/3/4。pickValues 直供
   // + 显式 u8(厂商码 PropDesc 拒答时类型会错落到 u16 默认,写入无效)。
   ShootingParam(
@@ -374,21 +375,27 @@ final kShootingParams = <ShootingParam>[
     pickValues: [0, 2, 4, 5],
     enumLabels: {0: 'FX', 2: 'DX', 4: '1:1', 5: '16:9'},
   ),
-  // AF 区域模式 0xD05D(u16;OpenZCine stillFocusArea 表):pickValues
-  // 直供 + 显式 u16。待真机核对(在册性/写入姿势)。
+  // AF 区域模式 0xD05D(u16):**取值域走相机 Desc FORM**(勿 pickValues
+  // 直供 —— OpenZCine 表与 Zf 两套人马)。Zf FORM 七值形状实证
+  // (2026-10-07 USB,框 w×h 为 whole-size 空间):0x8010 单点 293×316 /
+  // 0x8011 自动(无固定框,subjectActive 置位)/ 0x8017 精确 163×174 /
+  // 0x8018 宽S 815×884 / 0x8019 宽L 1859×1452 / 0x801E 宽C1 横带
+  // 5513×884 / 0x801F 宽C2 竖条 815×3724 —— 无 动态区域/3D 追踪。
+  // 0x8010/0x8011/0x8017 形状定案;宽 S/L/C1/C2 按框尺寸/形状推断,
+  // 机身菜单核对后定稿。竖条/横带模式框高度饱和,触控对焦 Y 轴不动
+  // 属预期 —— 面板可在切换模式时提示(待做)。STA 无线侧在册性待核。
   ShootingParam(
     code: PtpDevicePropCode.stillFocusMeteringMode,
     label: 'AF 区域',
     writeType: PtpDataType.uint16,
-    pickValues: [0x8010, 2, 0x8012, 0x8013, 0x8014, 0x8017, 0x8011],
     enumLabels: {
       0x8010: '单点',
-      2: '动态S',
-      0x8012: '3D 追踪',
-      0x8013: '动态M',
-      0x8014: '动态L',
-      0x8017: '精确',
       0x8011: '自动',
+      0x8017: '精确',
+      0x8018: '宽S',
+      0x8019: '宽L',
+      0x801E: '宽C1',
+      0x801F: '宽C2',
     },
   ),
   // ---- Ex 扩展属性码(0x0001_xxxx,> u16;读写自动走 Gen-3 Ex ops

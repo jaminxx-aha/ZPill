@@ -49,7 +49,13 @@ abstract final class NikonOperationCode {
   static const int startLiveView = 0x9201;
   static const int endLiveView = 0x9202;
   static const int getLiveViewImage = 0x9203;
-  static const int changeAfArea = 0x9205; // 移动取景对焦区域:两 u32 参数 = 帧像素 x/y(候选,待真机核对)
+  // 取帧主力码(OpenZCine 全系在册、无回退路径):应答 = display-info
+  // 头(大端:对焦框数组/水平仪/录制态/旋转)+ JPEG。老码 0x9203 在
+  // Zf 上应答解析不出头(2026-10-07 真机),取景引擎一律先 0x9428。
+  static const int getLiveViewImageEx = 0x9428;
+  // 移动取景对焦区域:两 u32 参数 = 帧头 whole-size 坐标系 x/y
+  // (OpenZCine recentre = coordinateWidth/2 实证;非 JPEG 像素)。
+  static const int changeAfArea = 0x9205;
   static const int afDriveCancel = 0x9206; // 取消自动对焦(候选,待真机核对)
   static const int mfDrive = 0x9204; // 手动对焦步进:params [方向(1=近/2=远), 脉冲数 1..32767](OpenZCine 同款;相对量,无绝对位置读出)
   static const int initiateCaptureRecInMedia = 0x9207;
@@ -190,7 +196,7 @@ abstract final class PtpDevicePropCode {
   static const int captureAreaCrop = 0xD030; // 图像区域 FX/DX/1:1/16:9,u8
   static const int stillFocusMode = 0xD061; // 静照对焦模式 AF-S/AF-C/MF/AF-A,u8
   static const int stillIsoAutoControl = 0xD054; // 静照自动 ISO 开关,u8(0=手动/1=自动;OpenZCine stillISOAutoControl)
-  static const int stillFocusMeteringMode = 0xD05D; // 静照 AF 区域模式,u16(单点/动态/3D/精确;OpenZCine stillFocusArea)
+  static const int stillFocusMeteringMode = 0xD05D; // 静照 AF 区域模式,u16(Zf FORM 七值:单点/自动/精确/宽S/宽L/宽C1/宽C2 —— 无 动态区域/3D 追踪,2026-10-07 USB 实证;标签见 shooting_param_catalog)
   static const int exposureRemaining = 0xD1F1 // 剩余可拍张数(OpenZCine exposureRemaining;读出用)
       ;
   // 曝光写路径(Z 系真机口径,OpenZCine:静照 ISO/快门的标准码 0x500F/
@@ -199,9 +205,10 @@ abstract final class PtpDevicePropCode {
   static const int isoControlSensitivity = 0xD0B5; // 有效 ISO 读(含 Auto ISO),u32
   static const int stillShutterSpeed = 0xD100; // 快门读写,u32 分数打包(num<<16|den)
   static const int applicationMode = 0xD1F0; // 应用模式,u8(一代机身 op 缺席时的写回退)
+  static const int sessionInitiatorInfo = 0xD406; // 会话发起者身份(MTP 标准;USB 人设身份门,见 PtpSession.enableAppControl)
   static const int activePicCtrlItem = 0xD200; // 优化校准(Picture Control),u16
-  // Zf 另报 MTP 标准属性 0xD303/0xD406/0xD407(UseDeviceStageFlag /
-  // SessionInitiatorInfo / PerceivedDeviceType,与拍摄无关,不入册)。
+  // Zf 另报 MTP 标准属性 0xD303/0xD407(UseDeviceStageFlag /
+  // PerceivedDeviceType,与拍摄无关,不入册)。
   // 色调模式 OpenZCine 记作 0x0001D01C(u32 扩展形态,超 u16 属性码宽;
   // USB 载体会截断成 0xD01C 阴天微调 = 静默错值)—— 不入册,留抓包项。
 }

@@ -87,6 +87,9 @@ NIKON_INITIATE_CAPTURE_REC_IN_SDRAM = 0x90C0
 NIKON_START_LIVEVIEW = 0x9201
 NIKON_END_LIVEVIEW = 0x9202
 NIKON_GET_LIVEVIEW_IMG = 0x9203
+NIKON_GET_LIVEVIEW_IMG_EX = 0x9428  # OpenZCine 全系取帧码(应答带 display-info 头)
+NIKON_CHANGE_AF_AREA = 0x9205  # p1/p2 = whole-size 坐标(OpenZCine PTPIPClientSession)
+NIKON_CHANGE_APPLICATION_MODE = 0x9435  # 遥控 op 前须切应用模式(app enableAppControl 同款)
 NIKON_DEVICE_READY = 0x90C8
 DEVICE_BUSY = 0x2019  # ISO 15740 标准响应码(设备忙)
 
@@ -787,6 +790,59 @@ def hexdump(b: bytes, limit: int = 512) -> str:
     return "\n".join(lines)
 
 
+# ── LiveViewObject 帧头解码(布局源 = OpenZCine PTPLiveViewObject.swift,
+#    ZR/Z7 raw dump 实证;与 ptpip_probe decode_lv_header 镜像) ─────────
+
+def _be16(p: bytes, o: int) -> int:
+    return struct.unpack_from(">H", p, o)[0]
+
+def _be32(p: bytes, o: int) -> int:
+    return struct.unpack_from(">I", p, o)[0]
+
+def _angle(p: bytes, o: int) -> str:
+    """BE 有符号 16.16 定点角度(度);0xFFFFFFFF = 机身报不可靠。"""
+    raw = _be32(p, o)
+    if raw == 0xFFFFFFFF:
+        return "unreliable"
+    v = raw - (1 << 32) if raw >= (1 << 31) else raw
+    return f"{v / 65536.0:.3f}°"
+
+def decode_lv_header(p: bytes) -> None:
+    """逐域打印 OpenZCine 布局的头字段 + 头部 hex(前 96B 与关键窗口)。"""
+    soi = p.find(b"\xff\xd8")
+    print(f"      [头解码] len={len(p)} SOI@{soi}")
+    if len(p) < 56:
+        print("      [头解码] < 56B,无 display-info 头")
+        return
+    print(f"        jpegLen(BE u32@12)={_be32(p, 12)}"
+          f"  wholeSize(BE u16@16/18)={_be16(p, 16)}x{_be16(p, 18)}")
+    print(f"        focusResult@42={p[42]} subjectActive@43={p[43]}"
+          f" areaCount@44={p[44]} selectedIndex@45={p[45]}"
+          f" trackingAF@46={p[46] if len(p) > 46 else '-'}")
+    slots = min(max(p[44], 1), 96)
+    for i in range(slots):
+        base = 48 + i * 8
+        if base + 8 > len(p):
+            break
+        w, h, cx, cy = struct.unpack_from(">HHHH", p, base)
+        if w or h:
+            print(f"        box[{i}] w={w} h={h} c=({cx},{cy})")
+    if len(p) > 828:
+        print(f"        recording@828={p[828]} tcOn@831={p[831]}"
+              f" tc@832-835={p[832]:02d}:{p[833]:02d}:{p[834]:02d}:{p[835]:02d}"
+              f" rotation@839={p[839]}")
+    if len(p) >= 852:
+        print(f"        level roll@840={_angle(p, 840)} pitch@844={_angle(p, 844)}"
+              f" yaw@848={_angle(p, 848)}")
+    for lo, hi in ((0, 96), (40, 64), (816, 852)):
+        if len(p) < hi:
+            continue
+        print(f"        hex[{lo:#05x}:{hi:#05x}]:")
+        for off in range(lo, min(hi, len(p)), 16):
+            row = p[off:off + 16]
+            print(f"          {off:04x}  {row.hex(' ')}")
+
+
 # ── 主流程 ────────────────────────────────────────────────────────────
 
 def main() -> int:
@@ -840,10 +896,18 @@ def main() -> int:
                          "解码,并打印类型来源)—— 曝光三属性回归:"
                          "--propdesc 5007,500d,500f")
     ap.add_argument("--liveview", type=int, metavar="帧数", default=0,
-                    help="Live View 摸底:0x9201 开取景 → 0x9203 轮询 N 帧"
+                    help="Live View 摸底:0x9201 开取景 → 取帧轮询 N 帧"
                          "(间隔 200ms 对齐 app;连续 5 帧失败收口)→ 0x9202。"
-                         "首帧落盘 /tmp,SOI 偏移直方图、帧率/字节数/"
-                         "单帧往返延迟统计")
+                         "首帧落盘 /tmp + 逐域头解码,SOI 偏移直方图、帧率/"
+                         "字节数/单帧往返延迟统计")
+    ap.add_argument("--liveview-op", type=lambda s: int(s, 16), metavar="hex",
+                    default=NIKON_GET_LIVEVIEW_IMG,
+                    help="取帧操作码:0x9203(老码,默认)/ 0x9428(Ex 码,"
+                         "应答带 display-info 头 = 对焦框/水平仪/录制态"
+                         "唯一数据源)")
+    ap.add_argument("--afarea", type=str, metavar="x,y", default=None,
+                    help="4v 内:取帧完成后发 0x9205 ChangeAfArea(x,y),"
+                         "再取 8 帧看 box[0] 是否移到 —— whole-size 坐标系实证")
     ap.add_argument("--capture", action="store_true",
                     help="快门释放摸底:发拍照 op + interrupt 事件时间线"
                          "+ 0x90C8 DeviceReady 忙等收口(300ms×30,事件先到"
@@ -1261,6 +1325,9 @@ def main() -> int:
                         pass
                 if payload is None:
                     continue
+            elif text.startswith("u16:"):
+                # u16 载荷(如 0xD05D AF 区域模式):u16:0x8010
+                payload = struct.pack("<H", int(text[4:], 0) & 0xFFFF)
             else:
                 payload = ptp_str(text)
             print(f"  ▶ 候选 {label}(载荷 {len(payload)}B)")
@@ -1293,7 +1360,7 @@ def main() -> int:
                             chr(d[i]) for i in range(1, min(len(d), 1 + d[0] * 2)) if d[i])
                     except Exception:
                         pass
-                print(f"    回读 Value <- {back!r}")
+                print(f"    回读 Value <- {back!r} hex={d.hex(' ')}")
             # GetDeviceInfo 对比(轻量:只看操作码集合)
             txid += 1
             txid, blob, rc = xact(dev, ep_out, ep_in, txid, GET_DEVICE_INFO)
@@ -1369,13 +1436,21 @@ def main() -> int:
             else:
                 print(f"  0x{prop:04X} Value <- 0x{rc:04X}")
 
-    # 步骤 4v(可选,--liveview N):Live View 轮询摸底 —— 0x9201 开取景,
-    # 0x9203 逐帧轮询直到 N 帧成功(间隔 200ms 对齐 app;失败同拍重试,
-    # 连续 5 帧失败收口 —— LiveViewEngine 同策略),0x9202 收尾。帧格式
-    # 无参考:首帧落盘 + 头 32B 备案;SOI 偏移直方图/帧大小/单帧事务
-    # 往返延迟,供 _sniffJpegStart 剥离策略与轮询间隔(200ms 够不够)回填。
+    # 步骤 4v(可选,--liveview N):Live View 轮询摸底 —— 0x9435 切应用
+    # 模式 → 0x9201 开取景 → 取帧轮询直到 N 帧成功(间隔 200ms 对齐 app;
+    # 失败同拍重试,连续 5 帧失败收口 —— LiveViewEngine 同策略)→ 0x9202
+    # 收尾。首帧落盘 + 逐域头解码;取帧码 --liveview-op:0x9203(老码)vs
+    # 0x9428(Ex,OpenZCine 全系取帧码,应答带 display-info 头)对拍。
+    # 0x9435 前置:Z 系方言,遥控 op 前须切应用模式(2026-10-07 Zf STA
+    # 实证:无 0x9435 的 0x9201 一发即断链;app enableAppControl 同款)。
     if args.liveview:
-        print(f"[4v] Live View 摸底(0x9201 → 0x9203 ×{args.liveview} 帧 → 0x9202):")
+        fetch_op = args.liveview_op
+        print(f"[4v] Live View 摸底(0x9435 → 0x9201 → 0x{fetch_op:04X}"
+              f" ×{args.liveview} 帧 → 0x9202):")
+        txid += 1
+        txid, _, rc = xact(dev, ep_out, ep_in, txid,
+                           NIKON_CHANGE_APPLICATION_MODE, [1])
+        print(f"    ChangeApplicationMode(0x9435,1) <- 0x{rc:04X}")
         txid += 1
         txid, blob, rc = xact(dev, ep_out, ep_in, txid, NIKON_START_LIVEVIEW)
         print(f"    StartLiveView <- 0x{rc:04X}")
@@ -1399,8 +1474,7 @@ def main() -> int:
                 t_x = time.monotonic()
                 try:
                     txid += 1
-                    txid, blob, rc = xact(dev, ep_out, ep_in, txid,
-                                          NIKON_GET_LIVEVIEW_IMG)
+                    txid, blob, rc = xact(dev, ep_out, ep_in, txid, fetch_op)
                 except (usb.core.USBError, IOError) as e:
                     print(f"    尝试 #{attempt} <- USB 异常:{e}")
                     try:
@@ -1430,6 +1504,7 @@ def main() -> int:
                     with open(out, "wb") as f:
                         f.write(data)
                     print(f"      头 32B: {data[:32].hex(' ')}  原始帧已存:{out}")
+                    decode_lv_header(data)
             elapsed = max(time.monotonic() - t0, 1e-6)
             print(f"    小结:取得 {got}/{args.liveview} 帧(失败 {fails} 连击即止)"
                   f"  用时 {elapsed:.1f}s  实测帧率 {got / elapsed:.1f}fps")
@@ -1445,6 +1520,41 @@ def main() -> int:
                       + "  ".join(f"@{k}×{v}" for k, v in sorted(soi_hist.items())))
                 print("      (@0 = JPEG 裸流直接解码;@-1 = 无 SOI,非 JPEG 帧,"
                       "头 32B 备案判读 —— _sniffJpegStart 剥离策略以此回填)")
+
+            # 4v-a(可选,--afarea x,y):0x9205 ChangeAfArea 坐标系实证 ——
+            # 发指定坐标,取 8 帧看对焦框(box[0])是否移动到位。whole-size
+            # 空间(头 @16/18)与 SOF 帧像素空间各试一次即可分辨坐标系。
+            if args.afarea and got > 0:
+                ax, ay = (int(v) for v in args.afarea.split(","))
+                print(f"    [4v-a] ChangeAfArea(0x9205) x={ax} y={ay}:")
+                txid += 1
+                txid, _, rc = xact(dev, ep_out, ep_in, txid,
+                                   NIKON_CHANGE_AF_AREA,
+                                   [ax & 0xFFFFFFFF, ay & 0xFFFFFFFF])
+                print(f"      ChangeAfArea <- 0x{rc:04X}")
+                if rc == OK:
+                    for i in range(8):
+                        time.sleep(0.25)
+                        try:
+                            txid += 1
+                            txid, blob, rc = xact(dev, ep_out, ep_in, txid,
+                                                  fetch_op)
+                        except (usb.core.USBError, IOError) as e:
+                            print(f"      帧 a#{i + 1} <- USB 异常:{e}")
+                            break
+                        if rc != OK or blob is None:
+                            print(f"      帧 a#{i + 1} <- 0x{rc:04X}")
+                            continue
+                        data = blob[HDR:]
+                        soi = data.find(b"\xff\xd8")
+                        if len(data) >= 56:
+                            w, h, cx, cy = struct.unpack_from(">HHHH", data, 48)
+                            print(f"      帧 a#{i + 1}: box[0] w={w} h={h} c=({cx},{cy})"
+                                  f" focusResult@42={data[42]} areaCount@44={data[44]}"
+                                  f" SOI@{soi}")
+                        else:
+                            print(f"      帧 a#{i + 1}: {len(data)}B SOI@{soi}(无头)")
+
             txid += 1
             txid, blob, rc = xact(dev, ep_out, ep_in, txid, NIKON_END_LIVEVIEW)
             print(f"    EndLiveView <- 0x{rc:04X}")

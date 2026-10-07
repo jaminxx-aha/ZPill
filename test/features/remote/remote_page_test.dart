@@ -12,7 +12,9 @@ import 'package:nikon_pill/core/ptp/operation_codes.dart';
 import 'package:nikon_pill/core/ptp/ptp_session.dart';
 import 'package:nikon_pill/core/ptp/ptp_transport.dart';
 import 'package:nikon_pill/core/remote/live_view_engine.dart';
+import 'package:nikon_pill/core/remote/live_view_header.dart';
 import 'package:nikon_pill/core/utils/byte_writer.dart';
+import 'package:nikon_pill/features/remote/live_view_overlays.dart';
 import 'package:nikon_pill/features/remote/remote_controller.dart';
 import 'package:nikon_pill/features/remote/remote_page.dart';
 
@@ -145,10 +147,13 @@ void _scriptParams(_ScriptTransport t, {int mode = 1}) {
     ..ok(data: _propDescDataset(PtpDevicePropCode.compressionSetting,
         PtpDataType.uint8, 7, enums: [4, 5, 7, 12]))
     // pickValues 参数(不读 desc,值走裸读):RAW 压缩 0 / 图像区域 0 /
-    // AF 区域 0x8010 / 主体检测 0 / 色调 1 / 优化校准 1
+    // 主体检测 0 / 色调 1 / 优化校准 1;AF 区域改相机 FORM 驱动
+    // (2026-10-07 Zf 七值实证)→ 完整 PropDesc 应答
     ..ok(data: Uint8List.fromList([0])) // rawCompressionType u8
     ..ok(data: Uint8List.fromList([0])) // captureAreaCrop u8
-    ..ok(data: Uint8List.fromList([0x10, 0x80])) // stillFocusMeteringMode u16
+    ..ok(data: _propDescDataset(PtpDevicePropCode.stillFocusMeteringMode,
+        PtpDataType.uint16, 0x8010,
+        enums: [0x8010, 0x8011, 0x8017, 0x8018, 0x8019, 0x801E, 0x801F]))
     ..ok(data: Uint8List.fromList([0])) // 主体检测 u8(Ex 码 0x0001D006)
     ..ok(data: Uint8List.fromList([1])) // 色调 u8(Ex 码 0x0001D01C)
     ..ok(data: Uint8List.fromList([1, 0])) // activePicCtrlItem u16
@@ -169,6 +174,30 @@ Uint8List _realJpeg() {
     }
   }
   return Uint8List.fromList(img.encodeJpg(image));
+}
+
+/// 最小 display-info 头(6048×3400、单 AF 框):头按真机形态补 1024B
+/// 定长 + SOI JPEG 尾(头长靠 SOI 位置定位),页面测试直接注到
+/// engine.header 驱动 AF 框叠层。
+Uint8List _headerObject() {
+  final b = Uint8List(1024 + 4);
+  void be16(int o, int v) {
+    b[o] = (v >> 8) & 0xFF;
+    b[o + 1] = v & 0xFF;
+  }
+
+  be16(16, 6048);
+  be16(18, 3400);
+  b[42] = 2; // 合焦
+  b[44] = 1;
+  be16(48, 240);
+  be16(50, 240);
+  be16(52, 3024);
+  be16(54, 1700);
+  b[1024] = 0xFF;
+  b[1025] = 0xD8;
+  b[1026] = 0xFF;
+  return b;
 }
 
 /// 横滚参数行(页面里唯一的水平 Scrollable)。
@@ -573,5 +602,115 @@ void main() {
     await tester.pumpAndSettle();
     expect(controller.focusBeforeCapture, isTrue);
     expect(transport.requests, isEmpty, reason: '纯本地开关,不发相机命令');
+  });
+
+  testWidgets('监看辅助开关:直方图等四个分析开关须同步启用帧分析器'
+      '(直方图无数据回归)', (tester) async {
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = RemoteController(
+        session: PtpSession(transport: transport),
+        connection: conn,
+        engine: LiveViewEngine(
+            session: PtpSession(transport: transport), delay: _parkedDelay),
+        delay: _parkedDelay,
+        aeDelay: _parkedDelay);
+    addTearDown(controller.dispose);
+    await tester
+        .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
+    expect(controller.analyzer.enabled.value, isFalse);
+
+    // 点辅助条图标盒(InkWell 只包图标,标签文字不在点击区)
+    await tester.tap(find.byIcon(Icons.bar_chart)); // 直方图
+    await tester.pumpAndSettle();
+    expect(controller.analyzer.enabled.value, isTrue,
+        reason: '开了直方图必须启用帧分析,否则永远无数据');
+
+    await tester.tap(find.byIcon(Icons.bar_chart));
+    await tester.pumpAndSettle();
+    expect(controller.analyzer.enabled.value, isFalse);
+  });
+
+  testWidgets('相机自报 AF 框:帧头在册即叠加(真实尺寸框,无需点按)',
+      (tester) async {
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = RemoteController(
+        session: PtpSession(transport: transport),
+        connection: conn,
+        engine: LiveViewEngine(
+            session: PtpSession(transport: transport), delay: _parkedDelay),
+        delay: _parkedDelay,
+        aeDelay: _parkedDelay);
+    addTearDown(controller.dispose);
+
+    transport
+      ..ok() // 0x9201
+      ..ok(data: _realJpeg()); // 首帧(SOF 尺寸入册 → imageRect 可算)
+    await tester
+        .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
+    await tester.tap(find.text('取景'));
+    await tester.pumpAndSettle();
+    expect(find.byType(AfAreasOverlay), findsNothing,
+        reason: '无头/未取景不画相机 AF 框');
+
+    controller.engine.header.value = parseLiveViewHeader(_headerObject());
+    await tester.pump();
+    expect(find.byType(AfAreasOverlay), findsOneWidget,
+        reason: '头一到即叠加相机自报框(尺寸随 AF 区域设置)');
+
+    // 头在册(相机自报框)时,点按占位框不叠加 —— 同屏只此一框
+    controller.afBox = AfBox(nx: 0.5, ny: 0.5);
+    await tester.pump();
+    const amber = Color(0xFFFFC107);
+    expect(
+        find.byWidgetPredicate((w) {
+          if (w is! DecoratedBox || w.decoration is! BoxDecoration) {
+            return false;
+          }
+          final border = (w.decoration as BoxDecoration).border;
+          return border is Border &&
+              border.top.width == 2 &&
+              border.top.color == amber;
+        }),
+        findsNothing,
+        reason: '头在册 = 相机真实框已在屏,占位框再画即双框');
+  });
+
+  testWidgets('横屏监看布局:取景画面全幅打底,控制条浮在画面上下',
+      (tester) async {
+    tester.view.physicalSize = const Size(1600, 800);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = RemoteController(
+        session: PtpSession(transport: transport),
+        connection: conn,
+        engine: LiveViewEngine(
+            session: PtpSession(transport: transport), delay: _parkedDelay),
+        delay: _parkedDelay,
+        aeDelay: _parkedDelay);
+    addTearDown(controller.dispose);
+
+    transport
+      ..ok() // 0x9201
+      ..ok(data: _realJpeg());
+    await tester
+        .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
+    await tester.tap(find.text('取景'));
+    await tester.pumpAndSettle();
+    expect(controller.liveViewActive, isTrue);
+
+    // 横屏 Stack:取景区(含 Image)占满整屏,不再是竖屏 Column 里被
+    // 控制条挤剩的一条 —— Image 组件盒 = 全屏尺寸
+    final imageSize = tester.getSize(find.byType(Image).first);
+    expect(imageSize.width, 1600);
+    expect(imageSize.height, 800,
+        reason: '画面打底占大块屏幕,按钮浮在其上');
+    // 控制条在画面之上同屏可见(浮层,不再把画面挤出屏)
+    expect(find.text('取景中'), findsOneWidget);
+    expect(find.byIcon(Icons.grid_on), findsOneWidget);
   });
 }
