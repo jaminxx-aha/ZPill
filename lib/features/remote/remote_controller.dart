@@ -7,9 +7,17 @@
 /// [0,0] 在应用模式/接管态被拒),成功码/形缓存后续直发。
 ///
 /// **APP 接管控制**(0x90C2 remote 模式,影控台同款):快门等参数受
-/// 机身物理拨盘控制,启用接管(机身拨盘锁定)应用才能调整;用户在
-/// 拍摄页确认后 [enableTakeover],解除/断连由 [releaseTakeover] 与
-/// 重连防御性收口(见 [_takeoverDangling])。
+/// 机身物理拨盘控制,启用接管(机身拨盘锁定)应用才能调整。进入路径
+/// 二:①用户在拍摄页确认后 [enableTakeover];②USB 连接流兜底
+/// (enableAppControl 的 0x90C2(1) 兜底,OpenZCine 同款 —— Zf 由此
+/// 退出上传优先模式)在 connected 沿静默对齐。解除/断连由
+/// [releaseTakeover] 与重连防御性收口(见 [_takeoverDangling])。
+///
+/// **连接即取景**(OpenZCine 口径:连接成功直接驱动进监看,相机侧由
+/// 此进及时取景):HomeShell 在 connected 沿调 [autoLiveViewOnConnect]。
+/// 取景生命周期跟连接走 —— 0x9202 只在用户显式关取景或断连时发;
+/// 拍摄页不可见只挂起帧轮询([setViewerVisible]),相机保持取景。
+/// 应用侧**不因连接切 tab**(用户明示)。
 ///
 /// 事件驱动:CaptureComplete(0x400D / 尼康 0xC102)提前收口拍照等待;
 /// ObjectAdded(0x4002 / 0xC101)→「已拍摄」提示 + 参数刷新(**不下载**,
@@ -105,7 +113,14 @@ final class RemoteController extends ChangeNotifier {
     _statesSub = connection?.states.listen((s) {
       if (s == CameraLinkState.connected) {
         _linkUp = true;
-        if (_takeoverDangling) {
+        if (session.remoteModeActive) {
+          // USB 连接流已兜底进 remote 模式(0x9435 恒拒 → 0x90C2(1),
+          // OpenZCine 连接脚本同款):静默对齐接管态 —— 芯片显示已启用、
+          // 拨盘级参数免确认直调,可随时解除。也覆盖悬挂解除:本链已在
+          // remote 模式,再发 0x90C2(0) 反而会拆掉刚抬的门。
+          _takeoverDangling = false;
+          _takeoverActive = true;
+        } else if (_takeoverDangling) {
           // 上次断链时还持有 remote 模式:防御性解除(机身拨盘可能仍
           // 锁定,OpenZCine 同款「photo 模式重入先复位」口径)。
           _takeoverDangling = false;
@@ -411,6 +426,12 @@ final class RemoteController extends ChangeNotifier {
 
   bool _linkUp = true;
   bool _disposed = false;
+
+  /// 拍摄页是否可见(IndexedStack 常驻,页面离台/回台、应用退后台/回
+  /// 前台都经 [setViewerVisible] 汇报)。不可见 = 挂起帧轮询与 AE 轮询
+  /// (相机侧保持取景 —— 取景生命周期跟连接走);默认 true = 无页面
+  /// 汇报时按可见处理(单测/无 HomeShell 场景)。
+  bool _viewerVisible = true;
   StreamSubscription<PtpEvent>? _eventsSub;
   StreamSubscription<CameraLinkState>? _statesSub;
   Completer<void>? _captureDone;
@@ -625,7 +646,7 @@ final class RemoteController extends ChangeNotifier {
       await _endBurstBracket();
       _burstLatched = false;
       _burstRun++;
-      if (wasLive) engine.resume();
+      if (wasLive && _viewerVisible) engine.resume();
       capturing = false;
       notifyListeners();
     }
@@ -655,7 +676,7 @@ final class RemoteController extends ChangeNotifier {
     } on Exception catch (e) {
       error = '快门释放失败:$e';
     } finally {
-      if (wasLive) engine.resume();
+      if (wasLive && _viewerVisible) engine.resume();
       capturing = false;
       notifyListeners();
     }
@@ -769,7 +790,7 @@ final class RemoteController extends ChangeNotifier {
           error = '手动对焦不可用(机械对焦环或机身忙)';
       }
     } finally {
-      engine.resume();
+      if (_viewerVisible) engine.resume();
       if (_linkUp) notifyListeners();
     }
   }
@@ -909,7 +930,7 @@ final class RemoteController extends ChangeNotifier {
     } on Exception catch (e) {
       error = '对焦失败:$e';
     } finally {
-      engine.resume();
+      if (_viewerVisible) engine.resume();
       focusing = false;
       if (_linkUp) notifyListeners();
     }
@@ -953,7 +974,10 @@ final class RemoteController extends ChangeNotifier {
   int _aeRun = 0;
 
   void _syncAePolling() {
-    final shouldRun = _linkUp && engine.status.value == LiveViewStatus.running;
+    // 页面不可见不轮询(取景引擎同款挂起;相机侧取景保持)。
+    final shouldRun = _linkUp &&
+        _viewerVisible &&
+        engine.status.value == LiveViewStatus.running;
     if (shouldRun && !_aePolling) {
       _aePolling = true;
       unawaited(_aePollLoop(++_aeRun));
@@ -985,6 +1009,34 @@ final class RemoteController extends ChangeNotifier {
       await engine.start();
     }
     notifyListeners();
+  }
+
+  /// 连接即取景(OpenZCine 口径:连接成功直接驱动进监看,相机侧由此
+  /// 进及时取景 —— 退出上传优先的收尾一步)。HomeShell 在 connected
+  /// 沿调用;参数刷新由 connected 沿照常先行(0x9201 与取帧不抢命令
+  /// 通道)。拍摄页不在前台也无妨:0x9201 照发(相机进取景),帧轮询
+  /// 挂起等页面可见([setViewerVisible])。用户显式关过取景(session
+  /// 内)也照样重开 —— 每次新连接都是「连接即监看」(OpenZCine 同款)。
+  Future<void> autoLiveViewOnConnect() async {
+    if (!_linkUp) return;
+    if (engine.status.value == LiveViewStatus.running) return;
+    await engine.start();
+    if (!_viewerVisible) engine.pause();
+  }
+
+  /// 拍摄页可见性汇报(离台/回台、退后台/回前台):不可见挂起帧轮询
+  /// 与 AE 轮询(相机侧保持取景,不发 0x9202),可见恢复。拍照/对焦
+  /// 操作前后的挂起不受影响(操作内 resume 会查本状态,页面不可见
+  /// 不提前恢复轮询)。
+  void setViewerVisible(bool visible) {
+    if (_viewerVisible == visible) return;
+    _viewerVisible = visible;
+    if (visible) {
+      engine.resume();
+    } else {
+      engine.pause();
+    }
+    _syncAePolling();
   }
 
   /// 快门释放:op 表选码(在册 0x9207 直用,见 [_fireShutter]),被拒
@@ -1026,7 +1078,7 @@ final class RemoteController extends ChangeNotifier {
       await _awaitCaptureSettled();
     } finally {
       _captureDone = null;
-      if (wasLive) engine.resume();
+      if (wasLive && _viewerVisible) engine.resume();
       capturing = false;
       notifyListeners();
     }

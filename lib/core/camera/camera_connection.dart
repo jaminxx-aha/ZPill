@@ -430,9 +430,10 @@ final class CameraConnectionImpl implements CameraConnection {
     }
     await _session.open();
     // 切应用模式(Z 系真机口径:不切则遥控写被 0x200F AccessDenied 拒;
-    // 尽力而为,失败不拦连接 —— 拍照/读参数不依赖它,OpenZCine 同款
-    // 降级策略)。真机核对。
-    await _session.enableAppControl();
+    // 尽力而为,失败不拦连接)。USB 额外带 remote 模式兜底:0x9435 在
+    // USB 人设下恒拒,0x90C2(1) 是 OpenZCine 的 USB 兜底 —— Zf 收到即
+    // 退出上传优先模式返回及时取景(2026-10-07 真机对照)。真机核对。
+    await _session.enableAppControl(usbRemoteFallback: true);
     _deviceName = info.model;
     _error = null;
     _transition(CameraLinkState.connected);

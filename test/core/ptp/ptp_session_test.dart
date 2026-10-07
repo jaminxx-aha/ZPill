@@ -506,17 +506,25 @@ void main() {
       expect(fake2.requests, hasLength(1), reason: '漂移在阈内:只读不写');
     });
 
-    test('changeCameraMode:0x90C2 params=[mode](APP 接管控制);非 OK 抛异常',        () async {
+    test('changeCameraMode:0x90C2 params=[mode](APP 接管控制);非 OK 抛异常;'
+        'remoteModeActive 随成功应答同步、被拒不翻', () async {
       final fake = FakePtpTransport()..reply(PtpResult(responseCode: PtpResponseCode.ok));
       final session = PtpSession(transport: fake);
       await session.changeCameraMode(1);
       expect(fake.requests.single.opcode, NikonOperationCode.changeCameraMode);
       expect(fake.requests.single.params, [1]);
+      expect(session.remoteModeActive, isTrue, reason: '0x90C2(1) 成功即置位');
 
       fake.reply(PtpResult(responseCode: NikonResponseCode.changeCameraModeFailed));
       await expectLater(session.changeCameraMode(0),
           throwsA(isA<PtpResponseException>()));
       expect(fake.requests.last.params, [0]);
+      expect(session.remoteModeActive, isTrue,
+          reason: '解除被拒不翻旗(相机侧模式未变)');
+
+      fake.reply(PtpResult(responseCode: PtpResponseCode.ok));
+      await session.changeCameraMode(0);
+      expect(session.remoteModeActive, isFalse, reason: '解除成功即熄');
     });
 
     test('getStorageIds:u32 计数 + N 个 u32(双卡槽)', () async {
@@ -661,8 +669,10 @@ void main() {
       expect(fake.requests.single.params, [1]);
     });
 
-    test('enableAppControl:0x9435 被拒 → 回退写 ApplicationMode 0xD1F0=1',
+    test('enableAppControl:0x9435 拒 → 直落 0xD1F0 兜底(不写身份、不重试)',
         () async {
+      // OpenZCine 全程不写 0xD406 身份(写身份会让机身把主机按新身份
+      // 归类、停「已连接到计算机」屏),连接链因此没有身份段。
       final fake = FakePtpTransport()
         ..reply(const PtpResult(
             responseCode: PtpResponseCode.operationNotSupported))
@@ -673,12 +683,25 @@ void main() {
         NikonOperationCode.changeApplicationMode,
         PtpOperationCode.setDevicePropValue,
       ]);
-      expect(
-          fake.requests[1].params, [PtpDevicePropCode.applicationMode]);
+      expect(fake.requests[1].params, [PtpDevicePropCode.applicationMode]);
       expect(fake.requests[1].dataOut, Uint8List.fromList([1]));
     });
 
-    test('enableAppControl:双拒 → false 不抛;不受拍摄参数总闸约束',
+    test('enableAppControl:0x9435 回 0x200F(USB 人设)→ 同样直落 0xD1F0'
+        '(拒绝码不分支,非 OK 一律走兜底)', () async {
+      final fake = FakePtpTransport()
+        ..reply(const PtpResult(responseCode: PtpResponseCode.accessDenied))
+        ..reply(const PtpResult(responseCode: PtpResponseCode.ok));
+      final session = PtpSession(transport: fake);
+      expect(await session.enableAppControl(), isTrue);
+      expect(fake.requests.map((r) => r.opcode), [
+        NikonOperationCode.changeApplicationMode,
+        PtpOperationCode.setDevicePropValue,
+      ]);
+      expect(fake.requests[1].params, [PtpDevicePropCode.applicationMode]);
+    });
+
+    test('enableAppControl:全拒 → false 不抛;不受拍摄参数总闸约束',
         () async {
       PtpSession.kSetPropEnabled = false; // 应用模式切换非拍摄参数写
       addTearDown(() => PtpSession.kSetPropEnabled = true);
@@ -688,68 +711,141 @@ void main() {
         ..reply(const PtpResult(responseCode: PtpResponseCode.generalError));
       final session = PtpSession(transport: fake);
       expect(await session.enableAppControl(), isFalse);
-    });
-
-    test('enableAppControl:0x200F(USB 人设)→ 写 initiator 0xD406 → 重试通',
-        () async {
-      final fake = FakePtpTransport()
-        ..reply(const PtpResult(responseCode: PtpResponseCode.accessDenied))
-        ..reply(const PtpResult(responseCode: PtpResponseCode.ok))
-        ..reply(const PtpResult(responseCode: PtpResponseCode.ok));
-      final session = PtpSession(transport: fake);
-      expect(await session.enableAppControl(), isTrue);
       expect(fake.requests.map((r) => r.opcode), [
         NikonOperationCode.changeApplicationMode,
-        PtpOperationCode.setDevicePropValue,
-        NikonOperationCode.changeApplicationMode,
+        PtpOperationCode.setDevicePropValue, // 0xD1F0 兜底(仍拒)
       ]);
-      expect(fake.requests[1].params,
-          [PtpDevicePropCode.sessionInitiatorInfo]);
+    });
+
+    test('writeInitiatorIdentity:载荷 = PTP 串(u8 字符数 + UTF-16LE 无终止符)',
+        () async {
+      final fake = FakePtpTransport()
+        ..reply(const PtpResult(responseCode: PtpResponseCode.ok));
+      final session = PtpSession(transport: fake);
+      expect(await session.writeInitiatorIdentity(), isTrue);
+      final req = fake.requests.single;
+      expect(req.opcode, PtpOperationCode.setDevicePropValue);
+      expect(req.params, [PtpDevicePropCode.sessionInitiatorInfo]);
       // 'NikonPill' PTP 字符串:u8 计数(字符数,不含 NUL)+ UTF-16LE,
       // 无终止符 —— 与探针 ptp_str 同款(Zf USB 实证载荷,2026-10-07)。
       final expected = <int>[9];
       for (final cu in 'NikonPill'.codeUnits) {
         expected.addAll([cu & 0xFF, cu >> 8]);
       }
-      expect(fake.requests[1].dataOut, Uint8List.fromList(expected));
+      expect(req.dataOut, Uint8List.fromList(expected));
     });
 
-    test('enableAppControl:USB 人设全链(initiator 通但 0x9435 仍拒 → 0xD1F0 兜底)',
+    test('writeInitiatorIdentity:被拒/链路异常 → false 不抛', () async {
+      final rejected = FakePtpTransport()
+        ..reply(const PtpResult(
+            responseCode: PtpResponseCode.operationNotSupported));
+      expect(
+          await PtpSession(transport: rejected).writeInitiatorIdentity(),
+          isFalse);
+      // 脚本耗尽(execute 抛 StateError)也兜住:尽力而为语义。
+      final dead = FakePtpTransport();
+      expect(await PtpSession(transport: dead).writeInitiatorIdentity(),
+          isFalse);
+    });
+
+    test('enableAppControl(usbRemoteFallback):0x9435 拒(USB 人设)→ '
+        '0x90C2(1) 进 remote → true + remoteModeActive(OpenZCine USB '
+        '同款,Zf 收到即退出上传优先模式返回及时取景)', () async {
+      final fake = FakePtpTransport()
+        ..reply(const PtpResult(
+            responseCode: PtpResponseCode.operationNotSupported)) // 0x9435
+        ..reply(const PtpResult(responseCode: PtpResponseCode.ok)); // 0x90C2(1)
+      final session = PtpSession(transport: fake);
+      expect(await session.enableAppControl(usbRemoteFallback: true), isTrue);
+      expect(fake.requests.map((r) => r.opcode), [
+        NikonOperationCode.changeApplicationMode,
+        NikonOperationCode.changeCameraMode,
+      ]);
+      expect(fake.requests[1].params, [1]);
+      expect(session.remoteModeActive, isTrue);
+    });
+
+    test('enableAppControl(usbRemoteFallback):0x9435 链路异常 → '
+        '0x90C2 兜底照走(尽力而为,异常不得拦连接主流程)', () async {
+      // 首发传输层异常(execute 抛)也落兜底:on Object 兜底语义。
+      final fake = FakePtpTransport()
+        ..fail(Exception('链路异常')) // 0x9435 抛
+        ..reply(const PtpResult(responseCode: PtpResponseCode.ok)); // 0x90C2(1)
+      final session = PtpSession(transport: fake);
+      expect(await session.enableAppControl(usbRemoteFallback: true), isTrue);
+      expect(fake.requests.map((r) => r.opcode), [
+        NikonOperationCode.changeApplicationMode,
+        NikonOperationCode.changeCameraMode,
+      ]);
+    });
+
+    test('enableAppControl(usbRemoteFallback):0x90C2 也拒 → 0xD1F0 兜底 → '
+        'true,remoteModeActive 不置位', () async {
+      final fake = FakePtpTransport()
+        ..reply(const PtpResult(
+            responseCode: PtpResponseCode.operationNotSupported)) // 0x9435
+        ..reply(const PtpResult(
+            responseCode:
+                PtpResponseCode.operationNotSupported)) // 0x90C2 op 缺席
+        ..reply(const PtpResult(responseCode: PtpResponseCode.ok)); // 0xD1F0
+      final session = PtpSession(transport: fake);
+      expect(await session.enableAppControl(usbRemoteFallback: true), isTrue);
+      expect(fake.requests.map((r) => r.opcode), [
+        NikonOperationCode.changeApplicationMode,
+        NikonOperationCode.changeCameraMode,
+        PtpOperationCode.setDevicePropValue,
+      ]);
+      expect(fake.requests[2].params, [PtpDevicePropCode.applicationMode]);
+      expect(fake.requests[2].dataOut, Uint8List.fromList([1]));
+      expect(session.remoteModeActive, isFalse, reason: '0x90C2 被拒不置位');
+    });
+
+    test('enableAppControl(usbRemoteFallback):三段全拒 → false 不抛', () async {
+      final allRejected = FakePtpTransport()
+        ..reply(const PtpResult(
+            responseCode: PtpResponseCode.operationNotSupported)) // 0x9435
+        ..reply(const PtpResult(
+            responseCode:
+                PtpResponseCode.operationNotSupported)) // 0x90C2 拒
+        ..reply(const PtpResult(
+            responseCode: PtpResponseCode.generalError)); // 0xD1F0 拒
+      final session2 = PtpSession(transport: allRejected);
+      expect(
+          await session2.enableAppControl(usbRemoteFallback: true), isFalse);
+      expect(allRejected.requests.map((r) => r.opcode), [
+        NikonOperationCode.changeApplicationMode,
+        NikonOperationCode.changeCameraMode,
+        PtpOperationCode.setDevicePropValue,
+      ]);
+    });
+
+    test('enableAppControl:不带 usbRemoteFallback(无线调用形态)→ '
+        '0x90C2 不发,链与旧版一致', () async {
+      final fake = FakePtpTransport()
+        ..reply(const PtpResult(
+            responseCode: PtpResponseCode.operationNotSupported)) // 0x9435
+        ..reply(const PtpResult(responseCode: PtpResponseCode.ok)); // 0xD1F0
+      final session = PtpSession(transport: fake);
+      expect(await session.enableAppControl(), isTrue);
+      expect(
+          fake.requests
+              .where((r) => r.opcode == NikonOperationCode.changeCameraMode),
+          isEmpty,
+          reason: 'remote 模式兜底仅 USB 连接流启用(OpenZCine isUSB 门同款)');
+    });
+
+    test('remoteModeActive 生命周期:close()/open() 复位(旧链持有态不带到新链)',
         () async {
       final fake = FakePtpTransport()
-        ..reply(const PtpResult(responseCode: PtpResponseCode.accessDenied))
-        ..reply(const PtpResult(responseCode: PtpResponseCode.ok))
-        ..reply(const PtpResult(responseCode: PtpResponseCode.accessDenied))
-        ..reply(const PtpResult(responseCode: PtpResponseCode.ok));
+        ..reply(const PtpResult(responseCode: PtpResponseCode.ok)) // 0x90C2(1)
+        ..reply(const PtpResult(responseCode: PtpResponseCode.ok)); // openSession
       final session = PtpSession(transport: fake);
-      expect(await session.enableAppControl(), isTrue);
-      expect(fake.requests.map((r) => r.opcode), [
-        NikonOperationCode.changeApplicationMode,
-        PtpOperationCode.setDevicePropValue,
-        NikonOperationCode.changeApplicationMode,
-        PtpOperationCode.setDevicePropValue,
-      ]);
-      expect(fake.requests[1].params,
-          [PtpDevicePropCode.sessionInitiatorInfo]);
-      expect(fake.requests[3].params, [PtpDevicePropCode.applicationMode]);
-    });
-
-    test('enableAppControl:0x200F 但 initiator 写被拒 → 直落 0xD1F0', () async {
-      final fake = FakePtpTransport()
-        ..reply(const PtpResult(responseCode: PtpResponseCode.accessDenied))
-        ..reply(const PtpResult(
-            responseCode: PtpResponseCode.operationNotSupported))
-        ..reply(const PtpResult(responseCode: PtpResponseCode.ok));
-      final session = PtpSession(transport: fake);
-      expect(await session.enableAppControl(), isTrue);
-      expect(fake.requests.map((r) => r.opcode), [
-        NikonOperationCode.changeApplicationMode,
-        PtpOperationCode.setDevicePropValue,
-        PtpOperationCode.setDevicePropValue,
-      ]);
-      expect(fake.requests[1].params,
-          [PtpDevicePropCode.sessionInitiatorInfo]);
-      expect(fake.requests[2].params, [PtpDevicePropCode.applicationMode]);
+      await session.changeCameraMode(1);
+      expect(session.remoteModeActive, isTrue);
+      await session.close();
+      expect(session.remoteModeActive, isFalse, reason: 'close 即复位');
+      await session.open();
+      expect(session.remoteModeActive, isFalse, reason: 'open 新链仍为空');
     });
 
     test('setDevicePropValue:总闸紧急关断抛 UnsupportedError 且不发请求',

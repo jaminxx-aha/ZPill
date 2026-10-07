@@ -577,6 +577,12 @@ void main() {
       await pumpEventQueue();
       expect(controller.takeoverActive, isFalse, reason: '断链即失效');
 
+      // 生产链建模:断链 teardown 即 session.close()(camera_connection
+      // 顺序),remote 旗标随链复位 —— 否则重连沿会把它误读作「连接流
+      // 已进 remote 模式」而跳过防御性解除。(会话未 Open 时 close 不
+      // 下链路,无 closeSession 应答可消费。)
+      await controller.session.close();
+
       // 重连:先防御性解除,再全量刷参
       transport.ok(); // 0x90C2 [0]
       _scriptParams(transport);
@@ -588,6 +594,58 @@ void main() {
       expect(modes, hasLength(2));
       expect(modes[1].params, [0], reason: '重连后防御性解除 remote 模式');
       expect(controller.exposure?.fNumber, 280, reason: '解除后照常刷参');
+    });
+
+    test('USB 连接流兜底进 remote 模式 → connected 沿静默对齐接管态'
+        '(OpenZCine 同款:免确认弹窗、拨盘级参数直调)', () async {
+      // 生产链建模:USB 连接流 enableAppControl(usbRemoteFallback) 的
+      // 0x90C2(1) 兜底已通(0x9435 在 USB 人设下恒拒,Zf 由此退出
+      // 上传优先模式返回及时取景,2026-10-07 真机对照)。
+      transport.reply(PtpResponseCode.operationNotSupported); // 0x9435 拒
+      transport.ok(); // 0x90C2 [1] 兜底通
+      await controller.session.enableAppControl(usbRemoteFallback: true);
+      expect(controller.session.remoteModeActive, isTrue);
+
+      _scriptParams(transport);
+      conn.statesCtrl.add(CameraLinkState.connected);
+      await pumpEventQueue();
+      expect(controller.takeoverActive, isTrue,
+          reason: '连接流已进 remote 模式,接管芯片直接显示已启用');
+      expect(controller.exposure?.fNumber, 280, reason: '照常刷参');
+
+      // 已激活:enableTakeover 幂等直通,不再发 0x90C2;也不发 [0] 解除。
+      expect(await controller.enableTakeover(), isTrue);
+      final modes = transport.requests
+          .where((r) => r.opcode == NikonOperationCode.changeCameraMode)
+          .toList();
+      expect(modes, hasLength(1));
+      expect(modes.single.params, [1]);
+    });
+
+    test('断链悬挂 + 新链连接流已进 remote 模式 → 跳过防御性解除'
+        '(不拆刚抬的门)', () async {
+      transport.ok(); // 启用接管
+      await controller.enableTakeover();
+      conn.statesCtrl.add(CameraLinkState.disconnected);
+      await pumpEventQueue();
+      await controller.session.close(); // teardown 建模(旗标复位)
+
+      // 新链:连接流又进了 remote 模式(USB 兜底)
+      transport.reply(PtpResponseCode.operationNotSupported); // 0x9435 拒
+      transport.ok(); // 0x90C2 [1] 兜底通
+      await controller.session.enableAppControl(usbRemoteFallback: true);
+      _scriptParams(transport);
+      conn.statesCtrl.add(CameraLinkState.connected);
+      await pumpEventQueue();
+      expect(controller.takeoverActive, isTrue,
+          reason: '新链的 remote 模式是连接流抬的,不是悬挂残留');
+      expect(
+          transport.requests
+              .where((r) => r.opcode == NikonOperationCode.changeCameraMode)
+              .map((r) => r.params),
+          everyElement([1]),
+          reason: '全程无 0x90C2 [0] —— 防御性解除不得拆新链刚抬的门');
+      expect(controller.exposure?.fNumber, 280, reason: '照常刷参');
     });
 
     test('拨盘参数写被拒(0x200F)→ 提示先启用 APP 接管', () async {
@@ -1317,6 +1375,88 @@ void main() {
     expect(mediaOps[0].params, [0xFFFFFFFE, 0]);
     expect(mediaOps[1].params, [0xFFFFFFFE, 0],
         reason: '缓存码直发路径同样携带');
+  });
+
+  group('拍摄页可见性(取景生命周期跟连接走)', () {
+    test('setViewerVisible(false):帧轮询与 AE 轮询挂起,不发 0x9202;'
+        '回台恢复', () async {
+      _scriptParams(transport);
+      conn.statesCtrl.add(CameraLinkState.connected);
+      await pumpEventQueue();
+      transport.ok(); // 0x9201
+      transport.ok(data: _fakeFrame()); // 首帧(轮询首拍)
+      await controller.toggleLiveView();
+      await pumpEventQueue();
+      expect(controller.liveViewActive, isTrue);
+      expect(transport.count(NikonOperationCode.getLiveViewImageEx), 1);
+
+      // 离台:放行挂着的 delay(AE 间隔 + 引擎间隔 + 若干挂起 tick),
+      // 不得再发任何请求(脚本无应答可耗,有请求即 StateError 炸出)。
+      controller.setViewerVisible(false);
+      final reqsAtHide = transport.requests.length;
+      for (var i = 0; i < 4; i++) {
+        // release 后轮询协程异步苏醒:逐把放行逐轮冲刷(AE 醒即退出,
+        // 引擎醒见挂起标志 → 再挂 tick;醒多少轮都不取帧)。
+        delay.release();
+        await pumpEventQueue();
+      }
+      expect(transport.requests.length, reqsAtHide, reason: '不可见零流量');
+      expect(controller.liveViewActive, isTrue,
+          reason: '相机侧取景保持(不发 0x9202)');
+      expect(transport.count(NikonOperationCode.endLiveView), 0);
+
+      // 回台:引擎恢复取帧,AE 轮询重启。AE 一轮 = fNumber PropDesc +
+      // 快门 0xD100 裸读 + ISO PropDesc + ISO 0xD0B5 裸读(四请求)。
+      transport.ok(data: _fakeFrame()); // 回台首帧
+      transport.ok(data: _propDescDataset( // AE:fNumber PropDesc
+          PtpDevicePropCode.fNumber, PtpDataType.uint16, 280,
+          enums: [280, 320, 400]));
+      transport.ok(data: _u32Bytes(1 << 16 | 100)); // AE:0xD100 快门
+      transport.ok(data: _propDescDataset( // AE:ISO PropDesc
+          PtpDevicePropCode.exposureIndex, PtpDataType.uint16, 200,
+          enums: [100, 200, 400, 800]));
+      transport.ok(data: _u32Bytes(200)); // AE:0xD0B5 有效 ISO
+      controller.setViewerVisible(true);
+      delay.release(); // 引擎挂起 tick 醒 → 取帧
+      await pumpEventQueue();
+      delay.release(); // AE 间隔醒 → 三连读
+      await pumpEventQueue();
+      expect(transport.count(NikonOperationCode.getLiveViewImageEx), 2,
+          reason: '回台恢复帧轮询');
+      expect(controller.exposure?.shutterRaw, 1 << 16 | 100,
+          reason: 'AE 轮询照常刷读数');
+    });
+
+    test('autoLiveViewOnConnect:页面不可见时连接转正,0x9201 照发、'
+        '帧轮询挂起(相机侧进取景)', () async {
+      _scriptParams(transport);
+      conn.statesCtrl.add(CameraLinkState.connected);
+      await pumpEventQueue();
+
+      controller.setViewerVisible(false); // 拍摄 tab 不在前台
+      transport.ok(); // 0x9201
+      transport.ok(data: _fakeFrame()); // 首帧(pause 落地前已在途)
+      await controller.autoLiveViewOnConnect();
+      await pumpEventQueue();
+      expect(controller.liveViewActive, isTrue,
+          reason: '连接即取景:0x9201 不等页面可见');
+      expect(transport.count(NikonOperationCode.startLiveView), 1);
+      expect(transport.count(NikonOperationCode.endLiveView), 0,
+          reason: '不可见只挂起轮询,不发 0x9202');
+
+      // 不可见:放行引擎 delay 不得再取帧(醒一轮挂一轮)。
+      final frames = transport.count(NikonOperationCode.getLiveViewImageEx);
+      delay.release();
+      await pumpEventQueue();
+      delay.release();
+      await pumpEventQueue();
+      expect(transport.count(NikonOperationCode.getLiveViewImageEx), frames,
+          reason: '帧轮询挂起,零流量');
+
+      // 幂等:已运行再调不重发 0x9201。
+      await controller.autoLiveViewOnConnect();
+      expect(transport.count(NikonOperationCode.startLiveView), 1);
+    });
   });
 
   group('触控对焦与对焦驱动(候选码,待真机核对)', () {

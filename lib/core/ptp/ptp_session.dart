@@ -160,6 +160,12 @@ final class PtpSession {
   /// 会话是否已打开(OpenSession 成功且未 CloseSession)。
   bool get isSessionOpen => _sessionOpen;
 
+  /// 0x90C2 remote 模式是否在持有(USB 连接流兜底进入,或用户接管/
+  /// 连拍括持开启)。每次开新会话复位 —— 机身对每个连接自行重估模式,
+  /// 旧链的持有态不得带到新链。
+  bool _remoteModeActive = false;
+  bool get remoteModeActive => _remoteModeActive;
+
   PtpDeviceInfo? _deviceInfo;
 
   /// 上次 GetDeviceInfo 的缓存(纯读,不发事务;未取过为 null)——
@@ -207,11 +213,13 @@ final class PtpSession {
       _ensureOk(result, PtpOperationCode.openSession);
     }
     _sessionOpen = true;
+    _remoteModeActive = false; // 新链新账:旧链的 remote 模式持有态不带来
   }
 
   /// CloseSession(幂等、尽力而为):相机已拔出时不因清理报错。
   /// 设备级断开由连接层调 transport.close()。
   Future<void> close() async {
+    _remoteModeActive = false; // 链将亡:remote 持有态一律作废(含未开会话的旁路持有)
     if (!_sessionOpen) return;
     _sessionOpen = false;
     await _serialized(() async {
@@ -537,17 +545,23 @@ final class PtpSession {
   }
 
   /// 连接后切「应用模式」(Z 系真机口径,OpenZCine 实测:不切则相机对
-  /// 遥控写回 0x200F AccessDenied)。链路:① 0x9435 ChangeApplicationMode
-  /// p1=1(无线/二代+直通);② 回 0x200F = USB 人设不给应用模式 —— 写
-  /// 会话发起者身份 0xD406='NikonPill'(与无线 hostname 同名)后重试:
-  /// Zf USB 实证(2026-10-07):initiator 残留 MTP 主机串时 0x9201 取景
-  /// 被拒 0xA004,写任一非 MTP 身份串后取景即通(0x9435 仍 0x200F,
-  /// 但 USB 人设下取景/拍照不依赖它;op 表 119→124 多出 0x9801-0x9805);
-  /// ③ op 缺席(一代)→ 回退写 ApplicationMode 属性 0xD1F0=1(u8)。
+  /// 遥控写回 0x200F AccessDenied)。链路对齐 OpenZCine 连接脚本:
+  /// ① 0x9435 ChangeApplicationMode p1=1(无线/二代+直通);② 非 OK
+  /// 应答(USB 人设恒拒,2026-10-07 真机)且 [usbRemoteFallback](USB
+  /// 连接流专用)→ **0x90C2 ChangeCameraMode(1) 进 remote 模式** ——
+  /// OpenZCine USB 兜底同款:「USB 上 0x9435 恒拒,remote 模式被接受
+  /// 并解锁控制」,Zf 收到即退出上传优先模式;③ 仍败 → 回退写
+  /// ApplicationMode 属性 0xD1F0=1(u8,一代 op 缺席口径)。
+  /// **不写 0xD406 initiator 身份**:OpenZCine 全程不写,而身份写会让
+  /// 机身把主机按新身份归类(op 表 119→124 变化)—— 2026-10-07 真机
+  /// 复报:写身份 + remote 模式 = 机身停「已连接到计算机」屏不进取景;
+  /// 不写 + remote 模式 + 连接即开取景(HomeShell autoLiveViewOnConnect)
+  /// = 及时取景。usbfs 主机实证过的身份写只保留在 LiveViewEngine 的
+  /// 0xA004 自愈末级(见 [writeInitiatorIdentity])。
   /// **不走 [kSetPropEnabled] 门禁** —— 它是连接模式控制而非拍摄参数
   /// 写,且发生在任何参数面板之前;连双失败也只返回 false 不抛(尽力
   /// 而为,拍照/读参数不依赖它,真机核对)。
-  Future<bool> enableAppControl() async {
+  Future<bool> enableAppControl({bool usbRemoteFallback = false}) async {
     var rc = PtpResponseCode.operationNotSupported;
     try {
       final result = await _serialized(() => transport.execute(PtpRequest(
@@ -556,31 +570,18 @@ final class PtpSession {
           )));
       rc = result.responseCode;
     } on Object {
-      // op 缺席/链路类(含脚本耗尽类 StateError):走属性回退。
+      // op 缺席/链路类(含脚本耗尽类 StateError):走回退。
       // 尽力而为步骤,on Object 兜底 —— 它失败不得影响连接主流程。
     }
     if (rc == PtpResponseCode.ok) return true;
-    if (rc == PtpResponseCode.accessDenied) {
+    if (usbRemoteFallback) {
       try {
-        final w = ByteWriter()..ptpString('NikonPill');
-        final idResult = await _serialized(() => transport.execute(
-              PtpRequest(
-                opcode: PtpOperationCode.setDevicePropValue,
-                params: [PtpDevicePropCode.sessionInitiatorInfo],
-                dataOut: w.takeBytes(),
-              ),
-            ));
-        if (idResult.responseCode == PtpResponseCode.ok) {
-          final retry = await _serialized(() => transport.execute(
-                PtpRequest(
-                  opcode: NikonOperationCode.changeApplicationMode,
-                  params: [1],
-                ),
-              ));
-          if (retry.responseCode == PtpResponseCode.ok) return true;
-        }
+        // remote 模式 = 机身拨盘锁定、控制权交 host(与用户「接管」
+        // 同一形态)—— 成功即置 [remoteModeActive],UI 侧对齐接管态。
+        await changeCameraMode(1);
+        return true;
       } on Object {
-        // initiator 写失败:落到 0xD1F0 回退(不拦连接主流程)。
+        // 0x90C2 也被拒(老机身 op 缺席):落到 0xD1F0。
       }
     }
     try {
@@ -596,17 +597,46 @@ final class PtpSession {
     }
   }
 
+  /// 写会话发起者身份 0xD406='NikonPill'(尽力而为,失败/被拒返 false)。
+  ///
+  /// Zf USB 实证(2026-10-07 探针):initiator 为出厂/残留 MTP 主机串
+  /// ('Windows/… MTPClassDriver')时 0x9201 StartLiveView 被拒 0xA004,
+  /// 写任一非 MTP 身份串('NikonPill'/'Android Device' 均验)即解锁;
+  /// 该值**每次连接弹回出厂**。身份写同时让机身把主机按新身份归类
+  /// (op 表 119→124 变化;真机复报:remote 模式下带身份写 = 停
+  /// 「已连接到计算机」屏),**且 iOS IC 链上不生效** —— 故连接流
+  /// [enableAppControl] 不再写它(OpenZCine 全程不写),只作
+  /// LiveViewEngine 0xA004 自愈的**末级**兜底(usbfs 直连主机
+  /// 0x90C2 意外失效时的另一把钥匙)。
+  /// 载荷 = PTP 字符串(u8 字符数 + UTF-16LE,无终止符),与探针
+  /// ptp_str 同款。
+  Future<bool> writeInitiatorIdentity() async {
+    try {
+      final w = ByteWriter()..ptpString('NikonPill');
+      final result = await _serialized(() => transport.execute(PtpRequest(
+            opcode: PtpOperationCode.setDevicePropValue,
+            params: [PtpDevicePropCode.sessionInitiatorInfo],
+            dataOut: w.takeBytes(),
+          )));
+      return result.responseCode == PtpResponseCode.ok;
+    } on Object {
+      return false; // op 不在册/链路类:尽力而为,不拦调用方
+    }
+  }
+
   /// Nikon ChangeCameraMode(0x90C2,源 = OpenZCine 全系在册):切换
   /// 「remote / PC-camera」模式。[mode] 1 = remote(**APP 接管控制**:
-  /// 机身拨盘锁定、屏幕可能熄灭,host 写入的会话值仅在持有期保值),
-  /// 0 = 解除。可在释放/AF/清洁中被拒(0xA003),调用方容忍。
-  /// 真机核对。
+  /// 机身拨盘锁定、屏幕可能熄灭,host 写入的会话值仅在持有期保值;
+  /// Zf 在 USB 上传优先模式下收到它即退回及时取景),0 = 解除。
+  /// 可在释放/AF/清洁中被拒(0xA003),调用方容忍。
+  /// 成功即同步 [remoteModeActive]。
   Future<void> changeCameraMode(int mode) async {
     final result = await _serialized(() => transport.execute(PtpRequest(
           opcode: NikonOperationCode.changeCameraMode,
           params: [mode],
         )));
     _ensureOk(result, NikonOperationCode.changeCameraMode);
+    _remoteModeActive = mode == 1;
   }
 
   /// Nikon StartLiveView(0x9201,候选码,待真机核对)。

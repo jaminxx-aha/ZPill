@@ -24,9 +24,11 @@
 /// 水平仪数据源:相机帧头虚拟水平仪(LiveViewHeader.level,机身侧水平
 /// 仪,OpenZCine 同源)优先,手机姿态流只作相机未报时的兜底。
 ///
-/// tab 模式:IndexedStack 常驻挂载,离开 tab([active] 变 false)即停
-/// 取景(相机侧 Live View 高功耗,后台白白打链路);切回/回前台对表
-/// 刷一次参数。
+/// tab 模式:IndexedStack 常驻挂载,离开 tab([active] 变 false)即
+/// 挂起帧轮询(取景生命周期跟连接走 —— 0x9201 已随连接沿发出、相机
+/// 保持取景,这里只停 USB 帧流量,不发 0x9202;回台恢复轮询并对表
+/// 刷一次参数)。取景的显式开关仍在动作行;连接即取景由 HomeShell
+/// 在 connected 沿驱动(RemoteController.autoLiveViewOnConnect)。
 library;
 
 import 'dart:async';
@@ -66,7 +68,8 @@ class RemotePage extends StatefulWidget {
 
   final RemoteController? controller;
 
-  /// tab 是否在前台(IndexedStack 常驻):false 时停取景。
+  /// tab 是否在前台(IndexedStack 常驻):false 时挂起帧轮询(相机侧
+  /// 取景保持 —— 生命周期跟连接走,只停 USB 流量)。
   final bool active;
 
   @override
@@ -98,17 +101,17 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     super.initState();
     controller = widget.controller ?? AppServices.instance.remoteController;
     WidgetsBinding.instance.addObserver(this);
+    controller.setViewerVisible(widget.active);
   }
 
   @override
   void didUpdateWidget(RemotePage oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // 切走 tab 即停取景(引擎单例持有,后台持续打链路不可取);
-    // 切回不自动重启 —— 取景是显式动作,但参数对表刷一次(机身侧
-    // 拨盘/菜单改动的事件不一定送达 app,切回即对表)。
-    if (!widget.active && oldWidget.active && controller.liveViewActive) {
-      unawaited(controller.toggleLiveView());
+    // tab 离台/回台:挂起/恢复帧轮询(相机侧取景保持,不发 0x9202)。
+    if (widget.active != oldWidget.active) {
+      controller.setViewerVisible(widget.active);
     }
+    // 回台对表刷一次参数(机身侧拨盘/菜单改动的事件不一定送达)。
     if (widget.active && !oldWidget.active && controller.linkUp) {
       unawaited(controller.refreshParams());
     }
@@ -117,10 +120,8 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    // 离页即停取景:引擎归 AppServices 单例持有,不停会在后台持续打链路。
-    if (controller.liveViewActive) {
-      unawaited(controller.toggleLiveView());
-    }
+    // 离页只挂起轮询(取景生命周期跟连接走,不因拆页发 0x9202)。
+    controller.setViewerVisible(false);
     super.dispose();
   }
 
@@ -135,14 +136,17 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    // 退后台停取景:相机侧 Live View 是高功耗状态,且 iOS/ohos 后台
-    // 网络不保活(与下载页同款约束)。
-    if (state == AppLifecycleState.paused && controller.liveViewActive) {
-      unawaited(controller.toggleLiveView());
+    // 退后台/回前台:挂起/恢复帧轮询(相机侧取景保持 —— 取景生命周期
+    // 跟连接走;后台不保活的是 iOS/ohos 的传输面,不再给相机发 0x9202)。
+    if (state == AppLifecycleState.paused) {
+      controller.setViewerVisible(false);
     }
-    // 回前台:参数对表刷一次(后台期间机身侧改动兜底,同切回 tab)。
-    if (state == AppLifecycleState.resumed && controller.linkUp) {
-      unawaited(controller.refreshParams());
+    if (state == AppLifecycleState.resumed) {
+      if (widget.active) controller.setViewerVisible(true);
+      // 回前台:参数对表刷一次(后台期间机身侧改动兜底,同切回 tab)。
+      if (controller.linkUp) {
+        unawaited(controller.refreshParams());
+      }
     }
   }
 

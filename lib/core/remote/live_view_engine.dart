@@ -9,14 +9,17 @@
 /// 0xC10C LiveViewStateChanged 事件**不参与启停**:引擎纯轮询自治
 /// (事件语义未实证,待真机核对)。
 ///
-/// pause/resume 供拍照期间挂起轮询(快门/DeviceReady 事务不被取帧
-/// 挤占串行锁);末帧保留(pause 不闪黑,failed 后回到页面仍见最后画面)。
+/// pause/resume 供两类挂起:拍照/对焦期间(快门/DeviceReady 事务不被
+/// 取帧挤占串行锁)与拍摄页不可见时(RemoteController.setViewerVisible,
+/// 取景生命周期跟连接走,页面离台只停轮询不发 0x9202)。末帧保留
+/// (pause 不闪黑,failed 后回到页面仍见最后画面)。
 library;
 
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import '../ptp/operation_codes.dart';
 import '../ptp/ptp_session.dart';
 import 'live_view_header.dart';
 
@@ -62,13 +65,15 @@ final class LiveViewEngine {
   bool _viewOn = false;
 
   /// 开启取景(幂等):StartLiveView 失败即转 failed,不进轮询。
+  /// 0xA004(状态不允许)时先走**自愈阶梯**再判失败 —— 见
+  /// [_startLiveViewHealing]。
   Future<void> start() async {
     if (status.value == LiveViewStatus.running) return;
     _failures = 0;
     _paused = false;
     lastError = null;
     try {
-      await session.startLiveView();
+      await _startLiveViewHealing();
     } on Exception catch (e) {
       lastError = '取景开启失败:$e';
       status.value = LiveViewStatus.failed;
@@ -78,6 +83,47 @@ final class LiveViewEngine {
     _viewOn = true;
     final run = ++_runId;
     unawaited(_loop(run));
+  }
+
+  /// 0x9201 带 USB 模式门自愈:被拒 0xA004 = 相机仍在上传优先模式
+  /// (USB 连接人设,0x9201 被拒)。自愈阶梯按真机实证强度排序,
+  /// 每级(一把钥匙)成功后重试一次 0x9201,重试仍拒换下一级,
+  /// 全败上抛**原始** 0xA004(不遮原语义);非 0xA004 拒 → 上抛
+  /// 该次错误(不无限打):
+  /// ① 0x90C2(1) 进 remote 模式 —— OpenZCine 连接脚本 USB 兜底同款,
+  ///   Zf 收到即退出上传优先模式(2026-10-07 真机对照;iOS IC 链上
+  ///   ② 不生效,这是唯一实证钥匙);成功即置
+  ///   [PtpSession.remoteModeActive]。
+  /// ② 写会话发起者身份 0xD406 非 MTP 串 —— 直连 USB 主机(usbfs/
+  ///   libusb 类:Android/ohos)实证有效(2026-10-07 探针);有屏显
+  ///   人设副作用(机身把主机归类为计算机),只作末级兜底。
+  Future<void> _startLiveViewHealing() async {
+    try {
+      await session.startLiveView();
+    } on PtpResponseException catch (e) {
+      if (e.responseCode != NikonResponseCode.invalidStatus) rethrow;
+      final keys = <Future<bool> Function()>[
+        () async {
+          try {
+            await session.changeCameraMode(1);
+            return true;
+          } on Object {
+            return false; // op 缺席/被拒/链路类:换下一把钥匙
+          }
+        },
+        session.writeInitiatorIdentity,
+      ];
+      for (final key in keys) {
+        if (!await key()) continue;
+        try {
+          await session.startLiveView();
+          return;
+        } on PtpResponseException catch (e2) {
+          if (e2.responseCode != NikonResponseCode.invalidStatus) rethrow;
+        }
+      }
+      rethrow; // 两把钥匙都试过仍拒:上抛原始 0xA004
+    }
   }
 
   /// 停止取景(幂等):立即废掉循环;开启过才发 EndLiveView,尽力而为
