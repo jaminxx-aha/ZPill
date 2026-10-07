@@ -112,7 +112,15 @@ final class RemoteController extends ChangeNotifier {
     this.engine.header.addListener(_onHeader);
     _statesSub = connection?.states.listen((s) {
       if (s == CameraLinkState.connected) {
+        final wasUp = _linkUp;
         _linkUp = true;
+        if (!wasUp) {
+          // 新连接(状态未离开的重复 connected 沿不重置):优化校准真名
+          // 缓存与旗标重建。
+          picCtrlNames.clear();
+          _picCtrlNamesFetched = false;
+          _picCtrlNamesBroken = false;
+        }
         if (session.remoteModeActive) {
           // USB 连接流已兜底进 remote 模式(0x9435 恒拒 → 0x90C2(1),
           // OpenZCine 连接脚本同款):静默对齐接管态 —— 芯片显示已启用、
@@ -237,6 +245,17 @@ final class RemoteController extends ChangeNotifier {
 
   /// 拍摄参数状态(PropDesc 驱动),键 = [PtpDevicePropCode]。
   final paramProps = <int, PropState>{};
+
+  /// 优化校准(0xD200)槽位真名(0x90CC 拉取):自定义(201-209)/云
+  /// (301-309)组的注册名由用户在机身上起,静态表只有「自定义 N」「云 N」
+  /// 占位 —— 键 = 槽位值。断连/重连重建。
+  final picCtrlNames = <int, String>{};
+
+  /// 名字已在本连接拉取过(一次性;机身下载新校准属罕见,重连即重取)。
+  bool _picCtrlNamesFetched = false;
+
+  /// 0x90CC 在本连接已失败(首异常即停,余下槽位不试)。
+  bool _picCtrlNamesBroken = false;
 
   /// 三要素只读快照(派生自 [paramProps],chips 展示用)。
   Exposure? get exposure => paramProps.isEmpty
@@ -1114,8 +1133,53 @@ final class RemoteController extends ChangeNotifier {
     }
     await _refreshIsoAuto();
     await _refreshShotsRemaining();
+    await _maybeFetchPicCtrlNames();
     if (!_linkUp) return;
     notifyListeners();
+  }
+
+  /// 优化校准槽位真名拉取(0x90CC,每连接一次):对 FORM 枚举里静态表
+  /// 未收录的槽位(自定义 201-209/云 301-309/表外新值)逐个读注册名;
+  /// 内置(1-11)/创意(101-120)静态表已有真名,跳过。首异常即停
+  /// (0x90CC 不通整组不试,机身名字显示回落静态占位)。digiCamControl
+  /// InitPictControl 同款枚举循环;Zf 待真机核对。
+  Future<void> _maybeFetchPicCtrlNames() async {
+    if (_picCtrlNamesFetched || _picCtrlNamesBroken || !_linkUp) return;
+    _picCtrlNamesFetched = true;
+    final param = shootingParamByCode[PtpDevicePropCode.activePicCtrlItem];
+    final staticLabels = param?.enumLabels ?? const <int, String>{};
+    final values = paramProps[PtpDevicePropCode.activePicCtrlItem]?.desc
+            ?.enumValues
+            ?.whereType<int>() ??
+        const <int>[];
+    var fetched = false;
+    for (final slot in values) {
+      if (staticLabels.containsKey(slot)) continue;
+      String? name;
+      try {
+        name = await session.getPictureControlName(slot);
+      } on Exception {
+        if (!_linkUp) return;
+        _picCtrlNamesBroken = true;
+        break;
+      }
+      if (!_linkUp) return;
+      if (name != null) {
+        picCtrlNames[slot] = name;
+        fetched = true;
+      }
+    }
+    if (fetched && _linkUp) notifyListeners();
+  }
+
+  /// 参数值展示(页面统一入口):优化校准槽位真名优先(0x90CC 缓存),
+  /// 其余走目录静态表。null 值 = 「--」。
+  String displayParamValue(int code, int? value) {
+    if (code == PtpDevicePropCode.activePicCtrlItem && value != null) {
+      final name = picCtrlNames[value];
+      if (name != null) return name;
+    }
+    return shootingParamByCode[code]?.display(value) ?? '--';
   }
 
   /// 剩余可拍张数(0xD1F1 裸读;拒答 null 不猜)。
@@ -1393,6 +1457,9 @@ final class RemoteController extends ChangeNotifier {
     notice = null;
     afBox = null;
     paramProps.clear();
+    picCtrlNames.clear();
+    _picCtrlNamesFetched = false;
+    _picCtrlNamesBroken = false;
     _pendingPropRefreshes.clear();
     notifyListeners();
   }

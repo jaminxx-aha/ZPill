@@ -427,12 +427,14 @@ final kShootingParams = <ShootingParam>[
     pickValues: [1, 2],
     enumLabels: {1: 'SDR', 2: 'HLG'},
   ),
-  // 优化校准 0xD200(u16):pickValues 直供内置组(1-11),创意组/云组
-  // 仍可读显示(段位格式化);厂商码 PropDesc 拒答时面板照常可调。
+  // 优化校准 0xD200(u16):相机 FORM 枚举驱动(真机 46 项全在 FORM,
+  // 静态表只有内置 11 项 —— pickValues 曾把 desc 读短路,值域被砍到
+  // 11 项,2026-10-07 用户反馈「相机 46 个应用只有 11 个」根因)。
+  // 自定义(201-209)/云(301-309)组的真名由 0x90CC 拉取
+  // (RemoteController.picCtrlNames),静态标签只是占位。
   ShootingParam(
     code: PtpDevicePropCode.activePicCtrlItem,
     label: '优化校准',
-    pickValues: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
     enumLabels: {
       1: '标准',
       2: '中性',

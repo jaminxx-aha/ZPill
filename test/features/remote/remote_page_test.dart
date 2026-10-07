@@ -156,7 +156,10 @@ void _scriptParams(_ScriptTransport t, {int mode = 1}) {
         enums: [0x8010, 0x8011, 0x8017, 0x8018, 0x8019, 0x801E, 0x801F]))
     ..ok(data: Uint8List.fromList([0])) // 主体检测 u8(Ex 码 0x0001D006)
     ..ok(data: Uint8List.fromList([1])) // 色调 u8(Ex 码 0x0001D01C)
-    ..ok(data: Uint8List.fromList([1, 0])) // activePicCtrlItem u16
+    // 优化校准:FORM 驱动(pickValues 已撤,2026-10-07)→ desc 应答;
+    // 枚举全静态表内 → 不触发 0x90CC 名字拉取
+    ..ok(data: _propDescDataset(PtpDevicePropCode.activePicCtrlItem,
+        PtpDataType.uint16, 1, enums: [1, 2, 3, 4]))
     ..ok(data: Uint8List.fromList([0])) // 0xD054 自动 ISO:关
     ..ok(data: _u32Bytes(1234)); // 0xD1F1 剩余张数
 }
@@ -229,7 +232,7 @@ void main() {
 
     // 读出条懒构建:按条内顺序单向滚到底逐个断言
     // (模式/ISO/快门/光圈/释放/对焦模式/白平衡/色温/测光/EV/闪光/
-    // 画质/RAW压缩/图像区域/优化校准)
+    // 画质/RAW压缩/图像区域/优化校准 + 目录余量 AF 区域/主体检测/色调)
     Future<void> scroll(String text) =>
         tester.scrollUntilVisible(find.text(text), 120, scrollable: _chipsRow);
     await scroll('自动'); // 白平衡
@@ -237,11 +240,17 @@ void main() {
     await scroll('中央重点'); // 测光值表(尼康方言 2=中央重点)
     await scroll('EV');
     expect(find.text('+0.3'), findsOneWidget);
-    await scroll('关闭'); // 闪光
+    await scroll('闪光'); // (值「关闭」与主体检测的「关闭」重字,滚标签)
     await scroll('RAW'); // 画质
     await scroll('无损压缩'); // RAW 压缩值
     await scroll('FX'); // 图像区域值
     await scroll('标准'); // 优化校准值
+    // 目录余量上条(2026-10-07:曾因 _stripOrder 不追加余量而整组不渲染)
+    await scroll('AF 区域');
+    expect(find.text('单点'), findsOneWidget, reason: 'AF 区域 FORM 值');
+    await scroll('主体检测');
+    await scroll('色调');
+    expect(find.text('SDR'), findsOneWidget, reason: '色调值');
     // 辅助条(固定行,无需滚动):对焦后拍 + APP 接管
     expect(find.text('对焦后拍'), findsOneWidget);
     expect(find.text('APP 接管'), findsOneWidget);

@@ -74,11 +74,15 @@ void main() {
   });
 
   test('display:优化校准内置组 + 段位格式化(创意/自定义/云)', () {
-    expect(_param(PtpDevicePropCode.activePicCtrlItem).display(1), '标准');
-    expect(_param(PtpDevicePropCode.activePicCtrlItem).display(4), '单色');
-    expect(_param(PtpDevicePropCode.activePicCtrlItem).display(103), 'Pop');
-    expect(_param(PtpDevicePropCode.activePicCtrlItem).display(202), '自定义 2');
-    expect(_param(PtpDevicePropCode.activePicCtrlItem).display(305), '云 5');
+    final p = _param(PtpDevicePropCode.activePicCtrlItem);
+    expect(p.pickValues, isNull,
+        reason: '取值域走相机 FORM(真机 46 项;静态 11 项直供曾把 desc '
+            '读短路砍掉值域,2026-10-07 用户反馈根因)');
+    expect(p.display(1), '标准');
+    expect(p.display(4), '单色');
+    expect(p.display(103), 'Pop');
+    expect(p.display(202), '自定义 2');
+    expect(p.display(305), '云 5');
   });
 
   test('display:数值格式化(光圈/快门打包分数/ISO/EV)', () {

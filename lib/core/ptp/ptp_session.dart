@@ -544,6 +544,31 @@ final class PtpSession {
     _ensureOk(result, op);
   }
 
+  /// Nikon GetPictCtrlData(0x90CC):读优化校准(0xD200)槽位详情里的
+  /// 注册名。params = [槽位号(即 0xD200 的值), 0];数据集布局按
+  /// digiCamControl NikonBase.GetPictureControl 实证 —— [3..22] 是
+  /// 20 字节 ASCII 名(NUL 截断,[0..2] 为未知/单色/自定义标志)。
+  /// 用于自定义(201-209)/云下载(301-309)槽位的真名显示(静态表只有
+  /// 「自定义 N」「云 N」占位);数据不足 23 字节或名字空白返回 null,
+  /// 上层回落静态标签。Zf 待真机核对。
+  Future<String?> getPictureControlName(int slot) async {
+    final result = await _serialized(() => transport.execute(PtpRequest(
+          opcode: NikonOperationCode.getPictCtrlData,
+          params: [slot, 0],
+        )));
+    _ensureOk(result, NikonOperationCode.getPictCtrlData);
+    final data = result.data;
+    if (data == null || data.length < 23) return null;
+    final nameCodes = <int>[];
+    for (var i = 3; i < 23; i++) {
+      final b = data[i];
+      if (b == 0) break;
+      if (b >= 0x20 && b < 0x7F) nameCodes.add(b);
+    }
+    final name = String.fromCharCodes(nameCodes).trim();
+    return name.isEmpty ? null : name;
+  }
+
   /// 连接后切「应用模式」(Z 系真机口径,OpenZCine 实测:不切则相机对
   /// 遥控写回 0x200F AccessDenied)。链路对齐 OpenZCine 连接脚本:
   /// ① 0x9435 ChangeApplicationMode p1=1(无线/二代+直通);② 非 OK

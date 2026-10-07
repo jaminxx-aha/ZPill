@@ -725,7 +725,9 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   // ── 拍摄读出条(相机控制核心)───────────────────────────────────
 
   /// 读出条 tile 顺序:对齐 OpenZCine photographyCaptureValues
-  /// (MODE/ISO/SHUTTER/IRIS/DRIVE/FOCUS/WB/METER/PROFILE),其余随后。
+  /// (MODE/ISO/SHUTTER/IRIS/DRIVE/FOCUS/WB/METER/PROFILE),其余随后
+  /// (目录余量按目录序追加 —— AF 区域/主体检测/色调等曾因此不渲染,
+  /// 2026-10-07 用户反馈「AF 区域/拍摄对象不能改」根因)。
   static const _stripOrder = <int>[
     PtpDevicePropCode.exposureProgramMode,
     PtpDevicePropCode.exposureIndex,
@@ -748,6 +750,9 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     final params = [
       for (final code in _stripOrder)
         if (shootingParamByCode[code] != null) shootingParamByCode[code]!,
+      // 目录余量(不在固定序里的)按目录序追加,新参数默认上条。
+      for (final p in kShootingParams)
+        if (!_stripOrder.contains(p.code)) p,
     ];
     return Container(
       margin: margin ?? const EdgeInsets.fromLTRB(12, 0, 12, 4),
@@ -780,7 +785,9 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                   for (final p in params)
                     _CaptureTile(
                       param: p,
-                      state: controller.paramProps[p.code],
+                      displayValue:
+                          controller.displayParamValue(p.code, controller
+                              .paramProps[p.code]?.value),
                       auto: controller.paramAutoControlled(p.code),
                       writable: controller.propWritable(p.code),
                       active: _activeParam == p.code,
@@ -1043,7 +1050,10 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                             ),
                           for (final v in enums)
                             ListTile(
-                              title: Text(p.display(v),
+                              // 槽位真名(0x90CC)优先:优化校准自定义/云组
+                              // 静态表只有「自定义 N」「云 N」占位。
+                              title: Text(
+                                  controller.displayParamValue(p.code, v),
                                   style: const TextStyle(
                                       color: _LiveDesign.text)),
                               trailing: v == current
@@ -1068,7 +1078,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                       padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
                       child: Column(
                         children: [
-                          Text(p.display(current),
+                          Text(controller.displayParamValue(p.code, current),
                               style: const TextStyle(
                                   fontSize: 30,
                                   fontWeight: FontWeight.w500,
@@ -1080,7 +1090,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                             max: rangeMax.toDouble(),
                             divisions:
                                 ((rangeMax - rangeMin) ~/ rangeStep).clamp(1, 1 << 20),
-                            label: p.display(current),
+                            label: controller.displayParamValue(p.code, current),
                             activeColor: _LiveDesign.accent,
                             onChanged: writing ? null : (_) {},
                             onChangeEnd: (v) =>
@@ -1148,7 +1158,7 @@ const _paramSheetItemExtent = 48.0;
 class _CaptureTile extends StatelessWidget {
   const _CaptureTile({
     required this.param,
-    required this.state,
+    required this.displayValue,
     required this.auto,
     required this.writable,
     required this.active,
@@ -1158,7 +1168,9 @@ class _CaptureTile extends StatelessWidget {
   });
 
   final ShootingParam param;
-  final PropState? state;
+
+  /// 值文本(经控制器路由:优化校准槽位真名 0x90CC 优先)。
+  final String displayValue;
   final bool auto;
   final bool writable;
   final bool active;
@@ -1168,7 +1180,7 @@ class _CaptureTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final value = param.display(state?.value);
+    final value = displayValue;
     return InkWell(
       onTap: writable && !writing ? onTap : null,
       borderRadius: BorderRadius.circular(10),
