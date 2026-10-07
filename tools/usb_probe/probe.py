@@ -91,6 +91,7 @@ NIKON_GET_LIVEVIEW_IMG_EX = 0x9428  # OpenZCine 全系取帧码(应答带 displa
 NIKON_CHANGE_AF_AREA = 0x9205  # p1/p2 = whole-size 坐标(OpenZCine PTPIPClientSession)
 NIKON_CHANGE_APPLICATION_MODE = 0x9435  # 遥控 op 前须切应用模式(app enableAppControl 同款)
 NIKON_DEVICE_READY = 0x90C8
+NIKON_GET_PICTCTRL_DATA = 0x90CC  # 优化校准槽位详情:params[槽位,0],name=数据[3..23) ASCII(libgphoto2 在册;布局 = digiCamControl 实证)
 DEVICE_BUSY = 0x2019  # ISO 15740 标准响应码(设备忙)
 
 # GetObjectHandles 参数(全部存储 / 全部格式;父对象:0=仅根层,ALL=递归)
@@ -112,6 +113,7 @@ NIKON_OC_CANDIDATES = {
     0x90C4: "GetLargeThumb(大图预览,相册大图查看候选)",
     0x90C7: "GetEvent(旧名 CheckEvent;尼康事件轮询,data-in)",
     0x90C8: "DeviceReady(忙等探针)",
+    0x90CC: "GetPictCtrlData(优化校准槽位详情,data-in;--picctrl 深化摸底)",
     0x9201: "StartLiveView", 0x9202: "EndLiveView", 0x9203: "GetLiveViewImg",
     0x9207: "InitiateCaptureRecInMedia(落卡拍,候选)",
     0x9400: "GetPartialObjectHiSpeed(尼康高速分块读)",
@@ -916,6 +918,11 @@ def main() -> int:
                     default=INITIATE_CAPTURE,
                     help="拍照操作码:0x100E(标准,默认)/ 0x9207 / 0x90C0"
                          "(尼康候选,配合 --capture)")
+    ap.add_argument("--picctrl", action="store_true",
+                    help="优化校准 0xD200 摸底:FORM 枚举全量(不截 12)"
+                         "+ 每槽位 0x90CC GetPictCtrlData 读注册名"
+                         "(自定义/云组真名;布局 = digiCamControl 实证:"
+                         "[1]单色 [2]自定义 [3..23) ASCII 名)")
     args = ap.parse_args()
 
     backend = make_backend()
@@ -1435,6 +1442,48 @@ def main() -> int:
                 print(f"    解码: {src} -> {v!r}")
             else:
                 print(f"  0x{prop:04X} Value <- 0x{rc:04X}")
+
+    # 步骤 4w(可选,--picctrl):优化校准(0xD200)槽位摸底 —— FORM 枚举
+    # 全量(4r 截 12,这里 46 项全列)+ 每槽位 0x90CC GetPictCtrlData 读
+    # 注册名(自定义/云组的真名在机身上由用户起,FORM 只有槽位号)。布局
+    # = digiCamControl NikonBase.GetPictureControl 实证:[0]未知 [1]单色
+    # 标志 [2]自定义标志 [3..23) 20 字节 ASCII 名 NUL 截断。回归点:
+    # FORM 项数(用户真机 46)、getSet、0x90CC 应答形态与名字字节。
+    if args.picctrl:
+        print("[4w] 优化校准 0xD200 摸底(FORM 全量 + 0x90CC 槽位名):")
+        txid += 1
+        txid, blob, rc = xact(dev, ep_out, ep_in, txid,
+                              GET_DEVICE_PROP_DESC, [0xD200])
+        slots = []
+        if rc == OK and blob is not None:
+            d = blob[HDR:]
+            desc = parse_prop_desc(d)
+            print(f"  Desc <- OK {len(d)}B  getSet={desc['getSet']}"
+                  f"({'可写' if desc['getSet'] else '只读'})"
+                  f"  current={desc['current']!r}")
+            slots = list(desc["enumValues"])
+            if slots:
+                print(f"  FORM 枚举({len(slots)}): "
+                      + " ".join(str(v) for v in slots))
+            else:
+                print("  FORM 枚举:无(只读裸值?—— 46 项清单得靠机身菜单)")
+        else:
+            print(f"  Desc <- 0x{rc:04X}(FORM 拿不到,跳过槽位名)")
+        for slot in slots:
+            txid += 1
+            txid, blob, rc = xact(dev, ep_out, ep_in, txid,
+                                  NIKON_GET_PICTCTRL_DATA, [slot, 0])
+            if rc == OK and blob is not None:
+                d = blob[HDR:]
+                name = (d[3:23].split(b"\x00")[0].decode("ascii", "replace")
+                        if len(d) >= 23 else "")
+                mono = d[1] if len(d) > 1 else -1
+                custom = d[2] if len(d) > 2 else -1
+                print(f"  0x90CC({slot}) <- OK {len(d)}B  mono={mono}"
+                      f" custom={custom}  name={name!r}")
+                print("      " + d[:48].hex(" "))
+            else:
+                print(f"  0x90CC({slot}) <- 0x{rc:04X}")
 
     # 步骤 4v(可选,--liveview N):Live View 轮询摸底 —— 0x9435 切应用
     # 模式 → 0x9201 开取景 → 取帧轮询直到 N 帧成功(间隔 200ms 对齐 app;

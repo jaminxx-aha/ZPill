@@ -166,16 +166,22 @@ Uint8List _u32Bytes(int v) => Uint8List.fromList(
 /// PropDesc)+ 值回读(路由参数读厂商码裸值)+ 末尾自动 ISO 状态
 /// (0xD054 裸读,u8)。[mode] 参数化曝光模式值(默认 M=1:快门/光圈/
 /// ISO 都可调;[modeUnreadable] 模拟模式读不到 → 不猜锁);
-/// readonlyCodes 指定只读属性。
+/// readonlyCodes 指定只读属性;[picCtrlEnums]/[picCtrlValue] 覆写优化校准
+/// 的 FORM 枚举与当前值(默认 [1,2,3,4] 全静态表内,不触发 0x90CC)。
 void _scriptParams(_ScriptTransport t,
     {Set<int> readonlyCodes = const {},
     int mode = 1,
     int drive = 1,
-    bool modeUnreadable = false}) {
+    bool modeUnreadable = false,
+    List<int>? picCtrlEnums,
+    int picCtrlValue = 1}) {
   for (final s in _kParamSpecs) {
     var value = s.value;
     if (s.code == PtpDevicePropCode.exposureProgramMode) value = mode;
     if (s.code == PtpDevicePropCode.stillCaptureMode) value = drive;
+    if (s.code == PtpDevicePropCode.activePicCtrlItem && picCtrlEnums != null) {
+      value = picCtrlValue;
+    }
     final param = shootingParamByCode[s.code]!;
     if (s.code == PtpDevicePropCode.exposureProgramMode && modeUnreadable) {
       t
@@ -185,7 +191,10 @@ void _scriptParams(_ScriptTransport t,
     }
     if (param.pickValues == null) {
       t.ok(data: _propDescDataset(s.code, s.type, value,
-          getSet: !readonlyCodes.contains(s.code), enums: s.enums));
+          getSet: !readonlyCodes.contains(s.code),
+          enums: (s.code == PtpDevicePropCode.activePicCtrlItem
+              ? picCtrlEnums
+              : s.enums)));
     } else if (_kVendorReadValues[s.code] == null) {
       // 取值域直供参数:不读 desc,值走裸读 —— 裸值应答(有厂商读码
       // 路由的由下方 vendor 应答覆盖)
@@ -198,6 +207,17 @@ void _scriptParams(_ScriptTransport t,
   }
   t.ok(data: Uint8List.fromList([0])); // 0xD054 自动 ISO:关
   t.ok(data: _u32Bytes(1234)); // 0xD1F1 剩余张数
+}
+
+/// 0x90CC GetPictCtrlData 应答数据集(digiCamControl 布局:[0]未知
+/// [1]单色 [2]自定义 [3..23) ASCII 名 NUL 填充;尾部补到 32B)。
+Uint8List _picCtrlData(String name) {
+  final b = Uint8List(32);
+  b[2] = 1; // 自定义标志
+  for (var i = 0; i < name.length && i < 20; i++) {
+    b[3 + i] = name.codeUnitAt(i);
+  }
+  return b;
 }
 
 /// PropDesc 全拒的回退应答(值走裸读;路由参数读厂商码)。
@@ -1064,6 +1084,95 @@ void main() {
     conn.statesCtrl.add(CameraLinkState.connected);
     await pumpEventQueue();
     expect(controller.shotsRemaining, 1234, reason: '_scriptParams 末尾预置');
+  });
+
+  test('优化校准:FORM 全量入状态 + 自定义/云组真名 0x90CC 拉取'
+      '(内置/创意组静态表已有,跳过)', () async {
+    _scriptParams(transport,
+        picCtrlEnums: [1, 101, 201, 202, 301], picCtrlValue: 201);
+    transport
+      ..ok(data: _picCtrlData('My Landscape')) // 201
+      ..ok(data: _picCtrlData('')) // 202:空名 → 回落静态占位
+      ..ok(data: _picCtrlData('Cloud 9')); // 301
+    conn.statesCtrl.add(CameraLinkState.connected);
+    await pumpEventQueue();
+    expect(
+        controller
+            .paramProps[PtpDevicePropCode.activePicCtrlItem]?.desc?.enumValues,
+        [1, 101, 201, 202, 301],
+        reason: '相机 FORM 驱动:枚举全量入状态(真机 46 项同理)');
+    expect(controller.paramProps[PtpDevicePropCode.activePicCtrlItem]?.value,
+        201);
+    expect(transport.count(NikonOperationCode.getPictCtrlData), 3,
+        reason: '只拉静态表外的槽位:1(标准)/101(Dream)不发 0x90CC');
+    expect(
+        transport.requests
+            .where((r) => r.opcode == NikonOperationCode.getPictCtrlData)
+            .map((r) => r.params.first),
+        [201, 202, 301],
+        reason: '按 FORM 枚举序逐槽位读,params=[槽位,0]');
+    expect(
+        controller.displayParamValue(PtpDevicePropCode.activePicCtrlItem, 201),
+        'My Landscape',
+        reason: '自定义组真名(机身用户起名)替掉「自定义 1」占位');
+    expect(
+        controller.displayParamValue(PtpDevicePropCode.activePicCtrlItem, 202),
+        '自定义 2',
+        reason: '空名(null)回落静态段位格式化');
+    expect(
+        controller.displayParamValue(PtpDevicePropCode.activePicCtrlItem, 301),
+        'Cloud 9',
+        reason: '云组真名替掉「云 1」占位');
+    expect(
+        controller.displayParamValue(PtpDevicePropCode.activePicCtrlItem, 1),
+        '标准',
+        reason: '静态表标签照常');
+  });
+
+  test('优化校准:0x90CC 首槽位被拒 → 整组停(不逐个撞),显示回落静态',
+      () async {
+    _scriptParams(transport, picCtrlEnums: [201, 202], picCtrlValue: 202);
+    transport.reply(PtpResponseCode.operationNotSupported);
+    conn.statesCtrl.add(CameraLinkState.connected);
+    await pumpEventQueue();
+    expect(transport.count(NikonOperationCode.getPictCtrlData), 1,
+        reason: '首异常即停:202 不再试');
+    expect(controller.picCtrlNames, isEmpty);
+    expect(controller.displayParamValue(PtpDevicePropCode.activePicCtrlItem, 202),
+        '自定义 2');
+  });
+
+  test('优化校准:断连清缓存;重连重取(每连接一次,重复 connected 不重拉)',
+      () async {
+    _scriptParams(transport, picCtrlEnums: [201], picCtrlValue: 201);
+    transport.ok(data: _picCtrlData('My Fav'));
+    conn.statesCtrl.add(CameraLinkState.connected);
+    await pumpEventQueue();
+    expect(controller.displayParamValue(PtpDevicePropCode.activePicCtrlItem, 201),
+        'My Fav');
+
+    conn.statesCtrl.add(CameraLinkState.disconnected);
+    await pumpEventQueue();
+    expect(controller.picCtrlNames, isEmpty, reason: '断连清缓存');
+    expect(controller.displayParamValue(PtpDevicePropCode.activePicCtrlItem, 201),
+        '自定义 1', reason: '回落静态占位');
+
+    // 重连:再次拉取(新连接档案重建)。
+    _scriptParams(transport, picCtrlEnums: [201], picCtrlValue: 201);
+    transport.ok(data: _picCtrlData('My Fav'));
+    conn.statesCtrl.add(CameraLinkState.connected);
+    await pumpEventQueue();
+    expect(controller.displayParamValue(PtpDevicePropCode.activePicCtrlItem, 201),
+        'My Fav');
+    expect(transport.count(NikonOperationCode.getPictCtrlData), 2,
+        reason: '两次连接各拉一次');
+
+    // 状态未离开的重复 connected 沿:不重拉(一次性旗标)。
+    _scriptParams(transport, picCtrlEnums: [201], picCtrlValue: 201);
+    conn.statesCtrl.add(CameraLinkState.connected);
+    await pumpEventQueue();
+    expect(transport.count(NikonOperationCode.getPictCtrlData), 2,
+        reason: '同连接内已拉过,不重复');
   });
 
   test('ObjectAdded → 「已拍摄」提示 + 参数刷新;断连后迟到事件丢弃', () async {

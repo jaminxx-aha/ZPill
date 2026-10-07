@@ -46,6 +46,12 @@ abstract final class NikonOperationCode {
   static const int getLargeThumb = 0x90C4;
   static const int getEvent = 0x90C7; // 事件轮询,data-in(旧名 CheckEvent)
   static const int deviceReady = 0x90C8; // 忙等探针
+  // 读优化校准(0xD200)槽位详情:data-in 应答布局按 digiCamControl
+  // NikonBase.GetPictureControl 实证 —— params [槽位号(即 0xD200 值), 0],
+  // 数据 [0]=未知 [1]=单色标志 [2]=自定义标志 [3..22]=20 字节 ASCII 名
+  // (NUL 截断)[23+]=调节值曲线;libgphoto2 ptp.h 在册(同组 0x90CD 写
+  // 0x90CE 删 0x90CF 能力);Zf 待真机核对。
+  static const int getPictCtrlData = 0x90CC;
   static const int startLiveView = 0x9201;
   static const int endLiveView = 0x9202;
   static const int getLiveViewImage = 0x9203;

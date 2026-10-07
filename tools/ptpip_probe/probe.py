@@ -143,6 +143,7 @@ NIKON_CHANGE_AF_AREA = 0x9205  # p1/p2 = whole-size 坐标(OpenZCine PTPIPClient
 NIKON_AF_DRIVE = 0x90C1
 NIKON_CHANGE_APPLICATION_MODE = 0x9435  # Z 系方言:遥控 op 前须切应用模式(app enableAppControl 同款)
 NIKON_DEVICE_READY = 0x90C8
+NIKON_GET_PICTCTRL_DATA = 0x90CC  # 优化校准槽位详情:params[槽位,0],name=数据[3..23) ASCII(libgphoto2 在册;布局 = digiCamControl 实证)
 DEVICE_BUSY = 0x2019  # ISO 15740 标准响应码(设备忙)
 
 PTP_OK = 0x2001
@@ -760,6 +761,10 @@ def main() -> int:
     ap.add_argument("--events", type=int, metavar="秒", default=0,
                     help="步骤 9e:evt 通道监听 N 秒(期间在相机上按快门/"
                          "转波轮),事件时间线带名称与参数")
+    ap.add_argument("--picctrl", action="store_true",
+                    help="步骤 9w:优化校准 0xD200 摸底(usb_probe --picctrl "
+                         "的无线对照):FORM 枚举全量 + 每槽位 0x90CC "
+                         "GetPictCtrlData 读注册名(自定义/云组真名)")
     args = ap.parse_args()
 
     try:
@@ -1127,6 +1132,51 @@ def main() -> int:
             except (ConnectionError, socket.timeout, ProtocolError) as e:
                 print(f"    EndLiveView:链路异常({e})")
             drain_evt_events(evt, t0)  # 0xC10C 若在停止时推送,语义在此落定
+
+    # 步骤 9w(可选,--picctrl):优化校准(0xD200)槽位摸底 —— usb_probe
+    # --picctrl 的无线对照。FORM 枚举全量 + 每槽位 0x90CC GetPictCtrlData
+    # 读注册名(自定义/云组真名;布局 = digiCamControl 实证:[0]未知
+    # [1]单色 [2]自定义 [3..23) ASCII 名 NUL 截断)。0x90CC 属厂商读,
+    # 9-op 小表外 —— 按表拒连即误杀的教训直发;0x9435 前量同 9v 保险。
+    if args.picctrl:
+        print("[9w] 优化校准 0xD200 摸底(FORM 全量 + 0x90CC 槽位名):")
+        ensure_app_mode()
+        slots = []
+        try:
+            t, payload, stats, (code, echoed, _) = cmd_xact(
+                cmd, tid, GET_DEVICE_PROP_DESC, [0xD200], dp=DP_DATA_IN)
+        except (ConnectionError, socket.timeout, ProtocolError) as e:
+            print(f"  0xD200 Desc:链路异常({e})—— 中止本步")
+            code = -1
+        if code == PTP_OK:
+            desc = parse_prop_desc(payload)
+            print(f"  Desc <- OK {len(payload)}B  getSet={desc['getSet']}"
+                  f"({'可写' if desc['getSet'] else '只读'})"
+                  f"  current={desc['current']!r}")
+            slots = list(desc["enumValues"] or [])
+            if slots:
+                print(f"  FORM 枚举({len(slots)}): " + " ".join(str(v) for v in slots))
+            else:
+                print("  FORM 枚举:无(只读裸值?—— 46 项清单得靠机身菜单)")
+        else:
+            print(f"  Desc <- 0x{code:04X}(FORM 拿不到,跳过槽位名)")
+        for slot in slots:
+            try:
+                t, payload, stats, (code, echoed, _) = cmd_xact(
+                    cmd, tid, NIKON_GET_PICTCTRL_DATA, [slot, 0], dp=DP_DATA_IN)
+            except (ConnectionError, socket.timeout, ProtocolError) as e:
+                print(f"  0x90CC({slot}):链路异常({e})—— 中止槽位循环")
+                break
+            if code == PTP_OK:
+                name = (payload[3:23].split(b"\x00")[0].decode("ascii", "replace")
+                        if len(payload) >= 23 else "")
+                mono = payload[1] if len(payload) > 1 else -1
+                custom = payload[2] if len(payload) > 2 else -1
+                print(f"  0x90CC({slot}) <- OK {len(payload)}B  mono={mono}"
+                      f" custom={custom}  name={name!r}")
+                print("      " + payload[:48].hex(" "))
+            else:
+                print(f"  0x90CC({slot}) <- 0x{code:04X}")
 
     # 步骤 9c(可选,--capture):快门释放摸底(无线对照)—— 0x100E(标准)
     # /0x9207/0x90C0(尼康候选)发一次,evt 事件时间线 + 0x90C8 DeviceReady
