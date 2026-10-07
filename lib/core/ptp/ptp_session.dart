@@ -537,21 +537,51 @@ final class PtpSession {
   }
 
   /// 连接后切「应用模式」(Z 系真机口径,OpenZCine 实测:不切则相机对
-  /// 遥控写回 0x200F AccessDenied)。链路:0x9435 ChangeApplicationMode
-  /// p1=1(二代+);一代机身 op 缺席 → 回退写 ApplicationMode 属性
-  /// 0xD1F0=1(u8)。**不走 [kSetPropEnabled] 门禁** —— 它是连接模式
-  /// 控制而非拍摄参数写,且发生在任何参数面板之前;连双失败也只返回
-  /// false 不抛(尽力而为,拍照/读参数不依赖它,真机核对)。
+  /// 遥控写回 0x200F AccessDenied)。链路:① 0x9435 ChangeApplicationMode
+  /// p1=1(无线/二代+直通);② 回 0x200F = USB 人设不给应用模式 —— 写
+  /// 会话发起者身份 0xD406='NikonPill'(与无线 hostname 同名)后重试:
+  /// Zf USB 实证(2026-10-07):initiator 残留 MTP 主机串时 0x9201 取景
+  /// 被拒 0xA004,写任一非 MTP 身份串后取景即通(0x9435 仍 0x200F,
+  /// 但 USB 人设下取景/拍照不依赖它;op 表 119→124 多出 0x9801-0x9805);
+  /// ③ op 缺席(一代)→ 回退写 ApplicationMode 属性 0xD1F0=1(u8)。
+  /// **不走 [kSetPropEnabled] 门禁** —— 它是连接模式控制而非拍摄参数
+  /// 写,且发生在任何参数面板之前;连双失败也只返回 false 不抛(尽力
+  /// 而为,拍照/读参数不依赖它,真机核对)。
   Future<bool> enableAppControl() async {
+    var rc = PtpResponseCode.operationNotSupported;
     try {
       final result = await _serialized(() => transport.execute(PtpRequest(
             opcode: NikonOperationCode.changeApplicationMode,
             params: [1],
           )));
-      if (result.responseCode == PtpResponseCode.ok) return true;
+      rc = result.responseCode;
     } on Object {
       // op 缺席/链路类(含脚本耗尽类 StateError):走属性回退。
       // 尽力而为步骤,on Object 兜底 —— 它失败不得影响连接主流程。
+    }
+    if (rc == PtpResponseCode.ok) return true;
+    if (rc == PtpResponseCode.accessDenied) {
+      try {
+        final w = ByteWriter()..ptpString('NikonPill');
+        final idResult = await _serialized(() => transport.execute(
+              PtpRequest(
+                opcode: PtpOperationCode.setDevicePropValue,
+                params: [PtpDevicePropCode.sessionInitiatorInfo],
+                dataOut: w.takeBytes(),
+              ),
+            ));
+        if (idResult.responseCode == PtpResponseCode.ok) {
+          final retry = await _serialized(() => transport.execute(
+                PtpRequest(
+                  opcode: NikonOperationCode.changeApplicationMode,
+                  params: [1],
+                ),
+              ));
+          if (retry.responseCode == PtpResponseCode.ok) return true;
+        }
+      } on Object {
+        // initiator 写失败:落到 0xD1F0 回退(不拦连接主流程)。
+      }
     }
     try {
       final w = ByteWriter()..u8(1);
@@ -580,7 +610,11 @@ final class PtpSession {
   }
 
   /// Nikon StartLiveView(0x9201,候选码,待真机核对)。
+  /// 每次开启取景重置 [getLiveViewObject] 的取码回退旗标 —— 会话跨
+  /// 连接复用(PtpLinkRouter 换 transport),换接一台支持 0x9428 的
+  /// 机身时下一次取景自动重新直试 Ex 码。
   Future<void> startLiveView() async {
+    _liveViewFallbackLegacy = false;
     final result = await _serialized(() => transport.execute(
           const PtpRequest(opcode: NikonOperationCode.startLiveView),
         ));
@@ -605,6 +639,41 @@ final class PtpSession {
     _ensureOk(result, NikonOperationCode.getLiveViewImage);
     return _sniffJpegStart(result.data ?? Uint8List(0));
   }
+
+  /// 同取帧,但**不剥头**返回原始 LiveViewObject —— display-info 头
+  /// 里带相机每帧自报的 AF 框/虚拟水平仪/录制态(见
+  /// core/remote/live_view_header.dart),监看层用它解析后再取 JPEG。
+  ///
+  /// 取码口径(2026-10-07 订正):**先 0x9428 GetLiveViewImageEx** ——
+  /// OpenZCine 全系(Gen-1/2/3)取帧只用它,应答必带 display-info 头;
+  /// 旧 0x9203 在 Zf 上应答解析不出头(水平仪回落手机/对焦框不出的
+  /// 根因)。被拒(不支持/拒绝类,非忙)则记下会话内改走 0x9203 兜底
+  /// (本次上抛、下一拍生效);0x2019 忙是正常轮询抖动,不上旗标照常
+  /// 上抛给引擎退避。
+  Future<Uint8List> getLiveViewObject() async {
+    if (_liveViewFallbackLegacy) {
+      final result = await _serialized(() => transport.execute(
+            const PtpRequest(opcode: NikonOperationCode.getLiveViewImage),
+          ));
+      _ensureOk(result, NikonOperationCode.getLiveViewImage);
+      return result.data ?? Uint8List(0);
+    }
+    try {
+      final result = await _serialized(() => transport.execute(
+            const PtpRequest(opcode: NikonOperationCode.getLiveViewImageEx),
+          ));
+      _ensureOk(result, NikonOperationCode.getLiveViewImageEx);
+      return result.data ?? Uint8List(0);
+    } on PtpResponseException catch (e) {
+      if (e.responseCode == PtpResponseCode.deviceBusy) rethrow;
+      _liveViewFallbackLegacy = true; // 下一拍起走 0x9203
+      rethrow;
+    }
+  }
+
+  /// 0x9428 被拒后本会话改走 0x9203(StartLiveView 时重置 —— 会话跨
+  /// 连接复用,换接机身后下一次取景自动重新直试 Ex 码)。
+  bool _liveViewFallbackLegacy = false;
 
   /// InitiateCapture(0x100E 标准,params [0,0]):快门释放,落卡存储。
   /// 0x2019 DeviceBusy(半按对焦未就绪等)按异常上抛,上层提示重试。
@@ -744,10 +813,10 @@ final class PtpSession {
     _ensureOk(result, NikonOperationCode.initiateCaptureRecInSdram);
   }
 
-  /// Nikon ChangeAfArea(0x9205,候选码,待真机核对):移动取景对焦区域。
-  /// 参数布局按 OpenZCine PTPIPClientSession:两 UINT32 = 取景帧像素
-  /// 坐标 x/y(其帧头 coordinateWidth 空间;我们无帧头,用解码帧尺寸
-  /// 作候选坐标系,标定待真机核对),无数据相。
+  /// Nikon ChangeAfArea(0x9205):移动取景对焦区域。
+  /// 参数布局按 OpenZCine PTPIPClientSession:两 UINT32 = 帧头 whole-size
+  /// 坐标系 x/y(@16/18,如 6048×3400;recentre 发 coordinateWidth/2 实证),
+  /// 无数据相。需取景开启(取景结束的机身拒 ChangeAfArea)。
   Future<void> changeAfArea(int x, int y) async {
     final result = await _serialized(() => transport.execute(PtpRequest(
           opcode: NikonOperationCode.changeAfArea,

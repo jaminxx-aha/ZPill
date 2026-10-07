@@ -10,6 +10,7 @@ import 'package:nikon_pill/core/ptp/operation_codes.dart';
 import 'package:nikon_pill/core/ptp/ptp_session.dart';
 import 'package:nikon_pill/core/ptp/ptp_transport.dart';
 import 'package:nikon_pill/core/remote/live_view_engine.dart';
+import 'package:nikon_pill/core/remote/live_view_header.dart';
 import 'package:nikon_pill/core/utils/byte_writer.dart';
 import 'package:nikon_pill/features/remote/remote_controller.dart';
 import 'package:nikon_pill/features/remote/shooting_param_catalog.dart';
@@ -270,6 +271,31 @@ Uint8List _fakeFrame({int width = 32, int height = 24}) =>
       (width >> 8) & 0xFF, width & 0xFF, // 宽
       0x01, 0x00, 0x00, 0x00, // 1 分量(占位,尺寸解析不读)
     ]);
+
+/// 最小 display-info 头(坐标系 6048×3400、单框;[recording] 写 @828):
+/// 头按真机形态补 1024B 定长 + SOI JPEG 尾(头长靠 SOI 位置定位),
+/// 控制器测试直接注到 engine.header。
+Uint8List _minimalHeaderFrame({required bool recording}) {
+  final b = Uint8List(1024 + 4);
+  void be16(int o, int v) {
+    b[o] = (v >> 8) & 0xFF;
+    b[o + 1] = v & 0xFF;
+  }
+
+  be16(16, 6048);
+  be16(18, 3400);
+  b[42] = 2; // 合焦
+  b[44] = 1; // areaCount
+  be16(48, 240);
+  be16(50, 240);
+  be16(52, 3024);
+  be16(54, 1700);
+  if (recording) b[828] = 1;
+  b[1024] = 0xFF;
+  b[1025] = 0xD8;
+  b[1026] = 0xFF;
+  return b;
+}
 
 void main() {
   late _ScriptTransport transport;
@@ -932,6 +958,18 @@ void main() {
               .where((r) => r.opcode == NikonOperationCode.startMovieRecInCard),
           isEmpty);
     });
+
+    test('帧头录制态同步(@828):机身自启录制对齐;停止帧复位', () async {
+      controller.engine.header.value =
+          parseLiveViewHeader(_minimalHeaderFrame(recording: true));
+      expect(controller.recording, isTrue);
+      expect(controller.recordingSince, isNotNull);
+
+      controller.engine.header.value =
+          parseLiveViewHeader(_minimalHeaderFrame(recording: false));
+      expect(controller.recording, isFalse);
+      expect(controller.recordingSince, isNull);
+    });
   });
 
   group('控制锁(0x200F 拒绝 → tile 锁标)', () {
@@ -1323,13 +1361,36 @@ void main() {
       await controller.touchFocus(0.5, 0.25);
       final af = transport.requests
           .singleWhere((r) => r.opcode == NikonOperationCode.changeAfArea);
-      expect(af.params, [16, 6], reason: '0.5×32、0.25×24');
+      expect(af.params, [16, 6], reason: '0.5×32、0.25×24(无头退回 SOF 帧)');
       expect(transport.count(NikonOperationCode.afDrive), 1);
       expect(controller.afBox, isNotNull);
       expect(controller.afBox!.nx, 0.5);
       expect(controller.afBox!.ny, 0.25);
       expect(controller.error, isNull);
       expect(controller.focusing, isFalse);
+    });
+
+    test('帧头在册 → 0x9205 参数用 whole-size 坐标系(6048×3400)', () async {
+      await startLiveView();
+      controller.engine.header.value =
+          parseLiveViewHeader(_minimalHeaderFrame(recording: false));
+      transport
+        ..ok() // changeAfArea
+        ..ok(); // afDrive
+      await controller.touchFocus(0.5, 0.25);
+      final af = transport.requests
+          .singleWhere((r) => r.opcode == NikonOperationCode.changeAfArea);
+      expect(af.params, [3024, 850],
+          reason: '0.5×6048、0.25×3400(OpenZCine recentre 同坐标系)');
+    });
+
+    test('录制被 0xA004 拒(机顶拨杆在照片档)→ 拨杆提示,录制态不变',
+        () async {
+      await startLiveView();
+      transport.reply(NikonResponseCode.invalidStatus); // 0x920A 被拒
+      await controller.toggleRecord();
+      expect(controller.error, contains('照片/视频'));
+      expect(controller.recording, isFalse, reason: '被拒不翻转录制态');
     });
 
     test('0x9205 忙(0x2019)→ 短退避重试后成功', () async {

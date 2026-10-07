@@ -155,6 +155,19 @@ void main() {
     expect(_param(PtpDevicePropCode.fNumber).readOnly, isFalse);
   });
 
+  test('AF 区域:Zf FORM 七值标签(2026-10-07 USB 形状实证)+ 取值域走相机', () {
+    final p = _param(PtpDevicePropCode.stillFocusMeteringMode);
+    expect(p.pickValues, isNull,
+        reason: 'Zf 与 OpenZCine 两套人马,直供表会覆盖真机 FORM');
+    expect(p.display(0x8010), '单点');
+    expect(p.display(0x8011), '自动');
+    expect(p.display(0x8017), '精确');
+    expect(p.display(0x8018), '宽S');
+    expect(p.display(0x8019), '宽L');
+    expect(p.display(0x801E), '宽C1');
+    expect(p.display(0x801F), '宽C2');
+  });
+
   test('快门取值域直供表:标准档打包值 + Bulb 哨兵(无 Time/X 同步)', () {
     final pick = _param(PtpDevicePropCode.exposureTime).pickValues!;
     expect(pick.first, 1 << 16 | 8000, reason: '1/8000s 打包');

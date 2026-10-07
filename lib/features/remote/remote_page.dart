@@ -17,6 +17,13 @@
 ///   IRIS/DRIVE/FOCUS/WB/METER/PROFILE,其余随后);
 /// - 辅助条:监看开关 + 「对焦后拍」+「APP 接管」。
 ///
+/// 横屏转**监看布局**(OpenZCine MonitorLayoutPolicy):取景画面全幅铺底
+/// 占大块屏幕,信息胶囊/辅助条浮顶、读出条/动作行浮底,贴边元素(横幅/
+/// 直方图/即拍即览卡)按浮层高度让位。
+///
+/// 水平仪数据源:相机帧头虚拟水平仪(LiveViewHeader.level,机身侧水平
+/// 仪,OpenZCine 同源)优先,手机姿态流只作相机未报时的兜底。
+///
 /// tab 模式:IndexedStack 常驻挂载,离开 tab([active] 变 false)即停
 /// 取景(相机侧 Live View 高功耗,后台白白打链路);切回/回前台对表
 /// 刷一次参数。
@@ -31,6 +38,7 @@ import '../../app_services.dart';
 import '../../core/ptp/operation_codes.dart';
 import '../../core/remote/frame_analysis.dart';
 import '../../core/remote/live_view_engine.dart';
+import '../../core/remote/live_view_header.dart';
 import '../../platform/motion_host.dart';
 import '../../platform/services.dart';
 import 'live_view_overlays.dart';
@@ -79,12 +87,17 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   /// 读出条中当前打开面板的参数(金高亮 tile)。
   int? _activeParam;
 
+  /// 手机姿态流(缓存单实例:MovtionHost 的 getter 每次返回**新**流,
+  /// 取景期页面每帧重建会让 StreamBuilder 反复拆装 EventChannel)。
+  /// 相机帧头带虚拟水平仪时优先用它,本流只作兜底。
+  late final Stream<MotionOrientation> _phoneAttitudes =
+      PlatformServices.motion.attitudes;
+
   @override
   void initState() {
     super.initState();
     controller = widget.controller ?? AppServices.instance.remoteController;
     WidgetsBinding.instance.addObserver(this);
-    controller.analyzer.enabled.addListener(_syncAnalyzerEnabled);
   }
 
   @override
@@ -104,7 +117,6 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    controller.analyzer.enabled.removeListener(_syncAnalyzerEnabled);
     // 离页即停取景:引擎归 AppServices 单例持有,不停会在后台持续打链路。
     if (controller.liveViewActive) {
       unawaited(controller.toggleLiveView());
@@ -136,37 +148,94 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
+    // 横屏 = 监看布局(OpenZCine MonitorLayoutPolicy 口径):取景画面
+    // 全幅铺底占大块屏幕,控制件(信息胶囊/辅助条/读出条/动作行)以
+    // 玻璃浮层叠在画面上,而不是竖屏的「上下挤出」。
+    final body = MediaQuery.orientationOf(context) == Orientation.landscape
+        ? _landscapeBody(context)
+        : _portraitBody(context);
     return Scaffold(
       backgroundColor: _LiveDesign.background,
-      body: SafeArea(
-        child: AnimatedBuilder(
-          animation: Listenable.merge([
-            controller,
-            controller.engine.frame,
-            controller.engine.status,
-          ]),
-          builder: (context, _) => Column(
-            children: [
-              _infoPill(context),
-              Expanded(child: _feedArea(context)),
-              _captureRow(context),
-              _captureStrip(context),
-              _assistStrip(context),
-            ],
+      body: SafeArea(child: body),
+    );
+  }
+
+  Widget _portraitBody(BuildContext context) {
+    return AnimatedBuilder(
+      animation: Listenable.merge([
+        controller,
+        controller.engine.frame,
+        controller.engine.status,
+      ]),
+      builder: (context, _) => Column(
+        children: [
+          _infoPill(context),
+          Expanded(child: _feedArea(context)),
+          _captureRow(context),
+          _captureStrip(context),
+          _assistStrip(context),
+        ],
+      ),
+    );
+  }
+
+  /// 横屏监看:全幅取景打底,顶栏(信息胶囊 + 辅助条)与底栏(读出条 +
+  /// 动作行)悬浮;横幅/直方图/即拍即览经 [ bannerBottomInset]/[topInset]
+  /// 让位浮层。
+  Widget _landscapeBody(BuildContext context) {
+    return AnimatedBuilder(
+      animation: Listenable.merge([
+        controller,
+        controller.engine.frame,
+        controller.engine.status,
+      ]),
+      builder: (context, _) => Stack(
+        fit: StackFit.expand,
+        children: [
+          _feedArea(context, topInset: 72, bannerBottomInset: 168),
+          Positioned(
+            top: 4,
+            left: 10,
+            right: 10,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(child: _infoPill(context, margin: EdgeInsets.zero)),
+                const SizedBox(width: 8),
+                Expanded(
+                  flex: 2,
+                  child:
+                      _assistStrip(context, margin: EdgeInsets.zero),
+                ),
+              ],
+            ),
           ),
-        ),
+          Positioned(
+            bottom: 4,
+            left: 10,
+            right: 10,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _captureStrip(context, margin: EdgeInsets.zero),
+                const SizedBox(height: 4),
+                _captureRow(context),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
 
   // ── 信息胶囊:链路 + 设备名 + 接管徽标 ──────────────────────────
 
-  Widget _infoPill(BuildContext context) {
+  Widget _infoPill(BuildContext context, {EdgeInsetsGeometry? margin}) {
     final linked = controller.linkUp;
     final name = controller.connection?.deviceName;
     return Container(
       width: double.infinity,
-      margin: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+      margin: margin ?? const EdgeInsets.fromLTRB(12, 8, 12, 4),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
       decoration: BoxDecoration(
         color: _LiveDesign.glass,
@@ -178,9 +247,13 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
           Icon(Icons.circle, size: 8,
               color: linked ? _LiveDesign.good : _LiveDesign.bad),
           const SizedBox(width: 8),
-          Text(
-            linked ? (name ?? '已连接') : '未连接相机',
-            style: const TextStyle(fontSize: 12, color: _LiveDesign.text),
+          // 横屏顶栏与辅助条分宽,名字可能被挤 —— 省略号收尾
+          Flexible(
+            child: Text(
+              linked ? (name ?? '已连接') : '未连接相机',
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 12, color: _LiveDesign.text),
+            ),
           ),
           if (linked && controller.shotsRemaining != null) ...[
             const SizedBox(width: 10),
@@ -223,7 +296,10 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
 
   // ── 取景区:帧 + 监看叠层 + 底边横幅 ────────────────────────────
 
-  Widget _feedArea(BuildContext context) {
+  /// 取景区:帧 + 监看叠层 + 底边横幅。[topInset]/[bannerBottomInset] 供
+  /// 横屏浮层布局把贴边元素(即拍即览卡/直方图/横幅)让位给顶/底控制条。
+  Widget _feedArea(BuildContext context,
+      {double topInset = 0, double bannerBottomInset = 0}) {
     final Uint8List? frame = controller.engine.frame.value;
     final status = controller.engine.status;
     return LayoutBuilder(builder: (context, constraints) {
@@ -292,7 +368,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
               Align(
                 alignment: Alignment.topLeft,
                 child: Container(
-                  margin: const EdgeInsets.all(10),
+                  margin: EdgeInsets.fromLTRB(10, 10 + topInset, 10, 10),
                   padding: const EdgeInsets.all(3),
                   decoration: BoxDecoration(
                     color: _LiveDesign.glass,
@@ -310,7 +386,8 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
               Align(
                 alignment: Alignment.bottomLeft,
                 child: Padding(
-                  padding: const EdgeInsets.all(8),
+                  padding:
+                      EdgeInsets.fromLTRB(8, 8, 8, 8 + bannerBottomInset),
                   child: ValueListenableBuilder(
                     valueListenable: controller.analyzer.analysis,
                     builder: (context, FrameAnalysis? analysis, _) =>
@@ -318,32 +395,71 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                   ),
                 ),
               ),
+            // 水平仪优先用**相机帧头**的虚拟水平仪(Zf 机身侧水平仪,
+            // OpenZCine 同源字段;Gen-1 短头/相机未报时落回手机姿态)。
             if (_showLevel)
-              StreamBuilder<MotionOrientation>(
-                stream: PlatformServices.motion.attitudes,
-                builder: (context, snapshot) {
-                  if (!snapshot.hasData) return const SizedBox.shrink();
-                  return LevelOverlay(orientation: snapshot.data!);
+              ValueListenableBuilder<LiveViewHeader?>(
+                valueListenable: controller.engine.header,
+                builder: (context, LiveViewHeader? h, _) {
+                  final level = h?.level;
+                  if (level != null) {
+                    const d2r = 3.141592653589793 / 180;
+                    return LevelOverlay(
+                      orientation: MotionOrientation(
+                        // 帧头角为相机视角、度;符号换算待真机核对。
+                        pitchRad: level.signedPitch * d2r,
+                        rollRad: -level.signedRoll * d2r,
+                      ),
+                    );
+                  }
+                  return StreamBuilder<MotionOrientation>(
+                    stream: _phoneAttitudes,
+                    builder: (context, snapshot) => snapshot.hasData
+                        ? LevelOverlay(orientation: snapshot.data!)
+                        : const SizedBox.shrink(),
+                  );
                 },
               ),
-            if (controller.afBox != null && imageRect != null)
-              _afBoxOverlay(imageRect, controller.afBox!),
+            // 相机自报 AF 框组(真实尺寸随 AF 区域设置:单点小框/动态大框;
+            // 主体检测开着时附人脸/眼睛框)—— 头在册即替代点按占位框。
+            ValueListenableBuilder<LiveViewHeader?>(
+              valueListenable: controller.engine.header,
+              builder: (context, LiveViewHeader? h, _) => h == null ||
+                      imageRect == null ||
+                      !controller.liveViewActive
+                  ? const SizedBox.shrink()
+                  : AfAreasOverlay(header: h, imageRect: imageRect),
+            ),
+            // 点按占位框只在**拿不到相机自报框**时兜底(0x9203 旧码裸
+            // JPEG / 头框数组空):头在册即让位,否则同屏双框。
+            ValueListenableBuilder<LiveViewHeader?>(
+              valueListenable: controller.engine.header,
+              builder: (context, LiveViewHeader? h, _) =>
+                  controller.afBox != null &&
+                          imageRect != null &&
+                          (h == null || h.boxes.isEmpty)
+                      ? _afBoxOverlay(imageRect, controller.afBox!)
+                      : const SizedBox.shrink(),
+            ),
             // 横幅贴画面底边(OpenZCine「坐在画面下沿」口径)
             if (!controller.linkUp)
               Align(
                 alignment: Alignment.bottomCenter,
                 child: _banner('未连接相机 —— 请先在「相机」页建立连接',
-                    _LiveDesign.accent),
+                    _LiveDesign.accent,
+                    bottomInset: bannerBottomInset),
               )
             else if (controller.error != null)
               Align(
                 alignment: Alignment.bottomCenter,
-                child: _banner(controller.error!, _LiveDesign.bad),
+                child: _banner(controller.error!, _LiveDesign.bad,
+                    bottomInset: bannerBottomInset),
               ),
             if (controller.notice != null)
               Align(
                 alignment: Alignment.bottomCenter,
-                child: _banner(controller.notice!, _LiveDesign.good),
+                child: _banner(controller.notice!, _LiveDesign.good,
+                    bottomInset: bannerBottomInset),
               ),
           ],
         ),
@@ -382,9 +498,9 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     );
   }
 
-  Widget _banner(String text, Color color) {
+  Widget _banner(String text, Color color, {double bottomInset = 0}) {
     return Container(
-      margin: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+      margin: EdgeInsets.fromLTRB(16, 0, 16, 10 + bottomInset),
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
       decoration: BoxDecoration(
         color: _LiveDesign.glass,
@@ -624,13 +740,13 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     PtpDevicePropCode.activePicCtrlItem,
   ];
 
-  Widget _captureStrip(BuildContext context) {
+  Widget _captureStrip(BuildContext context, {EdgeInsetsGeometry? margin}) {
     final params = [
       for (final code in _stripOrder)
         if (shootingParamByCode[code] != null) shootingParamByCode[code]!,
     ];
     return Container(
-      margin: const EdgeInsets.fromLTRB(12, 0, 12, 4),
+      margin: margin ?? const EdgeInsets.fromLTRB(12, 0, 12, 4),
       padding: const EdgeInsets.symmetric(vertical: 5),
       decoration: BoxDecoration(
         color: _LiveDesign.glass,
@@ -679,7 +795,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
 
   // ── 辅助条:监看开关 + 对焦后拍 + APP 接管 ──────────────────────
 
-  Widget _assistStrip(BuildContext context) {
+  Widget _assistStrip(BuildContext context, {EdgeInsetsGeometry? margin}) {
     Widget toggle(IconData icon, String label, bool current,
         void Function(bool) set) {
       return Padding(
@@ -720,7 +836,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     }
 
     return Container(
-      margin: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+      margin: margin ?? const EdgeInsets.fromLTRB(12, 0, 12, 10),
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
         color: _LiveDesign.glass,
@@ -732,16 +848,26 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         runSpacing: 4,
         children: [
           toggle(Icons.grid_on, '网格', _showGrid, (v) => setState(() => _showGrid = v)),
-          toggle(Icons.warning_amber, '斑马纹', _showZebra,
-              (v) => setState(() => _showZebra = v)),
-          toggle(Icons.bar_chart, '直方图', _showHistogram,
-              (v) => setState(() => _showHistogram = v)),
+          // 四个分析类开关改完须同步分析器启停(共享一份帧分析;
+          // 开而分析器未启 = 直方图无数据一类静默失效)。
+          toggle(Icons.warning_amber, '斑马纹', _showZebra, (v) {
+            setState(() => _showZebra = v);
+            _syncAnalyzerEnabled();
+          }),
+          toggle(Icons.bar_chart, '直方图', _showHistogram, (v) {
+            setState(() => _showHistogram = v);
+            _syncAnalyzerEnabled();
+          }),
           toggle(Icons.linear_scale, '水平仪', _showLevel,
               (v) => setState(() => _showLevel = v)),
-          toggle(Icons.palette_outlined, '伪色', _showFalseColor,
-              (v) => setState(() => _showFalseColor = v)),
-          toggle(Icons.blur_on, '峰值', _showPeaking,
-              (v) => setState(() => _showPeaking = v)),
+          toggle(Icons.palette_outlined, '伪色', _showFalseColor, (v) {
+            setState(() => _showFalseColor = v);
+            _syncAnalyzerEnabled();
+          }),
+          toggle(Icons.blur_on, '峰值', _showPeaking, (v) {
+            setState(() => _showPeaking = v);
+            _syncAnalyzerEnabled();
+          }),
           const SizedBox(width: 6),
           _smallChip(
             label: '对焦后拍',

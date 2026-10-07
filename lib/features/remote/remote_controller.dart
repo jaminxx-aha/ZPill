@@ -101,6 +101,7 @@ final class RemoteController extends ChangeNotifier {
         _setPropEnabled = setPropGate ?? _sessionSetPropGate {
     this.engine.status.addListener(_onEngineStatus);
     this.engine.frame.addListener(_onFrame);
+    this.engine.header.addListener(_onHeader);
     _statesSub = connection?.states.listen((s) {
       if (s == CameraLinkState.connected) {
         _linkUp = true;
@@ -721,6 +722,15 @@ final class RemoteController extends ChangeNotifier {
         recording = true;
         recordingSince = DateTime.now();
       }
+    } on PtpResponseException catch (e) {
+      if (e.responseCode == NikonResponseCode.invalidStatus) {
+        // 0xA004:机身不在可录制的状态 —— Zf 的机顶「照片/视频」切换
+        // 拨杆在照片档时 0x920A 即被拒(OpenZCine 同码口径 invalidStatus)。
+        error = '相机当前状态不允许录制 —— 请把机顶「照片/视频」切换拨杆'
+            '拨到视频档后重试(取景保持开启)';
+      } else {
+        error = '录制控制失败:${_nikonHint(e.responseCode) ?? e}';
+      }
     } on Exception catch (e) {
       error = '录制控制失败:$e';
     }
@@ -793,6 +803,27 @@ final class RemoteController extends ChangeNotifier {
     if (s != null && s != frameSize.value) frameSize.value = s;
   }
 
+  /// 帧头到达:对齐录制态(头部 @828 是机身权威 —— app/机身侧启动的
+  /// 录制都如实;0xC10A/0xC108 事件之外的每帧兜底)。头部无录制域
+  /// (一代 512B 头/解析失败)时不动状态。
+  void _onHeader() {
+    final h = engine.header.value;
+    if (h == null) return;
+    // 0x9205 坐标系缓存(OpenZCine lastFocusCoordinateSpace 同款):头
+    // 瞬时丢帧/解析失败时,触控对焦仍用相机最近自报的 whole-size,
+    // 不掉级到帧像素(两空间差 ~9 倍,掉级即点哪儿都跑左上角)。
+    if (h.coordinateWidth > 0 && h.coordinateHeight > 0) {
+      _lastHeaderSpace = (width: h.coordinateWidth, height: h.coordinateHeight);
+    }
+    if (h.recording == recording) return;
+    recording = h.recording;
+    recordingSince = h.recording ? DateTime.now() : null;
+    notifyListeners();
+  }
+
+  /// 最近一次帧头自报的 whole-size 坐标系(触控对焦坐标回退链第二级)。
+  ({int width, int height})? _lastHeaderSpace;
+
   // ---- 对焦域:触控对焦 + 对焦驱动(候选码,待真机核对)----
 
   /// 0x9205 忙重试(OpenZCine 同款策略:对焦区域移动遇 0x2019 短退避重试)。
@@ -800,9 +831,12 @@ final class RemoteController extends ChangeNotifier {
   static const _afBusyRetryDelay = Duration(milliseconds: 200);
 
   /// 触控对焦:点按取景画面 [nx]/[ny](归一化 0..1,取景图像坐标系)→
-  /// 帧像素坐标 → 0x9205 ChangeAfArea 移动对焦区域,随即驱动一次 AF
-  /// (点按即合焦的常规预期;若机身移点即自动对焦,后随的 0x90C1 应当
-  /// 立即返回,真机核对)。对焦框上屏直到下次点按/停取景。
+  /// **whole-size 坐标系**(帧头 @16/18,如 6048×3400;OpenZCine 重置对焦
+  /// 用 coordinateWidth/2 为中心点实证 —— 0x9205 参数不在 JPEG 像素空间)
+  /// → 0x9205 ChangeAfArea 移动对焦区域,随即驱动一次 AF(点按即合焦的
+  /// 常规预期)。头不可用回退链:当前头 → 最近头(OpenZCine 同款缓存)→
+  /// SOF 帧尺寸(末级候选,比例同但缩尺不同,待真机核对)。
+  /// 对焦框上屏直到下次点按/停取景;帧头 AF 框(真实尺寸)另行叠加。
   Future<void> touchFocus(double nx, double ny) async {
     if (!_linkUp) {
       error = '未连接相机';
@@ -810,7 +844,10 @@ final class RemoteController extends ChangeNotifier {
       return;
     }
     if (!liveViewActive || focusing) return; // 无取景/对焦中:静默忽略
-    final size = frameSize.value;
+    final h = engine.header.value;
+    final size = h != null && h.coordinateWidth > 0 && h.coordinateHeight > 0
+        ? (width: h.coordinateWidth, height: h.coordinateHeight)
+        : _lastHeaderSpace ?? frameSize.value;
     if (size == null) {
       error = '暂无取景帧,无法定位对焦点';
       notifyListeners();
@@ -1318,6 +1355,7 @@ final class RemoteController extends ChangeNotifier {
     _statesSub?.cancel();
     engine.status.removeListener(_onEngineStatus);
     engine.frame.removeListener(_onFrame);
+    engine.header.removeListener(_onHeader);
     frameSize.dispose();
     analyzer.dispose();
     super.dispose();

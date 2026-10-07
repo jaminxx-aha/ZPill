@@ -90,6 +90,7 @@ int _dataPhaseFor(int opcode, Uint8List? dataOut) {
     NikonOperationCode.getPartialObjectEx,
     NikonOperationCode.getPtpIpPairingCode,
     NikonOperationCode.getLiveViewImage,
+    NikonOperationCode.getLiveViewImageEx,
     NikonOperationCode.getDevicePropValueEx,
   };
   return dataInOps.contains(opcode) ? 3 : 1;

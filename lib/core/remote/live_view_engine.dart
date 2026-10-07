@@ -18,6 +18,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import '../ptp/ptp_session.dart';
+import 'live_view_header.dart';
 
 enum LiveViewStatus { idle, running, failed }
 
@@ -37,6 +38,10 @@ final class LiveViewEngine {
 
   /// 最近一帧(JPEG 字节,SOI 起);null = 尚未收到/从未开启。
   final frame = ValueNotifier<Uint8List?>(null);
+
+  /// 最近一帧的 display-info 头(相机自报的 AF 框/水平仪/录制态;
+  /// null = 裸 JPEG/头解析不出/尚未收到)。与 [frame] 同步发布。
+  final header = ValueNotifier<LiveViewHeader?>(null);
 
   final status = ValueNotifier<LiveViewStatus>(LiveViewStatus.idle);
 
@@ -104,9 +109,10 @@ final class LiveViewEngine {
         continue;
       }
       try {
-        final f = await session.getLiveViewImage();
+        final raw = await session.getLiveViewObject();
         if (run != _runId) return; // 停止后的迟到结果不发布
-        frame.value = f;
+        header.value = parseLiveViewHeader(raw);
+        frame.value = extractLiveViewJpeg(raw);
         _failures = 0;
         await _delay(interval);
       } on Object catch (e) {
