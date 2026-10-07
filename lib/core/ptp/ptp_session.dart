@@ -166,6 +166,20 @@ final class PtpSession {
   bool _remoteModeActive = false;
   bool get remoteModeActive => _remoteModeActive;
 
+  /// 连接梯诊断(2026-10-07 iPhone-USB 回归定案用):enableAppControl
+  /// 与 LiveViewEngine 0xA004 自愈把每步「op:结果」记入;取景失败时随
+  /// lastError 一并浮出到拍摄页,真机一眼读出哪一级被拒。open() 清零
+  /// (一连接一账)。
+  final List<String> connectLadder = [];
+
+  /// 记一笔连接梯诊断(见 [connectLadder])。
+  void noteLadder(String step) => connectLadder.add(step);
+
+  /// 连接梯诊断用的响应码短记(OK / 0xA004 形)。
+  static String ladderRc(int rc) => rc == PtpResponseCode.ok
+      ? 'OK'
+      : '0x${rc.toRadixString(16).toUpperCase()}';
+
   PtpDeviceInfo? _deviceInfo;
 
   /// 上次 GetDeviceInfo 的缓存(纯读,不发事务;未取过为 null)——
@@ -214,6 +228,7 @@ final class PtpSession {
     }
     _sessionOpen = true;
     _remoteModeActive = false; // 新链新账:旧链的 remote 模式持有态不带来
+    connectLadder.clear(); // 一连接一账:新连接的梯从零记
   }
 
   /// CloseSession(幂等、尽力而为):相机已拔出时不因清理报错。
@@ -571,12 +586,18 @@ final class PtpSession {
 
   /// 连接后切「应用模式」(Z 系真机口径,OpenZCine 实测:不切则相机对
   /// 遥控写回 0x200F AccessDenied)。链路对齐 OpenZCine 连接脚本:
-  /// ① 0x9435 ChangeApplicationMode p1=1(无线/二代+直通);② 非 OK
-  /// 应答(USB 人设恒拒,2026-10-07 真机)且 [usbRemoteFallback](USB
-  /// 连接流专用)→ **0x90C2 ChangeCameraMode(1) 进 remote 模式** ——
-  /// OpenZCine USB 兜底同款:「USB 上 0x9435 恒拒,remote 模式被接受
-  /// 并解锁控制」,Zf 收到即退出上传优先模式;③ 仍败 → 回退写
-  /// ApplicationMode 属性 0xD1F0=1(u8,一代 op 缺席口径)。
+  /// ① 0x9435 ChangeApplicationMode p1=1(无线/二代+直通);②
+  /// [usbRemoteFallback](USB 连接流专用)→ **0x90C2 ChangeCameraMode(1)
+  /// 进 remote 模式**。2026-10-07 归因梯(macOS-IC 真机,即 iPhone 代理
+  /// 链)定案:0x9435 在 IC 人设下**回 OK 但是假钥匙** —— 0x9201 仍被
+  /// 0xA004 拒;唯一实证解锁 = 0x90C2(1)(接受即 0x9201 通、取到 84KB
+  /// 帧;机身 remote + 取景运行 = 及时取景)。故 USB 连接流**无论
+  /// 0x9435 成败都直取 remote 模式**(OpenZCine「0x9435 失败才兜底
+  /// 0x90C2」的分支在 IC 人设下永远走不到);0x90C2 未成而 0x9435 已
+  /// OK 仍按旧语义算成;③ 双双未成 → 回退写 ApplicationMode 属性
+  /// 0xD1F0=1(u8,一代 op 缺席口径)。remote 的镜像收尾在连接层
+  /// (CloseSession 前 0x90C2(0)):不退则机身停「已连接到计算机」屏
+  /// (2026-10-07 真机:remote 态跨拔插保持,半按快门才退)。
   /// **不写 0xD406 initiator 身份**:OpenZCine 全程不写,而身份写会让
   /// 机身把主机按新身份归类(op 表 119→124 变化)—— 2026-10-07 真机
   /// 复报:写身份 + remote 模式 = 机身停「已连接到计算机」屏不进取景;
@@ -594,21 +615,41 @@ final class PtpSession {
             params: [1],
           )));
       rc = result.responseCode;
+      noteLadder('9435:${ladderRc(rc)}');
     } on Object {
       // op 缺席/链路类(含脚本耗尽类 StateError):走回退。
       // 尽力而为步骤,on Object 兜底 —— 它失败不得影响连接主流程。
+      noteLadder('9435:ERR');
     }
-    if (rc == PtpResponseCode.ok) return true;
+    if (rc == PtpResponseCode.ok && !usbRemoteFallback) return true;
     if (usbRemoteFallback) {
+      // 2026-10-07 归因梯定案(macOS-IC 真机):0x9435 在 IC 人设下回
+      // OK 但是假钥匙(0x9201 仍 0xA004),唯一实证解锁 = 0x90C2(1)。
+      // 故 USB 连接流无论 0x9435 成败都直取 remote 模式。
       try {
-        // remote 模式 = 机身拨盘锁定、控制权交 host(与用户「接管」
-        // 同一形态)—— 成功即置 [remoteModeActive],UI 侧对齐接管态。
         await changeCameraMode(1);
+        noteLadder('90C2:OK');
+        // 开闩即还身(2026-10-07 v8/v9 定案):上传优先门是**单向闩**
+        // —— 0x90C2(1) 打开后不因 0x90C2(0) 而关(v9 ⑧→⑨→⑩:背靠背
+        // 1→0 后 0x9201 照通、帧照流);而 remote **持有态**才是机身停
+        // 「已连接到计算机」屏的元凶(拨盘锁定,取景运行也不翻屏)。
+        // 1→0 背靠背 = 已连接屏只闪一次往返,机身直回自己的取景屏。
+        // 退失败不影响流(仅屏显停留已连接),由 teardown 兜底。
+        try {
+          await changeCameraMode(0);
+          noteLadder('90C2退:OK');
+        } on Object {
+          noteLadder('90C2退:拒');
+        }
         return true;
+      } on PtpResponseException catch (e) {
+        noteLadder('90C2:${ladderRc(e.responseCode)}');
       } on Object {
-        // 0x90C2 也被拒(老机身 op 缺席):落到 0xD1F0。
+        // 0x90C2 也被拒/链路类:落到 0xD1F0。
+        noteLadder('90C2:ERR');
       }
     }
+    if (rc == PtpResponseCode.ok) return true; // remote 未成但应用模式已接受
     try {
       final w = ByteWriter()..u8(1);
       final result = await _serialized(() => transport.execute(PtpRequest(
@@ -616,8 +657,10 @@ final class PtpSession {
             params: [PtpDevicePropCode.applicationMode],
             dataOut: w.takeBytes(),
           )));
+      noteLadder('D1F0:${ladderRc(result.responseCode)}');
       return result.responseCode == PtpResponseCode.ok;
     } on Object {
+      noteLadder('D1F0:ERR');
       return false;
     }
   }
@@ -651,8 +694,11 @@ final class PtpSession {
 
   /// Nikon ChangeCameraMode(0x90C2,源 = OpenZCine 全系在册):切换
   /// 「remote / PC-camera」模式。[mode] 1 = remote(**APP 接管控制**:
-  /// 机身拨盘锁定、屏幕可能熄灭,host 写入的会话值仅在持有期保值;
-  /// Zf 在 USB 上传优先模式下收到它即退回及时取景),0 = 解除。
+  /// 机身拨盘锁定,host 写入的会话值仅在持有期保值)。2026-10-07 真机
+  /// 定案:USB 上传优先门(0x9201 → 0xA004)的唯一实证钥匙(0x9435
+  /// 是假钥匙);remote + 0x9201 取景运行 = 机身及时取景,remote 持有
+  /// 而取景停 = 机身停「已连接到计算机」屏(跨拔插保持,0x90C2(0)
+  /// 或半按快门才退)。0 = 解除。
   /// 可在释放/AF/清洁中被拒(0xA003),调用方容忍。
   /// 成功即同步 [remoteModeActive]。
   Future<void> changeCameraMode(int mode) async {

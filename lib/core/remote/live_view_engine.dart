@@ -75,7 +75,11 @@ final class LiveViewEngine {
     try {
       await _startLiveViewHealing();
     } on Exception catch (e) {
-      lastError = '取景开启失败:$e';
+      // 连接梯一并浮出(真机定案仪器:哪一级被拒一眼可读)。
+      final ladder = session.connectLadder.join(' ');
+      lastError = ladder.isEmpty
+          ? '取景开启失败:$e'
+          : '取景开启失败:$e〔梯:$ladder〕';
       status.value = LiveViewStatus.failed;
       return;
     }
@@ -89,40 +93,67 @@ final class LiveViewEngine {
   /// (USB 连接人设,0x9201 被拒)。自愈阶梯按真机实证强度排序,
   /// 每级(一把钥匙)成功后重试一次 0x9201,重试仍拒换下一级,
   /// 全败上抛**原始** 0xA004(不遮原语义);非 0xA004 拒 → 上抛
-  /// 该次错误(不无限打):
-  /// ① 0x90C2(1) 进 remote 模式 —— OpenZCine 连接脚本 USB 兜底同款,
-  ///   Zf 收到即退出上传优先模式(2026-10-07 真机对照;iOS IC 链上
-  ///   ② 不生效,这是唯一实证钥匙);成功即置
-  ///   [PtpSession.remoteModeActive]。
+  /// 该次错误(不无限打)。每步(0x9201 各次/每把钥匙)记入
+  /// [PtpSession.connectLadder],start() 失败时随 lastError 浮出:
+  /// ① 0x90C2(1) 进 remote 模式 —— 上传优先门是单向闩,1 = 唯一
+  ///   实证开闩钥匙(2026-10-07 真机对照;iOS IC 链上 ② 不生效);
+  ///   **凡自愈进过 remote,收尾必配对 0x90C2(0) 还机身自由** ——
+  ///   remote 持有态才是机身停「已连接到计算机」屏的元凶,而闩不因
+  ///   退而关(v9 背靠背 1→0 后 0x9201 照通、帧照流)。
   /// ② 写会话发起者身份 0xD406 非 MTP 串 —— 直连 USB 主机(usbfs/
   ///   libusb 类:Android/ohos)实证有效(2026-10-07 探针);有屏显
   ///   人设副作用(机身把主机归类为计算机),只作末级兜底。
   Future<void> _startLiveViewHealing() async {
     try {
       await session.startLiveView();
+      session.noteLadder('9201:OK');
     } on PtpResponseException catch (e) {
+      session.noteLadder('9201:${PtpSession.ladderRc(e.responseCode)}');
       if (e.responseCode != NikonResponseCode.invalidStatus) rethrow;
+      var remoteEntered = false;
       final keys = <Future<bool> Function()>[
         () async {
           try {
             await session.changeCameraMode(1);
+            session.noteLadder('90C2:OK');
+            remoteEntered = true;
             return true;
           } on Object {
+            session.noteLadder('90C2:拒');
             return false; // op 缺席/被拒/链路类:换下一把钥匙
           }
         },
-        session.writeInitiatorIdentity,
+        () async {
+          final ok = await session.writeInitiatorIdentity();
+          session.noteLadder('D406:${ok ? 'OK' : '拒'}');
+          return ok;
+        },
       ];
-      for (final key in keys) {
-        if (!await key()) continue;
-        try {
-          await session.startLiveView();
-          return;
-        } on PtpResponseException catch (e2) {
-          if (e2.responseCode != NikonResponseCode.invalidStatus) rethrow;
+      try {
+        for (final key in keys) {
+          if (!await key()) continue;
+          try {
+            await session.startLiveView();
+            session.noteLadder('9201:OK');
+            return;
+          } on PtpResponseException catch (e2) {
+            session.noteLadder('9201:${PtpSession.ladderRc(e2.responseCode)}');
+            if (e2.responseCode != NikonResponseCode.invalidStatus) rethrow;
+          }
+        }
+        rethrow; // 两把钥匙都试过仍拒:上抛原始 0xA004
+      } finally {
+        if (remoteEntered) {
+          // 配对退闩:成功/全败路径都要还机身自由(失败时机身回自己的
+          // 屏,比停已连接屏友好);尽力而为,不影响上抛语义。
+          try {
+            await session.changeCameraMode(0);
+            session.noteLadder('90C2退:OK');
+          } on Object {
+            session.noteLadder('90C2退:拒');
+          }
         }
       }
-      rethrow; // 两把钥匙都试过仍拒:上抛原始 0xA004
     }
   }
 

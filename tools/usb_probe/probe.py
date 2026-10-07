@@ -121,7 +121,7 @@ NIKON_OC_CANDIDATES = {
     0x9431: "GetPartialObjectEx(64 位偏移+长度 —— Z 系断点续传主力)",
     0x9434: "GetObjectsMetaData(批量 ObjectInfo —— 渐进式相册快路候选)",
     0x9435: "ChangeApplicationMode(切应用模式,p1=1;不切遥控写被 0x200F 拒)",
-    0x9435: "ChangeApplicationMode(切应用模式,p1=1;不切遥控写被 0x200F 拒)",
+    0x90C2: "ChangeCameraMode(切 remote/PC 模式,p1=1;OpenZCine USB 连接兜底)",
 }
 NIKON_EVENT_CANDIDATES = {
     0x4002: "ObjectAdded(标准)", 0x400D: "CaptureComplete(标准)",
@@ -923,6 +923,13 @@ def main() -> int:
                          "+ 每槽位 0x90CC GetPictCtrlData 读注册名"
                          "(自定义/云组真名;布局 = digiCamControl 实证:"
                          "[1]单色 [2]自定义 [3..23) ASCII 名)")
+    ap.add_argument("--xact", type=str, metavar="OP[|p1,…][=hex]",
+                    action="append", default=[],
+                    help="任意事务梯:按序直发并打印响应码/数据量。OP 与参数"
+                         "皆十六进制(如 9435|1 / 90C2|1 / 9201 / "
+                         "1016|D1F0=01 后者为 data-out 载荷)。连接脚本对照"
+                         "仪器:0x9435 → 0x90C2(1) → 0x9201 哪级解开 Zf "
+                         "上传优先模式门(机身屏显由操作者目视对照)")
     args = ap.parse_args()
 
     backend = make_backend()
@@ -983,6 +990,56 @@ def main() -> int:
     if rcode != OK:
         print("    OpenSession 失败:检查相机是否弹出连接确认(部分机身需在相机上确认)")
         return 1
+
+    # 步骤 4x(可选,--xact):任意事务梯 —— 连接脚本/模式门直发仪器。
+    # 背景:OpenZCine 连接脚本(0x9435 → 0x90C2(1) USB 兜底)与 NikonPill
+    # enableAppControl 同款,但 Zf 机身停上传优先横幅的病根未定 —— 逐级
+    # 直发记录响应码,机身屏显由操作者目视对照(usbfs 直连人设与 iOS IC
+    # 人设可能不同;usbfs 实证的 0xD406 身份钥匙在 IC 链不生效)。
+    if args.xact:
+        print("[4x] 事务梯直发:")
+        for spec in args.xact:
+            data_hex = None
+            if "=" in spec:
+                spec, data_hex = spec.split("=", 1)
+            params: list = []
+            if "|" in spec:
+                spec, params_hex = spec.split("|", 1)
+                params = [int(p, 16) for p in params_hex.split(",") if p]
+            try:
+                op = int(spec, 16)
+            except ValueError:
+                print(f"    无法解析:{spec}(格式 OP[|p1,p2…][=hexdata])")
+                continue
+            payload = None if data_hex is None else bytes.fromhex(data_hex)
+            name = NIKON_OC_CANDIDATES.get(op, "?")
+            tag = (f"0x{op:04X}({name})[{','.join('0x%X' % p for p in params)}]"
+                   + (f" dataOut={len(payload)}B" if payload is not None else ""))
+            try:
+                txid += 1
+                if payload is None:
+                    txid, blob, rc = xact(dev, ep_out, ep_in, txid, op, params)
+                else:
+                    txid, rc = xact_out(dev, ep_out, ep_in, txid, op, params,
+                                        payload)
+                    blob = None
+            except (usb.core.USBError, IOError) as e:
+                print(f"    {tag} <- USB 异常:{e}")
+                try:
+                    dev.clear_halt(ep_out)
+                    dev.clear_halt(ep_in)
+                    print("      已 clear_halt 两端点")
+                except usb.core.USBError:
+                    pass
+                continue
+            if blob is not None and rc == OK:
+                data = blob[HDR:]
+                print(f"    {tag} <- 0x{rc:04X}  data={len(data)}B  "
+                      f"head={data[:16].hex(' ')}")
+            else:
+                print(f"    {tag} <- 0x{rc:04X}"
+                      + ("" if blob is None
+                         else f"  数据 {(len(blob) - HDR)}B(响应非 OK)"))
 
     # 步骤 4t(可选,--thumb):缩略图/预览数据布局。GetThumb(0x100A)是标准码,
     # 数据应为内嵌缩略图(JPEG?多大?);Nikon GetLargeThumb(0x90C4)是厂商码,

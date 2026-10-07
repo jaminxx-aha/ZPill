@@ -327,6 +327,8 @@ void main() {
     fake.reply(_ok()); // CloseSession(残留)
     fake.reply(_ok()); // OpenSession ②
     fake.reply(_ok()); // 0x9435 切应用模式
+    fake.reply(_ok()); // 0x90C2(1) 开闩(0x9435 OK 也照发,假钥匙防短路)
+    fake.reply(_ok()); // 0x90C2(0) 开闩即还身(连接括号)
 
     await conn.connect();
 
@@ -339,12 +341,14 @@ void main() {
         PtpOperationCode.closeSession,
         PtpOperationCode.openSession,
         NikonOperationCode.changeApplicationMode,
+        NikonOperationCode.changeCameraMode,
+        NikonOperationCode.changeCameraMode,
       ],
     );
   });
 
-  test('disconnect:detach 先行 → CloseSession 不下链路,状态回 disconnected',
-      () async {
+  test('disconnect:连接括号已退 remote → teardown 无 remote 可退,'
+      'detach 挡住 CloseSession,状态回 disconnected', () async {
     final usb = FakeUsbHostChannel(const [_zf]);
     final fake = FakePtpTransport();
     final (conn, _, session) = wireUsb(usb, fake);
@@ -352,6 +356,8 @@ void main() {
     fake.reply(_ok(data: buildDeviceInfoDataset()));
     fake.reply(_ok()); // OpenSession
     fake.reply(_ok()); // 0x9435 切应用模式
+    fake.reply(_ok()); // 0x90C2(1) 开闩
+    fake.reply(_ok()); // 0x90C2(0) 开闩即还身(连接括号)
     await conn.connect();
 
     await conn.disconnect();
@@ -360,13 +366,18 @@ void main() {
     expect(conn.deviceName, isNull);
     expect(session.isSessionOpen, isFalse);
     expect(usb.closeCalls, 1);
-    // teardown 顺序定案:detach 先行挡住 CloseSession(相机侧残留由
-    // 0x201E 自愈处理),链路上只见过连接期的三个请求
+    // 连接括号(1→0)已还身:remoteModeActive=false,teardown 无 remote
+    // 可退(用户「接管」开启的 remote 才走退步,见控制器测试);detach
+    // 先行挡住 CloseSession(相机侧残留由 0x201E 自愈处理)。
     expect(fake.requests.map((r) => r.opcode), [
       PtpOperationCode.getDeviceInfo,
       PtpOperationCode.openSession,
       NikonOperationCode.changeApplicationMode,
+      NikonOperationCode.changeCameraMode, // 0x90C2(1) 开闩
+      NikonOperationCode.changeCameraMode, // 0x90C2(0) 连接括号还身
     ]);
+    expect(fake.requests[3].params, [1]);
+    expect(fake.requests[4].params, [0]);
   });
 
   test('OpenSession 被拒:failed + 清理(close 会话与 USB)', () async {
@@ -409,6 +420,7 @@ void main() {
     fake.reply(_ok(data: buildDeviceInfoDataset())); // GetDeviceInfo(force)
     fake.reply(_ok()); // OpenSession
     fake.reply(_ok()); // 0x9435 切应用模式
+    fake.reply(_ok()); // 0x90C2(1) 进 remote
     await conn.connect();
     expect(conn.state, CameraLinkState.connected);
     expect(conn.deviceName, 'TestModel');
@@ -424,6 +436,8 @@ void main() {
     fake.reply(_ok(data: buildDeviceInfoDataset()));
     fake.reply(_ok()); // OpenSession
     fake.reply(_ok()); // 0x9435 切应用模式
+    fake.reply(_ok()); // 0x90C2(1) 开闩
+    fake.reply(_ok()); // 0x90C2(0) 连接括号还身
     await conn.connect();
     expect(conn.state, CameraLinkState.connected);
 
@@ -434,11 +448,14 @@ void main() {
     expect(conn.error, '相机已断开(USB 连接消失)');
     expect(session.isSessionOpen, isFalse);
     expect(usb.closeCalls, 1);
-    // 断链清理同样不下 CloseSession(detach 先行)
+    // 断链清理:连接括号已退 remote(无 remote 可退)→ 不下 CloseSession
+    // (detach 先行)
     expect(fake.requests.map((r) => r.opcode), [
       PtpOperationCode.getDeviceInfo,
       PtpOperationCode.openSession,
       NikonOperationCode.changeApplicationMode,
+      NikonOperationCode.changeCameraMode, // 0x90C2(1) 开闩
+      NikonOperationCode.changeCameraMode, // 0x90C2(0) 连接括号还身
     ]);
     expect(states, [
       CameraLinkState.connecting,

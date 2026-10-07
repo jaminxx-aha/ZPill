@@ -246,17 +246,19 @@ void main() {
         [NikonOperationCode.startLiveView]);
   });
 
-  test('身份门自愈:0x9201 首拍 0xA004 → 0x90C2(1) 进 remote → 重试通进轮询',
-      () async {
-    // Zf USB 实证(2026-10-07):进 remote 模式是 OpenZCine 连接脚本
-    // USB 兜底同款,Zf 收到即退出上传优先模式;iOS IC 链上这是唯一实证
-    // 钥匙(0xD406 身份写不生效)—— 故排在自愈阶梯第一级。
+  test('身份门自愈:0x9201 首拍 0xA004 → 0x90C2(1) 开闩 → 重试通,'
+      '配对 0x90C2(0) 还身(闩单向,流照跑)', () async {
+    // Zf USB 实证(2026-10-07 v8/v9):上传优先门是单向闩,0x90C2(1)
+    // = 唯一实证开闩钥匙(0x9435 是假钥匙);remote 持有态才是机身停
+    // 「已连接到计算机」屏的元凶 —— 故自愈进过 remote 必配对退出,
+    // 退不关闩(背靠背 1→0 后 0x9201 照通、帧照流)。
     final transport = _ScriptTransport()
       ..fail(const PtpResponseException(
           opcode: NikonOperationCode.startLiveView,
           responseCode: NikonResponseCode.invalidStatus))
-      ..ok() // 0x90C2(1) 进 remote 模式
+      ..ok() // 0x90C2(1) 开闩进 remote
       ..ok() // 0x9201 重试通
+      ..ok() // 0x90C2(0) 配对还身
       ..ok(data: _frame(7)); // 首帧
     final engine = LiveViewEngine(
       session: PtpSession(transport: transport),
@@ -271,11 +273,13 @@ void main() {
       NikonOperationCode.startLiveView,
       NikonOperationCode.changeCameraMode,
       NikonOperationCode.startLiveView,
+      NikonOperationCode.changeCameraMode,
       NikonOperationCode.getLiveViewImageEx,
     ]);
     expect(transport.requests[1].params, [1]);
-    expect(engine.session.remoteModeActive, isTrue,
-        reason: '自愈进 remote 模式后 session 旗标对齐(接管芯片可见)');
+    expect(transport.requests[3].params, [0], reason: '开闩即还身');
+    expect(engine.session.remoteModeActive, isFalse,
+        reason: '配对退出后 remote 不再持有(机身回自己的取景屏)');
 
     // 自愈路径照常置 _viewOn:stop 发 0x9202(不开则不发)。
     await engine.stop();
@@ -341,6 +345,13 @@ void main() {
     expect(engine.status.value, LiveViewStatus.failed);
     expect(engine.lastError, contains('A004'),
         reason: '自愈段全败上抛原始 0xA004,不遮原语义');
+    // 连接梯随失败浮出(真机定案仪器:哪一级被拒一眼可读)。
+    expect(engine.lastError, contains('〔梯:'));
+    expect(engine.session.connectLadder, [
+      '9201:0xA004',
+      '90C2:拒',
+      'D406:拒',
+    ], reason: '钥匙失败不重试 0x9201,直接换下一把');
     expect(transport.requests.map((r) => r.opcode), [
       NikonOperationCode.startLiveView,
       NikonOperationCode.changeCameraMode,
@@ -354,17 +365,18 @@ void main() {
         reason: '从未开启成功,stop 不发 EndLiveView');
   });
 
-  test('remote 进了但重试仍 0xA004 → 身份写兜底 → 重试通', () async {
+  test('remote 进了但重试仍 0xA004 → 身份写兜底 → 重试通,末尾配对还身', () async {
     final transport = _ScriptTransport()
       ..fail(const PtpResponseException(
           opcode: NikonOperationCode.startLiveView,
           responseCode: NikonResponseCode.invalidStatus))
-      ..ok() // 0x90C2(1) 进 remote 模式
+      ..ok() // 0x90C2(1) 开闩进 remote
       ..fail(const PtpResponseException(
           opcode: NikonOperationCode.startLiveView,
           responseCode: NikonResponseCode.invalidStatus)) // remote 后仍拒
       ..ok() // 0xD406 身份写
       ..ok() // 0x9201 重试通
+      ..ok() // 0x90C2(0) 配对还身(remoteEntered)
       ..ok(data: _frame(8)); // 首帧
     final engine = LiveViewEngine(
       session: PtpSession(transport: transport),
@@ -381,23 +393,26 @@ void main() {
       NikonOperationCode.startLiveView,
       PtpOperationCode.setDevicePropValue,
       NikonOperationCode.startLiveView,
+      NikonOperationCode.changeCameraMode,
       NikonOperationCode.getLiveViewImageEx,
     ]);
+    expect(engine.session.remoteModeActive, isFalse);
   });
 
-  test('双段自愈后仍 0xA004:各重试一次,failed 上抛', () async {
+  test('双段自愈后仍 0xA004:各重试一次,failed 上抛,仍配对还身', () async {
     final transport = _ScriptTransport()
       ..fail(const PtpResponseException(
           opcode: NikonOperationCode.startLiveView,
           responseCode: NikonResponseCode.invalidStatus))
-      ..ok() // 0x90C2(1) 进 remote 模式
+      ..ok() // 0x90C2(1) 开闩进 remote
       ..fail(const PtpResponseException(
           opcode: NikonOperationCode.startLiveView,
           responseCode: NikonResponseCode.invalidStatus)) // remote 重试仍拒
       ..ok() // 0xD406 身份写通
       ..fail(const PtpResponseException(
           opcode: NikonOperationCode.startLiveView,
-          responseCode: NikonResponseCode.invalidStatus)); // 最后重试仍拒
+          responseCode: NikonResponseCode.invalidStatus)) // 最后重试仍拒
+      ..ok(); // 0x90C2(0) 配对还身(finally 路径)
     final engine = LiveViewEngine(
       session: PtpSession(transport: transport),
       delay: _GatedDelay().call,
@@ -412,5 +427,12 @@ void main() {
             .length,
         3,
         reason: '初拍 + remote 重试 + 身份重试,各一次不无限打');
+    expect(
+        transport.requests
+            .where((r) => r.opcode == NikonOperationCode.changeCameraMode)
+            .last
+            .params,
+        [0],
+        reason: '进过 remote 必配对退出:失败路径也要还机身自由');
   });
 }
