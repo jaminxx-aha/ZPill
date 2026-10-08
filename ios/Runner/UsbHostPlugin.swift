@@ -135,11 +135,18 @@ private func synthDataContainer(opcode: UInt16, txid: UInt32, payload: Data) -> 
 private final class CameraStore: NSObject, ICDeviceBrowserDelegate {
   static let shared = CameraStore()
 
+  /// 浏览器启动到「枚举稳定」的窗口:ICDeviceBrowser 异步发现设备
+  /// (实测约 1s 入表),2s = 2× 余量。插件注册即预热,启动后稍候再
+  /// 点「连接」即秒回;马上点也最多等这扇窗(相机在场则出现即提前
+  /// 返回,不受窗口长短影响)。
+  static let firstEnumerationWindow: TimeInterval = 2
+
   let browser = ICDeviceBrowser()
   private let lock = NSLock()
   private var _cameras: [ICCameraDevice] = []
   private var _startRequested = false
   private var _firstDiscoveryWaited = false
+  private var _browserStartedAt: Date?
   var onDeviceRemoved: ((String) -> Void)?
 
   /// 主线程调用:授权(首次弹 TCC)→ 开始浏览。
@@ -154,13 +161,20 @@ private final class CameraStore: NSObject, ICDeviceBrowserDelegate {
 
     browser.delegate = self
     if browser.contentsAuthorizationStatus == .authorized {
-      browser.start()
+      startBrowser()
     } else {
       browser.requestContentsAuthorization { [weak self] status in
         guard let self = self, status == .authorized else { return }
-        self.browser.start()
+        self.startBrowser()
       }
     }
+  }
+
+  private func startBrowser() {
+    lock.lock()
+    _browserStartedAt = Date()
+    lock.unlock()
+    browser.start()
   }
 
   var cameras: [ICCameraDevice] {
@@ -181,7 +195,9 @@ private final class CameraStore: NSObject, ICDeviceBrowserDelegate {
     }
   }
 
-  /// 仅首次调用阻塞:给授权弹窗与设备发现留窗口;之后立刻返回快照
+  /// 首次调用最多阻塞到「浏览器已运行满 [firstEnumerationWindow]」
+  /// (相机在场即提前 break);浏览器未启动(首次 TCC 弹窗悬而未决)
+  /// 时退回整窗 [timeoutMs] —— 授权 + 枚举的兜底。之后立刻返回快照
   /// (会话期看门狗高频轮询 listCameras,不能每次都等)。
   func waitForFirstDiscovery(timeoutMs: Int) {
     lock.lock()
@@ -189,8 +205,14 @@ private final class CameraStore: NSObject, ICDeviceBrowserDelegate {
       lock.unlock()
       return
     }
+    let startedAt = _browserStartedAt
     lock.unlock()
-    let deadline = Date().addingTimeInterval(Double(timeoutMs) / 1000.0)
+    var deadline = Date().addingTimeInterval(Double(timeoutMs) / 1000.0)
+    if let startedAt = startedAt {
+      deadline = min(
+        deadline,
+        startedAt.addingTimeInterval(Self.firstEnumerationWindow))
+    }
     while Date() < deadline {
       if !nikonUsbCameras().isEmpty { break }
       usleep(150_000)
@@ -512,6 +534,10 @@ public final class UsbHostPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
     let events = FlutterEventChannel(
       name: "nikonpill/usb/events", binaryMessenger: registrar.messenger())
     events.setStreamHandler(instance)
+    // 启动即预热:浏览器先把设备枚举在后台跑起来(首次 TCC 授权弹窗
+    // 也提前到启动期完成),用户点「连接」时快照多半已就绪 —— 无相机
+    // 时不再白等整窗(见 waitForFirstDiscovery 的截止规则)。
+    DispatchQueue.main.async { CameraStore.shared.startIfNeeded() }
   }
 
   public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
