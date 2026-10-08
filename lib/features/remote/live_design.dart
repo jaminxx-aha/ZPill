@@ -127,9 +127,19 @@ const kLandscapeTopInset = 56.0;
 /// 即览)由此起让位。栏宽 116 让常见档位(1/1000s、f/2.8、ISO 3200)
 /// 完整显示(dense 值 14px)。
 const kLandscapeLeftInset = 134.0;
+/// 贴底动作行上沿(行高 72 + 8 间隙):横幅/直方图等贴底叠层由此起
+/// 让位(2026-10-08 横屏动作行贴底起);右缘快门柱的居中区也以此为
+/// 下界。
+const kLandscapeBottomInset = 80.0;
 
-/// 横屏辅助浮层宽(监看开关 + 芯片组,两列 Wrap 的舒适宽)。
-const kLandscapeAssistPanelWidth = 300.0;
+/// 竖屏浮层纵深(8 边距 + ~44 信息胶囊高 + 4 呼吸):信息胶囊浮在
+/// 取景画面上,贴顶叠层(即拍即览)由此起让位;辅助浮层锚在胶囊
+/// 下方(2026-10-08 手机相机式竖屏排版)。
+const kPortraitTopInset = 56.0;
+
+/// 辅助浮层宽(监看开关 + 芯片组,两列 Wrap 的舒适宽;竖屏锚在胶囊
+/// 下方 / 横屏让位右动作栏,共用)。
+const kAssistPanelWidth = 300.0;
 
 /// 参数面板列表条目高(ListTile 单行 = 48;itemExtent 固定后
 /// 「打开定位到当前值」的偏移量才可计算)。

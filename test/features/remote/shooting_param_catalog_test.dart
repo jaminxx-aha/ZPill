@@ -96,7 +96,8 @@ void main() {
     expect(_param(PtpDevicePropCode.exposureTime).display(0xFFFFFFFF), 'Bulb');
     expect(_param(PtpDevicePropCode.exposureTime).display(0xFFFFFFFE), 'X 同步');
     expect(_param(PtpDevicePropCode.exposureTime).display(0xFFFFFFFD), 'Time');
-    expect(_param(PtpDevicePropCode.exposureIndex).display(200), 'ISO 200');
+    // ISO 裸数值(2026-10-08 竖屏内联读出行起,值不再内嵌前缀)
+    expect(_param(PtpDevicePropCode.exposureIndex).display(200), '200');
     expect(
         _param(PtpDevicePropCode.exposureBiasCompensation).display(300), '+0.3');
     expect(

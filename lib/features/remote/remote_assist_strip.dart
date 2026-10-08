@@ -4,11 +4,11 @@ import 'live_design.dart';
 import 'monitor_toggles.dart';
 import 'remote_controller.dart';
 
-/// 辅助开关组(竖屏底部整条 / 横屏浮层面板共用):监看开关 Wrap +
-/// 对焦后拍/自拍/APP 接管芯片。状态随控制器 + [toggles](页面级视图
-/// 偏好),监听由外层 AnimatedBuilder 驱动;开关变化经
-/// [onTogglesChanged] 回页面(页面 setState + 同步帧分析器启停)。
-/// 颜色随应用主题(LiveDesign.of)。
+/// 辅助开关组(竖屏胶囊 tune 钮 / 横屏顶栏 tune 钮的非模态浮层共用):
+/// 监看开关 Wrap + 对焦后拍/自拍/APP 接管芯片。状态随控制器 +
+/// [toggles](页面级视图偏好),监听由外层 AnimatedBuilder 驱动;开关
+/// 变化经 [onTogglesChanged] 回页面(页面 setState + 同步帧分析器
+/// 启停)。颜色随应用主题(LiveDesign.of)。
 Widget _assistToggles(
   BuildContext context, {
   required RemoteController controller,
@@ -111,46 +111,11 @@ Widget _assistToggles(
   );
 }
 
-/// 竖屏底部辅助条:监看开关 + 对焦后拍/自拍/APP 接管芯片。
-class RemoteAssistStrip extends StatelessWidget {
-  const RemoteAssistStrip({
-    super.key,
-    required this.controller,
-    required this.toggles,
-    required this.onTogglesChanged,
-    required this.onTakeoverRequest,
-    this.margin,
-  });
-
-  final RemoteController controller;
-  final MonitorToggles toggles;
-  final void Function(MonitorToggles toggles) onTogglesChanged;
-  final void Function(BuildContext context) onTakeoverRequest;
-  final EdgeInsetsGeometry? margin;
-
-  @override
-  Widget build(BuildContext context) {
-    final live = LiveDesign.of(context);
-    return Container(
-      margin: margin ?? const EdgeInsets.fromLTRB(12, 0, 12, 10),
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: live.glass,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: live.hairline),
-      ),
-      child: _assistToggles(context,
-          controller: controller,
-          toggles: toggles,
-          onTogglesChanged: onTogglesChanged,
-          onTakeoverRequest: onTakeoverRequest),
-    );
-  }
-}
-
-/// 横屏辅助浮层(非模态):监看开关 + 芯片组,锚在顶栏 tune 钮下方、
-/// 让位右动作栏。点取景画面即收起(见 RemotePage._handleTapFocus),
-/// 点浮层外的其他控制件不收 —— 浮层不遮它们,互不打扰。
+/// 辅助浮层(非模态,竖横屏共用):监看开关 + 芯片组,竖屏锚在信息
+/// 胶囊下方、横屏锚在顶栏 tune 钮下方让位右动作栏。点取景画面即收起
+/// (见 RemotePage._handleTapFocus),点浮层外的其他控制件不收 ——
+/// 浮层不遮它们,互不打扰。(竖屏底部整条 RemoteAssistStrip 已随
+/// 2026-10-08 手机相机式排版撤除,开关全数收进本浮层。)
 class RemoteAssistPanel extends StatelessWidget {
   const RemoteAssistPanel({
     super.key,

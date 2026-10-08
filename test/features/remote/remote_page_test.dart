@@ -250,7 +250,8 @@ void main() {
     // 读出条首屏(OpenZCine 顺序:模式/ISO/快门/光圈/释放/对焦模式…)
     expect(find.text('模式'), findsOneWidget);
     expect(find.text('手动 M'), findsOneWidget);
-    expect(find.text('ISO 200'), findsOneWidget);
+    expect(find.text('ISO'), findsOneWidget, reason: 'ISO 小标签');
+    expect(find.text('200'), findsOneWidget, reason: 'ISO 裸数值');
     expect(find.text('1/100s'), findsOneWidget);
     expect(find.text('f/2.8'), findsOneWidget);
     expect(find.text('单张'), findsOneWidget, reason: '释放');
@@ -277,7 +278,10 @@ void main() {
     await scroll('主体检测');
     await scroll('色调');
     expect(find.text('SDR'), findsOneWidget, reason: '色调值');
-    // 辅助条(固定行,无需滚动):对焦后拍 + APP 接管
+    // 辅助开关收进胶囊 tune 钮的非模态浮层(手机相机式排版):
+    // 开面板后断言对焦后拍 + APP 接管
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
     expect(find.text('对焦后拍'), findsOneWidget);
     expect(find.text('APP 接管'), findsOneWidget);
   });
@@ -408,11 +412,10 @@ void main() {
     await tester
         .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
 
-    await tester.scrollUntilVisible(find.text('APP 接管'), 120,
-        scrollable: _chipsRow);
-    // 行尾芯片可能只进缓存区未真入屏:滚到底再点
-    await tester.drag(_chipsRow, const Offset(-240, 0));
-    await tester.pump();
+    // 辅助芯片收进胶囊 tune 钮的非模态浮层(手机相机式排版):
+    // 开面板再点
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
     transport.ok(); // 0x90C2 [1]
     await tester.tap(find.text('APP 接管'));
     await tester.pumpAndSettle();
@@ -486,8 +489,8 @@ void main() {
     await tester.pumpAndSettle();
     expect(controller.takeoverActive, isTrue);
     expect(find.text('自动 ISO'), findsOneWidget);
-    expect(find.text('ISO 200'), findsWidgets,
-        reason: '面板枚举项照常(芯片 + 面板各一处)');
+    expect(find.text('200'), findsWidgets,
+        reason: '面板枚举项照常(芯片裸数值 + 面板各一处)');
 
     transport
       ..ok() // 0xD054=1 开自动
@@ -637,11 +640,9 @@ void main() {
     await tester
         .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
     expect(controller.focusBeforeCapture, isFalse);
-    await tester.scrollUntilVisible(find.text('对焦后拍'), 120,
-        scrollable: _chipsRow);
-    // 行尾芯片可能只进缓存区未真入屏(滚动落点在边缘外):滚到底再点
-    await tester.drag(_chipsRow, const Offset(-240, 0));
-    await tester.pump();
+    // 对焦后拍收进胶囊 tune 钮的非模态浮层(手机相机式排版):开面板再点
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('对焦后拍'));
     await tester.pumpAndSettle();
     expect(controller.focusBeforeCapture, isTrue);
@@ -665,7 +666,10 @@ void main() {
         .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
     expect(controller.analyzer.enabled.value, isFalse);
 
-    // 点辅助条图标盒(InkWell 只包图标,标签文字不在点击区)
+    // 辅助开关收进胶囊 tune 钮浮层(手机相机式排版):开面板后点
+    // 图标盒(InkWell 只包图标,标签文字不在点击区)
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
     await tester.tap(find.byIcon(Icons.bar_chart)); // 直方图
     await tester.pumpAndSettle();
     expect(controller.analyzer.enabled.value, isTrue,
@@ -723,8 +727,69 @@ void main() {
         reason: '头在册 = 相机真实框已在屏,占位框再画即双框');
   });
 
-  testWidgets('横屏侧栏监看:画面全幅打底,参数竖列贴左、动作贴右,'
-      '辅助开关收进顶栏浮层', (tester) async {
+  testWidgets('竖屏手机相机式排版:浮胶囊 + 底部三行(读出/动作/快门),'
+      '辅助收 tune 浮层,纯净监看两段淡出可恢复', (tester) async {
+    _portrait(tester);
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = RemoteController(
+        session: PtpSession(transport: transport), connection: conn);
+    addTearDown(controller.dispose);
+    await tester
+        .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
+    await tester.pumpAndSettle();
+
+    // 底部三行:参数读出行(内联小标签+数值)→ 动作行 → 快门行
+    expect(find.text('模式'), findsOneWidget, reason: '读出行参数标签');
+    expect(find.text('取景'), findsOneWidget, reason: '动作行取景钮');
+    expect(find.text('对焦'), findsOneWidget);
+    expect(find.text('录制'), findsOneWidget);
+    expect(find.text('MF'), findsOneWidget);
+    expect(find.byIcon(Icons.photo_library_outlined), findsOneWidget,
+        reason: '快门行相册钮(无即拍图时图标占位)');
+    expect(find.byIcon(Icons.visibility_off), findsOneWidget,
+        reason: '快门行纯净监看钮');
+
+    // 辅助开关收进胶囊 tune 钮的非模态浮层:默认不在树
+    expect(find.text('对焦后拍'), findsNothing);
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
+    expect(find.text('对焦后拍'), findsOneWidget);
+
+    // 纯净监看:顶部浮层与底部三行两段淡出 + 放行点击(AnimatedOpacity
+    // 不裁树 —— 断言透明度与忽略指针;眼睛钮恢复)。
+    await tester.tap(find.byIcon(Icons.visibility_off));
+    await tester.pumpAndSettle();
+    for (final key in const ['portrait-chrome-top', 'portrait-chrome-bottom']) {
+      final chrome = find.byKey(ValueKey(key));
+      expect(tester.widget<IgnorePointer>(chrome).ignoring, isTrue,
+          reason: '$key 放行点击');
+      expect(
+          tester
+              .widget<AnimatedOpacity>(
+                  find.descendant(of: chrome, matching: find.byType(AnimatedOpacity)))
+              .opacity,
+          0.0,
+          reason: '$key 淡出');
+    }
+    await tester.tap(find.byIcon(Icons.visibility));
+    await tester.pumpAndSettle();
+    for (final key in const ['portrait-chrome-top', 'portrait-chrome-bottom']) {
+      final chrome = find.byKey(ValueKey(key));
+      expect(tester.widget<IgnorePointer>(chrome).ignoring, isFalse);
+      expect(
+          tester
+              .widget<AnimatedOpacity>(
+                  find.descendant(of: chrome, matching: find.byType(AnimatedOpacity)))
+              .opacity,
+          1.0,
+          reason: '$key 回来');
+    }
+    expect(find.byIcon(Icons.tune), findsOneWidget, reason: 'chrome 回来');
+  });
+
+  testWidgets('横屏监看:画面全幅打底,参数竖列贴左、快门柱居右、'
+      '动作行贴底,辅助开关收进顶栏浮层', (tester) async {
     _landscape(tester);
     final transport = _ScriptTransport();
     final conn = _FakeConnection();
@@ -747,7 +812,7 @@ void main() {
         .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
     conn.statesCtrl.add(CameraLinkState.connected);
     await tester.pumpAndSettle();
-    // 横屏取景钮 = 右动作栏图标钮(横屏无文字标签)
+    // 横屏取景钮 = 底部动作行(同竖屏一行)
     await tester.tap(find.byIcon(Icons.videocam_off_outlined));
     await tester.pumpAndSettle();
     expect(controller.liveViewActive, isTrue);
@@ -766,10 +831,24 @@ void main() {
     expect(_chipsRow, findsNothing);
     expect(find.text('模式'), findsOneWidget, reason: '左栏参数 tile');
 
-    // 动作竖列 + 顶栏按钮在场
+    // 动作行贴底 + 顶栏按钮在场
     expect(find.byIcon(Icons.center_focus_strong), findsOneWidget,
-        reason: '右栏对焦钮');
+        reason: '底部动作行对焦钮');
     expect(find.byIcon(Icons.tune), findsOneWidget, reason: '辅助面板入口');
+
+    // 快门柱纵向居右(2026-10-08 用户定案「拍照按钮在右侧中间」,
+    // 非底部居中):锚右缘(10 边距),纵向中点在顶栏下沿(64)与
+    // 底部动作行上沿(800-80)之间 → 中点 392。
+    final shutter =
+        find.byWidgetPredicate((w) => w is SizedBox && w.width == 78);
+    expect(shutter, findsOneWidget);
+    expect(tester.getCenter(shutter).dx, 1551,
+        reason: '快门贴右缘(10 边距 + 78/2)');
+    expect(tester.getCenter(shutter).dy, 392, reason: '快门纵向居中');
+    expect(find.byIcon(Icons.photo_library_outlined), findsOneWidget,
+        reason: '快门柱相册钮(无即拍图时图标占位)');
+    expect(find.byIcon(Icons.visibility_off), findsOneWidget,
+        reason: '快门柱纯净监看钮(顶栏不再重复)');
 
     // 辅助开关收浮层:默认不在树,点 tune 展开
     expect(find.byIcon(Icons.grid_on), findsNothing, reason: '默认收起');
