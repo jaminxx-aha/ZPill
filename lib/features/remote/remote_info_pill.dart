@@ -4,8 +4,8 @@ import 'live_design.dart';
 import 'remote_controller.dart';
 
 /// 信息胶囊:返回钮(路由态)+ 链路点 + 设备名 + 剩余张数/REC 时长 +
-/// 接管徽标 + 方向钮(链路/设备状态随控制器,监听由外层 AnimatedBuilder
-/// 驱动)。
+/// 接管徽标 + 监看辅助浮层钮(竖屏)+ 方向钮(链路/设备状态随控制器,
+/// 监听由外层 AnimatedBuilder 驱动)。
 ///
 /// [compact]:横屏顶栏态 —— 不占满宽(收缩包内容,顶栏中部透出
 /// 画面),徽标前用小间距代替 Spacer 撑开。
@@ -14,12 +14,22 @@ class RemoteInfoPill extends StatelessWidget {
     super.key,
     required this.controller,
     required this.onToggleOrientation,
+    this.onToggleAssist,
+    this.assistSelected = false,
     this.margin,
     this.compact = false,
   });
 
   final RemoteController controller;
   final VoidCallback onToggleOrientation;
+
+  /// 监看辅助浮层入口(竖屏胶囊内 tune 钮)。null = 不渲染 —— 横屏
+  /// 顶栏自带 ChromeIconButton 同职入口,胶囊里不重复。
+  final VoidCallback? onToggleAssist;
+
+  /// [onToggleAssist] 的选中态(浮层展开时金高亮)。
+  final bool assistSelected;
+
   final EdgeInsetsGeometry? margin;
   final bool compact;
 
@@ -84,6 +94,10 @@ class RemoteInfoPill extends StatelessWidget {
                 style: TextStyle(fontSize: 12, color: live.accent)),
             const SizedBox(width: 6),
           ],
+          if (onToggleAssist != null) ...[
+            _assistButton(live),
+            const SizedBox(width: 2),
+          ],
           _orientationButton(live),
         ],
       ),
@@ -101,6 +115,22 @@ class RemoteInfoPill extends StatelessWidget {
         width: 34,
         height: 30,
         child: Icon(Icons.arrow_back, size: 18, color: live.muted),
+      ),
+    );
+  }
+
+  /// 监看辅助浮层开关钮(方向钮左侧,竖屏排版):tune 图标,展开态金
+  /// 高亮;与返回/方向钮同款胶囊内嵌 InkWell(34×30 触达、9 圆角)。
+  Widget _assistButton(LivePalette live) {
+    return InkWell(
+      onTap: onToggleAssist,
+      customBorder:
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(9)),
+      child: SizedBox(
+        width: 34,
+        height: 30,
+        child: Icon(Icons.tune,
+            size: 18, color: assistSelected ? live.accent : live.muted),
       ),
     );
   }

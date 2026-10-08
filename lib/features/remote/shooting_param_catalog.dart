@@ -106,7 +106,9 @@ final shootingParamByCode = <int, ShootingParam>{
 /// 光圈:f 值 ×100(ISO 15740 定点,Zf 实际布局待真机核对)。
 String _formatFNumber(int v) => 'f/${(v / 100).toStringAsFixed(1)}';
 
-String _formatIso(int v) => 'ISO $v';
+/// ISO:裸数值 —— 标签随行展示(2026-10-08 竖屏内联读出行起,值不再
+/// 内嵌「ISO 」前缀,否则与标签拼成「ISO ISO 200」)。
+String _formatIso(int v) => '$v';
 
 /// EV:千分之一档(ISO 15740),一位小数带符号。
 String _formatEv(int v) {

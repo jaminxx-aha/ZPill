@@ -6,10 +6,12 @@ import 'live_design.dart';
 import 'remote_controller.dart';
 import 'remote_info_pill.dart';
 
-/// 竖屏动作行:取景开关 / 对焦 / 录制 / MF 步进 / 快门(状态随控制器,
-/// 监听由外层 AnimatedBuilder 驱动)。颜色随应用主题(LiveDesign.of)。
-class CaptureRow extends StatelessWidget {
-  const CaptureRow({super.key, required this.controller});
+/// 底部动作行(竖屏读出行与快门行之间 / 横屏贴底,2026-10-08 手机
+/// 原生相机式排版):取景 / 对焦 / 录制 / MF 步进对,40px 玻璃小方块
+/// + 10px 标签。状态随控制器,监听由外层 AnimatedBuilder 驱动;颜色
+/// 随应用主题(LiveDesign.of)。
+class CaptureActionBar extends StatelessWidget {
+  const CaptureActionBar({super.key, required this.controller});
 
   final RemoteController controller;
 
@@ -17,74 +19,92 @@ class CaptureRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final live = LiveDesign.of(context);
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 6),
+      padding: const EdgeInsets.fromLTRB(24, 6, 24, 4),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
         children: [
           _liveViewToggle(live, controller),
           _focusButton(live, controller),
           _recordButton(live, controller),
-          _mfNearFarButtons(live, controller),
-          _shutterButton(live, controller),
+          _mfCompactButtons(live, controller),
         ],
       ),
     );
   }
 }
 
-/// 横屏右动作栏:竖排 取景/对焦/录制 + MF 步进对 + 快门沉底,
-/// spaceBetween 分布。图标 + Tooltip(横屏屏面窄,不带下标签);
-/// 录制中钮下补时长小字(事件驱动刷新,同信息胶囊)。
-class LandscapeActionRail extends StatelessWidget {
-  const LandscapeActionRail({super.key, required this.controller});
+/// 竖屏快门行(2026-10-08 手机原生相机式排版):相机相册缩略图 |
+/// 大圆环快门 | 纯净监看圆钮。缩略图钮显示最近一拍
+/// ([RemoteController.reviewThumb],即拍即览同源),无图时相册图标
+/// 占位;点按进相机相册。横屏的竖排同组三件见 [CaptureShutterColumn]。
+class CaptureShutterRow extends StatelessWidget {
+  const CaptureShutterRow({
+    super.key,
+    required this.controller,
+    required this.onOpenAlbum,
+    required this.onHideChrome,
+  });
 
   final RemoteController controller;
+
+  /// 点按缩略图钮 → 打开相机相册(页面侧路由)。
+  final VoidCallback onOpenAlbum;
+
+  /// 纯净监看:隐去全部控制浮层(竖屏 = 顶部胶囊/浮层 + 底部三行),
+  /// 只留画面与监看叠层。
+  final VoidCallback onHideChrome;
 
   @override
   Widget build(BuildContext context) {
     final live = LiveDesign.of(context);
-    final usable = controller.linkUp && controller.liveViewActive;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 6, 24, 10),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+        children: [
+          _albumThumbButton(live, controller, onOpenAlbum),
+          _shutterButton(live, controller, size: 78),
+          _circleAction(live, Icons.visibility_off,
+              tooltip: '纯净监看(隐藏全部控制,只留画面)', onTap: onHideChrome),
+        ],
+      ),
+    );
+  }
+}
+
+/// 横屏快门柱(2026-10-08 用户定案「拍照按钮在右侧中间」):竖排
+/// 相册缩略图 / 大圆环快门 / 纯净监看,锚在右缘纵向中点 —— 手机相机
+/// 横屏的快门位(竖屏快门行旋转 90° 的同组三件)。状态随控制器,
+/// 监听由外层 AnimatedBuilder 驱动;颜色随应用主题(LiveDesign.of)。
+class CaptureShutterColumn extends StatelessWidget {
+  const CaptureShutterColumn({
+    super.key,
+    required this.controller,
+    required this.onOpenAlbum,
+    required this.onHideChrome,
+  });
+
+  final RemoteController controller;
+
+  /// 点按缩略图钮 → 打开相机相册(页面侧路由)。
+  final VoidCallback onOpenAlbum;
+
+  /// 纯净监看:隐去全部控制浮层(横屏 = 顶栏/参数栏/快门柱/动作行),
+  /// 只留画面与监看叠层。
+  final VoidCallback onHideChrome;
+
+  @override
+  Widget build(BuildContext context) {
+    final live = LiveDesign.of(context);
     return Column(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      mainAxisSize: MainAxisSize.min,
       children: [
-        ChromeIconButton(
-          icon: controller.liveViewActive
-              ? Icons.videocam
-              : Icons.videocam_off_outlined,
-          tooltip: controller.liveViewActive ? '取景中(点按关闭)' : '取景',
-          dimmed: !controller.liveViewActive,
-          size: 44,
-          onTap: controller.toggleLiveView,
-        ),
-        ChromeIconButton(
-          icon: Icons.center_focus_strong,
-          tooltip: controller.focusing ? '对焦中' : '对焦(驱动一次自动对焦)',
-          dimmed: !usable,
-          size: 44,
-          onTap: usable && !controller.focusing ? controller.afDriveNow : null,
-        ),
-        Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ChromeIconButton(
-              icon: controller.recording ? Icons.stop : Icons.fiber_manual_record,
-              tooltip: controller.recording ? '停录' : '录制',
-              dimmed: !usable,
-              size: 44,
-              onTap: usable && !controller.capturing
-                  ? controller.toggleRecord
-                  : null,
-            ),
-            if (controller.recording)
-              Text(recDurationLabel(controller.recordingSeconds),
-                  style: TextStyle(
-                      fontSize: 10,
-                      color: live.bad,
-                      fontFeatures: const [FontFeature.tabularFigures()])),
-          ],
-        ),
-        _mfNearFarButtons(live, controller),
-        _shutterButton(live, controller, size: 64),
+        _albumThumbButton(live, controller, onOpenAlbum),
+        const SizedBox(height: 8),
+        _shutterButton(live, controller, size: 78),
+        const SizedBox(height: 8),
+        _circleAction(live, Icons.visibility_off,
+            tooltip: '纯净监看(隐藏全部控制,只留画面)', onTap: onHideChrome),
       ],
     );
   }
@@ -148,7 +168,7 @@ class ChromeIconButton extends StatelessWidget {
 
 Widget _liveViewToggle(LivePalette live, RemoteController controller) {
   final active = controller.liveViewActive;
-  return _actionButton(
+  return _compactButton(
     live: live,
     icon: active ? Icons.videocam : Icons.videocam_off_outlined,
     label: active ? '取景中' : '取景',
@@ -161,7 +181,7 @@ Widget _liveViewToggle(LivePalette live, RemoteController controller) {
 /// 取景开启是前置条件 —— 未开取景机身回 0xA00B)。
 Widget _focusButton(LivePalette live, RemoteController controller) {
   final usable = controller.linkUp && controller.liveViewActive;
-  return _actionButton(
+  return _compactButton(
     live: live,
     icon: Icons.center_focus_strong,
     label: controller.focusing ? '对焦中' : '对焦',
@@ -174,7 +194,7 @@ Widget _focusButton(LivePalette live, RemoteController controller) {
 Widget _recordButton(LivePalette live, RemoteController controller) {
   final usable = controller.linkUp && controller.liveViewActive;
   final rec = controller.recording;
-  return _actionButton(
+  return _compactButton(
     live: live,
     icon: rec ? Icons.stop : Icons.fiber_manual_record,
     label: rec ? recDurationLabel(controller.recordingSeconds) : '录制',
@@ -183,19 +203,20 @@ Widget _recordButton(LivePalette live, RemoteController controller) {
   );
 }
 
-/// MF 步进(0x9204):向近/向远两粒竖排小钮(跟焦环语义,相对量)。
-Widget _mfNearFarButtons(LivePalette live, RemoteController controller) {
+/// MF 步进(竖屏紧凑动作行):向近/向远两粒横排小钮 + MF 小标
+/// (0x9204 相对量,跟焦环语义;近在左、远在右,同镜头距离刻度)。
+Widget _mfCompactButtons(LivePalette live, RemoteController controller) {
   final usable = controller.linkUp && controller.liveViewActive;
   Widget step(IconData icon, bool towardNear, String tip) {
     return Tooltip(
       message: tip,
       child: SizedBox(
-        width: 40,
-        height: 32,
+        width: 34,
+        height: 40,
         child: Material(
           color: live.glass,
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(9),
+            borderRadius: BorderRadius.circular(12),
             side: BorderSide(color: live.hairline),
           ),
           child: InkWell(
@@ -203,7 +224,7 @@ Widget _mfNearFarButtons(LivePalette live, RemoteController controller) {
                 ? () => controller.mfDriveStep(towardNear: towardNear)
                 : null,
             child: Icon(icon,
-                size: 18, color: usable ? live.text : live.faint),
+                size: 16, color: usable ? live.text : live.faint),
           ),
         ),
       ),
@@ -213,10 +234,15 @@ Widget _mfNearFarButtons(LivePalette live, RemoteController controller) {
   return Column(
     mainAxisSize: MainAxisSize.min,
     children: [
-      step(Icons.add, false, 'MF 向远(步进)'),
-      const SizedBox(height: 4),
-      step(Icons.remove, true, 'MF 向近(步进)'),
-      const SizedBox(height: 4),
+      Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          step(Icons.remove, true, 'MF 向近(步进)'),
+          const SizedBox(width: 3),
+          step(Icons.add, false, 'MF 向远(步进)'),
+        ],
+      ),
+      const SizedBox(height: 3),
       Text('MF', style: TextStyle(fontSize: 10, color: live.faint)),
     ],
   );
@@ -226,9 +252,9 @@ Widget _mfNearFarButtons(LivePalette live, RemoteController controller) {
 /// 按下变半透明(拍照中)。深色 = 白圈白芯(现状);浅色 = 墨圈 +
 /// 统一黄芯(v8「统一令」的按钮黄)。**按下即拍 + 按住连拍**(连续
 /// 释放档时按住 = 连拍括持链发,抬起终止;普通档点按 = 单张)。
-/// [size] 默认竖屏动作行 72,横屏右栏 64。
+/// [size] 默认竖屏快门行 78,横屏右栏 64。
 Widget _shutterButton(LivePalette live, RemoteController controller,
-    {double size = 72}) {
+    {double size = 78}) {
   final usable = controller.linkUp;
   return GestureDetector(
     behavior: HitTestBehavior.opaque,
@@ -288,9 +314,9 @@ Widget _shutterButton(LivePalette live, RemoteController controller,
   );
 }
 
-/// 动作行按钮:玻璃圆角方块 + 图标 + 下标签(取景/对焦);
+/// 紧凑动作行按钮(竖屏):40px 玻璃圆角方块 + 图标 + 10px 下标签;
 /// 整块(含标签)都是点击区。
-Widget _actionButton({
+Widget _compactButton({
   required LivePalette live,
   required IconData icon,
   required String label,
@@ -301,33 +327,82 @@ Widget _actionButton({
   return InkWell(
     onTap: onTap,
     customBorder:
-        RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
     child: Column(
       mainAxisSize: MainAxisSize.min,
       children: [
         Container(
-          width: 56,
-          height: 56,
+          width: 40,
+          height: 40,
           decoration: BoxDecoration(
             color: onTap == null ? live.surface : live.glass,
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(12),
             border: Border.all(color: live.hairline),
           ),
           child: Center(
             child: spinning
                 ? SizedBox(
-                    width: 22,
-                    height: 22,
+                    width: 18,
+                    height: 18,
                     child: CircularProgressIndicator(
-                        strokeWidth: 2.4, color: live.accent),
+                        strokeWidth: 2.2, color: live.accent),
                   )
                 : Icon(icon,
-                    size: 26, color: dimmed ? live.muted : live.text),
+                    size: 20, color: dimmed ? live.muted : live.text),
           ),
         ),
-        const SizedBox(height: 4),
-        Text(label, style: TextStyle(fontSize: 11, color: live.muted)),
+        const SizedBox(height: 3),
+        Text(label, style: TextStyle(fontSize: 10, color: live.muted)),
       ],
+    ),
+  );
+}
+
+/// 相册缩略图钮(快门行左):最近一拍的即拍图,无图时相册图标占位;
+/// 点按进相机相册(手机相机语言 —— 拍完即看)。
+Widget _albumThumbButton(
+    LivePalette live, RemoteController controller, VoidCallback onOpenAlbum) {
+  final thumb = controller.reviewThumb;
+  return Tooltip(
+    message: '相机相册',
+    child: SizedBox(
+      width: 54,
+      height: 54,
+      child: Material(
+        color: live.glass,
+        shape: CircleBorder(side: BorderSide(color: live.hairline)),
+        child: InkWell(
+          onTap: onOpenAlbum,
+          customBorder: const CircleBorder(),
+          child: thumb != null
+              ? ClipOval(
+                  child: Image.memory(thumb,
+                      fit: BoxFit.cover, gaplessPlayback: true))
+              : Icon(Icons.photo_library_outlined,
+                  size: 22, color: live.text),
+        ),
+      ),
+    ),
+  );
+}
+
+/// 圆形玻璃功能钮(快门行非主操作位):54px 圆 + 图标 + Tooltip。
+Widget _circleAction(LivePalette live, IconData icon,
+    {required String tooltip, required VoidCallback onTap}) {
+  return Tooltip(
+    message: tooltip,
+    child: SizedBox(
+      width: 54,
+      height: 54,
+      child: Material(
+        color: live.glass,
+        shape: CircleBorder(side: BorderSide(color: live.hairline)),
+        child: InkWell(
+          onTap: onTap,
+          customBorder: const CircleBorder(),
+          child: Icon(icon, size: 22, color: live.text),
+        ),
+      ),
     ),
   );
 }

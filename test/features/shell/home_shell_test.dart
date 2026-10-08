@@ -590,7 +590,10 @@ void main() {
     _scriptParams(f.transport); // 进页对表
     await tester.tap(find.text('进入拍摄'));
     await tester.pumpAndSettle();
-    // 开网格(页面 State)—— 旋转后此开关必须还在
+    // 开网格(页面 State)—— 旋转后此开关必须还在。辅助开关收进胶囊
+    // tune 钮浮层(2026-10-08 手机相机式竖屏排版):先开面板再开网格。
+    await tester.tap(_inRemotePage(find.byIcon(Icons.tune)));
+    await tester.pumpAndSettle();
     await tester.tap(_inRemotePage(find.byIcon(Icons.grid_on)));
     await tester.pumpAndSettle();
     expect(_inRemotePage(find.byType(GridOverlay)), findsOneWidget);
