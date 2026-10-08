@@ -15,6 +15,8 @@ import 'package:nikon_pill/core/utils/byte_writer.dart';
 import 'package:nikon_pill/data/paired_cameras_store.dart';
 import 'package:nikon_pill/features/connection/camera_overview_controller.dart';
 import 'package:nikon_pill/features/connection/connection_page.dart';
+import 'package:nikon_pill/features/remote/remote_controller.dart';
+import 'package:nikon_pill/features/remote/remote_page.dart';
 import 'package:nikon_pill/platform/nsd_scanner.dart';
 
 /// 记账假连接:connect/disconnect/配对确认落账,states 流由测试驱动。
@@ -616,7 +618,7 @@ void main() {
       );
     });
 
-    testWidgets('已连接视图:信息卡组(链路/机身/镜头)+ 相册 + 断开连接',
+    testWidgets('已连接视图:信息卡组(链路/机身/镜头)+ 进入拍摄 + 相册 + 断开连接',
         (WidgetTester tester) async {
       // 加高视口:信息卡组较长,断开按钮在折线下(点空)。
       tester.view
@@ -643,8 +645,14 @@ void main() {
       final overview =
           CameraOverviewController(session: session, connection: conn);
       final controller = ConnectionController(connection: conn);
+      // 「进入拍摄」push 的遥控控制器:connection 置空(不接状态流,
+      // 零协议脚本)—— 本测只验路由进出,取景/参数由 remote 系测试覆盖。
+      final remote = RemoteController(
+          session: PtpSession(transport: _ScriptTransport()));
+      addTearDown(remote.dispose);
       await tester.pumpWidget(MaterialApp(
-        home: ConnectionPage(controller: controller, overview: overview),
+        home: ConnectionPage(
+            controller: controller, overview: overview, remoteController: remote),
       ));
 
       conn.statesCtrl.add(CameraLinkState.connected);
@@ -661,9 +669,27 @@ void main() {
       // 镜头卡:无照片/无 EXIF → 型号缺读,属性在册读到
       expect(find.text('400mm'), findsOneWidget);
       expect(find.text('ƒ/2.8'), findsOneWidget);
-      // 动作:相册入口 + 断开
+      // 动作:进入拍摄(主操作,状态卡正下方)+ 相册 + 断开
+      expect(find.text('进入拍摄'), findsOneWidget);
       expect(find.text('相册'), findsOneWidget);
       expect(find.text('断开连接'), findsOneWidget);
+
+      // 进入拍摄:全屏 push 遥控监看页;信息胶囊带返回钮,pop 即回。
+      await tester.tap(find.text('进入拍摄'));
+      await tester.pumpAndSettle();
+      expect(find.byType(RemotePage), findsOneWidget);
+      expect(
+          find.descendant(
+              of: find.byType(RemotePage),
+              matching: find.byIcon(Icons.arrow_back)),
+          findsOneWidget,
+          reason: '路由态信息胶囊带返回钮');
+      await tester.tap(find.descendant(
+          of: find.byType(RemotePage),
+          matching: find.byIcon(Icons.arrow_back)));
+      await tester.pumpAndSettle();
+      expect(find.byType(RemotePage), findsNothing, reason: '返回即回相机页');
+      expect(find.text('进入拍摄'), findsOneWidget);
 
       await tester.tap(find.text('断开连接'));
       await tester.pump();

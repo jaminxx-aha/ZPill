@@ -1,4 +1,5 @@
-/// 拍摄页(底部导航 tab):Live View 监看 + 相机控制。
+/// 拍摄页(相机页「进入拍摄」push 的全屏路由):Live View 监看 + 相机
+/// 控制。
 ///
 /// **界面语言源自 OpenZCine**(MonitorShell / MonitorCaptureStrip /
 /// CaptureSettingButton / PhotographyShutterButton / LiveDesign,MIT):
@@ -34,11 +35,18 @@
 /// 水平仪数据源:相机帧头虚拟水平仪(LiveViewHeader.level,机身侧水平
 /// 仪,OpenZCine 同源)优先,手机姿态流只作相机未报时的兜底。
 ///
-/// tab 模式:IndexedStack 常驻挂载,离开 tab([active] 变 false)即
-/// 挂起帧轮询(取景生命周期跟连接走 —— 0x9201 已随连接沿发出、相机
-/// 保持取景,这里只停 USB 帧流量,不发 0x9202;回台恢复轮询并对表
-/// 刷一次参数)。取景的显式开关仍在动作行;连接即取景由 HomeShell
-/// 在 connected 沿驱动(RemoteController.autoLiveViewOnConnect)。
+/// 挂载模式(2026-10-08 从底栏 tab 改制):相机页已连接视图「进入拍摄」
+/// 全屏 push,返回(pop/系统返回手势)即回相机页 —— 底栏全程不占监看
+/// 画面。离页即挂起帧轮询(取景生命周期跟连接走 —— 0x9201 已随连接沿
+/// 发出、相机保持取景,这里只停 USB 帧流量,不发 0x9202);每次进入
+/// 都是新建页面,initState 恢复轮询并对表刷一次参数(原 tab 模式的
+/// 「回台对表」沿移到此)。取景的显式开关仍在动作行;连接即取景由
+/// HomeShell 在 connected 沿驱动(RemoteController.autoLiveViewOnConnect)。
+///
+/// 离页两收口(2026-10-08 真机反馈):①横锁还竖 —— 方向钮是监看页
+/// 专属控件而 SystemChrome 全局生效,离页把外壳还竖(portraitUp 具体
+/// 方向,空表 All mask 会闪屏永不发),锁态复位 portrait;②断连即
+/// 退页 —— 链路没了监看页无从看,pop 回相机页(重连入口在彼)。
 library;
 
 import 'dart:async';
@@ -65,8 +73,9 @@ class RemotePage extends StatefulWidget {
 
   final RemoteController? controller;
 
-  /// tab 是否在前台(IndexedStack 常驻):false 时挂起帧轮询(相机侧
-  /// 取景保持 —— 生命周期跟连接走,只停 USB 流量)。
+  /// 本页是否可见(IndexedStack 常驻直挂场景/单测用;push 进入恒 true,
+  /// 离页即整页回收)。false 时挂起帧轮询(相机侧取景保持 —— 生命周期
+  /// 跟连接走,只停 USB 流量)。
   final bool active;
 
   @override
@@ -94,18 +103,33 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   late final Stream<MotionOrientation> _phoneAttitudes =
       PlatformServices.motion.attitudes;
 
+  /// 上拍链路态:断连沿(linkUp true→false)触发自动退页。控制器冷启
+  /// 乐观门闩 true 起步,直挂未连接场景与真连接在此同形,只在沿上分。
+  bool _wasLinkUp = true;
+
   @override
   void initState() {
     super.initState();
     controller = widget.controller ?? AppServices.instance.remoteController;
     WidgetsBinding.instance.addObserver(this);
     controller.setViewerVisible(widget.active);
+    _wasLinkUp = controller.linkUp;
+    controller.addListener(_onControllerChanged);
+    // 进页对表刷一次参数(路由模式每次进入都是新建页面,原 tab 模式
+    // 「回台对表」沿不存在;机身侧拨盘/菜单改动的事件不一定送达,同
+    // didUpdateWidget 的兜底口径)。门 = 取景在跑:连接即取景使真连接
+    // 必然如此,而 linkUp 是冷启乐观门闩(恒真)不能作凭;直挂/未连接
+    // 场景引擎 idle,零请求。
+    if (widget.active && controller.liveViewActive) {
+      unawaited(controller.refreshParams());
+    }
   }
 
   @override
   void didUpdateWidget(RemotePage oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // tab 离台/回台:挂起/恢复帧轮询(相机侧取景保持,不发 0x9202)。
+    // 可见性沿(常驻直挂场景,如单测):挂起/恢复帧轮询(相机侧取景
+    // 保持,不发 0x9202)。push 路由每次进入都是新建页面,不走此沿。
     if (widget.active != oldWidget.active) {
       controller.setViewerVisible(widget.active);
     }
@@ -118,12 +142,25 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    controller.removeListener(_onControllerChanged);
     // 离页只挂起轮询(取景生命周期跟连接走,不因拆页发 0x9202)。
-    // 方向锁**不**随页复位:锁是会话级(挂 RemoteController);且复位
-    // 要发空表 —— iOS 收 All mask 会按手机物理姿态重选方向、被转屏锁
-    // 弹回(2026-10-08 真机日志定案:竖→横→竖双旋闪屏)。
+    // 方向收口走 PopScope(pop 起点即发,不等 dispose);此处不动锁。
     controller.setViewerVisible(false);
     super.dispose();
+  }
+
+  /// 断连即退页(2026-10-08 真机反馈):链路没了监看页无从看,自动
+  /// pop 回相机页 —— 重连入口在彼,相机页也随断连切回连接方式视图。
+  /// 参数面板/确认框若开着一并收掉(popUntil 到壳);直挂首页场景
+  /// (单测)isFirst 即自身,no-op。方向收口在 pop 前先发(幂等,
+  /// PopScope 亦会走一遍)。
+  void _onControllerChanged() {
+    final up = controller.linkUp;
+    final dropped = _wasLinkUp && !up;
+    _wasLinkUp = up;
+    if (!dropped || !mounted) return;
+    _exitOrientationReset();
+    Navigator.of(context).popUntil((r) => r.isFirst);
   }
 
   /// 斑马纹/直方图/伪色/峰值共享同一份帧分析:任一开启即启用分析器。
@@ -165,9 +202,35 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     final body = MediaQuery.orientationOf(context) == Orientation.landscape
         ? _landscapeBody(context)
         : _portraitBody(context);
-    return Scaffold(
-      backgroundColor: LiveDesign.of(context).background,
-      body: SafeArea(child: body),
+    return PopScope(
+      canPop: true,
+      // 离页方向收口(返回钮/系统返回手势/断连退页都经此):pop 起点
+      // 即发,不等 dispose —— 转场与转屏并发,相机页落地即竖。
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) _exitOrientationReset();
+      },
+      child: Scaffold(
+        backgroundColor: LiveDesign.of(context).background,
+        body: SafeArea(child: body),
+      ),
+    );
+  }
+
+  /// 离页方向收口(幂等):横锁期间离开监看页,把外壳还竖 —— 方向钮
+  /// 是监看页专属控件而 SystemChrome 全局生效,不还的话相机页/设置页
+  /// 跟着横(2026-10-08 真机反馈)。锁态一并复位 portrait:每次进页
+  /// 从竖起步、点按直切横竖(无白点一击)。发的是具体方向 portraitUp,
+  /// **不是空表 All mask**(空表 iOS 按物理姿态闪转,2026-10-08 定案
+  /// 永不发);portrait/auto 锁离页无需动作(本就全局竖)。
+  void _exitOrientationReset() {
+    if (controller.orientationLock.value != OrientationLock.landscape) {
+      return;
+    }
+    controller.orientationLock.value = OrientationLock.portrait;
+    unawaited(
+      SystemChrome.setPreferredOrientations(
+              const [DeviceOrientation.portraitUp])
+          .catchError((Object _) {}),
     );
   }
 
@@ -344,7 +407,8 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   /// 屏向取反,首击必翻转、所见即所得。**永不发空表** —— 空表在 iOS 是
   /// All mask,requestGeometryUpdate 会按手机物理姿态重选方向、再被弹回
   /// (2026-10-08 真机日志定案:竖→横→竖双旋闪屏 + 白点一击),故按钮
-  /// 不设「回跟随系统」路径(2026-10-08 用户明示取消长按)。
+  /// 不设「回跟随系统」路径(2026-10-08 用户明示取消长按)。横锁离页由
+  /// [_exitOrientationReset] 还竖复位(锁态回 portrait,不发空表)。
   void _cycleOrientationLock() {
     final current = controller.orientationLock.value;
     final screenLandscape =

@@ -97,11 +97,13 @@ final class AfBox {
 
 /// 应用内方向锁(拍摄页方向按钮):auto 跟随系统(仅初始态);landscape/
 /// portrait 经 SystemChrome.setPreferredOrientations 强制(系统转屏锁
-/// 开着也能切)。会话级挂控制器(app 常驻):跨页面重建/换 tab 存活,
-/// 进程退出自然回 auto。**点按只在横/竖锁间直切,不设回 auto 路径**
-/// (长按已按用户要求取消,2026-10-08)—— 空表在 iOS 是 All mask,会让
-/// 系统按手机物理姿态重选方向(旋转锁开着时闪一圈,2026-10-08 真机
-/// 日志定案),不能放进点按循环。
+/// 开着也能切)。挂在常驻控制器上:页面重建不丢;但**离页即还竖**
+/// (RemotePage._exitOrientationReset:横锁是监看页专属,SystemChrome
+/// 却全局生效;锁态复位 portrait,再进从竖起步 —— 2026-10-08 真机
+/// 反馈改制)。**点按只在横/竖锁间直切,不设回 auto 路径**(长按已按
+/// 用户要求取消,2026-10-08)—— 空表在 iOS 是 All mask,会让系统按
+/// 手机物理姿态重选方向(旋转锁开着时闪一圈,2026-10-08 真机日志
+/// 定案),不能放进点按循环。
 enum OrientationLock { auto, landscape, portrait }
 
 final class RemoteController extends ChangeNotifier {
