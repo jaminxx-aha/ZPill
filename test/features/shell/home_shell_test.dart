@@ -128,7 +128,8 @@ Uint8List _rawValueBytes(PtpDataType type, int value) {
 }
 
 /// 目录序参数应答表(与 remote_controller_test 同款:模式 M · f/2.8 ·
-/// 1/100s · ISO 200 …,均可写;[drive] 释放档)。
+/// 1/100s · ISO 200 …,均可写;[drive] 释放档)。[fNumber] 可覆写 ——
+/// push 流测试用它区分「进页对表」刷的是第二遍脚本。
 typedef _ParamSpec = ({
   int code,
   PtpDataType type,
@@ -167,15 +168,16 @@ const _kVendorReadValues = <int, int>{
 /// 目录序全量应答(与 remote_controller_test._scriptParams 同款:
 /// PropDesc(取值域直供表参数跳过)+ 值回读(路由参数读厂商码裸值)
 /// + 末尾自动 ISO 状态与剩余张数)。
-void _scriptParams(_ScriptTransport t) {
+void _scriptParams(_ScriptTransport t, {int fNumber = 280}) {
   for (final s in _kParamSpecs) {
     final param = shootingParamByCode[s.code]!;
+    final value = s.code == PtpDevicePropCode.fNumber ? fNumber : s.value;
     if (param.pickValues == null) {
-      t.ok(data: _propDescDataset(s.code, s.type, s.value, enums: s.enums));
+      t.ok(data: _propDescDataset(s.code, s.type, value, enums: s.enums));
     } else if (_kVendorReadValues[s.code] == null) {
       // 取值域直供参数:不读 desc,值走裸读 —— 裸值应答(有厂商读码
       // 路由的由下方 vendor 应答覆盖)
-      t.ok(data: _rawValueBytes(s.type, s.value));
+      t.ok(data: _rawValueBytes(s.type, value));
     }
     final vendor = _kVendorReadValues[s.code];
     if (vendor != null) {
@@ -208,12 +210,39 @@ Finder _navTab(String label) => find.descendant(
 Finder _railTab(String label) => find.descendant(
     of: find.byType(NavigationRail), matching: find.text(label));
 
-/// 拍摄页内匹配(IndexedStack 常驻其他 tab,offstage 页也在树里)。
+/// 拍摄页内匹配(路由覆盖下相机页仍在树里,收窄到拍摄页)。
 Finder _inRemotePage(Finder f) =>
     find.descendant(of: find.byType(RemotePage), matching: f);
 
 int _selectedIndex(WidgetTester tester) =>
     tester.widget<NavigationBar>(find.byType(NavigationBar)).selectedIndex;
+
+/// 三 tab 外壳 + 拍摄页 push 流的公共脚手架:假连接 + 脚本化遥控
+/// 控制器(引擎 delay 挂起:首帧后轮询驻停,测试不发无脚本的取帧)。
+typedef _Fakes = ({
+  _ScriptTransport transport,
+  _FakeConnection conn,
+  ConnectionController connCtrl,
+  RemoteController remote,
+});
+
+_Fakes _fakes() {
+  final transport = _ScriptTransport();
+  final conn = _FakeConnection();
+  final connCtrl = ConnectionController(connection: conn);
+  final remote = RemoteController(
+      session: PtpSession(transport: transport),
+      connection: conn,
+      engine: LiveViewEngine(
+          session: PtpSession(transport: transport), delay: _parkedDelay),
+      delay: _parkedDelay);
+  return (
+    transport: transport,
+    conn: conn,
+    connCtrl: connCtrl,
+    remote: remote,
+  );
+}
 
 void main() {
   testWidgets('连接转正沿:不切 tab、连接即取景;切 tab 不停取景'
@@ -222,49 +251,40 @@ void main() {
       ..physicalSize = const Size(800, 2400)
       ..devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
-    final transport = _ScriptTransport();
-    final conn = _FakeConnection();
-    final connCtrl = ConnectionController(connection: conn);
-    addTearDown(connCtrl.dispose);
-    final controller = RemoteController(
-        session: PtpSession(transport: transport),
-        connection: conn,
-        // 引擎 delay 挂起:首帧后轮询驻停,测试不发无脚本的取帧。
-        engine: LiveViewEngine(
-            session: PtpSession(transport: transport), delay: _parkedDelay),
-        delay: _parkedDelay);
-    addTearDown(controller.dispose);
+    final f = _fakes();
+    addTearDown(f.connCtrl.dispose);
+    addTearDown(f.remote.dispose);
 
-    _scriptParams(transport); // connected → 控制器沿参数刷新(FIFO 道)
-    transport
+    _scriptParams(f.transport); // connected → 控制器沿参数刷新(FIFO 道)
+    f.transport
       ..okFor(NikonOperationCode.startLiveView) // 0x9201 连接即取景(引擎道)
       ..okFor(NikonOperationCode.getLiveViewImageEx,
           data: _realJpeg()); // 首帧 0x9428(轮询首拍,此后 delay 挂起)
     await tester.pumpWidget(MaterialApp(
         home: HomeShell(
-            connectionController: connCtrl, remoteController: controller)));
+            connectionController: f.connCtrl, remoteController: f.remote)));
     await tester.pumpAndSettle();
     expect(_selectedIndex(tester), 0, reason: '初始在相机 tab');
 
     // 连接转正(有线/无线同一状态机):留在原 tab,相机侧照进取景。
-    conn.statesCtrl.add(CameraLinkState.connected);
+    f.conn.statesCtrl.add(CameraLinkState.connected);
     await tester.pumpAndSettle();
-    expect(_selectedIndex(tester), 0, reason: '不切 tab(2026-10-07 用户明示)');
-    expect(controller.liveViewActive, isTrue,
-        reason: '连接即取景:拍摄页不可见不影响 0x9201');
+    expect(_selectedIndex(tester), 0,
+        reason: '不切 tab(2026-10-07 用户明示;进拍摄页由用户点击)');
+    expect(f.remote.liveViewActive, isTrue,
+        reason: '连接即取景:拍摄页未挂载不影响 0x9201');
     expect(
-        transport.requests
+        f.transport.requests
             .where((r) => r.opcode == NikonOperationCode.startLiveView),
         hasLength(1));
 
-    // 切到拍摄 tab:回台对表刷参数,取景保持(不发 0x9202)。
-    _scriptParams(transport);
-    await tester.tap(_navTab('拍摄'));
+    // 切到图库 tab:取景保持(不发 0x9202)。
+    await tester.tap(_navTab('图库'));
     await tester.pumpAndSettle();
     expect(_selectedIndex(tester), 1);
-    expect(controller.liveViewActive, isTrue, reason: '取景不因切台停');
+    expect(f.remote.liveViewActive, isTrue, reason: '取景不因切台停');
     expect(
-        transport.requests
+        f.transport.requests
             .where((r) => r.opcode == NikonOperationCode.endLiveView),
         isEmpty,
         reason: '切台只挂起帧轮询,取景生命周期跟连接走');
@@ -273,31 +293,31 @@ void main() {
     await tester.tap(_navTab('相机'));
     await tester.pumpAndSettle();
     expect(_selectedIndex(tester), 0);
-    expect(controller.liveViewActive, isTrue);
+    expect(f.remote.liveViewActive, isTrue);
     expect(
-        transport.requests
+        f.transport.requests
             .where((r) => r.opcode == NikonOperationCode.endLiveView),
         isEmpty);
 
     // 重复 connected(状态未离开的重复通知):不重复取景(已运行幂等),
     // 控制器沿照常再刷一遍参数。
-    _scriptParams(transport);
-    conn.statesCtrl.add(CameraLinkState.connected);
+    _scriptParams(f.transport);
+    f.conn.statesCtrl.add(CameraLinkState.connected);
     await tester.pumpAndSettle();
     expect(_selectedIndex(tester), 0, reason: '重复 connected 沿不切 tab');
     expect(
-        transport.requests
+        f.transport.requests
             .where((r) => r.opcode == NikonOperationCode.startLiveView),
         hasLength(1),
         reason: '连接即取景每次连接只一次(已运行直通)');
 
     // 断连:取景随连接收口(0x9202 只在断连或用户显式关时发)。
-    transport.okFor(NikonOperationCode.endLiveView); // 0x9202(引擎道)
-    conn.statesCtrl.add(CameraLinkState.disconnected);
+    f.transport.okFor(NikonOperationCode.endLiveView); // 0x9202(引擎道)
+    f.conn.statesCtrl.add(CameraLinkState.disconnected);
     await tester.pumpAndSettle();
-    expect(controller.liveViewActive, isFalse);
+    expect(f.remote.liveViewActive, isFalse);
     expect(
-        transport.requests
+        f.transport.requests
             .where((r) => r.opcode == NikonOperationCode.endLiveView),
         hasLength(1));
   });
@@ -308,74 +328,221 @@ void main() {
       ..physicalSize = const Size(800, 2400)
       ..devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
-    final transport = _ScriptTransport();
-    final conn = _FakeConnection();
-    final connCtrl = ConnectionController(connection: conn);
-    addTearDown(connCtrl.dispose);
-    final controller = RemoteController(
-        session: PtpSession(transport: transport),
-        connection: conn,
-        engine: LiveViewEngine(
-            session: PtpSession(transport: transport), delay: _parkedDelay),
-        delay: _parkedDelay);
-    addTearDown(controller.dispose);
+    final f = _fakes();
+    addTearDown(f.connCtrl.dispose);
+    addTearDown(f.remote.dispose);
 
-    _scriptParams(transport); // connected → 控制器沿参数刷新(照常,FIFO 道)
+    _scriptParams(f.transport); // connected → 控制器沿参数刷新(照常,FIFO 道)
     await tester.pumpWidget(MaterialApp(
         home: HomeShell(
-            connectionController: connCtrl, remoteController: controller)));
+            connectionController: f.connCtrl, remoteController: f.remote)));
     await tester.pumpAndSettle();
     await tester.tap(_navTab('图库'));
     await tester.pumpAndSettle();
-    expect(_selectedIndex(tester), 2);
+    expect(_selectedIndex(tester), 1);
 
-    transport
+    f.transport
       ..okFor(NikonOperationCode.startLiveView) // 0x9201(引擎道)
       ..okFor(NikonOperationCode.getLiveViewImageEx,
           data: _realJpeg()); // 首帧(引擎道)
-    conn.statesCtrl.add(CameraLinkState.connected);
+    f.conn.statesCtrl.add(CameraLinkState.connected);
     await tester.pumpAndSettle();
-    expect(_selectedIndex(tester), 2, reason: '不把浏览中的用户拽走');
-    expect(controller.liveViewActive, isTrue,
+    expect(_selectedIndex(tester), 1, reason: '不把浏览中的用户拽走');
+    expect(f.remote.liveViewActive, isTrue,
         reason: '连接即取景与页面无关:0x9201 照发,相机侧进及时取景');
     expect(
-        transport.requests
+        f.transport.requests
             .where((r) => r.opcode == NikonOperationCode.startLiveView),
         hasLength(1));
     expect(
-        transport.requests
+        f.transport.requests
             .where((r) => r.opcode == NikonOperationCode.endLiveView),
         isEmpty,
-        reason: '不可见只挂起帧轮询');
+        reason: '拍摄页未挂载只挂起帧轮询');
     // 帧轮询挂起:首帧之后零取帧(delay 挂起,不再耗脚本)。
     expect(
-        transport.requests
+        f.transport.requests
             .where((r) => r.opcode == NikonOperationCode.getLiveViewImageEx),
         hasLength(1),
-        reason: '页面不可见:只取首帧即挂起');
+        reason: '拍摄页未挂载:只取首帧即挂起');
   });
 
-  testWidgets('横屏外壳:底栏换左侧 NavigationRail,拍摄 tab 切换照常',
+  testWidgets('拍摄页 push 流:相机页「进入拍摄」→ 全屏路由;进页对表、'
+      '返回挂起帧轮询、取景不停', (tester) async {
+    tester.view
+      ..physicalSize = const Size(800, 2400)
+      ..devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    final f = _fakes();
+    addTearDown(f.connCtrl.dispose);
+    addTearDown(f.remote.dispose);
+
+    _scriptParams(f.transport); // connected → 控制器沿参数刷新(FIFO 道)
+    f.transport
+      ..okFor(NikonOperationCode.startLiveView) // 0x9201 连接即取景(引擎道)
+      ..okFor(NikonOperationCode.getLiveViewImageEx,
+          data: _realJpeg()); // 首帧(引擎道)
+    await tester.pumpWidget(MaterialApp(
+        home: HomeShell(
+            connectionController: f.connCtrl, remoteController: f.remote)));
+    await tester.pumpAndSettle();
+    f.conn.statesCtrl.add(CameraLinkState.connected);
+    await tester.pumpAndSettle();
+    expect(f.remote.liveViewActive, isTrue);
+
+    // 相机页已连接视图:主操作「进入拍摄」在场(状态卡正下方)。
+    expect(find.text('进入拍摄'), findsOneWidget);
+
+    // 进页对表:initState 刷第二遍参数脚本(值改 320 以证明确实刷了)。
+    _scriptParams(f.transport, fNumber: 320);
+    await tester.tap(find.text('进入拍摄'));
+    await tester.pumpAndSettle();
+    expect(find.byType(RemotePage), findsOneWidget, reason: '全屏路由上场');
+    expect(_inRemotePage(find.byIcon(Icons.arrow_back)), findsOneWidget,
+        reason: '路由态信息胶囊带返回钮');
+    expect(f.remote.exposure?.fNumber, 320,
+        reason: '进页对表刷参数(原 tab 模式「回台对表」沿移到 initState)');
+    expect(f.remote.liveViewActive, isTrue);
+
+    // 返回:pop 回相机页,只挂起帧轮询(不发 0x9202)。
+    await tester.tap(_inRemotePage(find.byIcon(Icons.arrow_back)));
+    await tester.pumpAndSettle();
+    expect(find.byType(RemotePage), findsNothing, reason: '返回即回相机页');
+    expect(find.text('进入拍摄'), findsOneWidget, reason: '相机页回来了');
+    expect(f.remote.liveViewActive, isTrue, reason: '取景不因离页停');
+    expect(
+        f.transport.requests
+            .where((r) => r.opcode == NikonOperationCode.endLiveView),
+        isEmpty,
+        reason: '离页只挂起帧轮询,取景生命周期跟连接走');
+  });
+
+  testWidgets('横锁离页还竖:返回相机页回竖屏,锁态复位、再进从竖起步'
+      '(portraitUp 具体方向,永不发空表)', (tester) async {
+    final calls = <MethodCall>[];
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        (call) async {
+          calls.add(call);
+          return null;
+        });
+    addTearDown(() => tester.binding.defaultBinaryMessenger
+        .setMockMethodCallHandler(SystemChannels.platform, null));
+
+    tester.view
+      ..physicalSize = const Size(800, 2400)
+      ..devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    final f = _fakes();
+    addTearDown(f.connCtrl.dispose);
+    addTearDown(f.remote.dispose);
+
+    _scriptParams(f.transport);
+    f.transport
+      ..okFor(NikonOperationCode.startLiveView)
+      ..okFor(NikonOperationCode.getLiveViewImageEx, data: _realJpeg());
+    await tester.pumpWidget(MaterialApp(
+        home: HomeShell(
+            connectionController: f.connCtrl, remoteController: f.remote)));
+    await tester.pumpAndSettle();
+    f.conn.statesCtrl.add(CameraLinkState.connected);
+    await tester.pumpAndSettle();
+
+    _scriptParams(f.transport); // 进页对表
+    await tester.tap(find.text('进入拍摄'));
+    await tester.pumpAndSettle();
+
+    List<MethodCall> orientationCalls() => [
+          for (final c in calls)
+            if (c.method == 'SystemChrome.setPreferredOrientations') c,
+        ];
+
+    // 点方向钮:auto(竖屏)→ 锁横
+    await tester.tap(_inRemotePage(find.byIcon(Icons.screen_rotation)));
+    await tester.pumpAndSettle();
+    expect(f.remote.orientationLock.value, OrientationLock.landscape);
+    expect(
+        orientationCalls().last.arguments,
+        ['DeviceOrientation.landscapeLeft', 'DeviceOrientation.landscapeRight']);
+
+    // 返回:离页收口 —— 外壳还竖(具体方向 portraitUp,非空表 All
+    // mask);锁态复位 portrait(方向钮是监看页专属,SystemChrome 全局)。
+    await tester.tap(_inRemotePage(find.byIcon(Icons.arrow_back)));
+    await tester.pumpAndSettle();
+    expect(find.byType(RemotePage), findsNothing);
+    expect(find.text('进入拍摄'), findsOneWidget, reason: '回相机页');
+    expect(f.remote.orientationLock.value, OrientationLock.portrait,
+        reason: '锁态复位:再进从竖起步');
+    expect(orientationCalls().last.arguments, ['DeviceOrientation.portraitUp'],
+        reason: '横锁还竖发具体方向,永不发空表');
+
+    // 再进:从竖起步(零新方向消息),点按直切横(portrait→landscape,
+    // 不绕 auto,无白点一击)。
+    _scriptParams(f.transport); // 进页对表
+    await tester.tap(find.text('进入拍摄'));
+    await tester.pumpAndSettle();
+    expect(orientationCalls(), hasLength(2),
+        reason: '进页不自动转屏(锁已复位 portrait)');
+    await tester.tap(_inRemotePage(find.byIcon(Icons.screen_rotation)));
+    await tester.pumpAndSettle();
+    expect(orientationCalls(), hasLength(3));
+    expect(
+        orientationCalls().last.arguments,
+        ['DeviceOrientation.landscapeLeft', 'DeviceOrientation.landscapeRight']);
+  });
+
+  testWidgets('断连自动退页:监看中断连 pop 回相机页(连接方式视图,'
+      '重连入口在彼)', (tester) async {
+    tester.view
+      ..physicalSize = const Size(800, 2400)
+      ..devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    final f = _fakes();
+    addTearDown(f.connCtrl.dispose);
+    addTearDown(f.remote.dispose);
+
+    _scriptParams(f.transport);
+    f.transport
+      ..okFor(NikonOperationCode.startLiveView)
+      ..okFor(NikonOperationCode.getLiveViewImageEx, data: _realJpeg());
+    await tester.pumpWidget(MaterialApp(
+        home: HomeShell(
+            connectionController: f.connCtrl, remoteController: f.remote)));
+    await tester.pumpAndSettle();
+    f.conn.statesCtrl.add(CameraLinkState.connected);
+    await tester.pumpAndSettle();
+
+    _scriptParams(f.transport); // 进页对表
+    await tester.tap(find.text('进入拍摄'));
+    await tester.pumpAndSettle();
+    expect(find.byType(RemotePage), findsOneWidget);
+    expect(f.remote.liveViewActive, isTrue);
+
+    // 断连(拔线/掉网):取景随连接收口(0x9202),页面自动退回
+    // 相机页 —— 链路没了监看页无从看,重连入口在相机页。
+    f.transport.okFor(NikonOperationCode.endLiveView);
+    f.conn.statesCtrl.add(CameraLinkState.disconnected);
+    await tester.pumpAndSettle();
+    expect(f.remote.liveViewActive, isFalse);
+    expect(find.byType(RemotePage), findsNothing, reason: '断连即退页');
+    expect(find.text('USB 连接'), findsOneWidget,
+        reason: '相机页回连接方式视图(默认有线)');
+    expect(find.text('进入拍摄'), findsNothing, reason: '入口随断连消失');
+  });
+
+  testWidgets('横屏外壳:底栏换左侧 NavigationRail,tab 切换照常(三 tab)',
       (tester) async {
     tester.view
       ..physicalSize = const Size(2400, 800)
       ..devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
-    final transport = _ScriptTransport();
-    final conn = _FakeConnection();
-    final connCtrl = ConnectionController(connection: conn);
-    addTearDown(connCtrl.dispose);
-    final controller = RemoteController(
-        session: PtpSession(transport: transport),
-        connection: conn,
-        engine: LiveViewEngine(
-            session: PtpSession(transport: transport), delay: _parkedDelay),
-        delay: _parkedDelay);
-    addTearDown(controller.dispose);
+    final f = _fakes();
+    addTearDown(f.connCtrl.dispose);
+    addTearDown(f.remote.dispose);
 
     await tester.pumpWidget(MaterialApp(
         home: HomeShell(
-            connectionController: connCtrl, remoteController: controller)));
+            connectionController: f.connCtrl, remoteController: f.remote)));
     await tester.pumpAndSettle();
     expect(find.byType(NavigationRail), findsOneWidget, reason: '横屏换 rail');
     expect(find.byType(NavigationBar), findsNothing,
@@ -387,51 +554,41 @@ void main() {
         0,
         reason: '初始在相机 tab');
 
-    // 切拍摄 tab:回台对表刷参数(active 沿;linkUp 乐观态即发)。
-    _scriptParams(transport);
-    await tester.tap(_railTab('拍摄'));
+    await tester.tap(_railTab('图库'));
     await tester.pumpAndSettle();
     expect(
         tester
             .widget<NavigationRail>(find.byType(NavigationRail))
             .selectedIndex,
-        1);
-    expect(controller.exposure?.fNumber, 280, reason: 'rail 切台照常刷参数');
+        1,
+        reason: 'rail 切台照常');
   });
 
-  testWidgets('竖→横旋转:拍摄页状态全程保留(网格在、取景不重启)'
-      '—— key 保 IndexedStack', (tester) async {
+  testWidgets('竖→横旋转:拍摄页状态全程保留(网格在、取景不重启)',
+      (tester) async {
     tester.view
       ..physicalSize = const Size(800, 2400)
       ..devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
-    final transport = _ScriptTransport();
-    final conn = _FakeConnection();
-    final connCtrl = ConnectionController(connection: conn);
-    addTearDown(connCtrl.dispose);
-    final controller = RemoteController(
-        session: PtpSession(transport: transport),
-        connection: conn,
-        engine: LiveViewEngine(
-            session: PtpSession(transport: transport), delay: _parkedDelay),
-        delay: _parkedDelay);
-    addTearDown(controller.dispose);
+    final f = _fakes();
+    addTearDown(f.connCtrl.dispose);
+    addTearDown(f.remote.dispose);
 
-    _scriptParams(transport); // connected → 控制器沿参数刷新(FIFO 道)
-    transport
+    _scriptParams(f.transport); // connected → 控制器沿参数刷新(FIFO 道)
+    f.transport
       ..okFor(NikonOperationCode.startLiveView) // 0x9201 连接即取景(引擎道)
       ..okFor(NikonOperationCode.getLiveViewImageEx,
           data: _realJpeg()); // 首帧(引擎道,此后 delay 挂起)
     await tester.pumpWidget(MaterialApp(
         home: HomeShell(
-            connectionController: connCtrl, remoteController: controller)));
+            connectionController: f.connCtrl, remoteController: f.remote)));
     await tester.pumpAndSettle();
-    conn.statesCtrl.add(CameraLinkState.connected);
+    f.conn.statesCtrl.add(CameraLinkState.connected);
     await tester.pumpAndSettle();
-    expect(controller.liveViewActive, isTrue);
+    expect(f.remote.liveViewActive, isTrue);
 
-    _scriptParams(transport); // 回台对表刷参数
-    await tester.tap(_navTab('拍摄'));
+    _scriptParams(f.transport); // 进页对表
+    await tester.tap(find.text('进入拍摄'));
     await tester.pumpAndSettle();
     // 开网格(页面 State)—— 旋转后此开关必须还在
     await tester.tap(_inRemotePage(find.byIcon(Icons.grid_on)));
@@ -440,17 +597,16 @@ void main() {
     expect(_inRemotePage(find.byType(Image)), findsOneWidget,
         reason: '首帧在屏');
 
-    // 旋转到横屏:底栏换 rail,页面 State 全程保留
+    // 旋转到横屏:页面 State 全程保留(拍摄页是独立路由,不随外壳
+    // 横竖切换重排;网格开关/帧不动)
     tester.view.physicalSize = const Size(2400, 800);
     await tester.pumpAndSettle();
-    expect(find.byType(NavigationRail), findsOneWidget, reason: '横屏 rail 接班');
-    expect(find.byType(NavigationBar), findsNothing);
     expect(_inRemotePage(find.byType(GridOverlay)), findsOneWidget,
-        reason: '网格开关跨旋转保留(无 key 会整树重建丢 State)');
+        reason: '网格开关跨旋转保留');
     expect(_inRemotePage(find.byType(Image)), findsOneWidget, reason: '帧不丢');
-    expect(controller.liveViewActive, isTrue);
+    expect(f.remote.liveViewActive, isTrue);
     expect(
-        transport.requests
+        f.transport.requests
             .where((r) => r.opcode == NikonOperationCode.startLiveView),
         hasLength(1),
         reason: '旋转不重启取景');
@@ -473,23 +629,24 @@ void main() {
       ..physicalSize = const Size(800, 2400)
       ..devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
-    final transport = _ScriptTransport();
-    final conn = _FakeConnection();
-    final connCtrl = ConnectionController(connection: conn);
-    addTearDown(connCtrl.dispose);
-    final controller = RemoteController(
-        session: PtpSession(transport: transport),
-        connection: conn,
-        engine: LiveViewEngine(
-            session: PtpSession(transport: transport), delay: _parkedDelay),
-        delay: _parkedDelay);
-    addTearDown(controller.dispose);
+    final f = _fakes();
+    addTearDown(f.connCtrl.dispose);
+    addTearDown(f.remote.dispose);
 
+    _scriptParams(f.transport); // connected → 控制器沿参数刷新(FIFO 道)
+    f.transport
+      ..okFor(NikonOperationCode.startLiveView) // 0x9201(引擎道)
+      ..okFor(NikonOperationCode.getLiveViewImageEx,
+          data: _realJpeg()); // 首帧(引擎道)
     await tester.pumpWidget(MaterialApp(
         home: HomeShell(
-            connectionController: connCtrl, remoteController: controller)));
-    _scriptParams(transport); // 回台对表刷参数(active 沿)
-    await tester.tap(_navTab('拍摄'));
+            connectionController: f.connCtrl, remoteController: f.remote)));
+    await tester.pumpAndSettle();
+    f.conn.statesCtrl.add(CameraLinkState.connected);
+    await tester.pumpAndSettle();
+
+    _scriptParams(f.transport); // 进页对表
+    await tester.tap(find.text('进入拍摄'));
     await tester.pumpAndSettle();
 
     List<MethodCall> orientationCalls() => [
@@ -519,8 +676,9 @@ void main() {
     tester.view.physicalSize = const Size(800, 2400);
     await tester.pumpAndSettle();
 
-    // 旋转后:锁仍竖,且旋转全程零多余消息 —— 锁挂控制器(会话级),
-    // 页面 State 回收不复位、不补发 auto(闪屏元凶)。
+    // 旋转后:锁仍竖,且旋转全程零多余消息 —— 锁挂控制器,页面重建
+    // 不丢、不补发 auto(闪屏元凶);横锁的离页还竖是另一条沿(见
+    // 「横锁离页还竖」测试),本测不离开页面。
     expect(orientationCalls(), hasLength(2),
         reason: '旋转不得触发复位消息(auto 空表会让真机按物理姿态闪转)');
 

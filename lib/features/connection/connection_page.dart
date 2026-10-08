@@ -2,7 +2,9 @@
 ///
 /// 未连接:连接方式分段切换(有线 USB / AP 热点 / 同一 Wi-Fi)——
 /// 切到哪种方式,下方只出该方式的连接卡;已连接:信息卡组(连接/
-/// 机身/镜头/存储卡)+「相册」入口 +「断开连接」。
+/// 机身/镜头/存储卡)+「进入拍摄」(主操作,全屏 push 遥控监看页 ——
+/// 2026-10-08 拍摄页从底栏 tab 改制,置状态卡正下方不滚动即可见)
+/// +「相册」入口 +「断开连接」。
 ///
 /// Controller = ViewModel(ChangeNotifier);**所有按钮必须绑定到
 /// Controller 方法**,禁止 UI 层直连协议层(TODO.md §三 注意事项)。
@@ -25,6 +27,8 @@ import '../../design/app_dimens.dart';
 import '../../platform/nsd_scanner.dart';
 import '../browser/photo_grid_page.dart';
 import '../common/widgets/confirm_dialog.dart';
+import '../remote/remote_controller.dart';
+import '../remote/remote_page.dart';
 import 'camera_overview_controller.dart';
 import 'connection_status_card.dart';
 
@@ -322,13 +326,22 @@ class ConnectionController extends ChangeNotifier {
 }
 
 class ConnectionPage extends StatefulWidget {
-  const ConnectionPage({super.key, this.controller, this.overview});
+  const ConnectionPage({
+    super.key,
+    this.controller,
+    this.overview,
+    this.remoteController,
+  });
 
   /// 测试注入;缺省取应用级单例(连接是全局单例状态)。
   final ConnectionController? controller;
 
   /// 测试注入;缺省取应用级单例。
   final CameraOverviewController? overview;
+
+  /// 测试注入(「进入拍摄」push 的拍摄页控制器);缺省取应用级单例。
+  /// 懒取 —— 只在点「进入拍摄」时解析,不点不实例化 AppServices。
+  final RemoteController? remoteController;
 
   @override
   State<ConnectionPage> createState() => _ConnectionPageState();
@@ -341,6 +354,9 @@ class _ConnectionPageState extends State<ConnectionPage>
 
   CameraOverviewController get _overview =>
       widget.overview ?? AppServices.instance.cameraOverview;
+
+  RemoteController get _remote =>
+      widget.remoteController ?? AppServices.instance.remoteController;
 
   /// 无感配对哨兵:进 pairing 态自动确认一次(state 离开即复位,
   /// 防多次 notify 重复触发)。
@@ -730,6 +746,18 @@ class _ConnectionPageState extends State<ConnectionPage>
         children: [
           ConnectionStatusCard(state: controller.state),
           const SizedBox(height: AppSpacing.md),
+          // 主操作:进入拍摄(遥控监看)。连上后第一动作,置状态卡
+          // 正下方不滚动即可见;全屏 push,底栏不占监看画面,拍摄页
+          // 自带返回钮。
+          SizedBox(
+            height: 48,
+            child: FilledButton.icon(
+              onPressed: _openRemote,
+              icon: const Icon(Icons.camera),
+              label: const Text('进入拍摄'),
+            ),
+          ),
+          const SizedBox(height: AppSpacing.md),
           _linkCard(context, controller),
           const SizedBox(height: AppSpacing.md),
           _bodyCard(context),
@@ -740,7 +768,7 @@ class _ConnectionPageState extends State<ConnectionPage>
           const SizedBox(height: AppSpacing.lg),
           SizedBox(
             height: 48,
-            child: FilledButton.icon(
+            child: FilledButton.tonalIcon(
               onPressed: _openAlbum,
               icon: const Icon(Icons.photo_library_outlined),
               label: const Text('相册'),
@@ -856,6 +884,16 @@ class _ConnectionPageState extends State<ConnectionPage>
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  /// 进入拍摄:全屏 push 遥控监看页(返回即回相机页;拍摄页离页自动
+  /// 挂起帧轮询,取景生命周期跟连接走,相机侧保持取景)。
+  void _openRemote() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => RemotePage(controller: _remote),
       ),
     );
   }

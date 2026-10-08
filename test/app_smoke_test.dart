@@ -26,29 +26,9 @@ void main() {
     expect(find.text('扫描相机'), findsNothing);
   });
 
-  testWidgets('拍摄 tab:取景/快门/参数芯片就位', (tester) async {
-    await boot(tester);
-
-    // 未连接时 linkUp 门闩默认放行(RemoteController 冷启乐观态),
-    // 断连横幅不显示 —— 以取景/快门/参数控件在场为冒烟点。
-    await tester.tap(find.text('拍摄'));
-    await tester.pumpAndSettle();
-    expect(find.text('拍摄'), findsWidgets); // AppBar + tab
-    expect(find.text('取景'), findsOneWidget);
-    // 「快门」:读出条 tile 标签(新版监看界面无快门钮文案,钮为纯图形)
-    expect(find.text('快门'), findsOneWidget);
-    // 参数目录 tiles(未读值 = '--');读出条懒构建,
-    // 行尾 tiles(画质/对焦后拍)要滚到可见
-    expect(find.text('模式'), findsOneWidget);
-    expect(find.text('ISO'), findsOneWidget);
-    final chips = find.byWidgetPredicate(
-        (w) => w is Scrollable && w.axisDirection == AxisDirection.right);
-    await tester.scrollUntilVisible(find.text('画质'), 120, scrollable: chips);
-    await tester.scrollUntilVisible(
-        find.text('对焦后拍'), 120,
-        scrollable: chips);
-    expect(find.text('对焦后拍'), findsOneWidget);
-  });
+  // 拍摄页冒烟不在此列:2026-10-08 起拍摄页由相机页已连接视图
+  // 「进入拍摄」push 进入,真机无连接不可达;页面级渲染/控件就位
+  // 由 remote_page_test 直挂 RemotePage 覆盖。
 
   testWidgets('图库 tab:空态(非 ohos 环境静默)', (tester) async {
     await boot(tester);

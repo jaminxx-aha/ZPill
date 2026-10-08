@@ -3,8 +3,9 @@ import 'package:flutter/material.dart';
 import 'live_design.dart';
 import 'remote_controller.dart';
 
-/// 信息胶囊:链路点 + 设备名 + 剩余张数/REC 时长 + 接管徽标 + 方向钮
-/// (链路/设备状态随控制器,监听由外层 AnimatedBuilder 驱动)。
+/// 信息胶囊:返回钮(路由态)+ 链路点 + 设备名 + 剩余张数/REC 时长 +
+/// 接管徽标 + 方向钮(链路/设备状态随控制器,监听由外层 AnimatedBuilder
+/// 驱动)。
 ///
 /// [compact]:横屏顶栏态 —— 不占满宽(收缩包内容,顶栏中部透出
 /// 画面),徽标前用小间距代替 Spacer 撑开。
@@ -27,6 +28,10 @@ class RemoteInfoPill extends StatelessWidget {
     final live = LiveDesign.of(context);
     final linked = controller.linkUp;
     final name = controller.connection?.deviceName;
+    // 返回钮只在路由态出现:拍摄页从底栏 tab 改为相机页 push 进入
+    // (2026-10-08),页内无 AppBar,这里补返回入口;直挂首页/单测里
+    // canPop 为假则不占位(系统返回手势照常可用,这里只是显式入口)。
+    final canPop = Navigator.of(context).canPop();
     return Container(
       width: compact ? null : double.infinity,
       margin: margin ?? const EdgeInsets.fromLTRB(12, 8, 12, 4),
@@ -38,6 +43,10 @@ class RemoteInfoPill extends StatelessWidget {
       ),
       child: Row(
         children: [
+          if (canPop) ...[
+            _backButton(context, live),
+            const SizedBox(width: 2),
+          ],
           Icon(Icons.circle,
               size: 8, color: linked ? live.good : live.bad),
           const SizedBox(width: 8),
@@ -77,6 +86,21 @@ class RemoteInfoPill extends StatelessWidget {
           ],
           _orientationButton(live),
         ],
+      ),
+    );
+  }
+
+  /// 返回钮(行首,路由态):pop 回相机页。与方向钮同款胶囊内嵌
+  /// InkWell(34×30 触达、9 圆角)。
+  Widget _backButton(BuildContext context, LivePalette live) {
+    return InkWell(
+      onTap: () => Navigator.of(context).maybePop(),
+      customBorder:
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(9)),
+      child: SizedBox(
+        width: 34,
+        height: 30,
+        child: Icon(Icons.arrow_back, size: 18, color: live.muted),
       ),
     );
   }

@@ -4,7 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:nikon_pill/app.dart';
 
 void main() {
-  testWidgets('应用启动并渲染底部四 tab', (WidgetTester tester) async {
+  testWidgets('应用启动并渲染底部三 tab', (WidgetTester tester) async {
     // 加高视口:ListView 懒构建,折线下内容未 build 即不可断言。
     tester.view
       ..physicalSize = const Size(800, 2400)
@@ -13,13 +13,14 @@ void main() {
     await tester.pumpWidget(const NikonPillApp());
     await tester.pumpAndSettle();
 
-    // 底部导航四 tab:标签文本与页内 AppBar 标题可能重名,
-    // 故断言 NavigationBar 的四个目的地而非全局唯一文本。
+    // 底部导航三 tab(拍摄页 2026-10-08 改由相机页「进入拍摄」push
+    // 进入):标签文本与页内 AppBar 标题可能重名,故断言 NavigationBar
+    // 的目的地而非全局唯一文本。
     final nav = tester.widget<NavigationBar>(find.byType(NavigationBar));
     final labels = nav.destinations
         .map((d) => (d as NavigationDestination).label)
         .toList();
-    expect(labels, ['相机', '拍摄', '图库', '设置']);
+    expect(labels, ['相机', '图库', '设置']);
     // 初始 tab = 相机:连接方式分段切换 —— 默认有线,另两方式不占屏。
     expect(find.text('有线连接(USB)'), findsOneWidget);
     expect(find.text('USB 连接'), findsOneWidget);
