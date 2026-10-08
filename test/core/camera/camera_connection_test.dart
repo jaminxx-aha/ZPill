@@ -97,7 +97,7 @@ PtpIpFrame _frameOf(PtpIpPacket packet) {
 /// 同生产语义),经 createIpTransport 注入连接层。
 (CameraConnectionImpl, PtpLinkRouter, PtpSession, FakePtpIpChannel,
         FakePtpIpChannel, PtpIpTransport)
-    wireWireless(FakeUsbHostChannel usb) {
+    wireWireless(FakeUsbHostChannel usb, {Duration? connectBudget}) {
   final command = FakePtpIpChannel();
   final event = FakePtpIpChannel();
   final channels = <PtpIpChannel>[command, event];
@@ -114,6 +114,7 @@ PtpIpFrame _frameOf(PtpIpPacket packet) {
       link: link,
       session: session,
       createIpTransport: () async => ip,
+      wirelessConnectBudget: connectBudget,
     ),
     link,
     session,
@@ -618,6 +619,69 @@ void main() {
       await expectLater(
           link.execute(const PtpRequest(opcode: PtpOperationCode.getDeviceInfo)),
           throwsA(isA<PtpLinkDetachedException>()));
+    });
+
+    test('半哑相机(TCP 通但握手不答):总预算一次收口,不逐级等分步超时',
+        () async {
+      final usb = FakeUsbHostChannel(const []);
+      final command = FakePtpIpChannel();
+      final event = FakePtpIpChannel();
+      final pool = <PtpIpChannel>[command, event];
+      final link = PtpLinkRouter();
+      final conn = CameraConnectionImpl(
+        usb: usb,
+        usbTransport: FakePtpTransport(),
+        link: link,
+        session: PtpSession(transport: link),
+        createIpTransport: () async => PtpIpTransport(
+          createChannel: () => pool.removeAt(0),
+          // 分步超时 500ms > 总预算 30ms:证明收口来自总预算而非分步
+          transactionTimeout: const Duration(milliseconds: 500),
+        ),
+        wirelessConnectBudget: const Duration(milliseconds: 30),
+      );
+
+      // 不脚本化任何握手响应:TCP 即接、Init 之后死寂(真机人设:IP 可
+      // 达但相机 PTP-IP 栈不答 —— 分步超时逐级叠加单次尝试能拖 30s+,
+      // 2026-10-08 用户反馈「上次」连接很久才失败)
+      await conn.connect(ip: '192.168.1.1');
+
+      expect(conn.state, CameraLinkState.failed);
+      expect(conn.error, contains('连接 192.168.1.1 超时'));
+      expect(conn.error, contains('扫描相机'));
+      expect(conn.isWireless, isFalse); // 预算收口时链路未立成
+      expect(usb.closeCalls, 1);
+
+      // 僵尸续体(在途握手仍等自己的分步超时)稍后自行收口关双通道,
+      // 不留泄漏的 TCP
+      await Future<void>.delayed(const Duration(milliseconds: 600));
+      expect(command.closed, isTrue);
+      expect(event.closed, isTrue);
+    });
+
+    test('半哑相机之二(收下会话但 op 死寂):切应用模式同计总预算,'
+        '不挂满 15s 后带毒转 connected', () async {
+      final usb = FakeUsbHostChannel(const []);
+      final (conn, _, session, command, event, _) = wireWireless(usb,
+          connectBudget: const Duration(milliseconds: 30));
+
+      final connecting = conn.connect(ip: '192.168.1.1');
+      // 握手 + GetDeviceInfo + OpenSession 全应答(相机收得下会话),
+      // 之后 0x9435 一去不回 —— 真机人设:停在有线界面的相机对无线
+      // Init 不拒也不答 op
+      await scriptHandshakeAndOpen(command, event);
+      await connecting;
+
+      expect(conn.state, CameraLinkState.failed);
+      expect(conn.error, contains('连接 192.168.1.1 超时'));
+      // 确实走到了切应用模式这一步(不是握手期就死了)
+      final ladderOp = _codec.decode(command.sent.last);
+      expect(ladderOp, isA<OperationRequestPacket>()
+          .having((p) => p.opcode, 'opcode', NikonOperationCode.changeApplicationMode));
+      expect(session.isSessionOpen, isFalse); // teardown 已收口
+      expect(command.closed, isTrue); // 会话已立成,close 即刻关双通道
+      expect(event.closed, isTrue);
+      expect(usb.closeCalls, 1);
     });
   });
 

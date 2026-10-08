@@ -439,7 +439,8 @@ class _ConnectionPageState extends State<ConnectionPage>
             onRetry: controller.retry,
           ),
           // connecting 逃生口:输入框/按钮全禁用期间(死 IP 的 TCP 超时
-          // 最长 ~5s,握手阶段更长),用户得有取消手段,否则像「卡死」。
+          // 最长 ~3s,建链/开会话/切模式另有 10s 总预算),用户得有取
+          // 消手段,否则像「卡死」。
           if (controller.state == CameraLinkState.connecting)
             Padding(
               padding: const EdgeInsets.only(top: 8),

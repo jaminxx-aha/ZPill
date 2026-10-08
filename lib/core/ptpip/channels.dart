@@ -79,10 +79,13 @@ final class PtpIpFrameSplitter {
 
 /// 基于 dart:io Socket 的默认实现(薄壳:连接、帧切分、收发、关断)。
 ///
-/// 连接超时 5s —— IP 错/热点没开时 Darwin SYN 重试 ~75s,会把 UI 拖进
-/// 「无限 connecting」;超时抛 [SocketException],由上层转成用户指引。
+/// 连接超时 3s —— IP 错/热点没开/相机停有线界面时 Darwin SYN 重试
+/// ~75s,会把 UI 拖进「无限 connecting」;超时抛 [SocketException],
+/// 由上层转成用户指引。健康局域网相机 TCP 握手远低于 1s(含首连 ARP、
+/// Wi-Fi 省电唤醒),3s 已是 30 倍余量,只砍死地址(2026-10-08:原 5s
+/// 是「上次」连死 IP 要干等 5s 才报「连不上」的主因)。
 final class TcpPtpIpChannel implements PtpIpChannel {
-  TcpPtpIpChannel({this.connectTimeout = const Duration(seconds: 5)});
+  TcpPtpIpChannel({this.connectTimeout = const Duration(seconds: 3)});
 
   final Duration connectTimeout;
   Socket? _socket;

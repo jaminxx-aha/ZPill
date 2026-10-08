@@ -117,6 +117,7 @@ final class CameraConnectionImpl implements CameraConnection {
     Future<PtpIpTransport> Function()? createIpTransport,
     PairedCamerasStore? pairedCameras,
     List<Duration>? postPairingRetryDelays,
+    Duration? wirelessConnectBudget,
   })  : _usb = usb,
         _usbTransport = usbTransport,
         _link = link,
@@ -124,7 +125,9 @@ final class CameraConnectionImpl implements CameraConnection {
         _createIpTransport = createIpTransport ?? _defaultIpTransport,
         _pairedCameras = pairedCameras,
         _postPairingRetryDelays =
-            postPairingRetryDelays ?? _defaultPostPairingDelays {
+            postPairingRetryDelays ?? _defaultPostPairingDelays,
+        _wirelessConnectBudget =
+            wirelessConnectBudget ?? _defaultWirelessConnectBudget {
     // 断链事件只在 connected/pairing 态生效;connecting 态的失败由
     // connect() 自己的 catch 上报,failed/disconnected 已无会话可清。
     _usb.breakages.listen(_onLinkBreakage);
@@ -156,6 +159,18 @@ final class CameraConnectionImpl implements CameraConnection {
     const Duration(seconds: 2),
     ...List.filled(19, const Duration(seconds: 3)),
   ];
+
+  /// 无线连接总预算(测试注入短窗),覆盖建链+开会话(TCP 双通道握手 →
+  /// GetDeviceInfo → OpenSession)与切应用模式两段。分步超时是逐级叠加
+  /// 的:TCP 5s + 每步事务 15s,相机半哑(IP 通但 Init 不答、或收下会话
+  /// 却对 op 死寂)时单次尝试最坏 30s+ 才收口,且 op 死寂还会带毒转
+  /// connected(2026-10-08 用户反馈「上次」连接很久才失败)。健康链路
+  /// ~2s 走完全部阶段,10s 预算只砍哑巴链路,不碰慢而活的链路;会话内
+  /// 长事务(下载)有各自看门狗。
+  final Duration _wirelessConnectBudget;
+
+  /// 默认预算(见 [_wirelessConnectBudget] 注)。
+  static const Duration _defaultWirelessConnectBudget = Duration(seconds: 10);
 
   /// 当前无线链路实例(连接期间非 null);teardown 收尾后清空。
   PtpIpTransport? _wirelessTransport;
@@ -241,12 +256,11 @@ final class CameraConnectionImpl implements CameraConnection {
     try {
       // breakages 只在 connected/pairing 态生效,与 USB 同一入口;teardown 取消订阅
       _wirelessBreakageSub = transport.breakages.listen(_onLinkBreakage);
-      await transport.connect(ip);
-      _link.attach(transport);
+      // 建链+开会话整体计时(见 _wirelessConnectBudget):超时异常走
+      // _wirelessErrorMessage 的 Timeout 分支,按总预算一次收口。
+      final info = await _openWirelessLink(transport, ip)
+          .timeout(_wirelessConnectBudget);
       _wireless = true;
-      // 无线不做 USB 那道受限画像拦截(STA 的 9 op 小表是常态人设,见类注)
-      final info = await _session.getDeviceInfo(force: true);
-      await _session.open();
       _deviceName = info.model;
       if (await _needsPairing(info)) {
         switch (await _runPairing(info, ip, instanceName)) {
@@ -287,7 +301,11 @@ final class CameraConnectionImpl implements CameraConnection {
       }
       // 切应用模式(同 USB 路径;SnapBridge 方言握手本就含此步,
       // 我们补齐 —— OpenZCine 无线握手序列在 OpenSession 后必发)。
-      await _session.enableAppControl();
+      // 同计总预算:相机收下 Init/开完会话却对 op 死寂的半哑态,旧路径
+      // 0x9435 挂满 15s 看门狗后还会带毒转 connected(链路已毒、状态机
+      // 报连上,真机 2026-10-08「上次」连接很久的场景之一)—— 预算内
+      // 收不掉就按「连接超时」failed 收口。
+      await _session.enableAppControl().timeout(_wirelessConnectBudget);
       // 连接档案落账(不管相机侧配对是否完成):扫描出的 IP/展示名进
       // 快速重连列表 —— STA「连接至计算机」模式相机不答 0x952B,旧
       // 逻辑只配对成功才落账 → 该模式永远存不下来(2026-10-06 真机
@@ -312,6 +330,23 @@ final class CameraConnectionImpl implements CameraConnection {
       }
       await _failConnect('无线连接失败:$e');
     }
+  }
+
+  /// 无线建链 + 开会话阶段(TCP 双通道握手 → GetDeviceInfo →
+  /// OpenSession),由调用方按 [_wirelessConnectBudget] 整体计时。
+  ///
+  /// 内部不做状态转移:超时后本函数的迟到续体还会走完既有 await,若在
+  /// 此 _transition 会用过期结果覆盖已收口的 failed 态(成功路径的
+  /// 状态转移全在调用方;_link.attach 不转移状态,后续连接会重新
+  /// attach 覆盖,僵尸 attach 无害)。
+  Future<PtpDeviceInfo> _openWirelessLink(
+      PtpIpTransport transport, String ip) async {
+    await transport.connect(ip);
+    _link.attach(transport);
+    // 无线不做 USB 那道受限画像拦截(STA 的 9 op 小表是常态人设,见类注)
+    final info = await _session.getDeviceInfo(force: true);
+    await _session.open();
+    return info;
   }
 
   /// 配对子流程:GetPtpIpPairingCode → 等用户确认 → CompletePairing。
