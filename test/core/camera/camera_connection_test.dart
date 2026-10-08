@@ -721,7 +721,7 @@ void main() {
       // 档案:键 = GetDeviceInfo 序列号,展示名 = mDNS 实例名
       final saved = await paired.list();
       expect(saved, hasLength(1));
-      expect(saved.single.id, '012345678901');
+      expect(saved.single.id, '12345678901');
       expect(saved.single.name, 'Z_f_8014411');
       expect(saved.single.model, 'TestModel');
       expect(saved.single.lastIp, '192.168.0.104');
@@ -866,7 +866,7 @@ void main() {
       final usb = FakeUsbHostChannel(const []);
       final paired = InMemoryPairedCamerasStore();
       await paired.save(const CameraInfo(
-        id: '012345678901',
+        id: '12345678901',
         name: 'Z_f_8014411',
         model: 'TestModel',
         lastIp: '192.168.0.104',
@@ -914,7 +914,7 @@ void main() {
       // 可用),但 wirelessPaired=false —— 下次连接仍问配对,不误记。
       final saved = await paired.list();
       expect(saved, hasLength(1));
-      expect(saved.single.id, '012345678901');
+      expect(saved.single.id, '12345678901');
       expect(saved.single.lastIp, '192.168.1.1');
       expect(saved.single.wirelessPaired, isFalse);
 

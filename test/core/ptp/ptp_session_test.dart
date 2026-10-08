@@ -102,11 +102,13 @@ final class LockProbeTransport implements PtpTransport {
 
 /// 手搓 GetDeviceInfo 数据集(ByteWriter;字段布局独立于被测代码)。
 /// [operations] 可覆盖操作码表(默认不含 0x90C4,测「不在册」路径用)。
+/// [serial] 可覆盖序列号(默认含前导零,覆盖 Zf 补零方言归一用例)。
 /// 默认操作码表 = 「正常相机」基线:GetDeviceInfo/OpenSession/GetObject/
 /// GetPartialObjectEx(连接层的受限画像检查以 GetObject 在册为准,
 /// 2026-10-01 真机受限态就是缺它)。
 Uint8List buildDeviceInfoDataset(
-    {List<int> operations = const [0x1001, 0x1007, 0x1009, 0x9431]}) {
+    {List<int> operations = const [0x1001, 0x1007, 0x1009, 0x9431],
+    String serial = '012345678901'}) {
   final w = ByteWriter()
     ..u16(0x0100) // StandardVersion = 100(PTP/1.0)
     ..u32(0x0000000A) // VendorExtensionId(尼康)
@@ -126,7 +128,7 @@ Uint8List buildDeviceInfoDataset(
   putPtpString(w, 'Nikon Corp'); // manufacturer
   putPtpString(w, 'TestModel'); // model
   putPtpString(w, 'V1.00'); // deviceVersion
-  putPtpString(w, '012345678901'); // serialNumber
+  putPtpString(w, serial); // serialNumber
   return w.takeBytes();
 }
 
@@ -152,9 +154,24 @@ void main() {
       expect(info.manufacturer, 'Nikon Corp');
       expect(info.model, 'TestModel');
       expect(info.deviceVersion, 'V1.00');
-      expect(info.serialNumber, '012345678901');
+      expect(info.serialNumber, '12345678901'); // 前导零剥除(方言归一)
       expect(info.supportsOperation(0x9431), isTrue);
       expect(info.supportsOperation(0x90C8), isFalse);
+    });
+
+    test('序列号 Zf 方言:定宽 32 左补零剥前导零;全零占位 → null', () {
+      // 真机实测(2026-10-09 定案):Zf 回 25 个 '0' + 8014411,
+      // 尾段与 mDNS 实例名 Z_f_8014411 同源。
+      expect(
+          PtpDeviceInfo.parse(buildDeviceInfoDataset(
+                  serial: '00000000000000000000000008014411'))
+              .serialNumber,
+          '8014411');
+      expect(
+          PtpDeviceInfo.parse(buildDeviceInfoDataset(serial: '000000000000'))
+              .serialNumber,
+          isNull,
+          reason: '全零占位视为未提供');
     });
   });
 

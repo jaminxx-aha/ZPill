@@ -110,7 +110,7 @@ void main() {
 
       expect(snap.model, 'TestModel');
       expect(snap.deviceVersion, 'V1.00');
-      expect(snap.serialNumber, '012345678901');
+      expect(snap.serialNumber, '12345678901');
       expect(snap.props, hasLength(3));
       expect(snap.props[0].code, 0x5001);
       expect(snap.props[0].value, 80);

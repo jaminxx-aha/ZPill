@@ -57,7 +57,7 @@ final class CameraOverviewController extends ChangeNotifier {
   int? batteryPercent;
 
   /// 当前焦距(mm);null 同上。EXIF 兜底时是「最近一张」的焦距。
-  int? focalLengthMm;
+  double? focalLengthMm;
 
   /// 当前光圈 ×100(280 = ƒ/2.8;ISO 15740 定点,Zf 实际布局待真机
   /// 核对);null 同上。EXIF 兜底时是「最近一张」的光圈
@@ -102,7 +102,9 @@ final class CameraOverviewController extends ChangeNotifier {
             case PtpDevicePropCode.batteryLevel:
               batteryPercent = value;
             case PtpDevicePropCode.focalLength:
-              focalLengthMm = value;
+              // 0x5008 裸值单位 0.01mm(ISO 15740/libgphoto2 ÷100,
+              // 与 FNumber ×100 同族定点;40mm 镜头回 4000)。
+              focalLengthMm = value / 100;
             case PtpDevicePropCode.fNumber:
               fNumber = value;
           }
@@ -149,16 +151,31 @@ final class CameraOverviewController extends ChangeNotifier {
     final jpg = newest.jpg;
     if (jpg == null) return;
     try {
-      final head = await session.getPartialObject(jpg.handle, 0, 64 * 1024);
-      if (!_linkUp) return;
+      // 头读降级:64KB 全 EXIF(MakerNote 可达数十 KB,LensModel 0xA434
+      // 在其后)→ 失败再试 16KB(iOS IC 链 64KB 单发被拒时的降级路,
+      // 宁可丢部分信息不丢整行)。
+      Uint8List? head;
+      for (final size in const [64 * 1024, 16 * 1024]) {
+        try {
+          final chunk = await session.getPartialObject(jpg.handle, 0, size);
+          if (!_linkUp) return;
+          if (chunk.isNotEmpty) {
+            head = chunk;
+            break;
+          }
+        } on Exception {
+          // 该档失败:试下一档
+        }
+      }
+      if (head == null) return;
       final exif = readJpegExif(head);
       if (exif == null) return;
       final card = exifCardDataOf(exif);
       lens = card.lens;
       // 属性路径缺读时 EXIF 兜底(标注语义变为「最近一张」;
-      // 光圈换算 ×100,与 0x5007 定点标度一致)。
+      // 光圈换算 ×100,与 0x5007 定点标度一致;EXIF 焦距本就是 mm)。
       if (focalLengthMm == null && card.focalLengthMm != null) {
-        focalLengthMm = card.focalLengthMm!.round();
+        focalLengthMm = card.focalLengthMm;
         focalLengthFromExif = true;
       }
       if (fNumber == null && card.fNumber != null) {

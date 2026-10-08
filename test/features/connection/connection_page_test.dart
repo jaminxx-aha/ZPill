@@ -638,7 +638,7 @@ void main() {
           data: Uint8List.fromList([80]))); // 电池 80%
       transport.reply(PtpResult(
           responseCode: PtpResponseCode.ok,
-          data: Uint8List.fromList([0x90, 0x01]))); // 焦距 400(u16 LE)
+          data: Uint8List.fromList([0xA0, 0x0F, 0x00, 0x00]))); // 焦距 u32 = 4000(0.01mm)→ 40mm
       transport.reply(PtpResult(
           responseCode: PtpResponseCode.ok,
           data: Uint8List.fromList([0x18, 0x01]))); // 光圈 ƒ/2.8(280)
@@ -664,10 +664,11 @@ void main() {
       // 机身卡:GetDeviceInfo + 电池(属性门禁读到)
       expect(find.text('TestModel'), findsOneWidget);
       expect(find.text('V1.00'), findsOneWidget);
-      expect(find.text('012345678901'), findsOneWidget);
+      // 序列号:Zf 定宽 32 左补零方言在解析层剥前导零
+      expect(find.text('12345678901'), findsOneWidget);
       expect(find.text('80%'), findsOneWidget);
       // 镜头卡:无照片/无 EXIF → 型号缺读,属性在册读到
-      expect(find.text('400mm'), findsOneWidget);
+      expect(find.text('40mm'), findsOneWidget);
       expect(find.text('ƒ/2.8'), findsOneWidget);
       // 动作:进入拍摄(主操作,状态卡正下方)+ 相册 + 断开
       expect(find.text('进入拍摄'), findsOneWidget);
