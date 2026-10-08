@@ -1,4 +1,5 @@
-/// 设置页(TODO.md §五):速传开关/格式,后续 T4 段位(水印/LUT)再扩。
+/// 设置页(TODO.md §五):深浅模式/速传开关/格式,后续 T4 段位(水印/
+/// LUT)再扩。
 library;
 
 import 'dart:async';
@@ -31,6 +32,9 @@ class SettingsController extends ChangeNotifier {
     }
     notifyListeners();
   }
+
+  Future<void> setThemeMode(AppThemeMode value) =>
+      _update(settings.copyWith(themeMode: value));
 
   Future<void> setAutoTransfer(bool value) =>
       _update(settings.copyWith(autoTransfer: value));
@@ -139,6 +143,27 @@ class _SettingsPageState extends State<SettingsPage> {
           child: ListView(
             keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
             children: [
+              ListTile(
+                title: const Text('深色模式'),
+                subtitle: const Text('跟随系统,或锁定浅色/深色'),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                child: SegmentedButton<AppThemeMode>(
+                  segments: const [
+                    ButtonSegment(
+                        value: AppThemeMode.system, label: Text('跟随系统')),
+                    ButtonSegment(
+                        value: AppThemeMode.light, label: Text('浅色')),
+                    ButtonSegment(
+                        value: AppThemeMode.dark, label: Text('深色')),
+                  ],
+                  selected: {controller.settings.themeMode},
+                  onSelectionChanged: (s) =>
+                      controller.setThemeMode(s.first),
+                ),
+              ),
+              const Divider(),
               SwitchListTile(
                 title: const Text('自动传输(速传)'),
                 subtitle: const Text('连接期间相机新拍的照片自动下载并导入相册'),

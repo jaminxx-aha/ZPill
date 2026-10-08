@@ -19,6 +19,7 @@ import '../../core/media/cube_lut.dart';
 import '../../core/media/image_edit.dart';
 import '../../core/ptpip/object_format.dart' show ObjectKind;
 import '../../core/transfer/object_downloader.dart' show ObjectDownloader;
+import '../../design/app_colors.dart';
 import '../../platform/gallery_saver.dart';
 import '../../platform/services.dart';
 import 'edit_controller.dart';
@@ -196,10 +197,10 @@ class _EditPageState extends State<EditPage> {
     return ListenableBuilder(
       listenable: _controller,
       builder: (context, _) => Scaffold(
-        backgroundColor: Colors.black,
+        backgroundColor: AppMedia.background,
         appBar: AppBar(
-          backgroundColor: Colors.black87,
-          foregroundColor: Colors.white,
+          backgroundColor: AppMedia.chrome,
+          foregroundColor: AppMedia.onMedia,
           title: Text(widget.filename, style: const TextStyle(fontSize: 16)),
           actions: [
             IconButton(
@@ -215,7 +216,7 @@ class _EditPageState extends State<EditPage> {
                       width: 20,
                       height: 20,
                       child: CircularProgressIndicator(
-                          strokeWidth: 2, color: Colors.white),
+                          strokeWidth: 2, color: AppMedia.onMedia),
                     )
                   : const Icon(Icons.save_outlined),
             ),
@@ -224,7 +225,7 @@ class _EditPageState extends State<EditPage> {
         body: !_controller.isReady
             ? const Center(
                 child: Text('无法编辑此文件(仅支持 JPEG)',
-                    style: TextStyle(color: Colors.white70)),
+                    style: TextStyle(color: AppMedia.onMediaMuted)),
               )
             : Column(
                 children: [
@@ -258,7 +259,7 @@ class _EditPageState extends State<EditPage> {
           final frame = _controller.frameSize;
           if (backdrop == null || frame == null) {
             return const Center(
-                child: CircularProgressIndicator(color: Colors.white));
+                child: CircularProgressIndicator(color: AppMedia.onMedia));
           }
           return CropView(
             backdrop: backdrop,
@@ -273,7 +274,7 @@ class _EditPageState extends State<EditPage> {
         final preview = _controller.previewJpeg;
         if (preview == null) {
           return const Center(
-              child: CircularProgressIndicator(color: Colors.white));
+              child: CircularProgressIndicator(color: AppMedia.onMedia));
         }
         return InteractiveViewer(
           maxScale: 8,
@@ -287,7 +288,7 @@ class _EditPageState extends State<EditPage> {
     return SafeArea(
       top: false,
       child: Material(
-        color: Colors.black87,
+        color: AppMedia.chrome,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -299,8 +300,8 @@ class _EditPageState extends State<EditPage> {
                     Expanded(
                       child: IconButton(
                         color: (t == _tool || (t == _Tool.crop && _cropping))
-                            ? Colors.white
-                            : Colors.white38,
+                            ? AppMedia.onMedia
+                            : AppMedia.onMediaFaint,
                         onPressed: () => t == _Tool.crop && !_cropping
                             ? _enterCropMode()
                             : _selectTool(t),
@@ -357,7 +358,7 @@ class _EditPageState extends State<EditPage> {
       required VoidCallback onTap,
     }) =>
         OutlinedButton.icon(
-          style: OutlinedButton.styleFrom(foregroundColor: Colors.white),
+          style: OutlinedButton.styleFrom(foregroundColor: AppMedia.onMedia),
           onPressed: onTap,
           icon: Icon(icon),
           label: Text(label),
@@ -437,7 +438,7 @@ class _EditPageState extends State<EditPage> {
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: [
                 TextButton(
-                  style: TextButton.styleFrom(foregroundColor: Colors.white70),
+                  style: TextButton.styleFrom(foregroundColor: AppMedia.onMediaMuted),
                   onPressed: _exitCrop,
                   child: const Text('取消'),
                 ),
@@ -466,7 +467,7 @@ class _EditPageState extends State<EditPage> {
                 width: 52,
                 child: Text(label,
                     style:
-                        const TextStyle(color: Colors.white70, fontSize: 13))),
+                        const TextStyle(color: AppMedia.onMediaMuted, fontSize: 13))),
             Expanded(
               child: Slider(
                 value: value.clamp(min, max),
@@ -483,7 +484,7 @@ class _EditPageState extends State<EditPage> {
                 child: Text(fmt(value),
                     textAlign: TextAlign.right,
                     style:
-                        const TextStyle(color: Colors.white38, fontSize: 12))),
+                        const TextStyle(color: AppMedia.onMediaFaint, fontSize: 12))),
           ],
         );
 
@@ -546,7 +547,7 @@ class _EditPageState extends State<EditPage> {
           ),
           const SizedBox(height: 8),
           OutlinedButton.icon(
-            style: OutlinedButton.styleFrom(foregroundColor: Colors.white),
+            style: OutlinedButton.styleFrom(foregroundColor: AppMedia.onMedia),
             onPressed: _importLutFromClipboard,
             icon: const Icon(Icons.content_paste),
             label: const Text('从剪贴板导入 .cube'),
@@ -820,7 +821,7 @@ class _CropPainter extends CustomPainter {
       fitted.top + rect.bottom * fitted.height,
     );
     // 遮罩:全幅半透黑,裁剪区内清透(露出底图)。
-    canvas.drawRect(Offset.zero & size, Paint()..color = Colors.black54);
+    canvas.drawRect(Offset.zero & size, Paint()..color = AppMedia.background.withValues(alpha: 0.54));
     canvas.save();
     canvas.clipRect(crop);
     canvas.drawRect(crop, Paint()..blendMode = BlendMode.clear);
@@ -829,19 +830,19 @@ class _CropPainter extends CustomPainter {
     final border = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.5
-      ..color = Colors.white;
+      ..color = AppMedia.onMedia;
     canvas.drawRect(crop, border);
     final grid = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = 0.5
-      ..color = Colors.white54;
+      ..color = AppMedia.onMediaSubtle;
     for (var i = 1; i < 3; i++) {
       final x = crop.left + crop.width * i / 3;
       final y = crop.top + crop.height * i / 3;
       canvas.drawLine(Offset(x, crop.top), Offset(x, crop.bottom), grid);
       canvas.drawLine(Offset(crop.left, y), Offset(crop.right, y), grid);
     }
-    final handle = Paint()..color = Colors.white;
+    final handle = Paint()..color = AppMedia.onMedia;
     for (final c in [
       crop.topLeft,
       crop.topRight,

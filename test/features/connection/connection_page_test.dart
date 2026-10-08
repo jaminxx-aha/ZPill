@@ -483,13 +483,15 @@ void main() {
           .pumpWidget(MaterialApp(home: ConnectionPage(controller: controller)));
 
       conn.statesCtrl.add(CameraLinkState.pairing);
-      await tester.pumpAndSettle();
+      // pairing 态状态卡尾槽是 spinner(不定进度),pumpAndSettle 永不
+      // settle —— 用 pump 走帧即可。
+      await tester.pump();
       // 验证码不回传相机(0x935A 参数与码无关),自动确认与手动等价;
       // 多次 notify 只确认一次(哨兵)。
       expect(conn.confirmCalls, 1);
       expect(find.text('配对确认'), findsNothing);
       conn.statesCtrl.add(CameraLinkState.pairing); // 状态未离开的重复 notify
-      await tester.pumpAndSettle();
+      await tester.pump();
       expect(conn.confirmCalls, 1);
     });
 
@@ -500,7 +502,7 @@ void main() {
           .pumpWidget(MaterialApp(home: ConnectionPage(controller: controller)));
 
       conn.statesCtrl.add(CameraLinkState.pairing);
-      await tester.pumpAndSettle();
+      await tester.pump();
       expect(conn.confirmCalls, 1);
       conn.statesCtrl.add(CameraLinkState.failed);
       await tester.pumpAndSettle();
@@ -515,13 +517,13 @@ void main() {
           .pumpWidget(MaterialApp(home: ConnectionPage(controller: controller)));
 
       conn.statesCtrl.add(CameraLinkState.pairing);
-      await tester.pumpAndSettle();
+      await tester.pump();
       expect(conn.confirmCalls, 1);
 
       // pairing → connecting 沿 = 机身确认等待窗(真机 2026-10-06:相机
       // 弹「配对完成」等按 OK,应用整窗静默重试不闪失败)
       conn.statesCtrl.add(CameraLinkState.connecting);
-      await tester.pumpAndSettle();
+      await tester.pump();
       expect(controller.awaitingCameraConfirm, isTrue);
       expect(find.text('等待相机上确认配对…'), findsOneWidget);
       expect(find.text('连接中…'), findsNothing);

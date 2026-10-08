@@ -15,6 +15,10 @@ enum TransferQuality { original, compressed }
 /// 水印模板(TODO §五 T4):off 关闭;corner 角标;card 摄影卡片。
 enum WatermarkStyle { off, corner, card }
 
+/// 深浅模式(system = 跟随系统;light/dark = 锁定)。独立于 Material
+/// 的 ThemeMode 枚举 —— data 层不依赖 Flutter,app 根再做映射。
+enum AppThemeMode { system, light, dark }
+
 final class AppSettings {
   const AppSettings({
     this.autoTransfer = false,
@@ -22,6 +26,7 @@ final class AppSettings {
     this.quality = TransferQuality.original,
     this.batterySaver = false,
     this.customSavePath,
+    this.themeMode = AppThemeMode.system,
     this.xmpCreator,
     this.xmpRights,
     this.xmpInjectRating = false,
@@ -38,6 +43,9 @@ final class AppSettings {
   final TransferQuality quality; // P3:传输质量(压缩路径未实现,暂不消费)
   final bool batterySaver; // P3:省电模式(未消费)
   final String? customSavePath; // P3:自定义存储路径(未消费)
+
+  /// 深浅模式:默认跟随系统,设置页可锁定。
+  final AppThemeMode themeMode;
 
   /// XMP 元数据注入(TODO §四):作者(dc:creator),空 = 不写该字段。
   final String? xmpCreator;
@@ -63,6 +71,7 @@ final class AppSettings {
     TransferQuality? quality,
     bool? batterySaver,
     String? customSavePath,
+    AppThemeMode? themeMode,
     String? xmpCreator,
     String? xmpRights,
     bool? xmpInjectRating,
@@ -76,6 +85,7 @@ final class AppSettings {
         quality: quality ?? this.quality,
         batterySaver: batterySaver ?? this.batterySaver,
         customSavePath: customSavePath ?? this.customSavePath,
+        themeMode: themeMode ?? this.themeMode,
         xmpCreator: xmpCreator ?? this.xmpCreator,
         xmpRights: xmpRights ?? this.xmpRights,
         xmpInjectRating: xmpInjectRating ?? this.xmpInjectRating,
@@ -92,6 +102,7 @@ final class AppSettings {
       other.quality == quality &&
       other.batterySaver == batterySaver &&
       other.customSavePath == customSavePath &&
+      other.themeMode == themeMode &&
       other.xmpCreator == xmpCreator &&
       other.xmpRights == xmpRights &&
       other.xmpInjectRating == xmpInjectRating &&
@@ -102,8 +113,8 @@ final class AppSettings {
   @override
   int get hashCode => Object.hash(
       autoTransfer, autoTransferFormat, quality, batterySaver, customSavePath,
-      xmpCreator, xmpRights, xmpInjectRating, xmpInjectGps, watermarkStyle,
-      watermarkText);
+      themeMode, xmpCreator, xmpRights, xmpInjectRating, xmpInjectGps,
+      watermarkStyle, watermarkText);
 
   Map<String, Object?> toJson() => {
         'autoTransfer': autoTransfer,
@@ -111,6 +122,7 @@ final class AppSettings {
         'quality': quality.name,
         'batterySaver': batterySaver,
         if (customSavePath != null) 'customSavePath': customSavePath,
+        'themeMode': themeMode.name,
         if (xmpCreator != null) 'xmpCreator': xmpCreator,
         if (xmpRights != null) 'xmpRights': xmpRights,
         'xmpInjectRating': xmpInjectRating,
@@ -129,6 +141,9 @@ final class AppSettings {
                 TransferQuality.original,
         batterySaver: json['batterySaver'] == true,
         customSavePath: json['customSavePath'] as String?,
+        themeMode:
+            _enumByName(AppThemeMode.values, json['themeMode']) ??
+                AppThemeMode.system,
         xmpCreator: json['xmpCreator'] as String?,
         xmpRights: json['xmpRights'] as String?,
         xmpInjectRating: json['xmpInjectRating'] == true,

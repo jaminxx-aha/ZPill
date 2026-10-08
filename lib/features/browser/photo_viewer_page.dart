@@ -18,9 +18,11 @@ import '../../core/browser/thumbnail_cache.dart';
 import '../../core/transfer/object_downloader.dart';
 import '../../core/transfer/transfer_engine.dart';
 import '../../core/transfer/transfer_task.dart';
+import '../../design/app_colors.dart';
 import '../../platform/gallery_saver.dart';
 import '../../platform/services.dart';
 import '../common/format.dart';
+import '../common/widgets/loading_overlay.dart';
 import '../edit/edit_page.dart';
 import 'download_format_sheet.dart';
 import 'ratings_controller.dart';
@@ -111,7 +113,7 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
                     IconButton(
                       iconSize: 32,
                       color: stars <= _ratings.ratingOf(group)
-                          ? Colors.amber
+                          ? AppColors.brandYellow
                           : Theme.of(context).disabledColor,
                       onPressed: () {
                         _ratings.rate(group, stars);
@@ -165,23 +167,8 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
   Future<void> _edit(PhotoGroup group) async {
     final jpg = group.jpg;
     if (jpg == null) return;
-    unawaited(showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => PopScope(
-        canPop: false,
-        child: Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: const [
-              CircularProgressIndicator(color: Colors.white),
-              SizedBox(height: 12),
-              Text('拉取原图…', style: TextStyle(color: Colors.white70)),
-            ],
-          ),
-        ),
-      ),
-    ));
+    unawaited(
+        showLoadingOverlay(context, message: '拉取原图…'));
     try {
       final dl =
           await _downloader.download(jpg, targetDir: await _gallery.tempDir());
@@ -216,10 +203,10 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
       builder: (context, _) {
         final rating = _ratings.ratingOf(group);
         return Scaffold(
-          backgroundColor: Colors.black,
+          backgroundColor: AppMedia.background,
           appBar: AppBar(
-            backgroundColor: Colors.black87,
-            foregroundColor: Colors.white,
+            backgroundColor: AppMedia.chrome,
+            foregroundColor: AppMedia.onMedia,
             title: Text('${_index + 1} / ${widget.items.length}'),
             actions: [
               if (group.hasJpg)
@@ -233,7 +220,7 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
                 onPressed: () => _rate(group),
                 icon: Icon(
                   rating > 0 ? Icons.star : Icons.star_border,
-                  color: rating > 0 ? Colors.amber : null,
+                  color: rating > 0 ? AppColors.brandYellow : null,
                 ),
               ),
             ],
@@ -264,9 +251,10 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
               return const Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  CircularProgressIndicator(color: Colors.white),
+                  CircularProgressIndicator(color: AppMedia.onMedia),
                   SizedBox(height: 12),
-                  Text('加载预览…', style: TextStyle(color: Colors.white70)),
+                  Text('加载预览…',
+                      style: TextStyle(color: AppMedia.onMediaMuted)),
                 ],
               );
             }
@@ -276,9 +264,10 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Icon(Icons.broken_image_outlined,
-                      color: Colors.white54, size: 48),
+                      color: AppMedia.onMediaSubtle, size: 48),
                   SizedBox(height: 8),
-                  Text('预览不可用', style: TextStyle(color: Colors.white70)),
+                  Text('预览不可用',
+                      style: TextStyle(color: AppMedia.onMediaMuted)),
                 ],
               );
             }
@@ -287,7 +276,7 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
               fit: BoxFit.contain,
               errorBuilder: (context, error, stackTrace) => const Icon(
                 Icons.broken_image_outlined,
-                color: Colors.white54,
+                color: AppMedia.onMediaSubtle,
                 size: 48,
               ),
             );
@@ -313,7 +302,7 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
       // 不用 BottomAppBar:它的定高(80)+ 自身留白叠上两行内容必然
       // 溢出(真机 13px);Material+Padding 让内容自适应高度。
       child: Material(
-        color: Colors.black87,
+        color: AppMedia.chrome,
         child: Padding(
           padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
           child: Column(
@@ -324,7 +313,8 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
                 info,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: Colors.white70, fontSize: 12),
+                style: const TextStyle(
+                    color: AppMedia.onMediaMuted, fontSize: 12),
               ),
               const SizedBox(height: 4),
               Row(
@@ -332,8 +322,8 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
                   Expanded(
                     child: FilledButton.tonalIcon(
                       style: FilledButton.styleFrom(
-                        backgroundColor: Colors.white12,
-                        foregroundColor: Colors.white,
+                        backgroundColor: AppMedia.onMediaDim,
+                        foregroundColor: AppMedia.onMedia,
                         visualDensity: VisualDensity.compact,
                       ),
                       onPressed: () =>
@@ -346,8 +336,8 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
                   Expanded(
                     child: FilledButton.tonalIcon(
                       style: FilledButton.styleFrom(
-                        backgroundColor: Colors.white12,
-                        foregroundColor: Colors.white,
+                        backgroundColor: AppMedia.onMediaDim,
+                        foregroundColor: AppMedia.onMedia,
                         visualDensity: VisualDensity.compact,
                       ),
                       onPressed: () =>

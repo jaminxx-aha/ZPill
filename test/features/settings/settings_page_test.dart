@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:nikon_pill/app.dart';
 import 'package:nikon_pill/app_services.dart';
+import 'package:nikon_pill/data/settings_store.dart';
 
 /// 设置页文本框收起/落库(真机反馈:点开文本框后键盘收不起来)。
 void main() {
@@ -38,5 +39,30 @@ void main() {
         reason: '点空白必须散焦,否则键盘收不起来');
     expect(AppServices.instance.settingsController.settings.xmpCreator, 'aha',
         reason: '焦点离开即落库,不依赖回车提交');
+  });
+
+  testWidgets('深色模式:三段切换即时改 themeMode 并落库', (tester) async {
+    await boot(tester);
+
+    ThemeMode appMode() => tester
+        .widget<MaterialApp>(find.byType(MaterialApp))
+        .themeMode!;
+    expect(appMode(), ThemeMode.system, reason: '默认跟随系统');
+
+    await tester.tap(find.text('深色'));
+    await tester.pumpAndSettle();
+    expect(appMode(), ThemeMode.dark, reason: '选深色应即时生效,无需重启');
+    expect(AppServices.instance.settingsController.settings.themeMode,
+        AppThemeMode.dark);
+
+    await tester.tap(find.text('浅色'));
+    await tester.pumpAndSettle();
+    expect(appMode(), ThemeMode.light);
+    expect(AppServices.instance.settingsController.settings.themeMode,
+        AppThemeMode.light);
+
+    await tester.tap(find.text('跟随系统'));
+    await tester.pumpAndSettle();
+    expect(appMode(), ThemeMode.system);
   });
 }

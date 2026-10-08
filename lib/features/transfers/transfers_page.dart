@@ -18,6 +18,7 @@ import '../../core/transfer/transfer_engine.dart';
 import '../../core/transfer/transfer_task.dart';
 import '../../platform/gallery_saver.dart';
 import '../common/format.dart';
+import '../common/widgets/states.dart';
 
 final class TransfersController extends ChangeNotifier {
   TransfersController({required this.engine, required this.gallery}) {
@@ -152,8 +153,9 @@ class _TransfersPageState extends State<TransfersPage> {
   Widget _body() {
     final tasks = _controller.tasks;
     if (tasks.isEmpty) {
-      return const Center(child: Text('暂无传输任务\n(在相机相册里多选或大图页单张下载)',
-          textAlign: TextAlign.center));
+      return const EmptyState(
+          icon: Icons.download_outlined,
+          message: '暂无传输任务\n(在相机相册里多选或大图页单张下载)');
     }
     return ListView.builder(
       padding: const EdgeInsets.only(bottom: 16),
