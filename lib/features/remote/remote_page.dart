@@ -22,8 +22,9 @@
 /// 屏高仅 ~390px,「浮顶 + 浮底」布局会盖掉约六成画面(2026-10-08
 /// 用户反馈),侧栏大部分落在取景画幅的左右黑边上;辅助开关收进顶栏
 /// tune 按钮的非模态浮层;纯净监看(眼睛)隐去全部控制浮层,只留画面
-/// 与监看叠层。方向按钮三态(跟随系统/锁横屏/锁竖屏)经 SystemChrome
-/// 强制,系统转屏锁开着也能切,不依赖系统自动横竖屏设置。
+/// 与监看叠层。方向按钮(恒显转屏图标,点按横↔竖直切,初始态跟随
+/// 系统)经 SystemChrome 强制,系统转屏锁开着也能切,不依赖系统自动
+/// 横竖屏设置。
 ///
 /// 水平仪数据源:相机帧头虚拟水平仪(LiveViewHeader.level,机身侧水平
 /// 仪,OpenZCine 同源)优先,手机姿态流只作相机未报时的兜底。
@@ -67,12 +68,6 @@ abstract final class _LiveDesign {
   static const bad = Color(0xFFD13437);
 }
 
-/// 应用内方向锁定(拍摄页方向按钮三态):auto 跟随系统;landscape/
-/// portrait 经 [SystemChrome.setPreferredOrientations] 强制 —— 系统
-/// 转屏锁开着也能切(iOS Info.plist 已声明全方向、Android configChanges
-/// 已含 orientation,均无平台工程改动)。app 全局生效,页面销毁时复位。
-enum _OrientationLock { auto, landscape, portrait }
-
 /// 横屏侧栏监看几何:顶栏一条(高 48)+ 左参数栏(宽 96)/右动作栏
 /// (宽 72)分贴两侧;贴边元素(横幅/直方图/即拍即览)经 _feedArea 的
 /// inset 让位。
@@ -114,9 +109,6 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   /// 读出条中当前打开面板的参数(金高亮 tile)。
   int? _activeParam;
 
-  /// 方向锁定(页面级视图偏好,不入持久化设置;重启回 auto)。
-  _OrientationLock _orientationLock = _OrientationLock.auto;
-
   /// 横屏辅助浮层(监看开关 + 芯片组)是否展开。
   bool _assistPanelOpen = false;
 
@@ -154,11 +146,10 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     // 离页只挂起轮询(取景生命周期跟连接走,不因拆页发 0x9202)。
+    // 方向锁**不**随页复位:锁是会话级(挂 RemoteController);且复位
+    // 要发空表 —— iOS 收 All mask 会按手机物理姿态重选方向、被转屏锁
+    // 弹回(2026-10-08 真机日志定案:竖→横→竖双旋闪屏)。
     controller.setViewerVisible(false);
-    // 方向锁定随页拆除复位(仅锁定态发 —— auto 本就未动系统)。
-    if (_orientationLock != _OrientationLock.auto) {
-      _applyOrientationLock(_OrientationLock.auto);
-    }
     super.dispose();
   }
 
@@ -337,72 +328,58 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
 
   // ── 方向锁定(应用内横竖屏切换)────────────────────────────────
 
-  /// 方向按钮循环:跟随系统 → 锁横屏 → 锁竖屏 → 跟随系统。
+  /// 方向按钮点按 = 切到另一半:横锁↔竖锁直切;auto 态(仅初始)按当前
+  /// 屏向取反,首击必翻转、所见即所得。**永不发空表** —— 空表在 iOS 是
+  /// All mask,requestGeometryUpdate 会按手机物理姿态重选方向、再被弹回
+  /// (2026-10-08 真机日志定案:竖→横→竖双旋闪屏 + 白点一击),故按钮
+  /// 不设「回跟随系统」路径(2026-10-08 用户明示取消长按)。
   void _cycleOrientationLock() {
-    const order = [
-      _OrientationLock.auto,
-      _OrientationLock.landscape,
-      _OrientationLock.portrait,
-    ];
-    setState(() {
-      _orientationLock =
-          order[(order.indexOf(_orientationLock) + 1) % order.length];
-    });
-    _applyOrientationLock(_orientationLock);
+    final current = controller.orientationLock.value;
+    final screenLandscape =
+        MediaQuery.orientationOf(context) == Orientation.landscape;
+    final next = switch (current) {
+      OrientationLock.landscape => OrientationLock.portrait,
+      OrientationLock.portrait => OrientationLock.landscape,
+      OrientationLock.auto => screenLandscape
+          ? OrientationLock.portrait
+          : OrientationLock.landscape,
+    };
+    controller.orientationLock.value = next;
+    _applyOrientationLock(next);
   }
 
-  /// 把方向锁定下发给系统(空列表 = 恢复默认全方向)。OHOS fork 若未
-  /// 实现该 method 会 MissingPluginException —— 方向按钮不能因平台
-  /// 差异炸页,静默兜住。
-  void _applyOrientationLock(_OrientationLock lock) {
+  /// 把方向锁定下发给系统(空列表 = 恢复默认全方向,现无发送方,switch
+  /// 穷举保留)。竖屏锁只发 portraitUp:Info.plist 本就未声明 UpsideDown,
+  /// 双值只留给系统自选余地。OHOS fork 若未实现该 method 会
+  /// MissingPluginException —— 方向按钮不能因平台差异炸页,静默兜住。
+  void _applyOrientationLock(OrientationLock lock) {
     final orientations = switch (lock) {
-      _OrientationLock.auto => const <DeviceOrientation>[],
-      _OrientationLock.landscape => const [
+      OrientationLock.auto => const <DeviceOrientation>[],
+      OrientationLock.landscape => const [
           DeviceOrientation.landscapeLeft,
           DeviceOrientation.landscapeRight,
         ],
-      _OrientationLock.portrait => const [
-          DeviceOrientation.portraitUp,
-          DeviceOrientation.portraitDown,
-        ],
+      OrientationLock.portrait => const [DeviceOrientation.portraitUp],
     };
-    unawaited(SystemChrome.setPreferredOrientations(orientations)
-        .catchError((Object _) {}));
+    unawaited(
+        SystemChrome.setPreferredOrientations(orientations).catchError((Object _) {}));
   }
 
-  /// 方向切换钮(信息胶囊行尾,竖横屏同位一处实现):三态图标即态
-  /// (锁定态金色),Tooltip 说明下一态。
+  /// 方向切换钮(信息胶囊行尾,竖横屏同位一处实现):**恒显转屏图标**
+  /// —— 不随锁态换形(stay_current_*/crop_* 两轮换形实测 18px 金色下
+  /// 均不可辨,用户明示「一直用最初始的图标」,2026-10-08);**无
+  /// Tooltip**(其长按弹「已锁xx」提示被用户点名单删)。点按横↔竖
+  /// 直切,锁态只在控制器里流转(会话级),页面重建不丢。
   Widget _orientationButton() {
-    final (icon, tip, locked) = switch (_orientationLock) {
-      _OrientationLock.auto => (
-          Icons.screen_rotation,
-          '方向:跟随系统(点按锁定横屏)',
-          false
-        ),
-      _OrientationLock.landscape => (
-          Icons.stay_current_landscape,
-          '方向:已锁横屏(点按锁定竖屏)',
-          true
-        ),
-      _OrientationLock.portrait => (
-          Icons.stay_current_portrait,
-          '方向:已锁竖屏(点按恢复跟随系统)',
-          true
-        ),
-    };
-    return Tooltip(
-      message: tip,
-      child: InkWell(
-        onTap: _cycleOrientationLock,
-        customBorder:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(9)),
-        child: SizedBox(
-          width: 34,
-          height: 30,
-          child: Icon(icon,
-              size: 18,
-              color: locked ? _LiveDesign.accent : _LiveDesign.muted),
-        ),
+    return InkWell(
+      onTap: _cycleOrientationLock,
+      customBorder:
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(9)),
+      child: const SizedBox(
+        width: 34,
+        height: 30,
+        child: Icon(Icons.screen_rotation,
+            size: 18, color: _LiveDesign.muted),
       ),
     );
   }

@@ -95,6 +95,15 @@ final class AfBox {
   final double ny;
 }
 
+/// 应用内方向锁(拍摄页方向按钮):auto 跟随系统(仅初始态);landscape/
+/// portrait 经 SystemChrome.setPreferredOrientations 强制(系统转屏锁
+/// 开着也能切)。会话级挂控制器(app 常驻):跨页面重建/换 tab 存活,
+/// 进程退出自然回 auto。**点按只在横/竖锁间直切,不设回 auto 路径**
+/// (长按已按用户要求取消,2026-10-08)—— 空表在 iOS 是 All mask,会让
+/// 系统按手机物理姿态重选方向(旋转锁开着时闪一圈,2026-10-08 真机
+/// 日志定案),不能放进点按循环。
+enum OrientationLock { auto, landscape, portrait }
+
 final class RemoteController extends ChangeNotifier {
   RemoteController({
     required this.session,
@@ -458,6 +467,9 @@ final class RemoteController extends ChangeNotifier {
 
   /// 最近取景帧尺寸(SOF 嗅探):触控对焦坐标映射 + 页面画幅计算用。
   final frameSize = ValueNotifier<({int width, int height})?>(null);
+
+  /// 方向锁(会话级):图标与循环读这里,页面只发切换与系统下发。
+  final orientationLock = ValueNotifier<OrientationLock>(OrientationLock.auto);
 
   /// 触控对焦框位置;null = 无。
   AfBox? afBox;
@@ -1477,6 +1489,7 @@ final class RemoteController extends ChangeNotifier {
     engine.frame.removeListener(_onFrame);
     engine.header.removeListener(_onHeader);
     frameSize.dispose();
+    orientationLock.dispose();
     analyzer.dispose();
     super.dispose();
   }

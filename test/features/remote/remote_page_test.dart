@@ -827,8 +827,9 @@ void main() {
     expect(find.byIcon(Icons.tune), findsOneWidget, reason: 'chrome 回来');
   });
 
-  testWidgets('方向按钮三态循环:跟随系统 → 锁横屏 → 锁竖屏 → 复位'
-      '(SystemChrome 消息,不依赖系统自动横竖屏设置)', (tester) async {
+  testWidgets('方向按钮点按横竖直切,图标恒定(Tooltip 已删,长按抬起=点按)'
+      '(点按循环永不发空表:空表在 iOS 是 All mask,按物理姿态闪转)',
+      (tester) async {
     final calls = <MethodCall>[];
     tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
         SystemChannels.platform,
@@ -839,6 +840,12 @@ void main() {
     addTearDown(() => tester.binding.defaultBinaryMessenger
         .setMockMethodCallHandler(SystemChannels.platform, null));
 
+    // 竖屏视口:auto 态首击按屏向取反,默认 800×600 是横屏会翻成竖锁
+    tester.view
+      ..physicalSize = const Size(800, 2400)
+      ..devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
     final transport = _ScriptTransport();
     final conn = _FakeConnection();
     final controller = RemoteController(
@@ -847,41 +854,98 @@ void main() {
     await tester
         .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
 
-    // 初始 = 跟随系统:零方向消息
+    // 初始 = 跟随系统:零方向消息,转屏图标
     expect(_orientationCalls(calls), isEmpty);
     expect(find.byIcon(Icons.screen_rotation), findsOneWidget);
 
-    // 1) 锁横屏(系统转屏锁开着也能切)
+    // 1) 竖屏下首击(auto):翻转屏向 → 锁横(系统转屏锁开着也能切)
     await tester.tap(find.byIcon(Icons.screen_rotation));
     await tester.pumpAndSettle();
-    expect(find.byIcon(Icons.stay_current_landscape), findsOneWidget);
+    expect(find.byIcon(Icons.screen_rotation), findsOneWidget,
+        reason: '图标恒定,不随锁态换形');
     expect(_orientationCalls(calls).last.arguments, [
       'DeviceOrientation.landscapeLeft',
       'DeviceOrientation.landscapeRight',
     ]);
 
-    // 2) 锁竖屏
-    await tester.tap(find.byIcon(Icons.stay_current_landscape));
-    await tester.pumpAndSettle();
-    expect(find.byIcon(Icons.stay_current_portrait), findsOneWidget);
-    expect(_orientationCalls(calls).last.arguments, [
-      'DeviceOrientation.portraitUp',
-      'DeviceOrientation.portraitDown',
-    ]);
-
-    // 3) 回跟随系统:空方向表(本 fork 恒发 List,空表原样下发)
-    await tester.tap(find.byIcon(Icons.stay_current_portrait));
-    await tester.pumpAndSettle();
-    expect(find.byIcon(Icons.screen_rotation), findsOneWidget);
-    expect(_orientationCalls(calls).last.arguments, isEmpty);
-
-    // 锁定态拆页:dispose 发空列表复位(auto 态拆页本就不发)
+    // 2) 点按直切对半:锁横 → 锁竖(不经 auto;单值 portraitUp:plist
+    // 未声明 UpsideDown,不留给系统自选)
     await tester.tap(find.byIcon(Icons.screen_rotation));
     await tester.pumpAndSettle();
-    _orientationCalls(calls).clear();
+    expect(_orientationCalls(calls).last.arguments,
+        ['DeviceOrientation.portraitUp']);
+
+    // 3) 再点直切回锁横 —— 点按循环永不发空表(2026-10-08 真机日志
+    // 定案:空表 = iOS All mask,按物理姿态闪转竖→横→竖,多耗一击)
+    await tester.tap(find.byIcon(Icons.screen_rotation));
+    await tester.pumpAndSettle();
+    expect(_orientationCalls(calls), hasLength(3));
+    expect(_orientationCalls(calls).last.arguments, [
+      'DeviceOrientation.landscapeLeft',
+      'DeviceOrientation.landscapeRight',
+    ]);
+
+    // 4) 锁定态拆页:不**复位** —— 锁是会话级(挂 RemoteController),
+    // dispose 不补发消息。
+    calls.clear();
     await tester.pumpWidget(const SizedBox());
     await tester.pump();
-    expect(_orientationCalls(calls).last.arguments, isEmpty,
-        reason: '锁定态拆页复位');
+    expect(_orientationCalls(calls), isEmpty, reason: '拆页不复位(会话级锁)');
+
+    // 5) 同控制器重建页面:锁仍是横 —— 竖屏视口下点一下发 portraitUp
+    // 即证(若锁丢回 auto,竖屏首击会发 landscape 对;图标恒定,靠消息断言)。
+    await tester.pumpWidget(
+        MaterialApp(home: RemotePage(controller: controller)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byIcon(Icons.screen_rotation));
+    await tester.pumpAndSettle();
+    expect(_orientationCalls(calls).last.arguments,
+        ['DeviceOrientation.portraitUp'],
+        reason: '横锁跨页面回收存活,重建后首击直切竖');
+
+    // 6) 长按:不弹「已锁xx」提示(Tooltip 已整体删除,用户点名单删);
+    // 无 onLongPress 注册,长按抬起等同一次点按(Flutter 默认语义)
+    // —— 只多一条消息,永不空表。
+    await tester.longPress(find.byIcon(Icons.screen_rotation));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('已锁'), findsNothing,
+        reason: '无 Tooltip 长按弹提示');
+    expect(_orientationCalls(calls), hasLength(2), reason: '长按抬起=点按');
+    expect(_orientationCalls(calls).last.arguments, [
+      'DeviceOrientation.landscapeLeft',
+      'DeviceOrientation.landscapeRight',
+    ]);
+  });
+
+  testWidgets('横屏 auto 态首击:按屏向取反 → 锁竖(所见即所得)',
+      (tester) async {
+    final calls = <MethodCall>[];
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        (call) async {
+          calls.add(call);
+          return null;
+        });
+    addTearDown(() => tester.binding.defaultBinaryMessenger
+        .setMockMethodCallHandler(SystemChannels.platform, null));
+
+    tester.view
+      ..physicalSize = const Size(2400, 800)
+      ..devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = RemoteController(
+        session: PtpSession(transport: transport), connection: conn);
+    addTearDown(controller.dispose);
+    await tester
+        .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
+
+    await tester.tap(find.byIcon(Icons.screen_rotation));
+    await tester.pumpAndSettle();
+    expect(_orientationCalls(calls).last.arguments,
+        ['DeviceOrientation.portraitUp'],
+        reason: '横屏首击翻成竖锁(不是默认锁横)');
   });
 }
