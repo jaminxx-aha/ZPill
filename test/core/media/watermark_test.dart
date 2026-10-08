@@ -107,6 +107,42 @@ void main() {
     expect(card.takenAt, isNull);
   });
 
+  test('APP1 段声明超头读:段尾截断仍解出(Zf 实测 65534B 段 vs 64KB 头读差 2B)', () {
+    // Zf 最新 JPG 的 EXIF APP1 声明 65534B(MakerNote 40KB+),64KB 头读
+    // 2+2+65534 = 65538 差 2B —— 截掉的是段尾填充/缩略图尾,IFD 全在前段。
+    // 镜像该形状:载荷尾部补 2B 填充,声明再 +2,头读恰好缺最后 2B。
+    final payload = Uint8List.fromList([..._exifPayload(), 0, 0]);
+    final segLen = 2 + 6 + payload.length + 2; // 声明比在场多 2B
+    final jpeg = Uint8List.fromList([
+      0xFF, 0xD8, //
+      0xFF, 0xE1, (segLen >> 8) & 0xFF, segLen & 0xFF,
+      ...'Exif'.codeUnits, 0, 0,
+      ...payload.sublist(0, payload.length - 2), // 声明的最后 2B 缺席
+    ]);
+    final exif = readJpegExif(jpeg);
+    expect(exif, isNotNull, reason: '段尾截断不该拒整段(2026-10-09 修)');
+    final card = exifCardDataOf(exif!);
+    expect(card.model, 'NIKON Z f');
+    expect(card.focalLengthMm, 85); // 截断尾是填充,条目数据完整
+  });
+
+  test('截断的非 Exif 段:无法跨过 → null(段扫描止步)', () {
+    // XMP APP1 声明 70000B、头读只有 200B:Exif APP1 在头读之外,
+    // 跨不过截断段(2026-10-09 修的另一半语义:截断仅对 Exif 本段宽容)。
+    final xmp = Uint8List.fromList([
+      ...'http://ns.adobe.com/xap/1.0/'.codeUnits, 0,
+      ...List.filled(150, 0x20),
+    ]);
+    const segLen = 70000;
+    final jpeg = Uint8List.fromList([
+      0xFF, 0xD8, //
+      0xFF, 0xE1, (segLen >> 8) & 0xFF, segLen & 0xFF,
+      ...xmp.sublist(0, xmp.length - 2),
+      ..._exifJpeg().sublist(2), // 真 Exif 段跟在后(头读视角全在段外)
+    ]);
+    expect(readJpegExif(jpeg), isNull);
+  });
+
   test('格式化:厂牌去重、整档光圈、秒级快门、焦段取整', () {
     expect(
         const ExifCardData(make: 'NIKON', model: 'NIKON Z f').titleLine,

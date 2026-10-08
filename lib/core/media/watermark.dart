@@ -128,6 +128,11 @@ Future<Uint8List> applyWatermark(Uint8List jpeg, WatermarkOptions options,
 // ---- EXIF 解析 ----------------------------------------------------------
 
 /// 从 JPEG 的 APP1(`Exif\0\0`)段解析 EXIF;无段/损坏 → null。
+///
+/// 头读截断容忍(2026-10-09 Zf 实测定案):最新 JPG 的 EXIF APP1 段
+/// 声明 65534B(MakerNote 40KB+ 撑大),64KB 头读盖不住整段(差 2B),
+/// 但 IFD0/ExifIFD/LensModel 数据全在前段 —— 段尾夹到可用字节照解,
+/// image 包对越界条目按缺项处理不抛。非 Exif 的截断段无法跨过,止步。
 img.ExifData? readJpegExif(Uint8List jpeg) {
   if (jpeg.length < 4 || jpeg[0] != 0xFF || jpeg[1] != 0xD8) return null;
   const header = [0x45, 0x78, 0x69, 0x66, 0x00, 0x00]; // 'Exif\0\0'
@@ -137,9 +142,11 @@ img.ExifData? readJpegExif(Uint8List jpeg) {
     final marker = jpeg[pos + 1];
     if (marker == 0xD8 || (marker >= 0xD0 && marker <= 0xD9)) break;
     final segLen = jpeg[pos + 2] << 8 | jpeg[pos + 3];
-    if (segLen < 2 || pos + 2 + segLen > jpeg.length) break;
-    if (marker == 0xE1 && segLen >= 2 + header.length) {
-      final payloadStart = pos + 4;
+    if (segLen < 2) break;
+    final segEnd = pos + 2 + segLen;
+    final end = segEnd > jpeg.length ? jpeg.length : segEnd;
+    final payloadStart = pos + 4;
+    if (marker == 0xE1 && end - payloadStart >= header.length) {
       var matches = true;
       for (var i = 0; i < header.length; i++) {
         if (jpeg[payloadStart + i] != header[i]) {
@@ -151,13 +158,14 @@ img.ExifData? readJpegExif(Uint8List jpeg) {
         try {
           return img.ExifData.fromInputBuffer(img.InputBuffer(
               Uint8List.sublistView(
-                  jpeg, payloadStart + header.length, pos + 2 + segLen)));
+                  jpeg, payloadStart + header.length, end)));
         } on Exception {
           return null;
         }
       }
     }
-    pos += 2 + segLen;
+    if (end < segEnd) break; // 本段被截断:后续段全在头读之外
+    pos = segEnd;
   }
   return null;
 }
