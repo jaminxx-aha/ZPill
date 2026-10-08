@@ -14,7 +14,9 @@ import 'package:nikon_pill/core/ptp/ptp_transport.dart';
 import 'package:nikon_pill/core/remote/live_view_engine.dart';
 import 'package:nikon_pill/core/utils/byte_writer.dart';
 import 'package:nikon_pill/features/connection/connection_page.dart';
+import 'package:nikon_pill/features/remote/live_view_overlays.dart';
 import 'package:nikon_pill/features/remote/remote_controller.dart';
+import 'package:nikon_pill/features/remote/remote_page.dart';
 import 'package:nikon_pill/features/remote/shooting_param_catalog.dart';
 import 'package:nikon_pill/features/shell/home_shell.dart';
 
@@ -202,6 +204,14 @@ Uint8List _realJpeg() {
 Finder _navTab(String label) => find.descendant(
     of: find.byType(NavigationBar), matching: find.text(label));
 
+/// NavigationRail(横屏外壳)上的 tab 标签。
+Finder _railTab(String label) => find.descendant(
+    of: find.byType(NavigationRail), matching: find.text(label));
+
+/// 拍摄页内匹配(IndexedStack 常驻其他 tab,offstage 页也在树里)。
+Finder _inRemotePage(Finder f) =>
+    find.descendant(of: find.byType(RemotePage), matching: f);
+
 int _selectedIndex(WidgetTester tester) =>
     tester.widget<NavigationBar>(find.byType(NavigationBar)).selectedIndex;
 
@@ -343,5 +353,106 @@ void main() {
             .where((r) => r.opcode == NikonOperationCode.getLiveViewImageEx),
         hasLength(1),
         reason: '页面不可见:只取首帧即挂起');
+  });
+
+  testWidgets('横屏外壳:底栏换左侧 NavigationRail,拍摄 tab 切换照常',
+      (tester) async {
+    tester.view
+      ..physicalSize = const Size(2400, 800)
+      ..devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final connCtrl = ConnectionController(connection: conn);
+    addTearDown(connCtrl.dispose);
+    final controller = RemoteController(
+        session: PtpSession(transport: transport),
+        connection: conn,
+        engine: LiveViewEngine(
+            session: PtpSession(transport: transport), delay: _parkedDelay),
+        delay: _parkedDelay);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(MaterialApp(
+        home: HomeShell(
+            connectionController: connCtrl, remoteController: controller)));
+    await tester.pumpAndSettle();
+    expect(find.byType(NavigationRail), findsOneWidget, reason: '横屏换 rail');
+    expect(find.byType(NavigationBar), findsNothing,
+        reason: '底栏退位(80px 高度还给监看画面)');
+    expect(
+        tester
+            .widget<NavigationRail>(find.byType(NavigationRail))
+            .selectedIndex,
+        0,
+        reason: '初始在相机 tab');
+
+    // 切拍摄 tab:回台对表刷参数(active 沿;linkUp 乐观态即发)。
+    _scriptParams(transport);
+    await tester.tap(_railTab('拍摄'));
+    await tester.pumpAndSettle();
+    expect(
+        tester
+            .widget<NavigationRail>(find.byType(NavigationRail))
+            .selectedIndex,
+        1);
+    expect(controller.exposure?.fNumber, 280, reason: 'rail 切台照常刷参数');
+  });
+
+  testWidgets('竖→横旋转:拍摄页状态全程保留(网格在、取景不重启)'
+      '—— key 保 IndexedStack', (tester) async {
+    tester.view
+      ..physicalSize = const Size(800, 2400)
+      ..devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final connCtrl = ConnectionController(connection: conn);
+    addTearDown(connCtrl.dispose);
+    final controller = RemoteController(
+        session: PtpSession(transport: transport),
+        connection: conn,
+        engine: LiveViewEngine(
+            session: PtpSession(transport: transport), delay: _parkedDelay),
+        delay: _parkedDelay);
+    addTearDown(controller.dispose);
+
+    _scriptParams(transport); // connected → 控制器沿参数刷新(FIFO 道)
+    transport
+      ..okFor(NikonOperationCode.startLiveView) // 0x9201 连接即取景(引擎道)
+      ..okFor(NikonOperationCode.getLiveViewImageEx,
+          data: _realJpeg()); // 首帧(引擎道,此后 delay 挂起)
+    await tester.pumpWidget(MaterialApp(
+        home: HomeShell(
+            connectionController: connCtrl, remoteController: controller)));
+    await tester.pumpAndSettle();
+    conn.statesCtrl.add(CameraLinkState.connected);
+    await tester.pumpAndSettle();
+    expect(controller.liveViewActive, isTrue);
+
+    _scriptParams(transport); // 回台对表刷参数
+    await tester.tap(_navTab('拍摄'));
+    await tester.pumpAndSettle();
+    // 开网格(页面 State)—— 旋转后此开关必须还在
+    await tester.tap(_inRemotePage(find.byIcon(Icons.grid_on)));
+    await tester.pumpAndSettle();
+    expect(_inRemotePage(find.byType(GridOverlay)), findsOneWidget);
+    expect(_inRemotePage(find.byType(Image)), findsOneWidget,
+        reason: '首帧在屏');
+
+    // 旋转到横屏:底栏换 rail,页面 State 全程保留
+    tester.view.physicalSize = const Size(2400, 800);
+    await tester.pumpAndSettle();
+    expect(find.byType(NavigationRail), findsOneWidget, reason: '横屏 rail 接班');
+    expect(find.byType(NavigationBar), findsNothing);
+    expect(_inRemotePage(find.byType(GridOverlay)), findsOneWidget,
+        reason: '网格开关跨旋转保留(无 key 会整树重建丢 State)');
+    expect(_inRemotePage(find.byType(Image)), findsOneWidget, reason: '帧不丢');
+    expect(controller.liveViewActive, isTrue);
+    expect(
+        transport.requests
+            .where((r) => r.opcode == NikonOperationCode.startLiveView),
+        hasLength(1),
+        reason: '旋转不重启取景');
   });
 }

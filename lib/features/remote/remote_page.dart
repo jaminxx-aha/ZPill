@@ -8,7 +8,7 @@
 /// 路由/连拍按住,见其头注)—— 本页只做视图,交互全部走控制器。
 ///
 /// 布局(竖屏,自上而下):
-/// - 信息胶囊:链路点 + 设备名 + 接管徽标;
+/// - 信息胶囊:链路点 + 设备名 + 接管徽标 + 方向切换钮;
 /// - 取景区(Expanded):取景帧 + 网格/斑马纹/直方图/水平仪 + 触控对焦,
 ///   错误/提示横幅贴画面底边(OpenZCine「坐在画面下沿」的口径);
 /// - 动作行:取景开关 / 对焦 / 快门(按下即拍、按住连拍);
@@ -17,9 +17,13 @@
 ///   IRIS/DRIVE/FOCUS/WB/METER/PROFILE,其余随后);
 /// - 辅助条:监看开关 + 「对焦后拍」+「APP 接管」。
 ///
-/// 横屏转**监看布局**(OpenZCine MonitorLayoutPolicy):取景画面全幅铺底
-/// 占大块屏幕,信息胶囊/辅助条浮顶、读出条/动作行浮底,贴边元素(横幅/
-/// 直方图/即拍即览卡)按浮层高度让位。
+/// 横屏转**侧栏监看布局**:取景画面全幅铺底,顶栏一条(信息胶囊 +
+/// 辅助面板/纯净监看按钮),参数读出竖列贴左、动作竖列贴右 —— 横屏
+/// 屏高仅 ~390px,「浮顶 + 浮底」布局会盖掉约六成画面(2026-10-08
+/// 用户反馈),侧栏大部分落在取景画幅的左右黑边上;辅助开关收进顶栏
+/// tune 按钮的非模态浮层;纯净监看(眼睛)隐去全部控制浮层,只留画面
+/// 与监看叠层。方向按钮三态(跟随系统/锁横屏/锁竖屏)经 SystemChrome
+/// 强制,系统转屏锁开着也能切,不依赖系统自动横竖屏设置。
 ///
 /// 水平仪数据源:相机帧头虚拟水平仪(LiveViewHeader.level,机身侧水平
 /// 仪,OpenZCine 同源)优先,手机姿态流只作相机未报时的兜底。
@@ -32,9 +36,9 @@
 library;
 
 import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../app_services.dart';
 import '../../core/ptp/operation_codes.dart';
@@ -63,6 +67,26 @@ abstract final class _LiveDesign {
   static const bad = Color(0xFFD13437);
 }
 
+/// 应用内方向锁定(拍摄页方向按钮三态):auto 跟随系统;landscape/
+/// portrait 经 [SystemChrome.setPreferredOrientations] 强制 —— 系统
+/// 转屏锁开着也能切(iOS Info.plist 已声明全方向、Android configChanges
+/// 已含 orientation,均无平台工程改动)。app 全局生效,页面销毁时复位。
+enum _OrientationLock { auto, landscape, portrait }
+
+/// 横屏侧栏监看几何:顶栏一条(高 48)+ 左参数栏(宽 96)/右动作栏
+/// (宽 72)分贴两侧;贴边元素(横幅/直方图/即拍即览)经 _feedArea 的
+/// inset 让位。
+const _kLandscapeTopBarHeight = 48.0;
+const _kParamRailWidth = 96.0;
+/// 顶栏下沿的纵深(8 边距 + 48 栏高):侧栏/贴顶叠层由此起让位。
+const _kLandscapeTopInset = 56.0;
+/// 左栏右沿(10 边距 + 96 栏宽 + 8 间隙):左下角叠层(直方图/即拍
+/// 即览)由此起让位。
+const _kLandscapeLeftInset = 114.0;
+
+/// 横屏辅助浮层宽(监看开关 + 芯片组,两列 Wrap 的舒适宽)。
+const _kLandscapeAssistPanelWidth = 300.0;
+
 class RemotePage extends StatefulWidget {
   const RemotePage({super.key, this.controller, this.active = true});
 
@@ -89,6 +113,15 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
 
   /// 读出条中当前打开面板的参数(金高亮 tile)。
   int? _activeParam;
+
+  /// 方向锁定(页面级视图偏好,不入持久化设置;重启回 auto)。
+  _OrientationLock _orientationLock = _OrientationLock.auto;
+
+  /// 横屏辅助浮层(监看开关 + 芯片组)是否展开。
+  bool _assistPanelOpen = false;
+
+  /// 横屏纯净监看:隐去全部控制浮层(横幅/监看叠层/触控对焦保留)。
+  bool _chromeHidden = false;
 
   /// 手机姿态流(缓存单实例:MovtionHost 的 getter 每次返回**新**流,
   /// 取景期页面每帧重建会让 StreamBuilder 反复拆装 EventChannel)。
@@ -122,6 +155,10 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     // 离页只挂起轮询(取景生命周期跟连接走,不因拆页发 0x9202)。
     controller.setViewerVisible(false);
+    // 方向锁定随页拆除复位(仅锁定态发 —— auto 本就未动系统)。
+    if (_orientationLock != _OrientationLock.auto) {
+      _applyOrientationLock(_OrientationLock.auto);
+    }
     super.dispose();
   }
 
@@ -183,62 +220,245 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     );
   }
 
-  /// 横屏监看:全幅取景打底,顶栏(信息胶囊 + 辅助条)与底栏(读出条 +
-  /// 动作行)悬浮;横幅/直方图/即拍即览经 [ bannerBottomInset]/[topInset]
-  /// 让位浮层。
+  /// 横屏侧栏监看:全幅取景打底,控制件收两侧 —— 顶栏一条(信息胶囊
+  /// + 辅助面板/纯净监看按钮)、左参数栏、右动作栏;辅助开关收进顶栏
+  /// tune 按钮的非模态浮层。chrome 整体(顶栏 + 双栏 + 浮层)经
+  /// IgnorePointer + AnimatedOpacity 支持纯净监看淡出。
+  ///
+  /// 监听拆两层:feed 区照旧 merge(controller+frame+status)逐帧刷;
+  /// chrome 层只听 controller —— 帧到达只写 ValueNotifier 不
+  /// notifyListeners,侧栏的 20 来个 tile/按钮不必逐帧重建。
   Widget _landscapeBody(BuildContext context) {
-    return AnimatedBuilder(
-      animation: Listenable.merge([
-        controller,
-        controller.engine.frame,
-        controller.engine.status,
-      ]),
-      builder: (context, _) => Stack(
-        fit: StackFit.expand,
-        children: [
-          _feedArea(context, topInset: 72, bannerBottomInset: 168),
-          Positioned(
-            top: 4,
-            left: 10,
-            right: 10,
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(child: _infoPill(context, margin: EdgeInsets.zero)),
-                const SizedBox(width: 8),
-                Expanded(
-                  flex: 2,
-                  child:
-                      _assistStrip(context, margin: EdgeInsets.zero),
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        // feed 区不能裸放:帧到达只写 ValueNotifier 不 notifyListeners,
+        // 没有这层 merge 监听,首帧永远停在「等待首帧」。
+        AnimatedBuilder(
+          animation: Listenable.merge([
+            controller,
+            controller.engine.frame,
+            controller.engine.status,
+          ]),
+          builder: (context, _) => _feedArea(context,
+              topInset: _kLandscapeTopInset, leftInset: _kLandscapeLeftInset),
+        ),
+        Positioned.fill(
+          child: IgnorePointer(
+            // key 供测试定位:Navigator 转场页自己也包 IgnorePointer,
+            // 全树按类型找不到「chrome 这一层」。
+            key: const ValueKey('landscape-chrome'),
+            ignoring: _chromeHidden,
+            child: AnimatedOpacity(
+              opacity: _chromeHidden ? 0 : 1,
+              duration: const Duration(milliseconds: 200),
+              child: AnimatedBuilder(
+                animation: controller,
+                builder: (context, _) => Stack(
+                  children: [
+                    // 顶栏:信息胶囊收缩包内容(中部透出画面)+ 两个按钮。
+                    Positioned(
+                      top: 8,
+                      left: 10,
+                      right: 10,
+                      height: _kLandscapeTopBarHeight,
+                      child: Row(
+                        children: [
+                          Flexible(
+                            child: _infoPill(context,
+                                margin: EdgeInsets.zero, compact: true),
+                          ),
+                          const SizedBox(width: 8),
+                          _chromeIconButton(
+                            icon: Icons.tune,
+                            tooltip: '监看辅助(网格/斑马纹/直方图/水平仪…)',
+                            selected: _assistPanelOpen,
+                            onTap: () => setState(
+                                () => _assistPanelOpen = !_assistPanelOpen),
+                          ),
+                          const SizedBox(width: 6),
+                          _chromeIconButton(
+                            icon: Icons.visibility_off,
+                            tooltip: '纯净监看(隐藏全部控制,只留画面)',
+                            onTap: () => setState(() {
+                              _chromeHidden = true;
+                              // 隐 chrome 时同步收起辅助浮层(不留一个
+                              // 看不见却开着的面板态)。
+                              _assistPanelOpen = false;
+                            }),
+                          ),
+                        ],
+                      ),
+                    ),
+                    // 左:参数读出竖列(读出条的竖向版)。
+                    Positioned(
+                      top: _kLandscapeTopInset + 8,
+                      bottom: 8,
+                      left: 10,
+                      width: _kParamRailWidth,
+                      child: _paramRail(context),
+                    ),
+                    // 右:动作竖列(取景/对焦/录制/MF/快门)。
+                    Positioned(
+                      top: _kLandscapeTopInset + 8,
+                      bottom: 8,
+                      right: 10,
+                      width: 72,
+                      child: _landscapeActionRail(context),
+                    ),
+                    // 辅助浮层:锚在 tune 钮下方、让位右动作栏。
+                    if (_assistPanelOpen)
+                      Positioned(
+                        top: _kLandscapeTopInset + 8,
+                        right: 90,
+                        width: _kLandscapeAssistPanelWidth,
+                        child: _assistPanel(context),
+                      ),
+                  ],
                 ),
-              ],
+              ),
             ),
           ),
+        ),
+        // 纯净监看恢复钮:chrome 全隐后唯一入口(监看叠层/横幅仍在)。
+        if (_chromeHidden)
           Positioned(
-            bottom: 4,
-            left: 10,
+            top: 8,
             right: 10,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                _captureStrip(context, margin: EdgeInsets.zero),
-                const SizedBox(height: 4),
-                _captureRow(context),
-              ],
+            child: _chromeIconButton(
+              icon: Icons.visibility,
+              tooltip: '显示控制界面',
+              onTap: () => setState(() => _chromeHidden = false),
             ),
           ),
+      ],
+    );
+  }
+
+  // ── 方向锁定(应用内横竖屏切换)────────────────────────────────
+
+  /// 方向按钮循环:跟随系统 → 锁横屏 → 锁竖屏 → 跟随系统。
+  void _cycleOrientationLock() {
+    const order = [
+      _OrientationLock.auto,
+      _OrientationLock.landscape,
+      _OrientationLock.portrait,
+    ];
+    setState(() {
+      _orientationLock =
+          order[(order.indexOf(_orientationLock) + 1) % order.length];
+    });
+    _applyOrientationLock(_orientationLock);
+  }
+
+  /// 把方向锁定下发给系统(空列表 = 恢复默认全方向)。OHOS fork 若未
+  /// 实现该 method 会 MissingPluginException —— 方向按钮不能因平台
+  /// 差异炸页,静默兜住。
+  void _applyOrientationLock(_OrientationLock lock) {
+    final orientations = switch (lock) {
+      _OrientationLock.auto => const <DeviceOrientation>[],
+      _OrientationLock.landscape => const [
+          DeviceOrientation.landscapeLeft,
+          DeviceOrientation.landscapeRight,
         ],
+      _OrientationLock.portrait => const [
+          DeviceOrientation.portraitUp,
+          DeviceOrientation.portraitDown,
+        ],
+    };
+    unawaited(SystemChrome.setPreferredOrientations(orientations)
+        .catchError((Object _) {}));
+  }
+
+  /// 方向切换钮(信息胶囊行尾,竖横屏同位一处实现):三态图标即态
+  /// (锁定态金色),Tooltip 说明下一态。
+  Widget _orientationButton() {
+    final (icon, tip, locked) = switch (_orientationLock) {
+      _OrientationLock.auto => (
+          Icons.screen_rotation,
+          '方向:跟随系统(点按锁定横屏)',
+          false
+        ),
+      _OrientationLock.landscape => (
+          Icons.stay_current_landscape,
+          '方向:已锁横屏(点按锁定竖屏)',
+          true
+        ),
+      _OrientationLock.portrait => (
+          Icons.stay_current_portrait,
+          '方向:已锁竖屏(点按恢复跟随系统)',
+          true
+        ),
+    };
+    return Tooltip(
+      message: tip,
+      child: InkWell(
+        onTap: _cycleOrientationLock,
+        customBorder:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(9)),
+        child: SizedBox(
+          width: 34,
+          height: 30,
+          child: Icon(icon,
+              size: 18,
+              color: locked ? _LiveDesign.accent : _LiveDesign.muted),
+        ),
       ),
     );
   }
 
-  // ── 信息胶囊:链路 + 设备名 + 接管徽标 ──────────────────────────
+  /// 玻璃圆角图标钮(横屏 chrome 专用):暗底 + 描边 + Tooltip;
+  /// [selected] 金 accent 高亮(辅助面板开等),[dimmed] 随可用性置灰。
+  Widget _chromeIconButton({
+    required IconData icon,
+    required String tooltip,
+    required VoidCallback? onTap,
+    double size = 36,
+    bool selected = false,
+    bool dimmed = false,
+  }) {
+    return Tooltip(
+      message: tooltip,
+      child: SizedBox(
+        width: size,
+        height: size,
+        child: Material(
+          color: selected ? _LiveDesign.accentDim : _LiveDesign.glass,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+            side: BorderSide(
+              color: selected
+                  ? _LiveDesign.accent.withValues(alpha: 0.5)
+                  : _LiveDesign.hairline,
+            ),
+          ),
+          child: InkWell(
+            onTap: onTap,
+            customBorder:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            child: Icon(icon,
+                size: size * 0.5,
+                color: dimmed
+                    ? _LiveDesign.faint
+                    : selected
+                        ? _LiveDesign.accent
+                        : _LiveDesign.text),
+          ),
+        ),
+      ),
+    );
+  }
 
-  Widget _infoPill(BuildContext context, {EdgeInsetsGeometry? margin}) {
+  // ── 信息胶囊:链路 + 设备名 + 接管徽标 + 方向钮 ──────────────────
+
+  /// [compact]:横屏顶栏态 —— 不占满宽(收缩包内容,顶栏中部透出
+  /// 画面),徽标前用小间距代替 Spacer 撑开。
+  Widget _infoPill(BuildContext context,
+      {EdgeInsetsGeometry? margin, bool compact = false}) {
     final linked = controller.linkUp;
     final name = controller.connection?.deviceName;
     return Container(
-      width: double.infinity,
+      width: compact ? null : double.infinity,
       margin: margin ?? const EdgeInsets.fromLTRB(12, 8, 12, 4),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
       decoration: BoxDecoration(
@@ -277,14 +497,16 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                     color: _LiveDesign.bad,
                     fontFeatures: [FontFeature.tabularFigures()])),
           ],
-          const Spacer(),
+          compact ? const SizedBox(width: 12) : const Spacer(),
           if (controller.takeoverActive) ...[
             Icon(Icons.lock, size: 13, color: _LiveDesign.accent),
             const SizedBox(width: 4),
             const Text('APP 接管中',
                 style:
                     TextStyle(fontSize: 12, color: _LiveDesign.accent)),
+            const SizedBox(width: 6),
           ],
+          _orientationButton(),
         ],
       ),
     );
@@ -300,10 +522,11 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
 
   // ── 取景区:帧 + 监看叠层 + 底边横幅 ────────────────────────────
 
-  /// 取景区:帧 + 监看叠层 + 底边横幅。[topInset]/[bannerBottomInset] 供
-  /// 横屏浮层布局把贴边元素(即拍即览卡/直方图/横幅)让位给顶/底控制条。
+  /// 取景区:帧 + 监看叠层 + 底边横幅。[topInset]/[bottomInset]/
+  /// [leftInset] 供横屏侧栏布局把贴边元素(即拍即览卡/直方图/横幅)
+  /// 让位给顶栏/底浮层/左参数栏。
   Widget _feedArea(BuildContext context,
-      {double topInset = 0, double bannerBottomInset = 0}) {
+      {double topInset = 0, double bottomInset = 0, double leftInset = 0}) {
     final Uint8List? frame = controller.engine.frame.value;
     final status = controller.engine.status;
     return LayoutBuilder(builder: (context, constraints) {
@@ -372,7 +595,8 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
               Align(
                 alignment: Alignment.topLeft,
                 child: Container(
-                  margin: EdgeInsets.fromLTRB(10, 10 + topInset, 10, 10),
+                  margin: EdgeInsets.fromLTRB(
+                      10 + leftInset, 10 + topInset, 10, 10),
                   padding: const EdgeInsets.all(3),
                   decoration: BoxDecoration(
                     color: _LiveDesign.glass,
@@ -390,8 +614,8 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
               Align(
                 alignment: Alignment.bottomLeft,
                 child: Padding(
-                  padding:
-                      EdgeInsets.fromLTRB(8, 8, 8, 8 + bannerBottomInset),
+                  padding: EdgeInsets.fromLTRB(
+                      8 + leftInset, 8, 8, 8 + bottomInset),
                   child: ValueListenableBuilder(
                     valueListenable: controller.analyzer.analysis,
                     builder: (context, FrameAnalysis? analysis, _) =>
@@ -451,19 +675,19 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                 alignment: Alignment.bottomCenter,
                 child: _banner('未连接相机 —— 请先在「相机」页建立连接',
                     _LiveDesign.accent,
-                    bottomInset: bannerBottomInset),
+                    bottomInset: bottomInset),
               )
             else if (controller.error != null)
               Align(
                 alignment: Alignment.bottomCenter,
                 child: _banner(controller.error!, _LiveDesign.bad,
-                    bottomInset: bannerBottomInset),
+                    bottomInset: bottomInset),
               ),
             if (controller.notice != null)
               Align(
                 alignment: Alignment.bottomCenter,
                 child: _banner(controller.notice!, _LiveDesign.good,
-                    bottomInset: bannerBottomInset),
+                    bottomInset: bottomInset),
               ),
           ],
         ),
@@ -472,7 +696,11 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   }
 
   /// 点按 → 触控对焦:屏幕坐标经 contain 矩阵归一化到取景帧坐标系。
+  /// 横屏辅助浮层开着时,点画面顺带收起浮层(画面本身即「外点」——
+  /// 不用 TapRegion:它在外点 down 时关面板,锚按钮的 tap 在 up 时
+  /// 又重开,两者打架)。
   void _handleTapFocus(TapUpDetails d, Rect? imageRect) {
+    if (_assistPanelOpen) setState(() => _assistPanelOpen = false);
     if (imageRect == null) return;
     final nx = ((d.localPosition.dx - imageRect.left) / imageRect.width)
         .clamp(0.0, 1.0);
@@ -612,8 +840,9 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
 
   /// 快门钮(OpenZCine PhotographyShutterButton 同款):白圈 + 白芯,
   /// 按下变半透明白(拍照中)。**按下即拍 + 按住连拍**(连续释放档时
-  /// 按住 = 连拍括持链发,抬起终止;普通档点按 = 单张)。
-  Widget _shutterButton(BuildContext context) {
+  /// 按住 = 连拍括持链发,抬起终止;普通档点按 = 单张)。[size] 默认
+  /// 竖屏动作行 72,横屏右栏 64。
+  Widget _shutterButton(BuildContext context, {double size = 72}) {
     final usable = controller.linkUp;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
@@ -626,14 +855,14 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       child: Opacity(
         opacity: usable ? 1 : 0.35,
         child: SizedBox(
-          width: 72,
-          height: 72,
+          width: size,
+          height: size,
           child: Stack(
             alignment: Alignment.center,
             children: [
               Container(
-                width: 72,
-                height: 72,
+                width: size,
+                height: size,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   border: Border.all(
@@ -641,8 +870,8 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                 ),
               ),
               Container(
-                width: 54,
-                height: 54,
+                width: size - 18,
+                height: size - 18,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   color: controller.capturing
@@ -652,8 +881,8 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                 child: Center(
                   child: controller.selfTimerCountdown != null
                       ? Text('${controller.selfTimerCountdown}',
-                          style: const TextStyle(
-                              fontSize: 24,
+                          style: TextStyle(
+                              fontSize: size >= 72 ? 24 : 20,
                               fontWeight: FontWeight.bold,
                               color: _LiveDesign.background))
                       : controller.capturing
@@ -671,6 +900,56 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
           ),
         ),
       ),
+    );
+  }
+
+  /// 横屏右动作栏:竖排 取景/对焦/录制 + MF 步进对 + 快门沉底,
+  /// spaceBetween 分布。图标 + Tooltip(横屏屏面窄,不带下标签);
+  /// 录制中钮下补时长小字(事件驱动刷新,同信息胶囊)。
+  Widget _landscapeActionRail(BuildContext context) {
+    final usable = controller.linkUp && controller.liveViewActive;
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        _chromeIconButton(
+          icon: controller.liveViewActive
+              ? Icons.videocam
+              : Icons.videocam_off_outlined,
+          tooltip: controller.liveViewActive ? '取景中(点按关闭)' : '取景',
+          dimmed: !controller.liveViewActive,
+          size: 44,
+          onTap: controller.toggleLiveView,
+        ),
+        _chromeIconButton(
+          icon: Icons.center_focus_strong,
+          tooltip: controller.focusing ? '对焦中' : '对焦(驱动一次自动对焦)',
+          dimmed: !usable,
+          size: 44,
+          onTap: usable && !controller.focusing ? controller.afDriveNow : null,
+        ),
+        Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _chromeIconButton(
+              icon: controller.recording ? Icons.stop : Icons.fiber_manual_record,
+              tooltip: controller.recording ? '停录' : '录制',
+              dimmed: !usable,
+              size: 44,
+              onTap: usable && !controller.capturing
+                  ? controller.toggleRecord
+                  : null,
+            ),
+            if (controller.recording)
+              Text(_recDurationLabel(),
+                  style: const TextStyle(
+                      fontSize: 10,
+                      color: _LiveDesign.bad,
+                      fontFeatures: [FontFeature.tabularFigures()])),
+          ],
+        ),
+        _mfNearFarButtons(context),
+        _shutterButton(context, size: 64),
+      ],
     );
   }
 
@@ -746,14 +1025,34 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     PtpDevicePropCode.activePicCtrlItem,
   ];
 
+  /// 读出条/参数栏的参数序:固定序(对齐 OpenZCine
+  /// photographyCaptureValues:MODE/ISO/SHUTTER/IRIS/DRIVE/FOCUS/WB/
+  /// METER/PROFILE,见 _stripOrder)+ 目录余量按目录序追加(新参数
+  /// 默认上栏)。
+  List<ShootingParam> _orderedParams() => [
+        for (final code in _stripOrder)
+          if (shootingParamByCode[code] != null) shootingParamByCode[code]!,
+        for (final p in kShootingParams)
+          if (!_stripOrder.contains(p.code)) p,
+      ];
+
+  /// 读出条 tile(竖屏底部横滚 / 横屏左参数栏竖列共用)的取值打包;
+  /// [dense] 为左栏紧凑态(值 13px + 省略号)。
+  _CaptureTile _captureTileOf(ShootingParam p, {bool dense = false}) =>
+      _CaptureTile(
+        param: p,
+        displayValue:
+            controller.displayParamValue(p.code, controller.paramProps[p.code]?.value),
+        auto: controller.paramAutoControlled(p.code),
+        writable: controller.propWritable(p.code),
+        active: _activeParam == p.code,
+        writing: controller.writing,
+        locked: controller.lockedProps.contains(p.code),
+        dense: dense,
+        onTap: () => _editParam(context, p),
+      );
+
   Widget _captureStrip(BuildContext context, {EdgeInsetsGeometry? margin}) {
-    final params = [
-      for (final code in _stripOrder)
-        if (shootingParamByCode[code] != null) shootingParamByCode[code]!,
-      // 目录余量(不在固定序里的)按目录序追加,新参数默认上条。
-      for (final p in kShootingParams)
-        if (!_stripOrder.contains(p.code)) p,
-    ];
     return Container(
       margin: margin ?? const EdgeInsets.fromLTRB(12, 0, 12, 4),
       padding: const EdgeInsets.symmetric(vertical: 5),
@@ -782,19 +1081,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                 scrollDirection: Axis.horizontal,
                 padding: const EdgeInsets.symmetric(horizontal: 12),
                 children: [
-                  for (final p in params)
-                    _CaptureTile(
-                      param: p,
-                      displayValue:
-                          controller.displayParamValue(p.code, controller
-                              .paramProps[p.code]?.value),
-                      auto: controller.paramAutoControlled(p.code),
-                      writable: controller.propWritable(p.code),
-                      active: _activeParam == p.code,
-                      writing: controller.writing,
-                      locked: controller.lockedProps.contains(p.code),
-                      onTap: () => _editParam(context, p),
-                    ),
+                  for (final p in _orderedParams()) _captureTileOf(p),
                 ],
               ),
             ),
@@ -804,9 +1091,46 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     );
   }
 
+  /// 横屏左参数栏:读出条的竖向滚动版(dense tile:值 13px + 省略号),
+  /// 上下边缘渐隐同横条(改轴向)。
+  Widget _paramRail(BuildContext context) {
+    return Container(
+      width: _kParamRailWidth,
+      padding: const EdgeInsets.symmetric(vertical: 5),
+      decoration: BoxDecoration(
+        color: _LiveDesign.glass,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: _LiveDesign.hairline),
+      ),
+      child: ShaderMask(
+        shaderCallback: (bounds) => const LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            Color(0x00000000),
+            Color(0xFF000000),
+            Color(0xFF000000),
+            Color(0x00000000),
+          ],
+          stops: [0, 0.05, 0.95, 1],
+        ).createShader(bounds),
+        blendMode: BlendMode.dstIn,
+        child: ListView(
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          itemExtent: 52,
+          children: [
+            for (final p in _orderedParams()) _captureTileOf(p, dense: true),
+          ],
+        ),
+      ),
+    );
+  }
+
   // ── 辅助条:监看开关 + 对焦后拍 + APP 接管 ──────────────────────
 
-  Widget _assistStrip(BuildContext context, {EdgeInsetsGeometry? margin}) {
+  /// 辅助开关组(竖屏底部整条 / 横屏浮层面板共用):监看开关 Wrap +
+  /// 对焦后拍/自拍/APP 接管芯片。
+  Widget _assistToggles(BuildContext context) {
     Widget toggle(IconData icon, String label, bool current,
         void Function(bool) set) {
       return Padding(
@@ -832,7 +1156,8 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                       borderRadius: BorderRadius.circular(10)),
                   child: Icon(icon,
                       size: 18,
-                      color: current ? _LiveDesign.accent : _LiveDesign.muted),
+                      color:
+                          current ? _LiveDesign.accent : _LiveDesign.muted),
                 ),
               ),
             ),
@@ -846,6 +1171,59 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       );
     }
 
+    return Wrap(
+      spacing: 2,
+      runSpacing: 4,
+      children: [
+        toggle(Icons.grid_on, '网格', _showGrid, (v) => setState(() => _showGrid = v)),
+        // 四个分析类开关改完须同步分析器启停(共享一份帧分析;
+        // 开而分析器未启 = 直方图无数据一类静默失效)。
+        toggle(Icons.warning_amber, '斑马纹', _showZebra, (v) {
+          setState(() => _showZebra = v);
+          _syncAnalyzerEnabled();
+        }),
+        toggle(Icons.bar_chart, '直方图', _showHistogram, (v) {
+          setState(() => _showHistogram = v);
+          _syncAnalyzerEnabled();
+        }),
+        toggle(Icons.linear_scale, '水平仪', _showLevel,
+            (v) => setState(() => _showLevel = v)),
+        toggle(Icons.palette_outlined, '伪色', _showFalseColor, (v) {
+          setState(() => _showFalseColor = v);
+          _syncAnalyzerEnabled();
+        }),
+        toggle(Icons.blur_on, '峰值', _showPeaking, (v) {
+          setState(() => _showPeaking = v);
+          _syncAnalyzerEnabled();
+        }),
+        const SizedBox(width: 6),
+        _smallChip(
+          label: '对焦后拍',
+          selected: controller.focusBeforeCapture,
+          onTap: () => controller.focusBeforeCapture =
+              !controller.focusBeforeCapture,
+          tooltip: '释放快门前先自动对焦(半按-全按;候选参数,待真机核对)',
+        ),
+        _smallChip(
+          label: controller.selfTimerSeconds == 0
+              ? '自拍'
+              : '自拍 ${controller.selfTimerSeconds}s',
+          selected: controller.selfTimerSeconds > 0,
+          onTap: () {
+            const cycle = [0, 2, 5, 10];
+            final next = cycle[(cycle.indexOf(controller.selfTimerSeconds) +
+                    1) %
+                cycle.length];
+            controller.setSelfTimer(next);
+          },
+          tooltip: '自拍定时:关 → 2s → 5s → 10s 循环;倒计时中再点取消',
+        ),
+        _takeoverChip(context),
+      ],
+    );
+  }
+
+  Widget _assistStrip(BuildContext context, {EdgeInsetsGeometry? margin}) {
     return Container(
       margin: margin ?? const EdgeInsets.fromLTRB(12, 0, 12, 10),
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
@@ -854,56 +1232,22 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: _LiveDesign.hairline),
       ),
-      child: Wrap(
-        spacing: 2,
-        runSpacing: 4,
-        children: [
-          toggle(Icons.grid_on, '网格', _showGrid, (v) => setState(() => _showGrid = v)),
-          // 四个分析类开关改完须同步分析器启停(共享一份帧分析;
-          // 开而分析器未启 = 直方图无数据一类静默失效)。
-          toggle(Icons.warning_amber, '斑马纹', _showZebra, (v) {
-            setState(() => _showZebra = v);
-            _syncAnalyzerEnabled();
-          }),
-          toggle(Icons.bar_chart, '直方图', _showHistogram, (v) {
-            setState(() => _showHistogram = v);
-            _syncAnalyzerEnabled();
-          }),
-          toggle(Icons.linear_scale, '水平仪', _showLevel,
-              (v) => setState(() => _showLevel = v)),
-          toggle(Icons.palette_outlined, '伪色', _showFalseColor, (v) {
-            setState(() => _showFalseColor = v);
-            _syncAnalyzerEnabled();
-          }),
-          toggle(Icons.blur_on, '峰值', _showPeaking, (v) {
-            setState(() => _showPeaking = v);
-            _syncAnalyzerEnabled();
-          }),
-          const SizedBox(width: 6),
-          _smallChip(
-            label: '对焦后拍',
-            selected: controller.focusBeforeCapture,
-            onTap: () => controller.focusBeforeCapture =
-                !controller.focusBeforeCapture,
-            tooltip: '释放快门前先自动对焦(半按-全按;候选参数,待真机核对)',
-          ),
-          _smallChip(
-            label: controller.selfTimerSeconds == 0
-                ? '自拍'
-                : '自拍 ${controller.selfTimerSeconds}s',
-            selected: controller.selfTimerSeconds > 0,
-            onTap: () {
-              const cycle = [0, 2, 5, 10];
-              final next = cycle[(cycle.indexOf(controller.selfTimerSeconds) +
-                      1) %
-                  cycle.length];
-              controller.setSelfTimer(next);
-            },
-            tooltip: '自拍定时:关 → 2s → 5s → 10s 循环;倒计时中再点取消',
-          ),
-          _takeoverChip(context),
-        ],
+      child: _assistToggles(context),
+    );
+  }
+
+  /// 横屏辅助浮层(非模态):监看开关 + 芯片组,锚在顶栏 tune 钮下方、
+  /// 让位右动作栏。点取景画面即收起(见 _handleTapFocus),点浮层外
+  /// 的其他控制件不收 —— 浮层不遮它们,互不打扰。
+  Widget _assistPanel(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: _LiveDesign.glass,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: _LiveDesign.hairline),
       ),
+      child: _assistToggles(context),
     );
   }
   /// 辅助条小芯片(对焦后拍 / APP 接管)。
@@ -1165,6 +1509,7 @@ class _CaptureTile extends StatelessWidget {
     required this.writing,
     required this.locked,
     required this.onTap,
+    this.dense = false,
   });
 
   final ShootingParam param;
@@ -1178,6 +1523,9 @@ class _CaptureTile extends StatelessWidget {
   final bool locked;
   final VoidCallback onTap;
 
+  /// 横屏左参数栏竖列的紧凑态:值 13px + 省略号(栏宽 ~96)。
+  final bool dense;
+
   @override
   Widget build(BuildContext context) {
     final value = displayValue;
@@ -1187,7 +1535,8 @@ class _CaptureTile extends StatelessWidget {
       child: Opacity(
         opacity: writable ? 1 : 0.38,
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          padding: EdgeInsets.symmetric(
+              horizontal: dense ? 8 : 10, vertical: 4),
           decoration: BoxDecoration(
             color: active ? _LiveDesign.accentDim : Colors.transparent,
             borderRadius: BorderRadius.circular(10),
@@ -1223,8 +1572,10 @@ class _CaptureTile extends StatelessWidget {
               Text(
                 '$value${auto ? '(自动)' : ''}',
                 maxLines: 1,
+                overflow:
+                    dense ? TextOverflow.ellipsis : TextOverflow.clip,
                 style: TextStyle(
-                  fontSize: 15,
+                  fontSize: dense ? 13 : 15,
                   fontWeight: FontWeight.w500,
                   color: auto ? _LiveDesign.muted : _LiveDesign.text,
                   fontFeatures: const [FontFeature.tabularFigures()],
