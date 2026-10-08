@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'dart:collection';
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 
@@ -454,5 +454,87 @@ void main() {
             .where((r) => r.opcode == NikonOperationCode.startLiveView),
         hasLength(1),
         reason: '旋转不重启取景');
+  });
+
+  testWidgets('方向锁定全程:点按横竖直切不丢锁、旋转不误发消息'
+      '(真机回归:竖→横→竖闪屏 + 白点一击 —— 点按永不发空表,图标恒定)',
+      (tester) async {
+    final calls = <MethodCall>[];
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        (call) async {
+          calls.add(call);
+          return null;
+        });
+    addTearDown(() => tester.binding.defaultBinaryMessenger
+        .setMockMethodCallHandler(SystemChannels.platform, null));
+
+    tester.view
+      ..physicalSize = const Size(800, 2400)
+      ..devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final connCtrl = ConnectionController(connection: conn);
+    addTearDown(connCtrl.dispose);
+    final controller = RemoteController(
+        session: PtpSession(transport: transport),
+        connection: conn,
+        engine: LiveViewEngine(
+            session: PtpSession(transport: transport), delay: _parkedDelay),
+        delay: _parkedDelay);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(MaterialApp(
+        home: HomeShell(
+            connectionController: connCtrl, remoteController: controller)));
+    _scriptParams(transport); // 回台对表刷参数(active 沿)
+    await tester.tap(_navTab('拍摄'));
+    await tester.pumpAndSettle();
+
+    List<MethodCall> orientationCalls() => [
+          for (final c in calls)
+            if (c.method == 'SystemChrome.setPreferredOrientations') c,
+        ];
+
+    // 第一击:竖屏下 auto 翻转屏向 → 锁横,系统随之转横(图标恒定)
+    await tester.tap(_inRemotePage(find.byIcon(Icons.screen_rotation)));
+    await tester.pumpAndSettle();
+    expect(_inRemotePage(find.byIcon(Icons.screen_rotation)), findsOneWidget,
+        reason: '图标恒定,不随锁态换形');
+    expect(orientationCalls(), hasLength(1));
+    expect(
+        orientationCalls().last.arguments,
+        ['DeviceOrientation.landscapeLeft', 'DeviceOrientation.landscapeRight']);
+    tester.view.physicalSize = const Size(2400, 800);
+    await tester.pumpAndSettle();
+
+    // 第二击:直切锁竖(landscape → portrait,不绕 auto —— auto 空表
+    // 在 iOS 是 All mask,真机按物理姿态闪转的元凶)
+    await tester.tap(_inRemotePage(find.byIcon(Icons.screen_rotation)));
+    await tester.pumpAndSettle();
+    expect(orientationCalls(), hasLength(2), reason: '只该有一次锁竖消息');
+    expect(
+        orientationCalls().last.arguments, ['DeviceOrientation.portraitUp']);
+    tester.view.physicalSize = const Size(800, 2400);
+    await tester.pumpAndSettle();
+
+    // 旋转后:锁仍竖,且旋转全程零多余消息 —— 锁挂控制器(会话级),
+    // 页面 State 回收不复位、不补发 auto(闪屏元凶)。
+    expect(orientationCalls(), hasLength(2),
+        reason: '旋转不得触发复位消息(auto 空表会让真机按物理姿态闪转)');
+
+    // 第三击:直切回锁横 —— 发 landscape 对即证锁竖态跨旋转存活;
+    // 点按循环永不发空表(旧三态的 auto 空表按物理姿态闪转,白点多耗
+    // 一击;图标恒定无长按,态只经消息序可见)
+    await tester.tap(_inRemotePage(find.byIcon(Icons.screen_rotation)));
+    await tester.pumpAndSettle();
+    expect(orientationCalls(), hasLength(3));
+    expect(
+        orientationCalls().last.arguments,
+        ['DeviceOrientation.landscapeLeft', 'DeviceOrientation.landscapeRight']);
+    tester.view.physicalSize = const Size(2400, 800);
+    await tester.pumpAndSettle();
+    expect(orientationCalls(), hasLength(3), reason: '旋转零方向消息');
   });
 }
