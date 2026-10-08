@@ -106,7 +106,10 @@ const Map<int, PtpDataType> kStandardPropDataType = {
   PtpDevicePropCode.fNumber: PtpDataType.uint16,
   PtpDevicePropCode.exposureTime: PtpDataType.uint32,
   PtpDevicePropCode.exposureIndex: PtpDataType.uint16,
-  PtpDevicePropCode.focalLength: PtpDataType.uint16,
+  // ISO 15740:焦距 u32、单位 0.01mm(libgphoto2 _get_FocalLength 同款
+  // ÷100 换算,与 FNumber ×100 是同族定点;2026-10-09 修正:此前误记
+  // u16)。÷100 的 mm 换算在展示侧(camera_overview_controller)。
+  PtpDevicePropCode.focalLength: PtpDataType.uint32,
 };
 
 /// 0x1015 GetDevicePropValue / 0x1016 SetDevicePropValue 的值单元。
@@ -130,7 +133,10 @@ final class PtpDevicePropValue {
   /// 抛 FormatException —— 宁可失败不可静默错值。
   static PtpDevicePropValue parse(int propCode, Uint8List data) {
     final standard = kStandardPropDataType[propCode];
-    if (standard != null) {
+    // 标准类型宽度与实际数据集不符 = 方言偏离,转长度嗅探
+    //(宽度不匹配仍硬读会在短缓冲上抛 RangeError —— Error 会逃逸
+    // on Exception 的收口)。
+    if (standard != null && (standard.width == null || standard.width == data.length)) {
       return PtpDevicePropValue(
         code: propCode,
         dataType: standard,

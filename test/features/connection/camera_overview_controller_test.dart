@@ -225,7 +225,7 @@ void main() {
         data: Uint8List.fromList([80]))); // 电池 u8
     transport.reply(PtpResult(
         responseCode: PtpResponseCode.ok,
-        data: Uint8List.fromList([0x90, 0x01]))); // 焦距 u16 LE = 400
+        data: Uint8List.fromList([0xA0, 0x0F, 0x00, 0x00]))); // 焦距 u32 = 4000(0.01mm)→ 40mm
     transport.reply(PtpResult(
         responseCode: PtpResponseCode.ok,
         data: Uint8List.fromList([0x18, 0x01]))); // 光圈 u16 LE = 280(ƒ/2.8)
@@ -235,7 +235,7 @@ void main() {
 
     expect(controller.deviceInfo?.model, 'TestModel');
     expect(controller.batteryPercent, 80);
-    expect(controller.focalLengthMm, 400);
+    expect(controller.focalLengthMm, 40); // 4000(0.01mm)÷100
     expect(controller.fNumber, 280);
     expect(controller.focalLengthFromExif, isFalse, reason: '属性路径');
     expect(controller.fNumberFromExif, isFalse);

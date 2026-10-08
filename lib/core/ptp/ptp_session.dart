@@ -107,8 +107,18 @@ final class PtpDeviceInfo {
       manufacturer: r.ptpString() ?? '',
       model: r.ptpString() ?? '',
       deviceVersion: r.ptpString() ?? '',
-      serialNumber: r.ptpString(),
+      serialNumber: _normalizeSerial(r.ptpString()),
     );
+  }
+
+  /// 序列号方言归一(2026-10-09 真机定案):Zf 回定宽 32 位、左补零的
+  /// 序列号(实测 '00000000000000000000000008014411' —— 尾段 8014411
+  /// 与 mDNS 实例名 Z_f_8014411 同源);剥前导零,全零占位(剥后为空)
+  /// 视为未提供 → null。注意:配对档案键由此换形(旧档案按补零串
+  /// 落账的,重连一次即迁移)。
+  static String? _normalizeSerial(String? raw) {
+    final s = raw?.replaceFirst(RegExp('^0+'), '');
+    return (s == null || s.isEmpty) ? null : s;
   }
 
   /// PTP 数组数据集类型:u32 计数 + N 个 u16。
