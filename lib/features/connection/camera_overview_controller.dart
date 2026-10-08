@@ -151,9 +151,10 @@ final class CameraOverviewController extends ChangeNotifier {
     final jpg = newest.jpg;
     if (jpg == null) return;
     try {
-      // 头读降级:64KB 全 EXIF(MakerNote 可达数十 KB,LensModel 0xA434
-      // 在其后)→ 失败再试 16KB(iOS IC 链 64KB 单发被拒时的降级路,
-      // 宁可丢部分信息不丢整行)。
+      // 头读降级:64KB → 16KB。Zf 实测(2026-10-09 USB 直连)64KB 足额
+      // 返回;镜头行曾空是 readJpegExif 对截断段过严(EXIF APP1 段声明
+      // 65534B,64KB 差 2B),已在解析侧修。阶梯保留为 IC 链异常时的
+      // 兜底(真实失败模式从未观测到,宁窄勿宽)。
       Uint8List? head;
       for (final size in const [64 * 1024, 16 * 1024]) {
         try {
