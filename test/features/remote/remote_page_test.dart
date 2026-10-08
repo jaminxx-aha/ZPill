@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'dart:collection';
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 
@@ -207,9 +207,33 @@ Uint8List _headerObject() {
 final _chipsRow = find.byWidgetPredicate(
     (w) => w is Scrollable && w.axisDirection == AxisDirection.right);
 
+/// 竖屏视口:flutter_test 默认 800×600 = 横屏,断言竖屏布局(横滚读出
+/// 条/辅助条/动作行文字)的用例必须显式竖过来。
+void _portrait(WidgetTester tester) {
+  tester.view
+    ..physicalSize = const Size(800, 2400)
+    ..devicePixelRatio = 1.0;
+  addTearDown(tester.view.reset);
+}
+
+/// 横屏视口(侧栏监看布局)。
+void _landscape(WidgetTester tester) {
+  tester.view
+    ..physicalSize = const Size(1600, 800)
+    ..devicePixelRatio = 1.0;
+  addTearDown(tester.view.reset);
+}
+
+/// flutter/platform 通道里的方向消息(过滤同通道的其他系统消息)。
+List<MethodCall> _orientationCalls(List<MethodCall> calls) => [
+      for (final c in calls)
+        if (c.method == 'SystemChrome.setPreferredOrientations') c,
+    ];
+
 void main() {
   testWidgets('参数 chips:目录值中文上屏(三要素大芯片 + 其余小芯片)',
       (tester) async {
+    _portrait(tester);
     final transport = _ScriptTransport();
     final conn = _FakeConnection();
     final controller = RemoteController(
@@ -257,6 +281,7 @@ void main() {
   });
 
   testWidgets('总闸紧急关断:全部参数芯片只读不可点', (tester) async {
+    _portrait(tester);
     PtpSession.kSetPropEnabled = false; // 生产已开,显式关断走分支
     addTearDown(() => PtpSession.kSetPropEnabled = true);
     final transport = _ScriptTransport();
@@ -282,6 +307,7 @@ void main() {
 
   testWidgets('门禁开 + 可写:点小芯片 → 枚举单选 → 0x1016 写 + 回读上屏',
       (tester) async {
+    _portrait(tester);
     PtpSession.kSetPropEnabled = true; // 翻 session 总闸(controller 闸注入)
     addTearDown(() => PtpSession.kSetPropEnabled = true);
     final transport = _ScriptTransport();
@@ -320,6 +346,7 @@ void main() {
 
   testWidgets('快门(拨盘拥有):先弹「APP 接管」确认 → 0x90C2 启用 → '
       '标准档面板直写打包值', (tester) async {
+    _portrait(tester);
     PtpSession.kSetPropEnabled = true;
     addTearDown(() => PtpSession.kSetPropEnabled = true);
     final transport = _ScriptTransport();
@@ -370,6 +397,7 @@ void main() {
 
   testWidgets('APP 接管芯片:未接管弹确认启用;已接管点按解除(0x90C2 [0])',
       (tester) async {
+    _portrait(tester);
     final transport = _ScriptTransport();
     final conn = _FakeConnection();
     final controller = RemoteController(
@@ -408,6 +436,7 @@ void main() {
 
   testWidgets('A(光圈优先)模式:快门芯片标「(自动)」置灰,光圈照常',
       (tester) async {
+    _portrait(tester);
     final transport = _ScriptTransport();
     final conn = _FakeConnection();
     final controller = RemoteController(
@@ -434,6 +463,7 @@ void main() {
 
   testWidgets('ISO 面板:「自动 ISO」开关置顶(0xD054;ISO 拨盘级参数'
       '先过接管确认)', (tester) async {
+    _portrait(tester);
     final transport = _ScriptTransport();
     final conn = _FakeConnection();
     final controller = RemoteController(
@@ -475,6 +505,7 @@ void main() {
 
   testWidgets('门禁开 + 域未知:面板出「取值域未知」只读提示(不炸不写)',
       (tester) async {
+    _portrait(tester);
     PtpSession.kSetPropEnabled = true;
     addTearDown(() => PtpSession.kSetPropEnabled = true);
     final transport = _ScriptTransport();
@@ -531,6 +562,7 @@ void main() {
 
   testWidgets('点按取景画面 → 触控对焦(0x9205 帧像素坐标 + 对焦框回投)',
       (tester) async {
+    _portrait(tester);
     final transport = _ScriptTransport();
     final conn = _FakeConnection();
     final controller = RemoteController(
@@ -588,6 +620,7 @@ void main() {
 
   testWidgets('「对焦后拍」开关:横滚行尾,点选即切换(零相机流量)',
       (tester) async {
+    _portrait(tester);
     final transport = _ScriptTransport();
     final conn = _FakeConnection();
     final controller = RemoteController(
@@ -615,6 +648,7 @@ void main() {
 
   testWidgets('监看辅助开关:直方图等四个分析开关须同步启用帧分析器'
       '(直方图无数据回归)', (tester) async {
+    _portrait(tester);
     final transport = _ScriptTransport();
     final conn = _FakeConnection();
     final controller = RemoteController(
@@ -642,6 +676,7 @@ void main() {
 
   testWidgets('相机自报 AF 框:帧头在册即叠加(真实尺寸框,无需点按)',
       (tester) async {
+    _portrait(tester);
     final transport = _ScriptTransport();
     final conn = _FakeConnection();
     final controller = RemoteController(
@@ -686,12 +721,9 @@ void main() {
         reason: '头在册 = 相机真实框已在屏,占位框再画即双框');
   });
 
-  testWidgets('横屏监看布局:取景画面全幅打底,控制条浮在画面上下',
-      (tester) async {
-    tester.view.physicalSize = const Size(1600, 800);
-    tester.view.devicePixelRatio = 1.0;
-    addTearDown(tester.view.reset);
-
+  testWidgets('横屏侧栏监看:画面全幅打底,参数竖列贴左、动作贴右,'
+      '辅助开关收进顶栏浮层', (tester) async {
+    _landscape(tester);
     final transport = _ScriptTransport();
     final conn = _FakeConnection();
     final controller = RemoteController(
@@ -703,23 +735,153 @@ void main() {
         aeDelay: _parkedDelay);
     addTearDown(controller.dispose);
 
+    // 单 FIFO 按消费顺序入队:connected 先吃掉 21 应答参数脚本,
+    // 之后 tap 的 0x9201、首帧、AF 点按两应答依次就位。
+    _scriptParams(transport);
     transport
-      ..ok() // 0x9201
-      ..ok(data: _realJpeg());
+      ..ok() // 0x9201(tap 后)
+      ..ok(data: _realJpeg()); // 首帧(此后 delay 挂起)
     await tester
         .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
-    await tester.tap(find.text('取景'));
+    conn.statesCtrl.add(CameraLinkState.connected);
+    await tester.pumpAndSettle();
+    // 横屏取景钮 = 右动作栏图标钮(横屏无文字标签)
+    await tester.tap(find.byIcon(Icons.videocam_off_outlined));
     await tester.pumpAndSettle();
     expect(controller.liveViewActive, isTrue);
 
-    // 横屏 Stack:取景区(含 Image)占满整屏,不再是竖屏 Column 里被
-    // 控制条挤剩的一条 —— Image 组件盒 = 全屏尺寸
+    // 画面打底占满整屏(Image 组件盒 = 全屏尺寸),不再是竖屏 Column
+    // 里被控制条挤剩的一条
     final imageSize = tester.getSize(find.byType(Image).first);
     expect(imageSize.width, 1600);
-    expect(imageSize.height, 800,
-        reason: '画面打底占大块屏幕,按钮浮在其上');
-    // 控制条在画面之上同屏可见(浮层,不再把画面挤出屏)
-    expect(find.text('取景中'), findsOneWidget);
-    expect(find.byIcon(Icons.grid_on), findsOneWidget);
+    expect(imageSize.height, 800, reason: '画面打底,控制件浮在其上');
+
+    // 参数读出 = 左栏竖向滚动(竖屏的横滚条在横屏不复存在)
+    expect(
+        find.byWidgetPredicate(
+            (w) => w is Scrollable && w.axisDirection == AxisDirection.down),
+        findsOneWidget);
+    expect(_chipsRow, findsNothing);
+    expect(find.text('模式'), findsOneWidget, reason: '左栏参数 tile');
+
+    // 动作竖列 + 顶栏按钮在场
+    expect(find.byIcon(Icons.center_focus_strong), findsOneWidget,
+        reason: '右栏对焦钮');
+    expect(find.byIcon(Icons.tune), findsOneWidget, reason: '辅助面板入口');
+
+    // 辅助开关收浮层:默认不在树,点 tune 展开
+    expect(find.byIcon(Icons.grid_on), findsNothing, reason: '默认收起');
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
+    expect(find.byIcon(Icons.grid_on), findsOneWidget, reason: '面板开');
+
+    // 点取景画面即收浮层 + 照常触控对焦(点左栏右沿与画幅左沿之间的
+    // 空白;预置 AF 两应答)。
+    transport
+      ..ok() // changeAfArea
+      ..ok(); // afDrive
+    await tester.tapAt(const Offset(200, 400));
+    await tester.pumpAndSettle();
+    expect(find.byIcon(Icons.grid_on), findsNothing, reason: '点画面收起面板');
+    final af = transport.requests.singleWhere(
+        (r) => r.opcode == NikonOperationCode.changeAfArea);
+    // contain 映射照常:画面左缘外钳到 0,纵向居中
+    expect(af.params, [0, 12]);
+  });
+
+  testWidgets('横屏纯净监看:控制浮层淡出放行点击,可一键恢复',
+      (tester) async {
+    _landscape(tester);
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = RemoteController(
+        session: PtpSession(transport: transport),
+        connection: conn,
+        engine: LiveViewEngine(
+            session: PtpSession(transport: transport), delay: _parkedDelay),
+        delay: _parkedDelay,
+        aeDelay: _parkedDelay);
+    addTearDown(controller.dispose);
+    await tester
+        .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
+
+    expect(find.byIcon(Icons.tune), findsOneWidget, reason: '隐前 chrome 在场');
+    await tester.tap(find.byIcon(Icons.visibility_off));
+    await tester.pumpAndSettle();
+
+    // 淡出 + 放行点击(AnimatedOpacity 不裁树 —— 断言透明度与忽略
+    // 指针,而非 finder 缺失)。Navigator 转场页自己也包 IgnorePointer,
+    // 按类型全树找会撞多层 —— 按键定位 chrome 那一层。
+    final chrome = find.byKey(const ValueKey('landscape-chrome'));
+    final chromeOpacity =
+        find.descendant(of: chrome, matching: find.byType(AnimatedOpacity));
+    expect(tester.widget<AnimatedOpacity>(chromeOpacity).opacity, 0.0);
+    expect(tester.widget<IgnorePointer>(chrome).ignoring, isTrue,
+        reason: '点击放行给画面(触控对焦照常)');
+
+    // 恢复钮(chrome 外的独立浮钮)在场可点
+    await tester.tap(find.byIcon(Icons.visibility));
+    await tester.pumpAndSettle();
+    expect(tester.widget<AnimatedOpacity>(chromeOpacity).opacity, 1.0);
+    expect(tester.widget<IgnorePointer>(chrome).ignoring, isFalse);
+    expect(find.byIcon(Icons.tune), findsOneWidget, reason: 'chrome 回来');
+  });
+
+  testWidgets('方向按钮三态循环:跟随系统 → 锁横屏 → 锁竖屏 → 复位'
+      '(SystemChrome 消息,不依赖系统自动横竖屏设置)', (tester) async {
+    final calls = <MethodCall>[];
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        (call) async {
+          calls.add(call);
+          return null;
+        });
+    addTearDown(() => tester.binding.defaultBinaryMessenger
+        .setMockMethodCallHandler(SystemChannels.platform, null));
+
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = RemoteController(
+        session: PtpSession(transport: transport), connection: conn);
+    addTearDown(controller.dispose);
+    await tester
+        .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
+
+    // 初始 = 跟随系统:零方向消息
+    expect(_orientationCalls(calls), isEmpty);
+    expect(find.byIcon(Icons.screen_rotation), findsOneWidget);
+
+    // 1) 锁横屏(系统转屏锁开着也能切)
+    await tester.tap(find.byIcon(Icons.screen_rotation));
+    await tester.pumpAndSettle();
+    expect(find.byIcon(Icons.stay_current_landscape), findsOneWidget);
+    expect(_orientationCalls(calls).last.arguments, [
+      'DeviceOrientation.landscapeLeft',
+      'DeviceOrientation.landscapeRight',
+    ]);
+
+    // 2) 锁竖屏
+    await tester.tap(find.byIcon(Icons.stay_current_landscape));
+    await tester.pumpAndSettle();
+    expect(find.byIcon(Icons.stay_current_portrait), findsOneWidget);
+    expect(_orientationCalls(calls).last.arguments, [
+      'DeviceOrientation.portraitUp',
+      'DeviceOrientation.portraitDown',
+    ]);
+
+    // 3) 回跟随系统:空方向表(本 fork 恒发 List,空表原样下发)
+    await tester.tap(find.byIcon(Icons.stay_current_portrait));
+    await tester.pumpAndSettle();
+    expect(find.byIcon(Icons.screen_rotation), findsOneWidget);
+    expect(_orientationCalls(calls).last.arguments, isEmpty);
+
+    // 锁定态拆页:dispose 发空列表复位(auto 态拆页本就不发)
+    await tester.tap(find.byIcon(Icons.screen_rotation));
+    await tester.pumpAndSettle();
+    _orientationCalls(calls).clear();
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump();
+    expect(_orientationCalls(calls).last.arguments, isEmpty,
+        reason: '锁定态拆页复位');
   });
 }
