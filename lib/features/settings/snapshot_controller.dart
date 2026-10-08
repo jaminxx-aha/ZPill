@@ -12,6 +12,7 @@ import '../../core/camera/camera_connection.dart';
 import '../../core/ptp/ptp_session.dart';
 import '../../core/remote/config_snapshot.dart';
 import '../../data/config_snapshot_store.dart';
+import '../../design/app_colors.dart';
 
 final class SnapshotController extends ChangeNotifier {
   SnapshotController({
@@ -152,7 +153,7 @@ Widget buildSnapshotSection(BuildContext context) {
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
             child: Text(controller.message!,
-                style: const TextStyle(color: Colors.green)),
+                style: TextStyle(color: AppColors.success(context))),
           ),
         for (final e in controller.snapshots.entries)
           ListTile(

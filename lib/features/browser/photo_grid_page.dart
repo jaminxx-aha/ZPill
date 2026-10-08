@@ -27,6 +27,9 @@ import '../../core/browser/thumbnail_cache.dart';
 import '../../core/transfer/transfer_engine.dart';
 import '../../core/transfer/transfer_task.dart';
 import '../common/format.dart';
+import '../common/widgets/confirm_dialog.dart';
+import '../common/widgets/states.dart';
+import '../../design/app_colors.dart';
 import 'browser_controller.dart';
 import 'download_format_sheet.dart';
 import 'photo_viewer_page.dart';
@@ -304,24 +307,14 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
       return;
     }
     final fileCount = groups.fold<int>(0, (n, g) => n + g.members.length);
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('删除相机上的文件?'),
-        content: Text('将删除 ${groups.length} 项(共 $fileCount 个文件)。\n此操作不可恢复。'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('删除'),
-          ),
-        ],
-      ),
+    final confirmed = await showConfirmDialog(
+      context,
+      title: '删除相机上的文件?',
+      content: '将删除 ${groups.length} 项(共 $fileCount 个文件)。\n此操作不可恢复。',
+      confirmLabel: '删除',
+      destructive: true,
     );
-    if (confirmed != true) {
+    if (!confirmed) {
       return;
     }
     if (!mounted) {
@@ -434,45 +427,17 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
       CameraAlbum? album, List<PhotoGroup> items) {
     if (items.isEmpty) {
       if (controller.error != null) {
-        return Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Padding(
-                padding: const EdgeInsets.all(16),
-                child: Text(controller.error!),
-              ),
-              FilledButton(
-                onPressed: controller.load,
-                child: const Text('重试'),
-              ),
-            ],
-          ),
-        );
+        return ErrorRetryPanel(
+            message: controller.error!, onRetry: controller.load);
       }
       if (controller.syncing) {
         final p = controller.progress;
-        return Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const SizedBox(
-                width: 28,
-                height: 28,
-                child: CircularProgressIndicator(strokeWidth: 2.5),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                p == null ? '正在连接相机读取对象…' : '正在读取相机对象 ${p.$1}/${p.$2}…',
-                textAlign: TextAlign.center,
-              ),
-            ],
-          ),
-        );
+        return LoadingState(
+            message: p == null
+                ? '正在连接相机读取对象…'
+                : '正在读取相机对象 ${p.$1}/${p.$2}…');
       }
-      return const Center(
-        child: Text('相机里还没有照片\n(未连接时请先在「相机」页连接)', textAlign: TextAlign.center),
-      );
+      return EmptyState(message: '相机里还没有照片\n(未连接时请先在「相机」页连接)');
     }
     return Column(
       children: [
@@ -521,31 +486,10 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
 
   /// 同步中断横幅:内容已显示,重试只补缺失对象(断点续传)。
   Widget _syncErrorBanner(BrowserController controller) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-      child: Card(
-        margin: EdgeInsets.zero,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-          child: Row(
-            children: [
-              const Icon(Icons.sync_problem, size: 20),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  controller.error!,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              TextButton(
-                onPressed: controller.load,
-                child: const Text('重试'),
-              ),
-            ],
-          ),
-        ),
-      ),
+    return InlineHint(
+      message: controller.error!,
+      actionLabel: '重试',
+      onAction: controller.load,
     );
   }
 
@@ -593,9 +537,9 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
             ),
             builder: (context, snap) {
               if (snap.connectionState != ConnectionState.done) {
-                return const ColoredBox(
-                  color: Color(0x22808080),
-                  child: Center(
+                return ColoredBox(
+                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                  child: const Center(
                     child: SizedBox(
                       width: 18,
                       height: 18,
@@ -606,17 +550,19 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
               }
               final path = snap.data;
               if (path == null || snap.hasError) {
-                return const ColoredBox(
-                  color: Color(0x33808080),
-                  child: Center(child: Icon(Icons.broken_image_outlined)),
+                return ColoredBox(
+                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                  child: const Center(
+                      child: Icon(Icons.broken_image_outlined)),
                 );
               }
               return Image.file(
                 File(path),
                 fit: BoxFit.cover,
-                errorBuilder: (context, error, stackTrace) => const ColoredBox(
-                  color: Color(0x33808080),
-                  child: Center(child: Icon(Icons.broken_image_outlined)),
+                errorBuilder: (context, error, stackTrace) => ColoredBox(
+                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                  child: const Center(
+                      child: Icon(Icons.broken_image_outlined)),
                 ),
               );
             },
@@ -663,18 +609,21 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
                   padding:
                       const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
                   decoration: BoxDecoration(
-                    color: Colors.amber.withValues(alpha: 0.85),
+                    // 品牌黄底深字(不随主题 —— 角标盖在照片上,黄底在
+                    // 深浅主题下同形)
+                    color: AppColors.brandYellow,
                     borderRadius: BorderRadius.circular(4),
                   ),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      const Icon(Icons.star, size: 9, color: Colors.white),
+                      const Icon(Icons.star,
+                          size: 9, color: AppColors.onBrandYellow),
                       const SizedBox(width: 2),
                       Text(
                         '${_ratings.ratingOf(group)}',
                         style: const TextStyle(
-                          color: Colors.white,
+                          color: AppColors.onBrandYellow,
                           fontSize: 9,
                           height: 1.3,
                         ),

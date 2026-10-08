@@ -16,16 +16,17 @@ import 'package:flutter/material.dart';
 
 import '../../app_services.dart';
 import '../../core/browser/album.dart';
-import '../../core/browser/storage_info.dart';
 import '../../core/camera/camera_connection.dart';
 import '../../core/camera/camera_discovery.dart';
 import '../../core/camera/camera_info.dart';
 import '../../data/client_identity_store.dart';
 import '../../data/paired_cameras_store.dart';
+import '../../design/app_dimens.dart';
 import '../../platform/nsd_scanner.dart';
 import '../browser/photo_grid_page.dart';
-import '../common/format.dart';
+import '../common/widgets/confirm_dialog.dart';
 import 'camera_overview_controller.dart';
+import 'connection_status_card.dart';
 
 /// 连接方式(未连接视图的分段选择;切到哪种出哪种卡)。
 enum ConnectionMethod { usb, ap, sta }
@@ -220,6 +221,7 @@ class ConnectionController extends ChangeNotifier {
     if (c == null) {
       return;
     }
+    _lastAttempt = connect;
     activeIp = null;
     await c.connect();
   }
@@ -230,6 +232,7 @@ class ConnectionController extends ChangeNotifier {
     if (c == null) {
       return;
     }
+    _lastAttempt = () => connectDiscovered(camera);
     await stopScan();
     activeIp = camera.host;
     await c.connect(ip: camera.host, instanceName: camera.name);
@@ -242,6 +245,7 @@ class ConnectionController extends ChangeNotifier {
     if (c == null || ip == null) {
       return;
     }
+    _lastAttempt = () => connectSaved(camera);
     activeIp = ip;
     await c.connect(ip: ip, instanceName: camera.name);
   }
@@ -256,6 +260,7 @@ class ConnectionController extends ChangeNotifier {
     if (c == null) {
       return;
     }
+    _lastAttempt = connectWireless;
     var ip = ipController.text.trim();
     if (ip.isEmpty) {
       ip = kDefaultCameraIp;
@@ -273,8 +278,23 @@ class ConnectionController extends ChangeNotifier {
     if (c == null || ip.isEmpty) {
       return;
     }
+    _lastAttempt = connectManualIp;
     activeIp = ip;
     await c.connect(ip: ip);
+  }
+
+  /// 最近一次连接尝试(失败重试重放):各 connect* 入口落账。重放会
+  /// 再次走完整入口(停扫/预填等副作用幂等);CameraConnection.connect
+  /// 自带 connected/connecting/pairing 态护栏,重入安全。
+  void Function()? _lastAttempt;
+
+  /// 重试上次失败的连接(仅 failed 态有意义,UI 只在该态出重试钮;
+  /// 无记录时静默 —— 如启动即 failed 从未尝试过)。
+  void retry() {
+    if (state != CameraLinkState.failed) {
+      return;
+    }
+    _lastAttempt?.call();
   }
 
   Future<void> confirmPairing() async {
@@ -406,18 +426,18 @@ class _ConnectionPageState extends State<ConnectionPage>
       onTap: () => FocusManager.instance.primaryFocus?.unfocus(),
       child: ListView(
         keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-        padding: const EdgeInsets.all(16),
+        padding: AppSpacing.screenPadding,
         children: [
-          // 状态着色:disconnected 灰 / connecting 蓝 / pairing 橙 /
-          // failed 红;配对后的机身确认等待窗显示专属文案(不闪失败)
-          _StatusCard(
-              state: controller.state,
-              waitingConfirm: controller.awaitingCameraConfirm),
-          if (controller.hint != null)
-            Padding(
-              padding: const EdgeInsets.only(top: 8),
-              child: Text(controller.hint!),
-            ),
+          // 状态着色:disconnected 灰 / connecting 红 / pairing 金 /
+          // connected 绿 / failed 红;busy 态尾槽 spinner;失败原因并入
+          // 副文(首句加粗)+ 重试钮。配对后的机身确认等待窗显示专属
+          // 文案(不闪失败)。
+          ConnectionStatusCard(
+            state: controller.state,
+            waitingConfirm: controller.awaitingCameraConfirm,
+            hint: controller.hint,
+            onRetry: controller.retry,
+          ),
           // connecting 逃生口:输入框/按钮全禁用期间(死 IP 的 TCP 超时
           // 最长 ~5s,握手阶段更长),用户得有取消手段,否则像「卡死」。
           if (controller.state == CameraLinkState.connecting)
@@ -459,15 +479,23 @@ class _ConnectionPageState extends State<ConnectionPage>
             ConnectionMethod.ap => _apCard(context, controller, busy: busy),
             ConnectionMethod.sta => _staCard(context, controller, busy: busy),
           },
-          const SizedBox(height: 12),
-          Text(
-            '· 首次无线连接会请求配对确认(相机记录本设备,之后免配对);'
-            '相机屏幕出现提示时请在机身上按 OK。\n'
-            '· 相机同一时间只允许一个客户端:若被 SnapBridge(尼享)抢先连上'
-            '会遭拒,请先彻底关闭它。\n'
-            '· 首次连接若失败,请在系统弹窗中允许访问本地网络后重试;'
-            '下载大文件期间请保持 App 在前台、屏幕点亮。',
-            style: Theme.of(context).textTheme.bodySmall,
+          const SizedBox(height: AppSpacing.md),
+          Container(
+            padding: const EdgeInsets.all(AppSpacing.md),
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.surfaceContainerLow,
+              borderRadius: BorderRadius.circular(AppRadius.sm),
+            ),
+            child: Text(
+              '· 首次无线连接会请求配对确认(相机记录本设备,之后免配对);'
+              '相机屏幕出现提示时请在机身上按 OK。\n'
+              '· 相机同一时间只允许一个客户端:若被 SnapBridge(尼享)抢先连上'
+              '会遭拒,请先彻底关闭它。\n'
+              '· 首次连接若失败,请在系统弹窗中允许访问本地网络后重试;'
+              '下载大文件期间请保持 App 在前台、屏幕点亮。',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant),
+            ),
           ),
         ],
       ),
@@ -565,9 +593,15 @@ class _ConnectionPageState extends State<ConnectionPage>
             SizedBox(
               width: double.infinity,
               child: OutlinedButton.icon(
-                icon: Icon(controller.scanning
-                    ? Icons.stop_circle_outlined
-                    : Icons.wifi_find),
+                // 扫描中 icon 槽换 spinner(标签文案不变):
+                // mDNS 发现是慢活,转圈才有进度感。
+                icon: controller.scanning
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.wifi_find),
                 label: Text(controller.scanning ? '扫描中…(点按停止)' : '扫描相机'),
                 onPressed: busy
                     ? null
@@ -662,26 +696,15 @@ class _ConnectionPageState extends State<ConnectionPage>
     ConnectionController controller,
     CameraInfo saved,
   ) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('忘记这台相机?'),
-        content: Text(
-            '删除「${saved.name}」的连接记录。已配对的相机会同时换新配对身份,'
-            '下次连接重新配对(自动确认,无需操作)。'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: const Text('删除'),
-          ),
-        ],
-      ),
+    final confirmed = await showConfirmDialog(
+      context,
+      title: '忘记这台相机?',
+      content: '删除「${saved.name}」的连接记录。已配对的相机会同时换新配对身份,'
+          '下次连接重新配对(自动确认,无需操作)。',
+      confirmLabel: '删除',
+      destructive: true,
     );
-    if (confirmed == true) {
+    if (confirmed) {
       await controller.removeSaved(saved);
     }
   }
@@ -702,18 +725,18 @@ class _ConnectionPageState extends State<ConnectionPage>
     return ListenableBuilder(
       listenable: _overview,
       builder: (context, _) => ListView(
-        padding: const EdgeInsets.all(16),
+        padding: AppSpacing.screenPadding,
         children: [
-          _StatusCard(state: controller.state),
-          const SizedBox(height: 12),
+          ConnectionStatusCard(state: controller.state),
+          const SizedBox(height: AppSpacing.md),
           _linkCard(context, controller),
-          const SizedBox(height: 12),
+          const SizedBox(height: AppSpacing.md),
           _bodyCard(context),
-          const SizedBox(height: 12),
+          const SizedBox(height: AppSpacing.md),
           _lensCard(context),
-          const SizedBox(height: 12),
-          const _StoragePanel(),
-          const SizedBox(height: 16),
+          const SizedBox(height: AppSpacing.md),
+          const StoragePanel(),
+          const SizedBox(height: AppSpacing.lg),
           SizedBox(
             height: 48,
             child: FilledButton.icon(
@@ -845,126 +868,6 @@ class _ConnectionPageState extends State<ConnectionPage>
           fallbackName: '相机相册',
         ),
       ),
-    );
-  }
-}
-
-class _StatusCard extends StatelessWidget {
-  const _StatusCard({required this.state, this.waitingConfirm = false});
-
-  final CameraLinkState state;
-
-  /// 配对后的机身确认等待窗(真机:相机弹「配对完成」等按 OK)——
-  /// 期间状态保持 connecting,用专属文案替代「连接中…」。
-  final bool waitingConfirm;
-
-  @override
-  Widget build(BuildContext context) {
-    final (label, color) = switch (state) {
-      CameraLinkState.disconnected => ('未连接', Colors.grey),
-      CameraLinkState.detecting => ('检测相机 WiFi…', Colors.blue),
-      CameraLinkState.connecting when waitingConfirm =>
-        ('等待相机上确认配对…', Colors.orange),
-      CameraLinkState.connecting => ('连接中…', Colors.blue),
-      CameraLinkState.pairing => ('等待配对确认…', Colors.orange),
-      CameraLinkState.connected => ('已连接', Colors.green),
-      CameraLinkState.failed => ('连接失败', Colors.red),
-    };
-    return Card(
-      color: color.withValues(alpha: 0.15),
-      child: ListTile(
-        leading: Icon(Icons.lan, color: color),
-        title: Text(label),
-        trailing: Icon(Icons.circle, color: color, size: 12),
-      ),
-    );
-  }
-}
-
-/// 双卡槽余量卡:每槽一行(名 + 剩余/总容量 + 余量进度条)。相机未上报
-/// 容量只显示名字;无槽不占位。(相册页删除后随相机信息卡组落户此处。)
-class _StoragePanel extends StatelessWidget {
-  const _StoragePanel();
-
-  @override
-  Widget build(BuildContext context) {
-    final overview = AppServices.instance.storageOverview;
-    return ListenableBuilder(
-      listenable: overview,
-      builder: (context, _) {
-        final storages = overview.storages;
-        if (storages.isEmpty) {
-          return const SizedBox.shrink();
-        }
-        return Card(
-          margin: EdgeInsets.zero,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            child: Column(
-              children: [
-                for (final storage in storages)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 4),
-                    child: _StorageRow(storage: storage),
-                  ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-}
-
-class _StorageRow extends StatelessWidget {
-  const _StorageRow({required this.storage});
-
-  final CameraStorage storage;
-
-  @override
-  Widget build(BuildContext context) {
-    final ratio = storage.freeRatio;
-    final colorScheme = Theme.of(context).colorScheme;
-    // 低余量(<10%)转警示色。
-    final barColor =
-        ratio != null && ratio < 0.1 ? colorScheme.error : colorScheme.primary;
-    return Row(
-      children: [
-        Icon(Icons.sd_card_outlined,
-            size: 20, color: colorScheme.onSurfaceVariant),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(storage.label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.bodyMedium),
-              if (ratio != null) ...[
-                const SizedBox(height: 4),
-                LinearProgressIndicator(
-                  value: 1 - ratio, // 已用占比
-                  minHeight: 4,
-                  borderRadius: BorderRadius.circular(2),
-                  backgroundColor: colorScheme.surfaceContainerHighest,
-                  color: barColor,
-                ),
-              ],
-            ],
-          ),
-        ),
-        const SizedBox(width: 12),
-        Text(
-          storage.maxCapacityBytes > 0
-              ? '${formatBytes(storage.freeSpaceBytes)} 可用 / ${formatBytes(storage.maxCapacityBytes)}'
-              : '容量未知',
-          style: Theme.of(context)
-              .textTheme
-              .bodySmall
-              ?.copyWith(color: colorScheme.onSurfaceVariant),
-        ),
-      ],
     );
   }
 }

@@ -16,8 +16,11 @@ import 'package:flutter/material.dart';
 import '../../app_services.dart';
 import '../../core/browser/photo_group.dart';
 import '../../core/ptpip/object_format.dart';
+import '../../design/app_colors.dart';
 import '../../platform/gallery_saver.dart';
 import '../../platform/services.dart';
+import '../common/widgets/confirm_dialog.dart';
+import '../common/widgets/states.dart';
 import '../transfers/transfers_page.dart';
 
 /// 图库格式过滤:按扩展名分流,与相机侧条目判定同源。
@@ -101,9 +104,9 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
             ],
           ),
           body: files.isEmpty
-              ? const Center(
-                  child: Text('应用内还没有文件\n(在相机相册里选择「下载到应用」)',
-                      textAlign: TextAlign.center),
+              ? const EmptyState(
+                  icon: Icons.download_outlined,
+                  message: '应用内还没有文件\n(在相机相册里选择「下载到应用」)',
                 )
               : Column(
                   children: [
@@ -202,9 +205,10 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
               file,
               fit: BoxFit.cover,
               cacheWidth: 300,
-              errorBuilder: (context, error, stackTrace) => const ColoredBox(
-                color: Color(0x33808080),
-                child: Center(child: Icon(Icons.broken_image_outlined)),
+              errorBuilder: (context, error, stackTrace) => ColoredBox(
+                color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                child: const Center(
+                    child: Icon(Icons.broken_image_outlined)),
               ),
             )
           else
@@ -262,24 +266,14 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   /// 长按格 / 查看器删除:确认对话框把关(应用内文件,删了要重下)。
   Future<void> _confirmDelete(File file) async {
     final name = file.uri.pathSegments.last;
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('删除应用内文件?'),
-        content: Text('将删除「$name」。\n此操作不可恢复(相机上的原件不受影响)。'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('删除'),
-          ),
-        ],
-      ),
+    final confirmed = await showConfirmDialog(
+      context,
+      title: '删除应用内文件?',
+      content: '将删除「$name」。\n此操作不可恢复(相机上的原件不受影响)。',
+      confirmLabel: '删除',
+      destructive: true,
     );
-    if (confirmed == true) {
+    if (confirmed) {
       await _controller.deleteAppFile(file);
     }
   }
@@ -303,10 +297,10 @@ class _LibraryViewer extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: AppMedia.background,
       appBar: AppBar(
-        backgroundColor: Colors.black87,
-        foregroundColor: Colors.white,
+        backgroundColor: AppMedia.chrome,
+        foregroundColor: AppMedia.onMedia,
         title: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
         actions: [
           IconButton(
@@ -329,7 +323,7 @@ class _LibraryViewer extends StatelessWidget {
             fit: BoxFit.contain,
             errorBuilder: (context, error, stackTrace) => const Icon(
               Icons.broken_image_outlined,
-              color: Colors.white54,
+              color: AppMedia.onMediaSubtle,
               size: 48,
             ),
           ),
@@ -364,24 +358,14 @@ class _LibraryViewer extends StatelessWidget {
   }
 
   Future<void> _delete(BuildContext context) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('删除应用内文件?'),
-        content: Text('将删除「$title」。\n此操作不可恢复(相机上的原件不受影响)。'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: const Text('删除'),
-          ),
-        ],
-      ),
+    final confirmed = await showConfirmDialog(
+      context,
+      title: '删除应用内文件?',
+      content: '将删除「$title」。\n此操作不可恢复(相机上的原件不受影响)。',
+      confirmLabel: '删除',
+      destructive: true,
     );
-    if (confirmed != true) {
+    if (!confirmed) {
       return;
     }
     if (!context.mounted) {

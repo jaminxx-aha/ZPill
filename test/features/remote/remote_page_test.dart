@@ -14,7 +14,9 @@ import 'package:nikon_pill/core/ptp/ptp_transport.dart';
 import 'package:nikon_pill/core/remote/live_view_engine.dart';
 import 'package:nikon_pill/core/remote/live_view_header.dart';
 import 'package:nikon_pill/core/utils/byte_writer.dart';
+import 'package:nikon_pill/design/app_theme.dart';
 import 'package:nikon_pill/features/remote/live_view_overlays.dart';
+import 'package:nikon_pill/features/remote/remote_banner.dart';
 import 'package:nikon_pill/features/remote/remote_controller.dart';
 import 'package:nikon_pill/features/remote/remote_page.dart';
 
@@ -344,7 +346,7 @@ void main() {
     expect(find.text('自动'), findsNothing);
   });
 
-  testWidgets('快门(拨盘拥有):先弹「APP 接管」确认 → 0x90C2 启用 → '
+  testWidgets('快门(拨盘拥有):面板先出接管区 → 0x90C2 启用 → '
       '标准档面板直写打包值', (tester) async {
     _portrait(tester);
     PtpSession.kSetPropEnabled = true;
@@ -368,9 +370,9 @@ void main() {
 
     await tester.tap(find.text('快门').first); // 芯片标签(另一处为快门钮)
     await tester.pumpAndSettle();
-    // 影控台同款确认:受机身拨盘控制的参数需先接管
+    // 双层跳合一:面板直接打开,拨盘拥有参数的面板头是接管区(原
+    // 「启用 APP 接管控制?」确认对话框的文案 + 启用钮搬进面板)。
     expect(find.text('启用 APP 接管控制?'), findsOneWidget);
-    expect(find.text('取消'), findsOneWidget);
     await tester.tap(find.text('启用'));
     await tester.pumpAndSettle();
     expect(controller.takeoverActive, isTrue);
@@ -476,8 +478,8 @@ void main() {
     await tester.pumpAndSettle();
     expect(controller.isoAuto, isFalse);
 
-    transport.ok(); // 0x90C2 [1] ISO 为拨盘级参数 → 接管确认
-    await tester.tap(find.text('ISO')); // 三要素大芯片
+    transport.ok(); // 0x90C2 [1] ISO 为拨盘级参数 → 面板接管区
+    await tester.tap(find.text('ISO')); // 读出条芯片(面板接管区在面板头)
     await tester.pumpAndSettle();
     expect(find.text('启用 APP 接管控制?'), findsOneWidget);
     await tester.tap(find.text('启用'));
@@ -947,5 +949,64 @@ void main() {
     expect(_orientationCalls(calls).last.arguments,
         ['DeviceOrientation.portraitUp'],
         reason: '横屏首击翻成竖锁(不是默认锁横)');
+  });
+
+  testWidgets('拍摄页随主题:深色暖黑/浅色白底,画面内容层恒用暗面'
+      '(2026-10-08「改成跟随主题」)', (tester) async {
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = RemoteController(
+        session: PtpSession(transport: transport), connection: conn);
+    addTearDown(controller.dispose);
+
+    Color scaffoldBackground() =>
+        tester.widget<Scaffold>(find.byType(Scaffold)).backgroundColor!;
+
+    await tester.pumpWidget(MaterialApp(
+      theme: AppTheme.light,
+      darkTheme: AppTheme.dark,
+      themeMode: ThemeMode.dark,
+      home: RemotePage(controller: controller),
+    ));
+    // 控制器 _linkUp 出厂为 true:喂一条断连沿,让「未连接」横幅上树
+    conn.statesCtrl.add(CameraLinkState.disconnected);
+    await tester.pumpAndSettle();
+    expect(scaffoldBackground(), const Color(0xFF12100E),
+        reason: '深色主题 = 暖黑现状,像素不变');
+
+    await tester.pumpWidget(MaterialApp(
+      theme: AppTheme.light,
+      darkTheme: AppTheme.dark,
+      themeMode: ThemeMode.light,
+      home: RemotePage(controller: controller),
+    ));
+    await tester.pumpAndSettle();
+    expect(scaffoldBackground(), const Color(0xFFFFFEFB),
+        reason: '浅色主题 = 白底(v8 统一令)');
+
+    // 未连接横幅叠在取景画面上,是内容层:深浅主题下都恒用暗面玻璃
+    // + 暗面金 —— 看图的内容层不随主题(同相册查看器口径)。
+    Color bannerGlass() {
+      final container = find
+          .descendant(
+              of: find.byType(LiveBanner), matching: find.byType(Container))
+          .first;
+      return (tester.widget<Container>(container).decoration!
+              as BoxDecoration)
+          .color!;
+    }
+
+    expect(bannerGlass(), const Color(0xB81B1713),
+        reason: '浅色主题下横幅仍恒用暗面玻璃');
+
+    await tester.pumpWidget(MaterialApp(
+      theme: AppTheme.light,
+      darkTheme: AppTheme.dark,
+      themeMode: ThemeMode.dark,
+      home: RemotePage(controller: controller),
+    ));
+    await tester.pumpAndSettle();
+    expect(bannerGlass(), const Color(0xB81B1713),
+        reason: '深色主题下横幅同一块暗面玻璃');
   });
 }
