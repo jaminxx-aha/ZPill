@@ -13,6 +13,8 @@
 /// | `nikonpill/nsd`      | NsdManager             | NetServiceBrowser      | @ohos.net.mdns        |
 /// | `nikonpill/motion`   | SensorManager 重力     | CoreMotion             | @ohos.sensor          |
 /// | `nikonpill/location` | LocationManager        | CoreLocation           | geoLocationManager    |
+/// | `nikonpill/raw`      | (待补 libraw)         | ImageIO RAW            | (待补)               |
+/// | `nikonpill/video`    | (待补 ExoPlayer)       | AVKit                  | (待补)               |
 ///
 /// *iOS 普通应用拿不到当前 WiFi SSID(需 entitlement 且大多被拒),
 /// 实际策略:直接尝试默认网关直连,详见 docs/ARCHITECTURE.md。
@@ -28,7 +30,9 @@ import 'location_host.dart';
 import 'motion_host.dart';
 import 'network_monitor.dart';
 import 'nsd_scanner.dart';
+import 'raw_decoder.dart';
 import 'usb/usb_host.dart';
+import 'video_player.dart';
 
 final class PlatformServices {
   PlatformServices._();
@@ -51,6 +55,15 @@ final class PlatformServices {
   /// 编译过待真机验证,native 缺失时调用报错按「无位置」降级)。
   static late final LocationHost location;
 
+  /// RAW→JPEG 原生解码(`nikonpill/raw`;iOS 已实现,Android/ohos 待补,
+  /// 缺失时 ThumbnailCache 回落 GetThumb 小图)。NEF 查看的数据源,
+  /// 见 raw_decoder.dart 头注释。
+  static late final RawDecoder rawDecoder;
+
+  /// 视频全屏播放(`nikonpill/video`;iOS 已实现,Android/ohos 待补,
+  /// 缺失时调用报错按「平台不支持」提示)。
+  static late final VideoPlayer videoPlayer;
+
   static bool _bootstrapped = false;
 
   /// main() 中调用(幂等;测试直接 pumpWidget 时不经 main,由
@@ -68,5 +81,7 @@ final class PlatformServices {
     nsd = MethodChannelNsdScanner();
     motion = MethodChannelMotionHost();
     location = MethodChannelLocationHost();
+    rawDecoder = MethodChannelRawDecoder();
+    videoPlayer = MethodChannelVideoPlayer();
   }
 }

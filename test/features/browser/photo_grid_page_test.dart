@@ -87,6 +87,9 @@ final class _FakeConnection implements CameraConnection {
 /// 假缩略图:即时返回路径(文件不存在 → Image.file 走占位,无动画挂起)。
 final class _FakeThumbs implements ThumbnailCache {
   @override
+  int get previewMaxPixelSize => 2560;
+
+  @override
   Future<String> pathFor(ObjectEntry entry, ThumbSource source) async =>
       '/tmp/nikonpill_test_thumb_${entry.handle}.jpg';
 

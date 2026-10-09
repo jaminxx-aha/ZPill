@@ -10,7 +10,8 @@ import 'package:nikon_pill/core/ptp/ptp_transport.dart';
 import 'package:nikon_pill/core/ptpip/object_format.dart';
 import 'package:nikon_pill/core/transfer/object_downloader.dart';
 
-import '../ptp/ptp_session_test.dart' show FakePtpTransport;
+import '../ptp/ptp_session_test.dart'
+    show FakePtpTransport, buildDeviceInfoDataset;
 
 ObjectEntry _entry(String name, int size, {int handle = 0x12}) => ObjectEntry(
       handle: handle,
@@ -125,5 +126,111 @@ void main() {
         '${dir.path}/B.NEF'); // 无冲突:原名
     expect(await ObjectDownloader.uniquePath(dir, 'noext'),
         '${dir.path}/noext'); // 无扩展名也能消歧
+  });
+
+  // ── GetPartialObject 分块路线(iOS IC 单回调风险的主修法) ────────
+
+  /// 0x101B 在册的设备信息应答(分块路线的门禁前提)。
+  PtpResult deviceInfoWithPartial() => _okData(
+      buildDeviceInfoDataset(operations: const [0x1001, 0x1009, 0x101B]));
+
+  ObjectDownloader chunkedDownloaderFor(FakePtpTransport fake,
+          {int chunkBytes = 50}) =>
+      ObjectDownloader(
+          session: PtpSession(transport: fake), partialChunkBytes: chunkBytes);
+
+  test('分块下载:按偏移逐块取,拼回整档,进度按块累计', () async {
+    final fake = FakePtpTransport();
+    final downloader = chunkedDownloaderFor(fake);
+
+    final payload = Uint8List.fromList(List.generate(120, (i) => i));
+    fake.reply(deviceInfoWithPartial());
+    fake.reply(_okData(Uint8List.sublistView(payload, 0, 50)));
+    fake.reply(_okData(Uint8List.sublistView(payload, 50, 100)));
+    fake.reply(_okData(Uint8List.sublistView(payload, 100, 120)));
+
+    final progresses = <int>[];
+    final result = await downloader.download(_entry('DSC_0004.NEF', 120),
+        targetDir: dir.path, onProgress: progresses.add);
+
+    expect(progresses, [50, 100, 120]);
+    expect(await File(result.path).readAsBytes(), payload);
+    // 事务序列:GetDeviceInfo 门禁 + 三次 0x101B(句柄/偏移/长度对账)。
+    expect(fake.requests.map((r) => r.opcode),
+        [PtpOperationCode.getDeviceInfo, ...List.filled(3, PtpOperationCode.getPartialObject)]);
+    expect(
+        fake.requests[1].params, [0x12, 0, 50]); // 末块要足不越界
+    expect(fake.requests[2].params, [0x12, 50, 50]);
+    expect(fake.requests[3].params, [0x12, 100, 20]);
+  });
+
+  test('分块取消:块间停发新命令,删半成品,抛取消异常', () async {
+    final fake = FakePtpTransport();
+    final downloader = chunkedDownloaderFor(fake);
+
+    fake.reply(deviceInfoWithPartial());
+    fake.reply(_okData(Uint8List.fromList(List.filled(50, 7))));
+
+    var cancelAfterFirstChunk = false;
+    await expectLater(
+      downloader.download(
+        _entry('DSC_0005.NEF', 120),
+        targetDir: dir.path,
+        onProgress: (_) => cancelAfterFirstChunk = true,
+        isCancelled: () => cancelAfterFirstChunk,
+      ),
+      throwsA(isA<DownloadCancelledException>()),
+    );
+    // 只发了门禁 + 第一块:取消后不再发新事务(无排空义务)。
+    expect(fake.requests.map((r) => r.opcode),
+        [PtpOperationCode.getDeviceInfo, PtpOperationCode.getPartialObject]);
+    expect(await dir.list().toList(), isEmpty); // 半成品已删
+  });
+
+  test('分块短读:实收不足按大小对账,FormatException 且不留半成品', () async {
+    final fake = FakePtpTransport();
+    final downloader = chunkedDownloaderFor(fake);
+
+    fake.reply(deviceInfoWithPartial());
+    fake.reply(_okData(Uint8List.fromList(List.filled(30, 1)))); // 短读 30/50
+
+    await expectLater(
+      downloader.download(_entry('DSC_0006.NEF', 120), targetDir: dir.path),
+      throwsA(isA<FormatException>()),
+    );
+    expect(await dir.list().toList(), isEmpty);
+  });
+
+  test('0x101B 不在册:忽略分块参数,回落整档 GetObject', () async {
+    final fake = FakePtpTransport();
+    final downloader = chunkedDownloaderFor(fake);
+
+    final payload = Uint8List.fromList(List.generate(80, (i) => i));
+    fake.reply(_okData(buildDeviceInfoDataset())); // 默认表无 0x101B
+    fake.reply(_okData(payload));
+
+    final result = await downloader
+        .download(_entry('DSC_0007.NEF', 80), targetDir: dir.path);
+
+    expect(fake.requests.map((r) => r.opcode),
+        [PtpOperationCode.getDeviceInfo, PtpOperationCode.getObject]);
+    expect(await File(result.path).readAsBytes(), payload);
+  });
+
+  test('分块被相机拒:上抛 PtpResponseException 且不留半成品', () async {
+    final fake = FakePtpTransport();
+    final downloader = chunkedDownloaderFor(fake);
+
+    fake.reply(deviceInfoWithPartial());
+    fake.fail(const PtpResponseException(
+      opcode: PtpOperationCode.getPartialObject,
+      responseCode: PtpResponseCode.generalError,
+    ));
+
+    await expectLater(
+      downloader.download(_entry('DSC_0008.NEF', 100), targetDir: dir.path),
+      throwsA(isA<PtpResponseException>()),
+    );
+    expect(await dir.list().toList(), isEmpty);
   });
 }

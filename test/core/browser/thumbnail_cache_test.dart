@@ -9,7 +9,9 @@ import 'package:nikon_pill/core/ptp/operation_codes.dart';
 import 'package:nikon_pill/core/ptp/ptp_session.dart';
 import 'package:nikon_pill/core/ptp/ptp_transport.dart';
 import 'package:nikon_pill/core/ptpip/object_format.dart';
+import 'package:nikon_pill/core/transfer/object_downloader.dart';
 import 'package:nikon_pill/platform/gallery_saver.dart';
+import 'package:nikon_pill/platform/raw_decoder.dart';
 
 import '../ptp/ptp_session_test.dart'
     show FakePtpTransport, buildDeviceInfoDataset;
@@ -51,6 +53,52 @@ final class FakeGallerySaver implements GallerySaver {
 
 final Uint8List _jpeg =
     Uint8List.fromList([0xFF, 0xD8, 0xFF, 0xE0, 0, 0x10, 0x4A, 0x46, 0x49, 0x46]);
+
+/// 假下载器:落一个伪 NEF 文件并回报;记录调用入参供断言。
+final class _FakeDownloader implements ObjectDownloader {
+  final List<(ObjectEntry, String)> calls = [];
+  bool failNext = false;
+
+  @override
+  int? get partialChunkBytes => null;
+
+  @override
+  Future<ObjectDownload> download(
+    ObjectEntry entry, {
+    required String targetDir,
+    void Function(int receivedBytes)? onProgress,
+    bool Function()? isCancelled,
+  }) async {
+    calls.add((entry, targetDir));
+    if (failNext) {
+      failNext = false;
+      throw const FormatException('假下载失败');
+    }
+    final path = '$targetDir/${entry.name}';
+    File(path).writeAsBytesSync(List.filled(4, 1));
+    onProgress?.call(entry.sizeInBytes);
+    return ObjectDownload(
+        path: path,
+        bytes: entry.sizeInBytes,
+        elapsed: Duration.zero,
+        averageBytesPerSecond: 1);
+  }
+}
+
+/// 假 RAW 解码器:返回固定 JPEG;可置败。
+final class _FakeRawDecoder implements RawDecoder {
+  int calls = 0;
+  bool fail = false;
+
+  @override
+  Future<Uint8List> decodeJpeg(String path, {required int maxPixelSize}) async {
+    calls++;
+    if (fail) {
+      throw const FormatException('假解码失败');
+    }
+    return _jpeg;
+  }
+}
 
 PtpResult _okData(Uint8List data) =>
     PtpResult(responseCode: PtpResponseCode.ok, data: data);
@@ -184,5 +232,69 @@ void main() {
     expect(File(path).existsSync(), isTrue);
     expect(fake.requests.map((r) => r.opcode),
         [PtpOperationCode.getDeviceInfo, NikonOperationCode.getLargeThumb]);
+  });
+
+  test('preview:NEF → 整档下载 + 原生解码,不碰 0x90C4/相机', () async {
+    final fake = FakePtpTransport(); // NEF 路不应发任何相机请求
+    final gallery = FakeGallerySaver();
+    final downloader = _FakeDownloader();
+    final decoder = _FakeRawDecoder();
+    final cache = ThumbnailCache(
+        session: PtpSession(transport: fake),
+        gallery: gallery,
+        downloader: downloader,
+        rawDecoder: decoder);
+
+    final path = await cache.pathFor(
+        _entry(0x12, name: 'DSC_0001.NEF'), ThumbSource.preview);
+    expect(File(path).existsSync(), isTrue);
+    expect(File(path).readAsBytesSync(), _jpeg);
+    expect(fake.requests, isEmpty); // 不走 0x90C4(Zf 对 NEF 回非 JPEG 条带)
+    expect(downloader.calls.single.$1.name, 'DSC_0001.NEF');
+    expect(decoder.calls, 1);
+    // 临时 NEF 已删(临时目录不留档)
+    final temp = Directory('${gallery.root.path}/temp');
+    expect(temp.listSync(), isEmpty);
+    // 磁盘缓存命中:二次取不再下载
+    final again =
+        await cache.pathFor(_entry(0x12, name: 'DSC_0001.NEF'), ThumbSource.preview);
+    expect(again, path);
+    expect(downloader.calls, hasLength(1));
+  });
+
+  test('preview:NEF 平台无解码器 → 回落 GetThumb 小图', () async {
+    final fake = FakePtpTransport()..reply(_okData(_jpeg));
+    final cache = ThumbnailCache(
+        session: PtpSession(transport: fake),
+        gallery: FakeGallerySaver(),
+        rawDecoder: null);
+
+    final path = await cache.pathFor(
+        _entry(0x12, name: 'DSC_0001.NEF'), ThumbSource.preview);
+    expect(File(path).readAsBytesSync(), _jpeg);
+    expect(fake.requests.map((r) => r.opcode), [PtpOperationCode.getThumb]);
+  });
+
+  test('preview:NEF 下载/解码失败 → 回落 GetThumb,临时档清理', () async {
+    for (final (which, downloader, decoder) in [
+      ('下载失败', _FakeDownloader()..failNext = true, _FakeRawDecoder()),
+      ('解码失败', _FakeDownloader(), _FakeRawDecoder()..fail = true),
+    ]) {
+      final gallery = FakeGallerySaver(); // 每子用例独立:防内容键串味
+      final fake = FakePtpTransport()..reply(_okData(_jpeg));
+      final cache = ThumbnailCache(
+          session: PtpSession(transport: fake),
+          gallery: gallery,
+          downloader: downloader,
+          rawDecoder: decoder);
+
+      final path = await cache.pathFor(
+          _entry(0x12, name: 'DSC_0001.NEF'), ThumbSource.preview);
+      expect(File(path).readAsBytesSync(), _jpeg, reason: which);
+      expect(fake.requests.map((r) => r.opcode), [PtpOperationCode.getThumb],
+          reason: which);
+      expect(Directory('${gallery.root.path}/temp').listSync(), isEmpty,
+          reason: '失败的临时档已删($which)');
+    }
   });
 }

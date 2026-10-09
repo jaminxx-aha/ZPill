@@ -1,17 +1,27 @@
 /// 单对象流式下载(传输引擎的工作单元)。
 ///
-/// 分工:GetObject 数据容器按块回调(PtpTransport.execute 的 onData)→
-/// 本类边收边写目标文件,**不整体驻留内存**;写到哪个目录、下载完
-/// 之后要不要进相册,由 TransferEngine 编排(本类不碰 GallerySaver)。
+/// 分工:数据容器按块回调(PtpTransport.execute 的 onData)→ 本类边收
+/// 边写目标文件,**不整体驻留内存**;写到哪个目录、下载完之后要不要
+/// 进相册,由 TransferEngine 编排(本类不碰 GallerySaver)。
 ///
-/// 取消语义:[isCancelled] 返回 true 后停止写盘(transport 继续收块
-/// 排空数据流,保持 USB/PTP 事务状态机干净),排空完毕删除半成品,
-/// 抛 [DownloadCancelledException]。
+/// 两条取数路线(2026-10-09 真机教训定案):
+/// - 整档 GetObject 流式([partialChunkBytes] = null,缺省):单事务,
+///   数据相位流式分块;取消时停止写盘但继续收块**排空数据流**
+///   (保持 USB/PTP 事务状态机干净),排空完毕删除半成品。
+/// - GetPartialObject 分块([partialChunkBytes] > 0):每块一个完整
+///   事务,块间响应取消/进度,无排空义务。**iOS IC 通道必须走这条**:
+///   ImageCaptureCore 把整个数据相位塞进一次 requestSendPTPCommand
+///   回调,多 MB 大档(NEF 24MB / MOV 数百 MB)一次回调不可控 ——
+///   真机触发读超时 → 看门狗判链路死亡,整 app 断连(缩略图/点击
+///   全挂)。64KB 分块与镜头头读同款(IC 链已验证粒度);ohos/Android
+///   通道内部本就 1MB 流块,保持 GetObject 不降速。
 library;
 
 import 'dart:io';
+import 'dart:math' as math;
 
 import '../browser/object_entry.dart';
+import '../ptp/operation_codes.dart';
 import '../ptp/ptp_session.dart';
 
 /// 下载被取消:半成品已删,数据流已排空。
@@ -39,14 +49,21 @@ final class ObjectDownload {
   double get megabytesPerSecond => averageBytesPerSecond / 1024 / 1024;
 }
 
-final class ObjectDownloader {
-  ObjectDownloader({required PtpSession session}) : _session = session;
+/// 非 final + 依赖字段私有:widget 测试可 implements(仅 download,
+/// 注入假路径,避开真机事务;与 PtpSession/ThumbnailCache 同款纪律)。
+class ObjectDownloader {
+  ObjectDownloader({required PtpSession session, this.partialChunkBytes})
+      : _session = session;
 
   final PtpSession _session;
 
+  /// GetPartialObject 单块字节;null = 整档 GetObject 流式(见库注释)。
+  /// 相机 op 表无 0x101B 时忽略本参数,回落 GetObject。
+  final int? partialChunkBytes;
+
   /// 流式下载 [entry] 到 [targetDir](不存在则创建),文件名冲突自动
-  /// 加 ` (n)` 序号。[onProgress] 每块回调累计字节数(块大小对齐
-  /// kUsbStreamChunkBytes,64KB 级)。
+  /// 加 ` (n)` 序号。[onProgress] 回调累计字节数(整档路线块大小对齐
+  /// kUsbStreamChunkBytes,64KB 级;分块路线 = [partialChunkBytes])。
   Future<ObjectDownload> download(
     ObjectEntry entry, {
     required String targetDir,
@@ -62,17 +79,41 @@ final class ObjectDownloader {
     final watch = Stopwatch()..start();
     var received = 0;
     var cancelled = false;
+    var chunked = false;
     try {
-      await _session.getObject(entry.handle, onData: (chunk) {
-        if (isCancelled != null && isCancelled()) {
-          cancelled = true;
-          return; // 不写盘,继续收块排空
+      chunked = partialChunkBytes != null && await _partialReadable();
+      if (chunked) {
+        // 分块路线:块间查取消;每块是完整事务,取消/失败即停,
+        // 不再发新命令(无 GetObject 的排空义务)。
+        var offset = 0;
+        while (offset < entry.sizeInBytes) {
+          if (isCancelled != null && isCancelled()) {
+            cancelled = true;
+            break;
+          }
+          final want =
+              math.min(partialChunkBytes!, entry.sizeInBytes - offset);
+          final chunk =
+              await _session.getPartialObject(entry.handle, offset, want);
+          if (chunk.isEmpty) break; // 相机提前收尾
+          sink.add(chunk);
+          received += chunk.length;
+          onProgress?.call(received);
+          offset += chunk.length;
+          if (chunk.length < want) break; // 短读 = EOF
         }
-        if (cancelled) return;
-        sink.add(chunk);
-        received += chunk.length;
-        onProgress?.call(received);
-      });
+      } else {
+        await _session.getObject(entry.handle, onData: (chunk) {
+          if (isCancelled != null && isCancelled()) {
+            cancelled = true;
+            return; // 不写盘,继续收块排空
+          }
+          if (cancelled) return;
+          sink.add(chunk);
+          received += chunk.length;
+          onProgress?.call(received);
+        });
+      }
       await sink.flush();
       await sink.close();
     } on Exception {
@@ -89,12 +130,30 @@ final class ObjectDownloader {
       await _deleteQuietly(file);
       throw const DownloadCancelledException();
     }
+    if (chunked && received != entry.sizeInBytes) {
+      // 分块路线对账:实收不足(ObjectInfo 谎报/相机中途断流)= 半档,
+      // 不能当成功落盘。
+      await _deleteQuietly(file);
+      throw FormatException(
+          '下载数据不完整:${entry.name} 期望 ${entry.sizeInBytes}B,'
+          '实收 ${received}B');
+    }
     return ObjectDownload(
       path: file.path,
       bytes: received,
       elapsed: watch.elapsed,
       averageBytesPerSecond: received / watch.elapsed.inMicroseconds * 1e6,
     );
+  }
+
+  /// 0x101B 能力门禁(op 表在册才走分块;取能力失败也回落整档)。
+  Future<bool> _partialReadable() async {
+    try {
+      return (await _session.getDeviceInfo())
+          .supportsOperation(PtpOperationCode.getPartialObject);
+    } on Exception {
+      return false;
+    }
   }
 
   /// 目录内不冲突的完整路径:`A.JPG` → `A (1).JPG`、`A (2).JPG`…

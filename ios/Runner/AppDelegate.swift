@@ -31,5 +31,11 @@ import UIKit
     if let registrar = registry.registrar(forPlugin: "BGPlugin") {
       BGPlugin.register(with: registrar)
     }
+    if let registrar = registry.registrar(forPlugin: "RawDecodePlugin") {
+      RawDecodePlugin.register(with: registrar)
+    }
+    if let registrar = registry.registrar(forPlugin: "VideoPlugin") {
+      VideoPlugin.register(with: registrar)
+    }
   }
 }

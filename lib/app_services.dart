@@ -9,6 +9,7 @@
 library;
 
 import 'dart:async' show unawaited;
+import 'dart:io' show Platform;
 
 import 'core/browser/camera_file_ops.dart';
 import 'core/browser/object_repository.dart';
@@ -92,8 +93,19 @@ final class AppServices {
     ratingsStore = FileRatingsStore(
         dataDir: PlatformServices.gallery.dataDir);
     ratings = RatingsController(store: ratingsStore);
-    thumbnails = ThumbnailCache(session: session, gallery: PlatformServices.gallery);
-    downloader = ObjectDownloader(session: session);
+    // iOS 下载走 GetPartialObject 64KB 分块:IC 通道一次回调收整个数据
+    // 相位,大档 GetObject 未验证且是断链主嫌疑(2026-10-09 真机);
+    // 其余平台通道内部本就流式,保持 GetObject 不降速。
+    downloader = ObjectDownloader(
+      session: session,
+      partialChunkBytes: Platform.isIOS ? 64 * 1024 : null,
+    );
+    thumbnails = ThumbnailCache(
+      session: session,
+      gallery: PlatformServices.gallery,
+      downloader: downloader,
+      rawDecoder: PlatformServices.rawDecoder,
+    );
     transferEngine = TransferEngineImpl(
       downloader: downloader,
       gallery: PlatformServices.gallery,

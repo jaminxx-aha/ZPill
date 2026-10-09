@@ -1,3 +1,7 @@
+import 'dart:async';
+import 'dart:io';
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -5,12 +9,18 @@ import 'package:nikon_pill/core/browser/object_entry.dart';
 import 'package:nikon_pill/core/browser/photo_group.dart';
 import 'package:nikon_pill/core/browser/thumbnail_cache.dart';
 import 'package:nikon_pill/core/ptpip/object_format.dart';
+import 'package:nikon_pill/core/transfer/object_downloader.dart';
 import 'package:nikon_pill/core/transfer/transfer_engine.dart';
 import 'package:nikon_pill/core/transfer/transfer_task.dart';
 import 'package:nikon_pill/features/browser/photo_viewer_page.dart';
+import 'package:nikon_pill/platform/gallery_saver.dart';
+import 'package:nikon_pill/platform/video_player.dart';
 
 /// 假缩略图:即时返回路径(文件不存在 → Image.file 走占位,无动画挂起)。
 final class _FakeThumbs implements ThumbnailCache {
+  @override
+  int get previewMaxPixelSize => 2560;
+
   @override
   Future<String> pathFor(ObjectEntry entry, ThumbSource source) async =>
       '/tmp/nikonpill_test_preview_${entry.handle}.jpg';
@@ -45,12 +55,94 @@ final class _FakeEngine implements TransferEngine {
   Future<void> clearHistory() async {}
 }
 
-ObjectEntry _file(int handle, String name, {int format = 0x3801}) =>
+/// 假下载器:真实落一个临时文件(播放收口要删它);[gate] 挂住进度
+/// 供取消路径摆拍;取消位照 [DownloadCancelledException] 语义抛。
+final class _FakeDownloader implements ObjectDownloader {
+  final List<(ObjectEntry, String)> calls = [];
+  bool failNext = false;
+  Completer<void>? gate;
+
+  @override
+  int? get partialChunkBytes => null;
+
+  @override
+  Future<ObjectDownload> download(
+    ObjectEntry entry, {
+    required String targetDir,
+    void Function(int receivedBytes)? onProgress,
+    bool Function()? isCancelled,
+  }) async {
+    calls.add((entry, targetDir));
+    if (gate != null) {
+      await gate!.future;
+    }
+    if (isCancelled != null && isCancelled()) {
+      throw const DownloadCancelledException();
+    }
+    if (failNext) {
+      failNext = false;
+      throw const FormatException('假下载失败');
+    }
+    final path = '$targetDir/${entry.name}';
+    File(path).writeAsBytesSync(List.filled(8, 1));
+    onProgress?.call(entry.sizeInBytes);
+    return ObjectDownload(
+        path: path,
+        bytes: entry.sizeInBytes,
+        elapsed: Duration.zero,
+        averageBytesPerSecond: 1);
+  }
+}
+
+/// 假播放器:记录播放路径,[pending] 挂住播放中状态供断言。
+/// 抽帧与该页无关(相机侧走 ThumbnailCache),照抛即可。
+final class _FakeVideoPlayer implements VideoPlayer {
+  final List<String> played = [];
+  Completer<void>? pending;
+
+  @override
+  Future<void> play(String path) {
+    played.add(path);
+    return (pending = Completer<void>()).future;
+  }
+
+  @override
+  Future<Uint8List> thumbnail(String path, {required int maxPixelSize}) async {
+    throw UnimplementedError();
+  }
+}
+
+/// 假相册:视频播放只用到 tempDir,其余照抛。
+final class _FakeGallery implements GallerySaver {
+  final Directory temp = Directory.systemTemp.createTempSync('nikonpill_test_viewer');
+
+  @override
+  Future<String> tempDir() async => temp.path;
+
+  @override
+  Future<String> dataDir() async => throw UnimplementedError();
+
+  @override
+  Future<String> thumbsDir() async => throw UnimplementedError();
+
+  @override
+  Future<String> previewsDir() async => throw UnimplementedError();
+
+  @override
+  Future<String> downloadsDir() async => throw UnimplementedError();
+
+  @override
+  Future<List<Uri>> importFiles(List<GalleryImportRequest> requests) async =>
+      throw UnimplementedError();
+}
+
+ObjectEntry _file(int handle, String name,
+        {int format = 0x3801, ObjectKind kind = ObjectKind.image}) =>
     ObjectEntry(
       handle: handle,
       name: name,
       sizeInBytes: 8,
-      kind: ObjectKind.image,
+      kind: kind,
       parentHandle: 0x11,
       capturedAt: DateTime.utc(2026, 10, 1, 12),
       formatCode: format,
@@ -113,6 +205,114 @@ void main() {
     final (entries, destination) = engine.calls.single;
     expect(entries.single.name, 'IMG_0101.JPG');
     expect(destination, TransferDestination.gallery);
+
+    await _drainSnackBar(tester);
+  });
+
+  testWidgets('视频组:播放钮 → 下载到临时目录 → 全屏播放 → 播完删档', (tester) async {
+    final gallery = _FakeGallery();
+    final downloader = _FakeDownloader();
+    final player = _FakeVideoPlayer();
+    final group = PhotoGroup([
+      _file(101, 'DSC_0001.MOV',
+          format: ObjectFormatCode.quickTime, kind: ObjectKind.video),
+    ]);
+    await tester.pumpWidget(_host(PhotoViewerPage(
+      items: [group],
+      initialIndex: 0,
+      thumbnails: _FakeThumbs(),
+      downloader: downloader,
+      gallery: gallery,
+      videoPlayer: player,
+    )));
+    await tester.pumpAndSettle();
+
+    // 视频组:播放钮浮层在,信息行注明「视频」
+    expect(find.byIcon(Icons.play_arrow), findsOneWidget);
+    expect(find.textContaining('视频'), findsWidgets);
+
+    await tester.tap(find.byIcon(Icons.play_arrow));
+    await tester.pumpAndSettle();
+
+    // 下载完成:进度对话框已收,播放已起
+    expect(find.text('下载视频'), findsNothing);
+    final (entry, dir) = downloader.calls.single;
+    expect(entry.name, 'DSC_0001.MOV');
+    expect(dir, gallery.temp.path);
+    expect(player.played, ['${gallery.temp.path}/DSC_0001.MOV']);
+    // 播放中:临时档还在(播完才删)
+    expect(File(player.played.single).existsSync(), isTrue);
+
+    player.pending!.complete();
+    // 删档是真 IO(File.delete 完成落在真实事件循环,pumpAndSettle
+    // 无帧可泵时会提前返回,全套并发下竞速):runAsync 里轮询到文件消失。
+    await tester.runAsync(() async {
+      for (var i = 0; i < 100 && File(player.played.single).existsSync(); i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 1));
+      }
+    });
+    expect(File(player.played.single).existsSync(), isFalse); // 播完删档
+  });
+
+  testWidgets('视频组:取消下载 → 半途而废,弹「已取消」,不播放', (tester) async {
+    final gallery = _FakeGallery();
+    final downloader = _FakeDownloader()..gate = Completer<void>();
+    final player = _FakeVideoPlayer();
+    final group = PhotoGroup([
+      _file(101, 'DSC_0001.MOV',
+          format: ObjectFormatCode.quickTime, kind: ObjectKind.video),
+    ]);
+    await tester.pumpWidget(_host(PhotoViewerPage(
+      items: [group],
+      initialIndex: 0,
+      thumbnails: _FakeThumbs(),
+      downloader: downloader,
+      gallery: gallery,
+      videoPlayer: player,
+    )));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.play_arrow));
+    await tester.pumpAndSettle();
+    expect(find.text('下载视频'), findsOneWidget); // 进度对话框在
+
+    await tester.tap(find.text('取消'));
+    await tester.pump(); // 置位取消位
+    downloader.gate!.complete();
+    await tester.pumpAndSettle();
+
+    expect(find.text('下载视频'), findsNothing); // 对话框收口
+    expect(find.text('已取消'), findsOneWidget);
+    expect(player.played, isEmpty); // 未进播放
+    expect(gallery.temp.listSync(), isEmpty); // 无半成品残留
+
+    await _drainSnackBar(tester);
+  });
+
+  testWidgets('视频组:下载失败 → 弹「下载失败」,不播放', (tester) async {
+    final gallery = _FakeGallery();
+    final downloader = _FakeDownloader()..failNext = true;
+    final player = _FakeVideoPlayer();
+    final group = PhotoGroup([
+      _file(101, 'DSC_0001.MOV',
+          format: ObjectFormatCode.quickTime, kind: ObjectKind.video),
+    ]);
+    await tester.pumpWidget(_host(PhotoViewerPage(
+      items: [group],
+      initialIndex: 0,
+      thumbnails: _FakeThumbs(),
+      downloader: downloader,
+      gallery: gallery,
+      videoPlayer: player,
+    )));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.play_arrow));
+    await tester.pumpAndSettle();
+
+    expect(find.text('下载视频'), findsNothing);
+    expect(find.text('下载失败,请检查连接后重试'), findsOneWidget);
+    expect(player.played, isEmpty);
 
     await _drainSnackBar(tester);
   });
