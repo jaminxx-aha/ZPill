@@ -623,4 +623,42 @@ void main() {
     tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
         SystemChannels.platform, null);
   });
+
+  testWidgets('视频组:点按唤回层盖在平台视图之上(父级包装的 tap 在'
+      '抬手结算时输给原生视图 —— 真机唤不回的结构根因)', (tester) async {
+    final gallery = _FakeGallery();
+    addTearDown(() => gallery.temp.deleteSync(recursive: true));
+    await _openViewer(
+        tester,
+        PhotoViewerPage(
+          items: [_videoGroup()],
+          initialIndex: 0,
+          thumbnails: _FakeThumbs(),
+          downloader: _FakeDownloader(),
+          gallery: gallery,
+          videoPlayer: _FakeVideoPlayer(),
+          embeddedVideoView: _stubView,
+        ));
+    await tester.tap(find.byIcon(Icons.play_arrow));
+    await tester.pumpAndSettle();
+
+    // 沿内嵌视图向上第一层 Stack = 播放页本体:平台视图必须是首子
+    // (底层),点按层(GestureDetector)其后(盖上)—— 引擎的同步
+    // 命中拦截只认「盖在上面的 Flutter 件」,父级包装不在此列。
+    Stack? playerStack;
+    tester
+        .element(find.byType(_StubVideoView))
+        .visitAncestorElements((element) {
+      if (element.widget is Stack) {
+        playerStack = element.widget as Stack;
+        return false;
+      }
+      return true;
+    });
+    expect(playerStack, isNotNull);
+    final children = playerStack!.children;
+    expect(children, hasLength(3));
+    expect(children[0], isA<_StubVideoView>()); // 平台视图打底
+    expect(children[1], isA<GestureDetector>()); // 点按层盖上
+  });
 }
