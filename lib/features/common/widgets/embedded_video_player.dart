@@ -1,9 +1,11 @@
 /// 查看器视频页共用件(图库本地档 + 相机相册临时档同用):iOS 内嵌
 /// 平台视图在页面里播放。
 ///
-/// 播放控制在 Flutter 侧自绘(AVKit 传输条关掉:原生横滑手势会与
-/// PageView 翻页抢 —— 裸视频面横滑归翻页,点按切控制浮层,进度条是
-/// Flutter 件叠在上面不经过平台视图)。高帧率(>30.5fps)素材浮
+/// 播放控制在 Flutter 侧自绘(AVKit 传输条关掉,原生侧无触摸诉求:
+/// 裸视频面上盖一层点按层收点按/唤回浮层 —— 点按层必须**盖在**平台
+/// 视图上而非包在其外,直接落在平台视图上的 tap 在抬手结算时竞争不过
+/// 原生视图,见 build 注释;横滑归 PageView 翻页,进度条是 Flutter
+/// 件叠在上面不经过平台视图)。高帧率(>30.5fps)素材浮
 /// 「24fps 顺帧」开关:非阻塞,点了才变速静音(顺帧是可选增强,不拦
 /// 起播)。[active] = 页为当前页(翻页 settle)才起播,滑走即暂停。
 /// 起播意图:图库路径 [autoplay] = false(2026-10-09 复报改:点开
@@ -243,13 +245,21 @@ class _EmbeddedVideoPlayerState extends State<EmbeddedVideoPlayer> {
     return Stack(
       fit: StackFit.expand,
       children: [
-        // 裸视频面:横滑归 PageView 翻页(原生不装传输条,不抢手势),
-        // 点按(未被拖动认领)切控制浮层。opaque:整面吃点按(平台
-        // 视图本就吸点;测试替身是透明盒,deferToChild 会漏下去)。
+        // 裸视频面(底层):平台视图本体。原生传输条关闭,原生侧没有
+        // 任何需要触摸的东西。
+        widget.viewBuilder(widget.path, _onViewCreated),
+        // 点按层:必须**盖在**平台视图上(Stack 后位者画在上),不能
+        // 包在它外面 —— 引擎对「直接落在平台视图上」的触摸走手势竞技场
+        // 异步仲裁,父级 tap 识别器在抬手结算时竞争不过原生视图(拖动类
+        // 手势越 slop 即抢先认领,所以横滑翻页一直是好的;tap 只在 up
+        // 时结算 —— 2026-10-09 真机:浮层 3s 自动隐后点按唤不回,图库/
+        // 相机相册同患)。盖上后走引擎的同步命中拦截:touchesBegan 起
+        // 原生即被挡,触摸全归 Flutter(点按层只注册 tap,拖动越过 slop
+        // 即弃权给 PageView 翻页)。
         GestureDetector(
           behavior: HitTestBehavior.opaque,
           onTap: _toggleControls,
-          child: widget.viewBuilder(widget.path, _onViewCreated),
+          child: const SizedBox.expand(),
         ),
         // 控制浮层(共用件):中键播放/暂停 + 底行顺帧开关与进度条 +
         // 右下全屏/退出全屏钮;播放中 3s 自动隐,点按唤回,暂停常驻。
