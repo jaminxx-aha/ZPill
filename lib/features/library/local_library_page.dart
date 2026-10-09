@@ -27,7 +27,9 @@ import '../../platform/raw_decoder.dart';
 import '../../platform/services.dart';
 import '../../platform/video_player.dart';
 import '../common/widgets/confirm_dialog.dart';
+import '../common/widgets/de_squeezed_image.dart';
 import '../common/widgets/states.dart';
+import '../common/widgets/video_conform.dart';
 import '../transfers/transfers_page.dart';
 
 /// 图库格式过滤:按扩展名分流,与相机侧条目判定同源。
@@ -490,9 +492,9 @@ class _LibraryViewerState extends State<_LibraryViewer> {
     );
   }
 
-  Widget _imageBody() => Image.file(
-        widget.file,
-        fit: BoxFit.contain,
+  Widget _imageBody() => DeSqueezedImage(
+        image: FileImage(widget.file),
+        deSqueeze: AppServices.instance.settingsController.value.deSqueeze,
         errorBuilder: (context, error, stackTrace) => const Icon(
           Icons.broken_image_outlined,
           color: AppMedia.onMediaSubtle,
@@ -504,9 +506,10 @@ class _LibraryViewerState extends State<_LibraryViewer> {
         future: _decode,
         builder: (context, snap) {
           if (snap.hasData) {
-            return Image.memory(
-              snap.data!,
-              fit: BoxFit.contain,
+            return DeSqueezedImage(
+              image: MemoryImage(snap.data!),
+              deSqueeze:
+                  AppServices.instance.settingsController.value.deSqueeze,
               errorBuilder: (context, error, stackTrace) => const Icon(
                 Icons.broken_image_outlined,
                 color: AppMedia.onMediaSubtle,
@@ -530,7 +533,9 @@ class _LibraryViewerState extends State<_LibraryViewer> {
 
   Future<void> _play() async {
     try {
-      await widget.videoPlayer.play(widget.file.path);
+      // 高帧率素材先问实时/顺帧(24fps conform);取消则不播
+      await playVideoWithConform(context,
+          player: widget.videoPlayer, path: widget.file.path);
     } on Exception {
       if (!mounted) return;
       ScaffoldMessenger.of(context)

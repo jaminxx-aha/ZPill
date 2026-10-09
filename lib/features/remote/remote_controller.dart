@@ -829,6 +829,113 @@ final class RemoteController extends ChangeNotifier {
     }
   }
 
+  /// 对焦滚轮拖动增量(竖直像素,正 = 向近 / 负 = 向远):攒够一步
+  /// [_dialStepPx] 发一次 0x9204([_dialStepPulses] 脉冲/步,不足一步的
+  /// 余量保留)。单在途:驱动进行中再拖,像素攒着,完成后续发 —— 命令
+  /// 通道上永远最多一个滚轮事务。**不挂起取景**(跟焦要在画面上看
+  /// 焦点变化,与 [mfDriveStep] 的单发路径不同)。AF 驱动(点按对焦/
+  /// 对焦按钮)抢占:代数自增,在途脉冲发完后不再续发。
+  void focusDialDrag(double dy) {
+    if (dy == 0 || !_linkUp || capturing) return;
+    _dialAccum += dy;
+    _dialPump();
+  }
+
+  /// 滚轮重新启用(开关从关到开时页面调;清失败预算与余量)。
+  void resetFocusDial() {
+    _dialFailures.clear();
+    _dialSuspended = false;
+    _dialAccum = 0;
+  }
+
+  /// 步进标定:24px 拖动 = 60 脉冲(OpenZCine FocusDial 同款量级;
+  /// 0x9204 脉冲与镜头 focus-by-wire 行程换算随机身,真机再调)。
+  static const double _dialStepPx = 24.0;
+  static const int _dialStepPulses = 60;
+
+  /// 失败墙钟预算:8s 窗口内 3 次失败 → 暂停滚轮(提示),窗口滑出
+  /// 后再拖自动恢复。失败多为链路/状态类,无脑重试只会堵命令通道。
+  static const _dialFailureWindow = Duration(seconds: 8);
+  static const int _dialFailureLimit = 3;
+
+  double _dialAccum = 0;
+  int _dialGen = 0;
+  bool _dialDriving = false;
+  final _dialFailures = <DateTime>[];
+  bool _dialSuspended = false;
+
+  void _dialPump() {
+    if (_dialDriving) return;
+    if (!_linkUp || !liveViewActive) {
+      _dialAccum = 0; // 无链路/无取景:余量无意义,清掉防陈旧爆发
+      return;
+    }
+    // 暂停中先看窗口:失败都滑出窗即自动恢复。
+    if (_dialSuspended) {
+      _pruneDialFailures();
+      if (_dialFailures.length >= _dialFailureLimit) return;
+      _dialSuspended = false;
+    }
+    final steps = _dialAccum ~/ _dialStepPx; // 截断除法:正负对称攒步
+    if (steps == 0) return;
+    _dialAccum -= steps * _dialStepPx;
+    final gen = _dialGen;
+    _dialDriving = true;
+    unawaited(() async {
+      try {
+        final outcome = await session.mfDrive(
+            towardNear: steps > 0, pulses: steps.abs() * _dialStepPulses);
+        switch (outcome) {
+          case MfDriveOutcome.complete:
+          case MfDriveOutcome.stepTooSmall:
+            break; // 过小是结果:不提示(拖快些即可),不挡续发
+          case MfDriveOutcome.endOfTravel:
+            notice = '对焦行程尽头';
+            _dialAccum = 0; // 该方向没有更多行程:余量丢弃
+            notifyListeners();
+          case MfDriveOutcome.refused:
+            notice = '手动对焦不可用(机械对焦环或机身忙)';
+            _dialAccum = 0;
+            notifyListeners();
+        }
+      } on Exception catch (e) {
+        if (!_linkUp) return; // 断连收口已清状态,迟到异常不计数
+        if (e is PtpResponseException &&
+            e.responseCode == PtpResponseCode.deviceBusy) {
+          // 机身忙(别的驱动在途):不算失败,余量丢弃不堆积
+          _dialAccum = 0;
+          return;
+        }
+        _dialFailures.add(DateTime.now());
+        _pruneDialFailures();
+        if (_dialFailures.length >= _dialFailureLimit) {
+          _dialSuspended = true;
+          _dialAccum = 0;
+          notice = '对焦滚轮已暂停(连续失败),稍后自动恢复';
+          notifyListeners();
+        }
+      } finally {
+        _dialDriving = false;
+        // 在途期间又拖了(或没被抢占):续发攒下的余量。
+        if (!_dialSuspended && gen == _dialGen && _linkUp) {
+          _dialPump();
+        }
+      }
+    }());
+  }
+
+  void _pruneDialFailures() {
+    final cutoff = DateTime.now().subtract(_dialFailureWindow);
+    _dialFailures.removeWhere((t) => t.isBefore(cutoff));
+  }
+
+  /// AF 驱动(点按对焦/对焦按钮)抢占在途滚轮:代数自增即止续发,
+  /// 余量清零(AF 改变了焦点位置,攒的像素是陈旧意图)。
+  void _preemptFocusDial() {
+    _dialGen++;
+    _dialAccum = 0;
+  }
+
   /// 录制时长(秒;未录制为 null)。
   int? get recordingSeconds => recordingSince == null
       ? null
@@ -899,6 +1006,7 @@ final class RemoteController extends ChangeNotifier {
       return;
     }
     if (!liveViewActive || focusing) return; // 无取景/对焦中:静默忽略
+    _preemptFocusDial(); // AF 抢占在途滚轮驱动(焦点位置将改变)
     final h = engine.header.value;
     final size = h != null && h.coordinateWidth > 0 && h.coordinateHeight > 0
         ? (width: h.coordinateWidth, height: h.coordinateHeight)
@@ -946,6 +1054,7 @@ final class RemoteController extends ChangeNotifier {
       notifyListeners();
       return;
     }
+    _preemptFocusDial(); // 同 touchFocus:AF 抢占在途滚轮驱动
     error = null;
     notifyListeners();
     await _driveAf();
@@ -1454,6 +1563,11 @@ final class RemoteController extends ChangeNotifier {
     _burstBracketHeld = false;
     _openShutterHeld = false;
     _cancelSelfTimer();
+    _dialGen++;
+    _dialAccum = 0;
+    _dialDriving = false;
+    _dialSuspended = false;
+    _dialFailures.clear();
     recording = false;
     recordingSince = null;
     reviewThumb = null;

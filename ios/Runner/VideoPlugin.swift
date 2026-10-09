@@ -1,16 +1,21 @@
 // NikonPill 视频播放通道(iOS 平台,native 侧)。
 //
 // 对应 Dart 契约 lib/platform/video_player.dart:
-// - play({path}):AVPlayer 播放本地文件,全屏 present。AVPlayerViewController
+// - play({path, rate}):AVPlayer 播放本地文件,全屏 present。AVPlayerViewController
 //   自带播放控制(进度/音量/全屏),补一个左上关闭钮(原生播放器没有
 //   Done);关闭 = dismiss + result(nil)(Dart 侧 Future 于此刻完成,
-//   调用方随后删临时档)。
+//   调用方随后删临时档)。rate 非 1 = 顺帧预览(conform,如 60fps 素材
+//   按 24fps 看 = 0.4):静音播放 —— 变速下音轨无意义(OpenZCine
+//   conform 同款)。
 // - thumbnail({path, maxPixelSize}):AVAssetImageGenerator 抽帧 → JPEG。
 //   取 0.1s 处(避开纯黑首帧)、appliesPreferredTrackTransform 按拍摄
 //   方向正立。抽帧是磁盘读 + 解码,移后台队列,结果回主线程交付
 //   (线程契约同 RawDecodePlugin);字节必须 FlutterStandardTypedData
 //   回传(裸 Data 触发 Dart 侧 TypeError —— 见 memory
 //   flutter-ios-channel-byte-trap)。
+// - frameRate({path}):AVAssetTrack.nominalFrameRate(标称帧率;顺帧
+//   预览的门禁数据)。无视频轨/探测失败回 nil,Dart 侧按「实时播放」
+//   处理。
 //
 // present 的 VC 取法:iOS 13+ 场景化(SceneDelegate),从
 // connectedScenes 取 foregroundActive 的 keyWindow rootVC,再走
@@ -35,8 +40,9 @@ public final class VideoPlugin: NSObject, FlutterPlugin {
         result(FlutterError(code: "bad_args", message: "play 须传 path", details: nil))
         return
       }
+      let rate = args["rate"] as? Double ?? 1.0
       DispatchQueue.main.async {
-        Self.presentPlayer(path: path, result: result)
+        Self.presentPlayer(path: path, rate: rate, result: result)
       }
     case "thumbnail":
       guard let args = call.arguments as? [String: Any],
@@ -53,6 +59,27 @@ public final class VideoPlugin: NSObject, FlutterPlugin {
             result(FlutterStandardTypedData(bytes: jpeg))
           case .failed(let error):
             result(error)
+          }
+        }
+      }
+    case "frameRate":
+      guard let args = call.arguments as? [String: Any],
+            let path = args["path"] as? String else {
+        result(FlutterError(code: "bad_args", message: "frameRate 须传 path", details: nil))
+        return
+      }
+      guard FileManager.default.fileExists(atPath: path) else {
+        result(FlutterError(code: "file_missing", message: "视频文件不存在: \(path)", details: nil))
+        return
+      }
+      let asset = AVURLAsset(url: URL(fileURLWithPath: path))
+      asset.loadTracks(withMediaType: .video) { tracks, _ in
+        DispatchQueue.main.async {
+          // 无视频轨/探测失败 = nil:调用方按「实时播放」走,不拦路径。
+          if let fps = tracks?.first?.nominalFrameRate, fps > 0 {
+            result(Double(fps))
+          } else {
+            result(nil)
           }
         }
       }
@@ -106,7 +133,7 @@ public final class VideoPlugin: NSObject, FlutterPlugin {
     return top
   }
 
-  private static func presentPlayer(path: String, result: @escaping FlutterResult) {
+  private static func presentPlayer(path: String, rate: Double, result: @escaping FlutterResult) {
     let url = URL(fileURLWithPath: path)
     guard FileManager.default.fileExists(atPath: path) else {
       result(FlutterError(code: "file_missing", message: "视频文件不存在: \(path)", details: nil))
@@ -119,6 +146,10 @@ public final class VideoPlugin: NSObject, FlutterPlugin {
     let player = AVPlayer(url: url)
     let playerVC = AVPlayerViewController()
     playerVC.player = player
+    if abs(rate - 1.0) > 0.001 {
+      // 顺帧预览(conform):变速下音轨无意义,静音(OpenZCine 同款)。
+      player.isMuted = true
+    }
 
     // 包一层自带关闭钮的壳:AVPlayerViewController 无 Done,
     // 全屏 modal 也不吃下滑dismiss。
@@ -128,6 +159,9 @@ public final class VideoPlugin: NSObject, FlutterPlugin {
     host.modalPresentationStyle = .fullScreen
     presenting.present(host, animated: true) {
       player.play()
+      if abs(rate - 1.0) > 0.001 {
+        player.rate = Float(rate)
+      }
     }
   }
 }

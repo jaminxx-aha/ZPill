@@ -4,6 +4,7 @@ library;
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../app_services.dart';
@@ -11,7 +12,10 @@ import '../../core/browser/photo_group.dart';
 import '../../data/settings_store.dart';
 import 'snapshot_controller.dart' show buildSnapshotSection;
 
-class SettingsController extends ChangeNotifier {
+/// 取景页/取景区消费设置(autoRotateFeed/deSqueeze)时把本控制器当
+/// [ValueListenable] 直挂:监听即 ChangeNotifier,值即 [settings]。
+class SettingsController extends ChangeNotifier
+    implements ValueListenable<AppSettings> {
   SettingsController({required this.store}) {
     _sub = store.settings.listen((s) {
       settings = s;
@@ -22,6 +26,10 @@ class SettingsController extends ChangeNotifier {
 
   final SettingsStore store;
   AppSettings settings = const AppSettings();
+
+  @override
+  AppSettings get value => settings;
+
   StreamSubscription<AppSettings>? _sub;
 
   Future<void> _load() async {
@@ -59,6 +67,18 @@ class SettingsController extends ChangeNotifier {
 
   Future<void> setWatermarkText(String value) =>
       _update(settings.copyWith(watermarkText: value));
+
+  Future<void> setFeedUpscaler(FeedUpscaler value) =>
+      _update(settings.copyWith(feedUpscaler: value));
+
+  Future<void> setTemporalDenoise(bool value) =>
+      _update(settings.copyWith(temporalDenoise: value));
+
+  Future<void> setAutoRotateFeed(bool value) =>
+      _update(settings.copyWith(autoRotateFeed: value));
+
+  Future<void> setDeSqueeze(double value) =>
+      _update(settings.copyWith(deSqueeze: value.clamp(1.0, 2.0)));
 
   Future<void> _update(AppSettings next) async {
     settings = next;
@@ -265,6 +285,81 @@ class _SettingsPageState extends State<SettingsPage> {
                     onSubmitted: controller.setWatermarkText,
                   ),
                 ),
+              const Divider(),
+              ListTile(
+                title: const Text('监看'),
+                subtitle: const Text('取景画面显示层处理:上采样 / 降噪 / 旋转 / 变宽'),
+              ),
+              const Padding(
+                padding: EdgeInsets.fromLTRB(16, 0, 16, 4),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text('画面上采样',
+                      style: TextStyle(fontSize: 13)),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                child: SegmentedButton<FeedUpscaler>(
+                  segments: const [
+                    ButtonSegment(value: FeedUpscaler.off, label: Text('关')),
+                    ButtonSegment(value: FeedUpscaler.fast, label: Text('快速')),
+                    ButtonSegment(
+                        value: FeedUpscaler.quality, label: Text('高质量')),
+                  ],
+                  selected: {controller.settings.feedUpscaler},
+                  onSelectionChanged: (s) =>
+                      controller.setFeedUpscaler(s.first),
+                ),
+              ),
+              SwitchListTile(
+                title: const Text('时域降噪'),
+                subtitle: const Text(
+                    '前后帧运动自适应混合(仅「高质量」上采样生效)'),
+                value: controller.settings.temporalDenoise,
+                onChanged: controller.setTemporalDenoise,
+              ),
+              SwitchListTile(
+                title: const Text('画面自动旋转'),
+                subtitle: const Text('相机竖持/倒置时画面转正显示(默认开)'),
+                value: controller.settings.autoRotateFeed,
+                onChanged: controller.setAutoRotateFeed,
+              ),
+              ListTile(
+                title: const Text('变宽还原(anamorphic)'),
+                subtitle: Text(
+                    '变形宽银幕镜头的水平挤压按倍率还原显示;当前 ${controller.settings.deSqueeze.toStringAsFixed(2)}×'),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+                child: Wrap(
+                  spacing: 6,
+                  children: [
+                    for (final preset in kDeSqueezePresets)
+                      ChoiceChip(
+                        label: preset == 1.0
+                            ? const Text('关')
+                            : Text('$preset×'),
+                        selected:
+                            controller.settings.deSqueeze == preset,
+                        onSelected: (_) =>
+                            controller.setDeSqueeze(preset),
+                      ),
+                  ],
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                child: Slider(
+                  min: 1.0,
+                  max: 2.0,
+                  divisions: 100,
+                  label:
+                      '${controller.settings.deSqueeze.toStringAsFixed(2)}×',
+                  value: controller.settings.deSqueeze,
+                  onChanged: controller.setDeSqueeze,
+                ),
+              ),
               const Divider(),
               const ListTile(
                 title: Text('传输质量'),

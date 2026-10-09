@@ -25,7 +25,9 @@ import '../../platform/gallery_saver.dart';
 import '../../platform/services.dart';
 import '../../platform/video_player.dart';
 import '../common/format.dart';
+import '../common/widgets/de_squeezed_image.dart';
 import '../common/widgets/loading_overlay.dart';
+import '../common/widgets/video_conform.dart';
 import '../edit/edit_page.dart';
 import 'download_format_sheet.dart';
 import 'ratings_controller.dart';
@@ -233,7 +235,10 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
     }
     _closeDialog();
     try {
-      await _videoPlayer.play(dl.path);
+      // 高帧率素材先问实时/顺帧(24fps conform);取消则不播
+      if (!mounted) return;
+      await playVideoWithConform(context,
+          player: _videoPlayer, path: dl.path);
     } on Exception {
       // 通道未实现(Android/ohos 待补)或原生播放失败
       if (mounted) _snack('该平台暂不支持视频播放');
@@ -341,9 +346,11 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
                 ],
               );
             }
-            return Image.file(
-              File(path),
-              fit: BoxFit.contain,
+            // 变宽还原:设置 >1 时按倍率水平拉伸(见 DeSqueezedImage)
+            return DeSqueezedImage(
+              image: FileImage(File(path)),
+              deSqueeze:
+                  AppServices.instance.settingsController.value.deSqueeze,
               errorBuilder: (context, error, stackTrace) => Icon(
                 group.isVideo
                     ? Icons.movie_outlined
