@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:nikon_pill/core/browser/object_entry.dart';
@@ -70,7 +70,7 @@ final class _FakeRawDecoder implements RawDecoder {
 /// 伪播放器:记录播放路径与速率;抽帧 [failThumbs] 默认失败(= 无抽帧回落
 /// 图标格,与生产 Android/ohos 无通道同形),海报帧用例置 false;
 /// [frameRateOf] 供顺帧用例注入帧率;[embedded] = 内嵌播放视图可用
-/// (iOS 人设;viewControl/viewStatus/viewSeek 落账,viewStatus 由
+/// (iOS 人设;load/viewControl/viewSeek 落账,viewStatus 由
 /// viewControl 驱动像真播放器 —— 位置不前进,值不变才不重绘,
 /// FakeAsync 里 pumpAndSettle 才能收)。
 final class _FakeVideoPlayer implements VideoPlayer {
@@ -85,6 +85,7 @@ final class _FakeVideoPlayer implements VideoPlayer {
 
   /// viewControl 指令流:(viewId, playing, rate)。
   final viewControls = <(int, bool, double)>[];
+  final loads = <(int, String)>[];
   final seeks = <(int, double)>[];
   final viewStates =
       <int, ({double position, double duration, bool playing})>{};
@@ -95,6 +96,11 @@ final class _FakeVideoPlayer implements VideoPlayer {
   @override
   Future<void> play(String path, {double rate = 1.0}) async {
     played.add((path, rate));
+  }
+
+  @override
+  Future<void> loadEmbeddedView(int viewId, String path) async {
+    loads.add((viewId, path));
   }
 
   @override
@@ -437,10 +443,10 @@ void main() {
     expect(find.text('RAW 解码失败(该平台可能不支持)'), findsOneWidget);
   });
 
-  // ── 视频页内播放(2026-10-09:点开即播,不再「海报帧 + 播放钮 +
-  // 弹全屏新页」三步走)──
+  // ── 视频页内播放(2026-10-09 再改:点开**不自动播**,首帧 + 播放钮
+  // 常驻,点了才起播;全屏改查看器原地旋转,同一播放器零跳变)──
 
-  testWidgets('MOV:点开即播(页内起播,不弹全屏新页)', (tester) async {
+  testWidgets('MOV:点开不自动播放(装载即暂停,点播放才起播)', (tester) async {
     writeFile('c.mov', modified: DateTime(2026, 10, 3));
     final gallery = _FakeGallery(dir);
     final player = _FakeVideoPlayer(embedded: true);
@@ -453,13 +459,25 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('c.mov'), findsWidgets); // 查看器 AppBar
-    // 视图就位即按意图起播(1× 实时;不再先问顺帧/再点播放钮)
+    // 视图就位 → 通道装载档案 → 按意图暂停(装载先于控制,同通道 FIFO)
+    expect(player.loads, [(7, '${dir.path}/c.mov')]);
     expect(player.viewControls, isNotEmpty);
-    expect(player.viewControls.first, (7, true, 1.0));
-    // 不再走全屏 play 通道
+    expect(player.viewControls.first, (7, false, 1.0)); // 不自动起播
+    expect(find.byIcon(Icons.play_arrow), findsOneWidget); // 中键 = 播放
+    // 不走全屏 play 通道;应用内常驻档播完不删
     expect(player.played, isEmpty);
-    // 应用内常驻档:播完不删(与相机相册临时下载播放不同)
     expect(File('${dir.path}/c.mov').existsSync(), isTrue);
+
+    // 点播放才起播
+    await tester.tap(find.byIcon(Icons.play_arrow));
+    await tester.pumpAndSettle();
+    expect(player.viewControls.last, (7, true, 1.0));
+
+    // 播放中退出查看器(左上返回)= 立即停播(显式暂停兜底,不靠
+    // 平台视图销毁时序 —— 2026-10-09 退出后声音未停复报)
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    expect(player.viewControls.last, (7, false, 1.0));
   });
 
   testWidgets('MOV:高帧率浮顺帧开关(非阻塞),点了才变速静音', (tester) async {
@@ -474,19 +492,19 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('c.mov')));
     await tester.pumpAndSettle();
 
-    // 直接起播(60fps 也不拦,顺帧是开关不是门)
-    expect(player.viewControls.first, (7, true, 1.0));
+    // 暂停待播,顺帧开关照样在场(不拦起播,非门)
+    expect(player.viewControls.first, (7, false, 1.0));
     expect(find.text('24fps 顺帧'), findsOneWidget);
 
     await tester.tap(find.text('24fps 顺帧'));
     await tester.pumpAndSettle();
-    expect(player.viewControls.last, (7, true, 0.4));
+    expect(player.viewControls.last, (7, false, 0.4));
     expect(find.text('顺帧 24fps · 40%'), findsOneWidget);
 
     // 再点回实时
     await tester.tap(find.text('顺帧 24fps · 40%'));
     await tester.pumpAndSettle();
-    expect(player.viewControls.last, (7, true, 1.0));
+    expect(player.viewControls.last, (7, false, 1.0));
   });
 
   testWidgets('MOV:播放控制 —— 暂停/续播/拖进度条', (tester) async {
@@ -501,8 +519,14 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('c.mov')));
     await tester.pumpAndSettle();
 
-    // 起播后中键是暂停图样;点它暂停
+    // 待播:中键是播放图样;点它起播
+    expect(find.byIcon(Icons.play_arrow), findsOneWidget);
+    await tester.tap(find.byIcon(Icons.play_arrow));
+    await tester.pumpAndSettle();
+    expect(player.viewControls.last, (7, true, 1.0));
     expect(find.byIcon(Icons.pause), findsOneWidget);
+
+    // 播放中点中键暂停
     await tester.tap(find.byIcon(Icons.pause));
     await tester.pumpAndSettle();
     expect(player.viewControls.last, (7, false, 1.0));
@@ -517,6 +541,94 @@ void main() {
     await tester.pumpAndSettle();
     expect(player.seeks, isNotEmpty);
     expect(player.seeks.single.$1, 7);
+  });
+
+  /// 浮层当前透明度配置(淡入淡出由 AnimatedOpacity 内部驱动)。
+  /// 经 Slider 定位:视频页浮层是它唯一的 AnimatedOpacity 祖先。
+  double overlayOpacity(WidgetTester tester) => tester
+      .widget<AnimatedOpacity>(find.ancestor(
+          of: find.byType(Slider), matching: find.byType(AnimatedOpacity)))
+      .opacity;
+
+  testWidgets('MOV:播放中控制浮层 3s 自动隐,点按唤回;暂停常驻', (tester) async {
+    writeFile('c.mov', modified: DateTime(2026, 10, 3));
+    final gallery = _FakeGallery(dir);
+    final player = _FakeVideoPlayer(embedded: true);
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    await tester.pumpWidget(embeddedHost(gallery, controller, player));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('c.mov')));
+    await tester.pumpAndSettle();
+    // 待播浮层常驻;点播放起播(此后浮层要自动隐)
+    expect(overlayOpacity(tester), 1.0);
+    await tester.tap(find.byIcon(Icons.play_arrow));
+    await tester.pumpAndSettle();
+
+    // 播放中 3s 后自动隐(此前常驻不消 —— 用户复报点)
+    await tester.pump(const Duration(seconds: 4));
+    await tester.pumpAndSettle(); // 180ms 淡出收尾
+    expect(overlayOpacity(tester), 0.0);
+
+    // 点按画面(避开中键/角钮的空档)唤回,播放中再计 3s
+    await tester.tapAt(const Offset(400, 150));
+    await tester.pumpAndSettle();
+    expect(overlayOpacity(tester), 1.0);
+
+    // 暂停后浮层常驻:过了 3s 也不隐(不然没法点续播)
+    await tester.tap(find.byIcon(Icons.pause));
+    await tester.pump(const Duration(seconds: 4));
+    await tester.pumpAndSettle();
+    expect(overlayOpacity(tester), 1.0);
+    expect(player.viewControls.last, (7, false, 1.0));
+  });
+
+  testWidgets('MOV:全屏 —— 原地旋转(同一播放器,不新增视图)', (tester) async {
+    writeFile('c.mov', modified: DateTime(2026, 10, 3));
+    final gallery = _FakeGallery(dir);
+    final player = _FakeVideoPlayer(embedded: true);
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    // 记录 SystemChrome 通道指令(方向锁/沉浸是全屏的本体动作)
+    final chromeCalls = <MethodCall>[];
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform, (call) async {
+      chromeCalls.add(call);
+      return null;
+    });
+    await tester.pumpWidget(embeddedHost(gallery, controller, player));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('c.mov')));
+    await tester.pumpAndSettle();
+    expect(find.text('c.mov'), findsWidgets); // 顶栏标题在
+
+    // 进全屏:顶栏收起 + 锁横屏 + 沉浸,角钮翻成退出
+    await tester.tap(find.byIcon(Icons.fullscreen));
+    await tester.pumpAndSettle();
+    expect(find.text('c.mov'), findsNothing); // AppBar 随全屏收起
+    expect(find.byIcon(Icons.fullscreen_exit), findsOneWidget);
+    // 同一播放器:没有第二次装载,也没有暂停/续播翻动
+    expect(player.loads, hasLength(1));
+    expect(player.viewControls, hasLength(1));
+    List<List<String>> orientationCalls() => chromeCalls
+        .where((c) => c.method == 'SystemChrome.setPreferredOrientations')
+        .map((c) => List<String>.from(c.arguments as List))
+        .toList();
+    expect(orientationCalls().first, ['DeviceOrientation.landscapeLeft',
+        'DeviceOrientation.landscapeRight']); // 锁横屏
+    expect(chromeCalls.any((c) => c.method.contains('SystemUIMode')),
+        isTrue); // 沉浸
+
+    // 退全屏:顶栏回来,方向还原成应用方向集
+    await tester.tap(find.byIcon(Icons.fullscreen_exit));
+    await tester.pumpAndSettle();
+    expect(find.text('c.mov'), findsWidgets);
+    expect(find.byIcon(Icons.fullscreen), findsOneWidget);
+    expect(orientationCalls().last, ['DeviceOrientation.portraitUp',
+        'DeviceOrientation.landscapeLeft',
+        'DeviceOrientation.landscapeRight']);
   });
 
   testWidgets('MOV:无内嵌视图平台(Android/ohos)回落海报帧 + 说明文案',
@@ -585,6 +697,28 @@ void main() {
     await dragLikeFinger(tester, find.byType(PageView), const Offset(600, 0));
     expect(find.text('c.jpg'), findsWidgets);
     expect(find.text('b.jpg'), findsNothing);
+  });
+
+  testWidgets('查看器:图片滑到视频不自动播放(装载即暂停)', (tester) async {
+    writeFile('a.jpg', modified: DateTime(2026, 10, 2));
+    writeFile('b.mov', modified: DateTime(2026, 10, 3));
+    final gallery = _FakeGallery(dir);
+    final player = _FakeVideoPlayer(embedded: true);
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    await tester.pumpWidget(embeddedHost(gallery, controller, player));
+    await tester.pumpAndSettle();
+
+    // 倒序 b.mov, a.jpg;开在图片(a)上,右滑到视频(b)
+    await tester.tap(find.byKey(const ValueKey('a.jpg')));
+    await tester.pumpAndSettle();
+    await dragLikeFinger(tester, find.byType(PageView), const Offset(600, 0));
+    expect(find.text('b.mov'), findsWidgets);
+
+    // 视频页就位:装载了档案,但控制指令是暂停(不自动播)
+    expect(player.loads, [(7, '${dir.path}/b.mov')]);
+    expect(player.viewControls.first, (7, false, 1.0));
+    expect(find.byIcon(Icons.play_arrow), findsOneWidget);
   });
 
   testWidgets('查看器删除:当前页删除下一张滑入;删尾页翻回前一页',

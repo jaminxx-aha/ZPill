@@ -3,8 +3,9 @@
 // 对应 Dart 契约 lib/platform/video_player.dart:
 // - play({path, rate}):AVPlayer 播放本地文件,全屏 present。AVPlayerViewController
 //   自带播放控制(进度/音量/全屏),补一个左上关闭钮(原生播放器没有
-//   Done);关闭 = dismiss + result(nil)(Dart 侧 Future 于此刻完成,
-//   调用方随后删临时档)。rate 非 1 = 顺帧预览(conform,如 60fps 素材
+//   Done)。**任何途径**的关闭(自家 × / iOS 26 AVKit 自绘 × / 系统
+//   dismiss)= 停播 + result(nil)(Dart 侧 Future 于此刻完成,调用方
+//   随后删临时档)。rate 非 1 = 顺帧预览(conform,如 60fps 素材
 //   按 24fps 看 = 0.4):静音播放 —— 变速下音轨无意义(OpenZCine
 //   conform 同款)。
 // - thumbnail({path, maxPixelSize}):AVAssetImageGenerator 抽帧 → JPEG。
@@ -16,12 +17,17 @@
 // - frameRate({path}):AVAssetTrack.nominalFrameRate(标称帧率;顺帧
 //   预览的门禁数据)。无视频轨/探测失败回 nil,Dart 侧按「实时播放」
 //   处理。
+// - viewLoad({id, path}):内嵌播放视图装载档案(平台视图
+//   `nikonpill/video-view` 创建后、起播前由 Dart 侧调用 —— 平台视图
+//   不走 creationParams 传路径,引擎侧编解码钩子不可靠,见工厂注释)。
 // - viewControl({id, playing, rate}):驱动内嵌播放视图(平台视图
 //   `nikonpill/video-view`,图库查看器视频页):起播/暂停 + 顺帧速率。
-//   AVPlayerViewController 以子视图进 Flutter 树,自带传输条(点按出
-//   控制);横滑翻页手势归 Flutter(UiKitView 空 gestureRecognizers,
-//   拖动由 Flutter 滚动手势认领,点按未被认领才送达原生)。视图销毁
-//   = 暂停 + 摘 player(翻页离场即停,不需要 Dart 侧收口)。
+//   AVPlayerViewController 以子视图进 Flutter 树,原生传输条关闭
+//   (播放控制 Flutter 自绘);横滑翻页手势归 Flutter(UiKitView 空
+//   gestureRecognizers,拖动由 Flutter 滚动手势认领,点按未被认领才
+//   送达原生)。视图销毁 = 暂停 + 摘 player;Dart 侧 dispose 时也显式
+//   发一条暂停兜底(引擎销毁时序不保证即时,2026-10-09 退出查看器
+//   声音未停复报)。
 //
 // present 的 VC 取法:iOS 13+ 场景化(SceneDelegate),从
 // connectedScenes 取 foregroundActive 的 keyWindow rootVC,再走
@@ -55,6 +61,16 @@ public final class VideoPlugin: NSObject, FlutterPlugin {
       DispatchQueue.main.async {
         Self.presentPlayer(path: path, rate: rate, result: result)
       }
+    case "viewLoad":
+      guard let args = call.arguments as? [String: Any],
+            let id = (args["id"] as? NSNumber)?.int64Value,
+            let path = args["path"] as? String else {
+        result(FlutterError(code: "bad_args", message: "viewLoad 须传 id/path", details: nil))
+        return
+      }
+      // 视图可能正在销毁途 mid-teardown:找不到就静默 OK(Dart 侧不收口)。
+      Self.embeddedViews[id]?.load(path: path)
+      result(nil)
     case "viewControl":
       guard let args = call.arguments as? [String: Any],
             let id = (args["id"] as? NSNumber)?.int64Value else {
@@ -253,51 +269,50 @@ final class _CloseHostViewController: UIViewController {
   }
 
   @objc private func closeTapped() {
-    guard !didClose else { return }
+    dismiss(animated: true)
+  }
+
+  // 任何途径的收场都停播 + 收口:自家 × 之外,iOS 26 的 AVKit 在全屏
+  // modal 语境还会自绘一排控制(左上含 ×,「双 ×」旧患)—— 点那个 ×
+  // 只 dismiss 宿主、不走 closeTapped → 声音继续、result 悬挂、临时档
+  // 永不删(2026-10-09 真机复报)。统一在宿主消失钩子收尾,一次性。
+  override func viewWillDisappear(_ animated: Bool) {
+    super.viewWillDisappear(animated)
+    guard isBeingDismissed, !didClose else { return }
     didClose = true
     playerViewController.player?.pause()
     playerViewController.player = nil
-    dismiss(animated: true) { [onClose] in
-      onClose()
-    }
+    onClose()
   }
 }
 
-/// 内嵌播放平台视图工厂:creationParams 只收 path(Dart 侧
-/// EmbeddedVideoViewBuilder 传参;起播/速率走 viewControl 通道,
-/// 不在创建时定死 —— 翻页 settle 才起播)。
+/// 内嵌播放平台视图工厂:不带 creationParams —— 实测引擎不把
+/// creationParams 送给工厂(createArgsCodec 可选钩子的 @objc 可见性
+/// 不可靠,2026-10-09 模拟器探针实证 rawArgs=nil → player=nil → 黑页
+/// 无法播放),档案路径改走 viewLoad 通道(onPlatformViewCreated 后
+/// Dart 侧显式装载,方法通道 FIFO 时序有保证;Android/ohos 将来同路)。
 final class EmbeddedVideoViewFactory: NSObject, FlutterPlatformViewFactory {
   func create(
     withFrame frame: CGRect, viewIdentifier viewId: Int64, arguments args: Any?
   ) -> FlutterPlatformView {
-    let path = (args as? [String: Any])?["path"] as? String
-    return EmbeddedVideoPlatformView(viewId: viewId, path: path)
-  }
-
-  func createArgsCodec() -> FlutterMessageCodec {
-    FlutterStandardMessageCodec.sharedInstance()
+    EmbeddedVideoPlatformView(viewId: viewId)
   }
 }
 
 /// 内嵌播放视图:AVPlayerViewController 以子视图进 Flutter 树(图库
-/// 查看器视频页)。播放控制用 AVKit 自带传输条(点按视频出控制);
-/// 起播/暂停/顺帧速率由 Dart 侧 viewControl 驱动(翻页离场即暂停)。
-/// 非全屏子视图上下文,AVKit 不画自家关闭钮(全屏 modal 语境才画,
-/// 与 _CloseHostViewController 的关闭钮叠加成双 × 的老问题不复发)。
+/// 查看器视频页)。档案装载(viewLoad)、起播/暂停/顺帧速率
+/// (viewControl)、进度(viewStatus/viewSeek)全走方法通道,由 Dart
+/// 侧 _VideoPage 驱动(翻页离场即暂停)。非全屏子视图上下文,AVKit
+/// 不画自家关闭钮(全屏 modal 语境才画,与 _CloseHostViewController
+/// 的关闭钮叠加成双 × 的老问题不复发)。
 final class EmbeddedVideoPlatformView: NSObject, FlutterPlatformView {
   private let viewId: Int64
-  private let player: AVPlayer?
+  private var player: AVPlayer?
   private let controller = AVPlayerViewController()
 
-  init(viewId: Int64, path: String?) {
+  init(viewId: Int64) {
     self.viewId = viewId
-    if let path, FileManager.default.fileExists(atPath: path) {
-      let p = AVPlayer(url: URL(fileURLWithPath: path))
-      player = p
-      controller.player = p
-    } else {
-      player = nil // 文件缺失:黑底空视图(Dart 侧另有海报帧兜底)
-    }
+    self.player = nil // viewLoad 装载前:黑底空视图
     // 播放控制由 Flutter 侧自绘(Dart _VideoPage):原生传输条关掉,
     // 横滑手势才归 PageView 翻页、点按归 Flutter 切控制浮层。
     controller.showsPlaybackControls = false
@@ -313,6 +328,17 @@ final class EmbeddedVideoPlatformView: NSObject, FlutterPlatformView {
     player?.pause()
     controller.player = nil
     VideoPlugin.embeddedViews.removeValue(forKey: viewId)
+  }
+
+  /// 装载档案(Dart 侧 onPlatformViewCreated 后调用;仅首次生效,
+  /// 翻回同页复用同一视图)。文件缺失保持黑底(Dart 侧另有海报帧兜底)。
+  func load(path: String) {
+    guard player == nil, FileManager.default.fileExists(atPath: path) else {
+      return
+    }
+    let p = AVPlayer(url: URL(fileURLWithPath: path))
+    player = p
+    controller.player = p
   }
 
   /// 起播/暂停 + 速率(顺帧):rate != 1 静音(变速下音轨无意义,
@@ -348,6 +374,13 @@ final class EmbeddedVideoPlatformView: NSObject, FlutterPlatformView {
   }
 
   func seek(to seconds: Double) {
-    player?.seek(to: CMTime(seconds: seconds, preferredTimescale: 600))
+    // 零容差精确档:默认 seek(to:) 是高效档,会吸附到目标前方最近的
+    // 关键帧(最多偏一个 GOP)—— 拖进度条落点回跳、重放回 0 不在 0,
+    // 全屏位置搬运时进度条凭空剩一截「没播完」。本地档解码回溯代价
+    // 可忽略,一律精确落点。
+    player?.seek(
+      to: CMTime(seconds: seconds, preferredTimescale: 600),
+      toleranceBefore: .zero,
+      toleranceAfter: .zero)
   }
 }

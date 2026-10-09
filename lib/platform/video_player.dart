@@ -19,10 +19,15 @@
 /// - `supportsEmbeddedView`:平台是否具备内嵌播放视图(= iOS 平台视图
 ///   `nikonpill/video-view` 已注册;Android/ohos 待补 → 调用方回落
 ///   海报帧 + 说明文案,不再走全屏 play)。
+/// - `loadEmbeddedView(viewId, path)`:内嵌视图装载档案。**路径不走
+///   平台视图 creationParams**(引擎对工厂可选编解码钩子的挂接不可靠,
+///   实测参数到不了原生侧 → 黑页无法播放),改走方法通道 ——
+///   [embeddedVideoViewBuilder] 的 onCreated 回传 viewId 后、起播前
+///   显式调用;同通道 FIFO,时序有保证。
 /// - `controlEmbeddedView(viewId, {playing, rate})`:驱动内嵌视图的
 ///   起播/暂停与速率(顺帧开关)。viewId 来自 [embeddedVideoViewBuilder]
 ///   的 onCreated 回调。视图本体 = [embeddedVideoViewBuilder](UiKitView
-///   包 AVPlayerViewController,自带传输条;点按出控制、横滑归 Flutter
+///   包 AVPlayerViewController;点按出 Flutter 自绘控制、横滑归 Flutter
 ///   翻页 —— UiKitView 空 gestureRecognizers 的竞技场语义)。
 ///
 /// PTP 相机没有流式播放在谈:MOV 播放必须先整档下载(相机相册路径),
@@ -59,6 +64,11 @@ abstract interface class VideoPlayer {
   /// 内嵌播放视图是否可用(iOS 平台视图已注册;其余平台回占位说明)。
   bool get supportsEmbeddedView;
 
+  /// 内嵌播放视图 [viewId] 装载 [path](onCreated 回传 viewId 后、
+  /// 起播前调用一次)。路径走方法通道而非平台视图 creationParams
+  /// (引擎编解码钩子不可靠,见库注释)。视图未创建/已销毁时静默忽略。
+  Future<void> loadEmbeddedView(int viewId, String path);
+
   /// 驱动内嵌播放视图 [viewId]:起播/暂停 + 速率(顺帧 = 24/fps,
   /// 非 1 速率静音)。视图未创建/已销毁时静默忽略。
   Future<void> controlEmbeddedView(int viewId,
@@ -74,14 +84,14 @@ abstract interface class VideoPlayer {
 }
 
 /// 生产内嵌视图:iOS 平台视图 `nikonpill/video-view`(VideoPlugin 注册,
-/// AVPlayerViewController 自带传输条)。仅 iOS 真机可用;其余平台调用方
-/// 不得构建(以 [VideoPlayer.supportsEmbeddedView] 门禁)。
+/// AVPlayerViewController)。不带 creationParams —— 档案路径由
+/// [VideoPlayer.loadEmbeddedView] 走方法通道装载(见类注释)。
+/// 仅 iOS 真机可用;其余平台调用方不得构建(以
+/// [VideoPlayer.supportsEmbeddedView] 门禁)。
 Widget embeddedVideoViewBuilder(
         String path, void Function(int viewId) onCreated) =>
     UiKitView(
       viewType: 'nikonpill/video-view',
-      creationParams: {'path': path},
-      creationParamsCodec: const StandardMessageCodec(),
       onPlatformViewCreated: onCreated,
     );
 
@@ -90,6 +100,14 @@ final class MethodChannelVideoPlayer implements VideoPlayer {
 
   @override
   bool get supportsEmbeddedView => Platform.isIOS;
+
+  @override
+  Future<void> loadEmbeddedView(int viewId, String path) async {
+    await _channel.invokeMethod<void>('viewLoad', {
+      'id': viewId,
+      'path': path,
+    });
+  }
 
   @override
   Future<void> controlEmbeddedView(int viewId,
