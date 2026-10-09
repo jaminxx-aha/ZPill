@@ -20,9 +20,9 @@ library;
 
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../app_services.dart';
 import '../../core/browser/photo_group.dart';
@@ -119,36 +119,6 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   void initState() {
     super.initState();
     _controller.refreshAppFiles();
-    // 调试钩子(勿删生产逻辑):dart-define NP_AUTO_VIDEO=1 时,文件列表
-    // 到位后自动点开首个视频的查看器 —— 模拟器复现「视频无法播放」用。
-    if (const String.fromEnvironment('NP_AUTO_VIDEO') == '1') {
-      _autoOpenVideoOnce();
-    }
-  }
-
-  /// NP_AUTO_VIDEO=1:轮到视频就开查看器(复刻 _cell 的 openable 序)。
-  void _autoOpenVideoOnce() {
-    void tryOpen() {
-      if (!mounted) return;
-      final peers = _controller.appFiles
-          .where((f) =>
-              _isViewable(f) ||
-              isRawFilename(_nameOf(f)) ||
-              isVideoFilename(_nameOf(f)))
-          .toList(growable: false)
-        ..sort(
-            (a, b) => b.statSync().modified.compareTo(a.statSync().modified));
-      final videos = peers.where((f) => isVideoFilename(_nameOf(f)));
-      if (videos.isEmpty) {
-        Timer(const Duration(milliseconds: 400), tryOpen); // 列表未就位,再等
-        return;
-      }
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _openViewer(videos.first, peers);
-      });
-    }
-
-    Timer(const Duration(milliseconds: 400), tryOpen);
   }
 
   bool _isViewable(File file) => _isViewableName(_nameOf(file));
@@ -440,9 +410,11 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
 }
 
 /// 应用内文件查看(黑底,PageView 左右滑翻页):双指缩放(JPG/NEF)、
-/// NEF 原生解码长边 ≤2560(会话缓存,翻回不重解)、MOV 页内直接播放
-/// (iOS 平台视图 + Flutter 自绘播放控制,见 [_VideoPage])。顶栏动作
-/// (导入系统相册/删除)作用于当前页;删除后列表收缩、尾页翻回前一页。
+/// NEF 原生解码长边 ≤2560(会话缓存,翻回不重解)、MOV 页内播放
+/// (iOS 平台视图 + Flutter 自绘播放控制,见 [_VideoPage],点开不自动
+/// 播)。视频页可全屏(原地旋转:锁横屏 + 隐顶栏,同一播放器,无新
+/// 视图无跳变)。顶栏动作(导入系统相册/删除)作用于当前页;删除后
+/// 列表收缩、尾页翻回前一页。
 class _LibraryViewer extends StatefulWidget {
   const _LibraryViewer({
     required this.files,
@@ -480,6 +452,18 @@ class _LibraryViewerState extends State<_LibraryViewer> {
       PageController(initialPage: widget.initialIndex);
   late int _index = widget.initialIndex;
 
+  /// 视频全屏(原地旋转):锁横屏 + 隐顶栏。平台视图不能搬家,但查看
+  /// 器自身布局可以 —— 同一 UiKitView 随 Scaffold 转横填满屏幕,零跳变
+  /// (对比旧法:推新路由自建第二个播放器,装载黑闪 + 位置来回搬运)。
+  bool _fullscreen = false;
+
+  /// 应用全局方向集(main.dart 启动即设,传感器跟随);退出全屏还原。
+  static const _appOrientations = [
+    DeviceOrientation.portraitUp,
+    DeviceOrientation.landscapeLeft,
+    DeviceOrientation.landscapeRight,
+  ];
+
   /// NEF 大图解码缓存(会话内合并:页滑出视口被 dispose 后 future 仍
   /// 在,翻回不重解 —— 整档 RAW 解码是秒级重活)。
   final Map<String, Future<Uint8List>> _decodes = {};
@@ -487,7 +471,31 @@ class _LibraryViewerState extends State<_LibraryViewer> {
   @override
   void dispose() {
     _pageController.dispose();
+    if (_fullscreen) {
+      // 全屏中收查看器(返回手势/删除尾页):还原方向与系统栏再走
+      _setChrome(fullscreen: false);
+    }
     super.dispose();
+  }
+
+  void _setFullscreen(bool on) {
+    setState(() => _fullscreen = on);
+    _setChrome(fullscreen: on);
+  }
+
+  void _setChrome({required bool fullscreen}) {
+    // 沉浸(隐状态栏/指示条)+ 钉/放方向;ohos fork 通道缺失时静默
+    // 兜住(与 remote_page 方向锁同一手法)。
+    SystemChrome.setEnabledSystemUIMode(
+            fullscreen ? SystemUiMode.immersiveSticky : SystemUiMode.edgeToEdge)
+        .catchError((Object _) {});
+    SystemChrome.setPreferredOrientations(fullscreen
+            ? const [
+                DeviceOrientation.landscapeLeft,
+                DeviceOrientation.landscapeRight,
+              ]
+            : _appOrientations)
+        .catchError((Object _) {});
   }
 
   Future<Uint8List> _decodeFor(File file) => _decodes.putIfAbsent(
@@ -501,28 +509,37 @@ class _LibraryViewerState extends State<_LibraryViewer> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppMedia.background,
-      appBar: AppBar(
-        backgroundColor: AppMedia.chrome,
-        foregroundColor: AppMedia.onMedia,
-        title: Text(_nameOf(_current),
-            maxLines: 1, overflow: TextOverflow.ellipsis),
-        actions: [
-          IconButton(
-            tooltip: '导入系统相册',
-            onPressed: _importToGallery,
-            icon: const Icon(Icons.photo_library_outlined),
-          ),
-          IconButton(
-            tooltip: '删除',
-            onPressed: _delete,
-            icon: const Icon(Icons.delete_outline),
-          ),
-        ],
-      ),
+      // 全屏收顶栏:视频页撑满(同一平台视图转横),照片页无顶栏照看
+      appBar: _fullscreen
+          ? null
+          : AppBar(
+              backgroundColor: AppMedia.chrome,
+              foregroundColor: AppMedia.onMedia,
+              title: Text(_nameOf(_current),
+                  maxLines: 1, overflow: TextOverflow.ellipsis),
+              actions: [
+                IconButton(
+                  tooltip: '导入系统相册',
+                  onPressed: _importToGallery,
+                  icon: const Icon(Icons.photo_library_outlined),
+                ),
+                IconButton(
+                  tooltip: '删除',
+                  onPressed: _delete,
+                  icon: const Icon(Icons.delete_outline),
+                ),
+              ],
+            ),
       body: PageView.builder(
         controller: _pageController,
         itemCount: _files.length,
-        onPageChanged: (i) => setState(() => _index = i),
+        onPageChanged: (i) {
+          setState(() => _index = i);
+          // 全屏是视频语境:滑到非视频页自动退出(还原方向与顶栏)
+          if (_fullscreen && !isVideoFilename(_nameOf(_files[i]))) {
+            _setFullscreen(false);
+          }
+        },
         itemBuilder: (_, i) => _page(_files[i], active: i == _index),
       ),
     );
@@ -538,6 +555,8 @@ class _LibraryViewerState extends State<_LibraryViewer> {
               player: widget.videoPlayer,
               viewBuilder:
                   widget.embeddedVideoView ?? embeddedVideoViewBuilder,
+              fullscreen: _fullscreen,
+              onToggleFullscreen: () => _setFullscreen(!_fullscreen),
             )
           : _VideoFallbackPage(file: file, thumbFor: widget.thumbFor);
     }
@@ -669,20 +688,26 @@ class _LibraryViewerState extends State<_LibraryViewer> {
   }
 }
 
-/// 视频页(查看器 PageView 的一页):iOS 内嵌平台视图在页面里直接播
-/// —— 点开即播,不再「海报帧 + 居中播放钮 + 弹全屏新页」三步走。
+/// 视频页(查看器 PageView 的一页):iOS 内嵌平台视图在页面里播放 —
+/// 点开**不自动播**(2026-10-09 复报改):首帧 + 播放钮常驻,点了才起
+/// 播;从图片滑过来同理。
 ///
 /// 播放控制在 Flutter 侧自绘(AVKit 传输条关掉:原生横滑手势会与
 /// PageView 翻页抢 —— 裸视频面横滑归翻页,点按切控制浮层,进度条是
 /// Flutter 件叠在上面不经过平台视图)。高帧率(>30.5fps)素材浮
 /// 「24fps 顺帧」开关:非阻塞,点了才变速静音(顺帧是可选增强,不拦
 /// 起播)。[active] = 页为当前页(翻页 settle)才起播,滑走即暂停。
+///
+/// 全屏走 [_fullscreen]/[onToggleFullscreen](查看器原地旋转,同一播
+/// 放器);本页只换角钮图样。
 class _VideoPage extends StatefulWidget {
   const _VideoPage({
     required this.file,
     required this.active,
     required this.player,
     required this.viewBuilder,
+    required this.fullscreen,
+    required this.onToggleFullscreen,
   });
 
   final File file;
@@ -692,24 +717,34 @@ class _VideoPage extends StatefulWidget {
   /// 内嵌视图构建(测试注入;生产 = iOS 平台视图)。
   final EmbeddedVideoViewBuilder viewBuilder;
 
+  /// 查看器全屏态(原地旋转):角钮在 全屏/退出全屏 间切换。
+  final bool fullscreen;
+
+  /// 切换查看器全屏。
+  final VoidCallback onToggleFullscreen;
+
   @override
   State<_VideoPage> createState() => _VideoPageState();
 }
 
 class _VideoPageState extends State<_VideoPage> {
   static const _pollInterval = Duration(milliseconds: 250);
+  static const _controlsHideDelay = Duration(seconds: 3);
 
   int? _viewId;
   double? _fps; // 标称帧率(未知/≤30.5 = 无顺帧开关)
   bool _conform = false;
   bool _controlsVisible = true;
-  bool _playingIntent = true; // 起播意图:点开即播;暂停/播完翻 false
+  // 起播意图:点开不自动播(首帧 + 播放钮),点了播放才 true;暂停/
+  // 播完跟随翻 false。滑走保持原意图,翻回继续(没点过播放的翻回仍停)。
+  bool _playingIntent = false;
   bool _playing = false; // 原生观测(播完自停跟随)
   double _position = 0;
   double _duration = 0;
   bool _scrubbing = false;
   double _scrubTo = 0;
   Timer? _pollTimer;
+  Timer? _hideTimer; // 播放中 3s 自动隐浮层;暂停/播完浮层常驻
 
   @override
   void initState() {
@@ -731,7 +766,16 @@ class _VideoPageState extends State<_VideoPage> {
 
   @override
   void dispose() {
-    _stopPolling(); // 平台视图随 State 销毁,native 侧自会暂停摘表
+    // 显式暂停兜底:不等平台视图销毁链(引擎 dispose 时序不保证即时
+    // —— 2026-10-09 退出查看器声音未停复报),通道先发暂停;原生侧
+    // 若已摘表则静默无操作,双保险。
+    final id = _viewId;
+    if (id != null) {
+      unawaited(widget.player
+          .controlEmbeddedView(id, playing: false, rate: 1.0));
+    }
+    _stopPolling();
+    _hideTimer?.cancel();
     super.dispose();
   }
 
@@ -749,10 +793,14 @@ class _VideoPageState extends State<_VideoPage> {
   double get _rate =>
       _conform && _highFps ? kConformTargetFps / _fps! : 1.0;
 
-  void _onViewCreated(int viewId) {
+  Future<void> _onViewCreated(int viewId) async {
     _viewId = viewId;
-    _sync(); // 视图就位:当前页立即按意图起播
-    _pollStatus();
+    // 档案路径不走平台视图 creationParams(引擎编解码钩子不可靠,实测
+    // 到不了原生侧),通道装载;同通道 FIFO 保证装载先于控制。
+    await widget.player.loadEmbeddedView(viewId, widget.file.path);
+    if (!mounted) return;
+    _sync(); // 视图就位:按意图同步(默认暂停,点了播放才起播)
+    unawaited(_pollStatus());
   }
 
   /// 把「起播意图 × 顺帧速率」推给原生视图。
@@ -779,6 +827,7 @@ class _VideoPageState extends State<_VideoPage> {
     try {
       final status = await widget.player.embeddedViewStatus(id);
       if (!mounted) return;
+      final wasPlaying = _playing;
       // 值未变不重绘(测试 FakeAsync 里 pumpAndSettle 才能收)。
       if (status.playing == _playing &&
           status.position == _position &&
@@ -791,13 +840,41 @@ class _VideoPageState extends State<_VideoPage> {
         _position = status.position;
         _duration = status.duration;
       });
+      // 起播 → 计时隐浮层;停了(暂停/播完)→ 浮层常驻等下一次点按
+      if (_playing && !wasPlaying) {
+        _armHide();
+      } else if (!_playing && wasPlaying) {
+        _hideTimer?.cancel();
+        _showControls();
+      }
     } on Exception {
       // 视图销毁竞态/通道抖动:静默,下轮再试
     }
   }
 
+  /// 播放中且浮层可见时,[_controlsHideDelay] 后自动隐掉(拖进度条
+  /// 会取消、松手重新计时;暂停不计时 —— 浮层常驻才点得到播放)。
+  void _armHide() {
+    _hideTimer?.cancel();
+    if (!_playingIntent || !_controlsVisible) return;
+    _hideTimer = Timer(_controlsHideDelay, () {
+      if (mounted) setState(() => _controlsVisible = false);
+    });
+  }
+
+  void _showControls() {
+    if (mounted && !_controlsVisible) {
+      setState(() => _controlsVisible = true);
+    }
+  }
+
   void _toggleControls() {
     setState(() => _controlsVisible = !_controlsVisible);
+    if (_controlsVisible) {
+      _armHide(); // 播放中唤回 → 再计时隐掉;暂停时 armHide 自行跳过
+    } else {
+      _hideTimer?.cancel();
+    }
   }
 
   Future<void> _togglePlay() async {
@@ -810,6 +887,11 @@ class _VideoPageState extends State<_VideoPage> {
     }
     await widget.player.controlEmbeddedView(id,
         playing: widget.active && _playingIntent, rate: _rate);
+    if (_playingIntent) {
+      _armHide(); // 原生起播观测要等下一轮 poll,先按意图计时
+    } else {
+      _hideTimer?.cancel();
+    }
   }
 
   void _toggleConform() {
@@ -819,112 +901,181 @@ class _VideoPageState extends State<_VideoPage> {
 
   @override
   Widget build(BuildContext context) {
-    final percent = _highFps ? (kConformTargetFps / _fps! * 100).round() : 0;
-    final sliderMax = _duration > 0 ? _duration : 1.0;
-    final shownPosition = _scrubbing ? _scrubTo : _position;
     return Stack(
       fit: StackFit.expand,
       children: [
         // 裸视频面:横滑归 PageView 翻页(原生不装传输条,不抢手势),
-        // 点按(未被拖动认领)切控制浮层。
+        // 点按(未被拖动认领)切控制浮层。opaque:整面吃点按(平台
+        // 视图本就吸点;测试替身是透明盒,deferToChild 会漏下去)。
         GestureDetector(
+          behavior: HitTestBehavior.opaque,
           onTap: _toggleControls,
           child: widget.viewBuilder(widget.file.path, _onViewCreated),
         ),
-        // 控制浮层:中键播放/暂停 + 底行顺帧开关与进度条;点视频面隐掉。
-        IgnorePointer(
-          ignoring: !_controlsVisible,
-          child: AnimatedOpacity(
-            opacity: _controlsVisible ? 1 : 0,
-            duration: const Duration(milliseconds: 180),
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                Center(
-                  child: Material(
-                    color: AppMedia.onMediaDim,
-                    shape: const CircleBorder(),
-                    child: InkWell(
-                      customBorder: const CircleBorder(),
-                      onTap: _togglePlay,
-                      child: Padding(
-                        padding: const EdgeInsets.all(20),
-                        child: Icon(
-                          _playingIntent
-                              ? Icons.pause
-                              : Icons.play_arrow,
-                          color: AppMedia.onMedia,
-                          size: 48,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-                Align(
-                  alignment: Alignment.bottomCenter,
-                  child: SafeArea(
-                    top: false,
-                    minimum: const EdgeInsets.only(bottom: 8, left: 12, right: 12),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        if (_highFps)
-                          Padding(
-                            padding: const EdgeInsets.only(bottom: 8),
-                            child: Align(
-                              alignment: Alignment.centerLeft,
-                              child: FilterChip(
-                                selected: _conform,
-                                label: Text(_conform
-                                    ? '顺帧 24fps · $percent%'
-                                    : '24fps 顺帧'),
-                                onSelected: (_) => _toggleConform(),
-                              ),
-                            ),
-                          ),
-                        Row(
-                          children: [
-                            Text(_formatClock(shownPosition),
-                                style: const TextStyle(
-                                    color: AppMedia.onMediaMuted, fontSize: 12)),
-                            Expanded(
-                              child: Slider(
-                                value: shownPosition.clamp(0, sliderMax),
-                                max: sliderMax,
-                                onChanged: _duration <= 0
-                                    ? null
-                                    : (v) => setState(() {
-                                          _scrubbing = true;
-                                          _scrubTo = v;
-                                        }),
-                                onChangeEnd: (v) {
-                                  setState(() {
-                                    _scrubbing = false;
-                                    _position = v;
-                                  });
-                                  final id = _viewId;
-                                  if (id != null) {
-                                    unawaited(widget.player
-                                        .seekEmbeddedView(id, position: v));
-                                  }
-                                },
-                              ),
-                            ),
-                            Text(_formatClock(_duration),
-                                style: const TextStyle(
-                                    color: AppMedia.onMediaMuted, fontSize: 12)),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
+        // 控制浮层(共用件):中键播放/暂停 + 底行顺帧开关与进度条 +
+        // 右下全屏/退出全屏钮;播放中 3s 自动隐,点按唤回,暂停常驻。
+        _VideoControlsOverlay(
+          visible: _controlsVisible,
+          playingIntent: _playingIntent,
+          position: _position,
+          duration: _duration,
+          scrubbing: _scrubbing,
+          scrubTo: _scrubTo,
+          fps: _fps,
+          conform: _conform,
+          onTogglePlay: _togglePlay,
+          onToggleConform: _toggleConform,
+          onScrub: (v) {
+            _hideTimer?.cancel(); // 拖动期间不隐
+            setState(() {
+              _scrubbing = true;
+              _scrubTo = v;
+            });
+          },
+          onScrubEnd: (v) {
+            setState(() {
+              _scrubbing = false;
+              _position = v;
+            });
+            final id = _viewId;
+            if (id != null) {
+              unawaited(widget.player.seekEmbeddedView(id, position: v));
+            }
+            _armHide(); // 松手重新计时
+          },
+          bottomRight: IconButton(
+            tooltip: widget.fullscreen ? '退出全屏' : '全屏播放',
+            onPressed: widget.onToggleFullscreen,
+            icon: Icon(
+              widget.fullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
+              color: AppMedia.onMedia,
             ),
           ),
         ),
       ],
+    );
+  }
+}
+
+/// 播放控制浮层:中键播放/暂停 + 底行顺帧开关与进度条,底行右端动作
+/// 钮由调用方给(全屏/退出全屏切换,恒在右下角)。随 [visible] 淡入
+/// 淡出,隐藏期间不吃指针。
+class _VideoControlsOverlay extends StatelessWidget {
+  const _VideoControlsOverlay({
+    required this.visible,
+    required this.playingIntent,
+    required this.position,
+    required this.duration,
+    required this.scrubbing,
+    required this.scrubTo,
+    required this.fps,
+    required this.conform,
+    required this.onTogglePlay,
+    required this.onToggleConform,
+    required this.onScrub,
+    required this.onScrubEnd,
+    required this.bottomRight,
+  });
+
+  final bool visible;
+  final bool playingIntent;
+  final double position;
+  final double duration;
+  final bool scrubbing;
+  final double scrubTo;
+  final double? fps;
+  final bool conform;
+  final VoidCallback onTogglePlay;
+  final VoidCallback onToggleConform;
+  final ValueChanged<double> onScrub;
+  final ValueChanged<double> onScrubEnd;
+  final Widget bottomRight;
+
+  @override
+  Widget build(BuildContext context) {
+    final highFps = fps != null && fps! > kConformFpsGate;
+    final percent =
+        highFps ? (kConformTargetFps / fps! * 100).round() : 0;
+    final sliderMax = duration > 0 ? duration : 1.0;
+    final shownPosition = scrubbing ? scrubTo : position;
+    return IgnorePointer(
+      ignoring: !visible,
+      child: AnimatedOpacity(
+        opacity: visible ? 1 : 0,
+        duration: const Duration(milliseconds: 180),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            Center(
+              child: Material(
+                color: AppMedia.onMediaDim,
+                shape: const CircleBorder(),
+                child: InkWell(
+                  customBorder: const CircleBorder(),
+                  onTap: onTogglePlay,
+                  child: Padding(
+                    padding: const EdgeInsets.all(20),
+                    child: Icon(
+                      playingIntent ? Icons.pause : Icons.play_arrow,
+                      color: AppMedia.onMedia,
+                      size: 48,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            Align(
+              alignment: Alignment.bottomCenter,
+              child: SafeArea(
+                top: false,
+                minimum: const EdgeInsets.only(bottom: 8, left: 12, right: 12),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    if (highFps)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: FilterChip(
+                            selected: conform,
+                            label: Text(conform
+                                ? '顺帧 24fps · $percent%'
+                                : '24fps 顺帧'),
+                            onSelected: (_) => onToggleConform(),
+                          ),
+                        ),
+                      ),
+                    Row(
+                      children: [
+                        Text(_formatClock(shownPosition),
+                            style: const TextStyle(
+                                color: AppMedia.onMediaMuted, fontSize: 12)),
+                        Expanded(
+                          child: Slider(
+                            value: shownPosition.clamp(0, sliderMax),
+                            max: sliderMax,
+                            onChanged: duration <= 0
+                                ? null
+                                : (v) => onScrub(v),
+                            onChangeEnd: (v) => onScrubEnd(v),
+                          ),
+                        ),
+                        Text(_formatClock(duration),
+                            style: const TextStyle(
+                                color: AppMedia.onMediaMuted, fontSize: 12)),
+                        // 右下角动作钮(全屏/退出全屏):恒在底行右端
+                        bottomRight,
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

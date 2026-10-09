@@ -162,11 +162,17 @@ private final class CameraStore: NSObject, ICDeviceBrowserDelegate {
     browser.delegate = self
     if browser.contentsAuthorizationStatus == .authorized {
       startBrowser()
-    } else {
+    } else if browser.responds(
+      to: NSSelectorFromString("requestContentsAuthorizationWithCompletion:"))
+    {
       browser.requestContentsAuthorization { [weak self] status in
         guard let self = self, status == .authorized else { return }
         self.startBrowser()
       }
+    } else {
+      // 模拟器无该授权 API(设备独有,缺失即崩):直接起浏览,
+      // 无相机自然空表 —— 模拟器只跑不出相机,不拦应用启动。
+      startBrowser()
     }
   }
 

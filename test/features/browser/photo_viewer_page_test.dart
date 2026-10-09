@@ -125,6 +125,9 @@ final class _FakeVideoPlayer implements VideoPlayer {
   bool get supportsEmbeddedView => false;
 
   @override
+  Future<void> loadEmbeddedView(int viewId, String path) async {}
+
+  @override
   Future<void> controlEmbeddedView(int viewId,
       {required bool playing, required double rate}) async {}
 
