@@ -4,6 +4,11 @@
 /// —— 拉伸恰好等于 ds,不像「contain 后再 Transform.scale」会溢出
 /// 屏盒。ds ≤ 1 直通 contain(零开销路径);解码未完/失败回 contain
 /// 原样。[errorBuilder] 语义同 [Image.errorBuilder]。
+///
+/// contain 路径**撑满父约束**(SizedBox.expand):RenderImage 在松
+/// 约束下按固有像素尺寸排布、不放大 —— 相机缩略(160×120 级)会
+/// 显示成屏中央一小块(2026-10-09 装机复报「点进去很小」)。撑满后
+/// contain 语义不变,小图铺满视口。调用方须给有界约束(查看器均如此)。
 library;
 
 import 'package:flutter/material.dart';
@@ -76,12 +81,15 @@ class _DeSqueezedImageState extends State<DeSqueezedImage> {
     final info = _info;
     final ds = widget.deSqueeze;
     if (ds <= 1.0 || info == null || info.image.width <= 0) {
-      // 关/未解出:普通 contain
-      return Image(
-        image: widget.image,
-        fit: BoxFit.contain,
-        errorBuilder: widget.errorBuilder,
-        filterQuality: FilterQuality.medium,
+      // 关/未解出:普通 contain —— 但盒撑满约束(小图也放大铺满,
+      // RenderImage 松约束下按固有像素排布不上放,见类注)。
+      return SizedBox.expand(
+        child: Image(
+          image: widget.image,
+          fit: BoxFit.contain,
+          errorBuilder: widget.errorBuilder,
+          filterQuality: FilterQuality.medium,
+        ),
       );
     }
     return AspectRatio(

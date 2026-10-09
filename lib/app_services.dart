@@ -93,12 +93,14 @@ final class AppServices {
     ratingsStore = FileRatingsStore(
         dataDir: PlatformServices.gallery.dataDir);
     ratings = RatingsController(store: ratingsStore);
-    // iOS 下载走 GetPartialObject 64KB 分块:IC 通道一次回调收整个数据
-    // 相位,大档 GetObject 未验证且是断链主嫌疑(2026-10-09 真机);
-    // 其余平台通道内部本就流式,保持 GetObject 不降速。
+    // iOS 下载走 GetPartialObject 分块:IC 通道一次回调收整个数据相位,
+    // 大档 GetObject 未验证且是断链主嫌疑(2026-10-09 真机);分块在
+    // 无线(PTP/IP)上每块一个完整事务,小块的事务往返开销摊大 ——
+    // 2026-10-09 复报「准备播放太长」起块升 1MB(单块仍在看门狗时限
+    // 内)。其余平台通道内部本就流式,保持 GetObject 不降速。
     downloader = ObjectDownloader(
       session: session,
-      partialChunkBytes: Platform.isIOS ? 64 * 1024 : null,
+      partialChunkBytes: Platform.isIOS ? 1024 * 1024 : null,
     );
     thumbnails = ThumbnailCache(
       session: session,
