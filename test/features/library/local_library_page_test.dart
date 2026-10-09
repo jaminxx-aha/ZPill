@@ -69,14 +69,28 @@ final class _FakeRawDecoder implements RawDecoder {
 
 /// 伪播放器:记录播放路径与速率;抽帧 [failThumbs] 默认失败(= 无抽帧回落
 /// 图标格,与生产 Android/ohos 无通道同形),海报帧用例置 false;
-/// [frameRateOf] 供顺帧用例注入帧率。
+/// [frameRateOf] 供顺帧用例注入帧率;[embedded] = 内嵌播放视图可用
+/// (iOS 人设;viewControl/viewStatus/viewSeek 落账,viewStatus 由
+/// viewControl 驱动像真播放器 —— 位置不前进,值不变才不重绘,
+/// FakeAsync 里 pumpAndSettle 才能收)。
 final class _FakeVideoPlayer implements VideoPlayer {
-  _FakeVideoPlayer({this.failThumbs = true, this.frameRateOf});
+  _FakeVideoPlayer({this.failThumbs = true, this.frameRateOf, this.embedded = false});
 
   final bool failThumbs;
   final double? Function(String path)? frameRateOf;
+  final bool embedded;
+
   final played = <(String, double)>[];
   final thumbs = <(String, int)>[];
+
+  /// viewControl 指令流:(viewId, playing, rate)。
+  final viewControls = <(int, bool, double)>[];
+  final seeks = <(int, double)>[];
+  final viewStates =
+      <int, ({double position, double duration, bool playing})>{};
+
+  @override
+  bool get supportsEmbeddedView => embedded;
 
   @override
   Future<void> play(String path, {double rate = 1.0}) async {
@@ -95,6 +109,56 @@ final class _FakeVideoPlayer implements VideoPlayer {
   @override
   Future<double?> frameRate(String path) async =>
       frameRateOf == null ? null : frameRateOf!(path);
+
+  @override
+  Future<void> controlEmbeddedView(int viewId,
+      {required bool playing, required double rate}) async {
+    viewControls.add((viewId, playing, rate));
+    final s = viewStates[viewId];
+    viewStates[viewId] = (
+      position: s?.position ?? 0.0,
+      duration: s?.duration ?? 60.0,
+      playing: playing,
+    );
+  }
+
+  @override
+  Future<({double position, double duration, bool playing})>
+      embeddedViewStatus(int viewId) async =>
+          viewStates[viewId] ??
+          (position: 0.0, duration: 60.0, playing: false);
+
+  @override
+  Future<void> seekEmbeddedView(int viewId, {required double position}) async {
+    seeks.add((viewId, position));
+    final s = viewStates[viewId];
+    if (s != null) {
+      viewStates[viewId] =
+          (position: position, duration: s.duration, playing: s.playing);
+    }
+  }
+}
+
+/// 假内嵌视频视图:占位盒 + 微任务里回 onCreated(固定 viewId 7)。
+/// 不建真平台视图(Widget 测试环境造不出;生产行为装机验)。
+final class _StubVideoView extends StatefulWidget {
+  const _StubVideoView({required this.onCreated});
+
+  final void Function(int viewId) onCreated;
+
+  @override
+  State<_StubVideoView> createState() => _StubVideoViewState();
+}
+
+final class _StubVideoViewState extends State<_StubVideoView> {
+  @override
+  void initState() {
+    super.initState();
+    scheduleMicrotask(() => widget.onCreated(7));
+  }
+
+  @override
+  Widget build(BuildContext context) => const SizedBox.expand();
 }
 
 /// 任务流由测试驱动的伪引擎(sync 广播:事件在 add 时刻同步送达,
@@ -139,14 +203,25 @@ void main() {
   }
 
   Widget host(_FakeGallery gallery, TransfersController controller,
-          {RawDecoder? rawDecoder, VideoPlayer? videoPlayer}) =>
+          {RawDecoder? rawDecoder,
+          VideoPlayer? videoPlayer,
+          EmbeddedVideoViewBuilder? embeddedView}) =>
       MaterialApp(
           home: LocalLibraryPage(
         controller: controller,
         gallery: gallery,
         rawDecoder: rawDecoder ?? _FakeRawDecoder(fail: true),
         videoPlayer: videoPlayer ?? _FakeVideoPlayer(),
+        embeddedVideoView: embeddedView,
       ));
+
+  /// 内嵌播放人设:embedded 播放器 + 假视图(onCreated 回固定 viewId 7)。
+  Widget embeddedHost(_FakeGallery gallery, TransfersController controller,
+          _FakeVideoPlayer player) =>
+      host(gallery, controller,
+          videoPlayer: player,
+          embeddedView: (path, onCreated) =>
+              _StubVideoView(onCreated: onCreated));
 
   testWidgets('空态:应用内还没有文件', (tester) async {
     final gallery = _FakeGallery(dir);
@@ -362,53 +437,90 @@ void main() {
     expect(find.text('RAW 解码失败(该平台可能不支持)'), findsOneWidget);
   });
 
-  testWidgets('MOV:查看器播放钮 → 原生播放,应用内档保留', (tester) async {
+  // ── 视频页内播放(2026-10-09:点开即播,不再「海报帧 + 播放钮 +
+  // 弹全屏新页」三步走)──
+
+  testWidgets('MOV:点开即播(页内起播,不弹全屏新页)', (tester) async {
     writeFile('c.mov', modified: DateTime(2026, 10, 3));
     final gallery = _FakeGallery(dir);
-    final player = _FakeVideoPlayer();
+    final player = _FakeVideoPlayer(embedded: true);
     final controller =
         TransfersController(engine: _FakeEngine(), gallery: gallery);
-    await tester.pumpWidget(host(gallery, controller, videoPlayer: player));
+    await tester.pumpWidget(embeddedHost(gallery, controller, player));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byIcon(Icons.videocam_outlined));
+    await tester.tap(find.byKey(const ValueKey('c.mov')));
     await tester.pumpAndSettle();
+
     expect(find.text('c.mov'), findsWidgets); // 查看器 AppBar
-    expect(find.byIcon(Icons.play_arrow), findsOneWidget); // 播放钮
-
-    await tester.tap(find.byIcon(Icons.play_arrow));
-    await tester.pumpAndSettle();
-    expect(player.played, [('${dir.path}/c.mov', 1.0)]);
+    // 视图就位即按意图起播(1× 实时;不再先问顺帧/再点播放钮)
+    expect(player.viewControls, isNotEmpty);
+    expect(player.viewControls.first, (7, true, 1.0));
+    // 不再走全屏 play 通道
+    expect(player.played, isEmpty);
     // 应用内常驻档:播完不删(与相机相册临时下载播放不同)
     expect(File('${dir.path}/c.mov').existsSync(), isTrue);
   });
 
-  testWidgets('MOV:高帧率先问顺帧,24fps 档按 0.4 播', (tester) async {
+  testWidgets('MOV:高帧率浮顺帧开关(非阻塞),点了才变速静音', (tester) async {
     writeFile('c.mov', modified: DateTime(2026, 10, 3));
     final gallery = _FakeGallery(dir);
-    final player = _FakeVideoPlayer(frameRateOf: (_) => 60);
+    final player = _FakeVideoPlayer(embedded: true, frameRateOf: (_) => 60);
     final controller =
         TransfersController(engine: _FakeEngine(), gallery: gallery);
-    await tester.pumpWidget(host(gallery, controller, videoPlayer: player));
+    await tester.pumpWidget(embeddedHost(gallery, controller, player));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byIcon(Icons.videocam_outlined));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byIcon(Icons.play_arrow));
+    await tester.tap(find.byKey(const ValueKey('c.mov')));
     await tester.pumpAndSettle();
 
-    // 顺帧门:未选不起播
-    expect(find.text('高帧率素材'), findsOneWidget);
-    expect(player.played, isEmpty);
+    // 直接起播(60fps 也不拦,顺帧是开关不是门)
+    expect(player.viewControls.first, (7, true, 1.0));
+    expect(find.text('24fps 顺帧'), findsOneWidget);
 
-    await tester.tap(find.text('24fps 顺帧 · 40%'));
+    await tester.tap(find.text('24fps 顺帧'));
     await tester.pumpAndSettle();
-    expect(player.played, [('${dir.path}/c.mov', 0.4)]);
-    // 常驻档保留
-    expect(File('${dir.path}/c.mov').existsSync(), isTrue);
+    expect(player.viewControls.last, (7, true, 0.4));
+    expect(find.text('顺帧 24fps · 40%'), findsOneWidget);
+
+    // 再点回实时
+    await tester.tap(find.text('顺帧 24fps · 40%'));
+    await tester.pumpAndSettle();
+    expect(player.viewControls.last, (7, true, 1.0));
   });
 
-  testWidgets('MOV:网格海报帧抽帧落盘,查看器共用缓存不重复抽', (tester) async {
+  testWidgets('MOV:播放控制 —— 暂停/续播/拖进度条', (tester) async {
+    writeFile('c.mov', modified: DateTime(2026, 10, 3));
+    final gallery = _FakeGallery(dir);
+    final player = _FakeVideoPlayer(embedded: true);
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    await tester.pumpWidget(embeddedHost(gallery, controller, player));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('c.mov')));
+    await tester.pumpAndSettle();
+
+    // 起播后中键是暂停图样;点它暂停
+    expect(find.byIcon(Icons.pause), findsOneWidget);
+    await tester.tap(find.byIcon(Icons.pause));
+    await tester.pumpAndSettle();
+    expect(player.viewControls.last, (7, false, 1.0));
+
+    // 续播
+    await tester.tap(find.byIcon(Icons.play_arrow));
+    await tester.pumpAndSettle();
+    expect(player.viewControls.last, (7, true, 1.0));
+
+    // 拖进度条 → seek(左拖出进度值)
+    await tester.drag(find.byType(Slider), const Offset(-60, 0));
+    await tester.pumpAndSettle();
+    expect(player.seeks, isNotEmpty);
+    expect(player.seeks.single.$1, 7);
+  });
+
+  testWidgets('MOV:无内嵌视图平台(Android/ohos)回落海报帧 + 说明文案',
+      (tester) async {
     writeFile('c.mov', modified: DateTime(2026, 10, 3));
     final gallery = _FakeGallery(dir);
     final player = _FakeVideoPlayer(failThumbs: false);
@@ -418,19 +530,101 @@ void main() {
     await tester.pumpAndSettle();
 
     // 抽帧一次(会话内合并),落盘 thumbsDir(lib_ 前缀内容键,与
-    // NEF 同管线)。假 JPEG 解不开走 errorBuilder,按格键点进。
+    // NEF 同管线)。
     expect(player.thumbs, [('${dir.path}/c.mov', 512)]);
     expect(
         File('${gallery.thumbs.path}/lib_c.mov_3.jpg').existsSync(), isTrue);
 
     await tester.tap(find.byKey(const ValueKey('c.mov')));
     await tester.pumpAndSettle();
-    // 查看器海报帧走页面级缓存:不重复抽帧,播放钮在场。
+    // 查看器海报帧走页面级缓存:不重复抽帧;说明文案在场,无播放钮。
     expect(player.thumbs, hasLength(1));
-    expect(find.byIcon(Icons.play_arrow), findsOneWidget);
+    expect(find.text('该平台暂不支持视频播放'), findsOneWidget);
+    expect(find.byIcon(Icons.play_arrow), findsNothing);
+  });
 
-    await tester.tap(find.byIcon(Icons.play_arrow));
+  /// 真机手指式拖动:多帧小步位移。单步大位移(tester.drag)会一步
+  /// 跨过 InteractiveViewer Scale 手势的 36px pan slop 被它先认领,
+  /// 翻页不动;真机多帧小位移下 PageView 的 18px touch slop 先到。
+  Future<void> dragLikeFinger(
+      WidgetTester tester, Finder finder, Offset offset) async {
+    final gesture = await tester.startGesture(tester.getCenter(finder));
+    final steps = (offset.distance / 10).ceil();
+    final step = offset / steps.toDouble();
+    for (var i = 0; i < steps; i++) {
+      await gesture.moveBy(step);
+      await tester.pump();
+    }
+    await gesture.up();
     await tester.pumpAndSettle();
-    expect(player.played, [('${dir.path}/c.mov', 1.0)]);
+  }
+
+  // ── 查看器翻页(2026-10-09:PageView 左右滑)──
+
+  testWidgets('查看器:左右滑翻页,标题跟随网格过滤序', (tester) async {
+    writeFile('a.jpg', modified: DateTime(2026, 10, 1));
+    writeFile('b.jpg', modified: DateTime(2026, 10, 2));
+    writeFile('c.jpg', modified: DateTime(2026, 10, 3));
+    final gallery = _FakeGallery(dir);
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    await tester.pumpWidget(host(gallery, controller));
+    await tester.pumpAndSettle();
+
+    // 倒序 c,b,a;打开第一张(c)
+    await tester.tap(find.byType(Image).first);
+    await tester.pumpAndSettle();
+    expect(find.text('c.jpg'), findsWidgets);
+
+    // 左滑 → 下一张(b)
+    await dragLikeFinger(tester, find.byType(PageView), const Offset(-600, 0));
+    expect(find.text('b.jpg'), findsWidgets);
+    expect(find.text('c.jpg'), findsNothing);
+
+    // 右滑 → 回到 c
+    await dragLikeFinger(tester, find.byType(PageView), const Offset(600, 0));
+    expect(find.text('c.jpg'), findsWidgets);
+    expect(find.text('b.jpg'), findsNothing);
+  });
+
+  testWidgets('查看器删除:当前页删除下一张滑入;删尾页翻回前一页',
+      (tester) async {
+    writeFile('a.jpg', modified: DateTime(2026, 10, 1));
+    writeFile('b.jpg', modified: DateTime(2026, 10, 2));
+    writeFile('c.jpg', modified: DateTime(2026, 10, 3));
+    final gallery = _FakeGallery(dir);
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    await tester.pumpWidget(host(gallery, controller));
+    await tester.pumpAndSettle();
+
+    // 倒序 c,b,a;打开 c
+    await tester.tap(find.byType(Image).first);
+    await tester.pumpAndSettle();
+
+    // 删当前页 c → b 滑入(页位不变,下一张补上)
+    await tester.tap(find.byTooltip('删除'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('删除'));
+    await tester.pumpAndSettle();
+    await tester
+        .runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+    await tester.pumpAndSettle();
+    expect(File('${dir.path}/c.jpg').existsSync(), isFalse);
+    expect(find.text('b.jpg'), findsWidgets);
+
+    // 滑到尾页 a,删除 → 翻回前一页 b(不白屏)
+    await dragLikeFinger(tester, find.byType(PageView), const Offset(-600, 0));
+    expect(find.text('a.jpg'), findsWidgets);
+    await tester.tap(find.byTooltip('删除'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('删除'));
+    await tester.pumpAndSettle();
+    await tester
+        .runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+    await tester.pumpAndSettle();
+    expect(File('${dir.path}/a.jpg').existsSync(), isFalse);
+    expect(find.text('b.jpg'), findsWidgets); // 尾页删除后落回 b
+    expect(find.byType(PageView), findsOneWidget); // 查看器还在
   });
 }

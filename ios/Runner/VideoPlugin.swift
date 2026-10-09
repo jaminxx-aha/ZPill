@@ -16,6 +16,12 @@
 // - frameRate({path}):AVAssetTrack.nominalFrameRate(标称帧率;顺帧
 //   预览的门禁数据)。无视频轨/探测失败回 nil,Dart 侧按「实时播放」
 //   处理。
+// - viewControl({id, playing, rate}):驱动内嵌播放视图(平台视图
+//   `nikonpill/video-view`,图库查看器视频页):起播/暂停 + 顺帧速率。
+//   AVPlayerViewController 以子视图进 Flutter 树,自带传输条(点按出
+//   控制);横滑翻页手势归 Flutter(UiKitView 空 gestureRecognizers,
+//   拖动由 Flutter 滚动手势认领,点按未被认领才送达原生)。视图销毁
+//   = 暂停 + 摘 player(翻页离场即停,不需要 Dart 侧收口)。
 //
 // present 的 VC 取法:iOS 13+ 场景化(SceneDelegate),从
 // connectedScenes 取 foregroundActive 的 keyWindow rootVC,再走
@@ -26,10 +32,15 @@ import Flutter
 import UIKit
 
 public final class VideoPlugin: NSObject, FlutterPlugin {
+  /// 内嵌播放视图登记表(viewId → 视图;创建/销毁与通道回调都在主线程)。
+  static var embeddedViews: [Int64: EmbeddedVideoPlatformView] = [:]
+
   public static func register(with registrar: FlutterPluginRegistrar) {
     let channel = FlutterMethodChannel(
       name: "nikonpill/video", binaryMessenger: registrar.messenger())
     registrar.addMethodCallDelegate(VideoPlugin(), channel: channel)
+    registrar.register(
+      EmbeddedVideoViewFactory(), withId: "nikonpill/video-view")
   }
 
   public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
@@ -44,6 +55,34 @@ public final class VideoPlugin: NSObject, FlutterPlugin {
       DispatchQueue.main.async {
         Self.presentPlayer(path: path, rate: rate, result: result)
       }
+    case "viewControl":
+      guard let args = call.arguments as? [String: Any],
+            let id = (args["id"] as? NSNumber)?.int64Value else {
+        result(FlutterError(code: "bad_args", message: "viewControl 须传 id", details: nil))
+        return
+      }
+      let playing = args["playing"] as? Bool ?? false
+      let rate = args["rate"] as? Double ?? 1.0
+      // 视图可能正在销毁途 mid-teardown:找不到就静默 OK(Dart 侧不收口)。
+      Self.embeddedViews[id]?.apply(playing: playing, rate: rate)
+      result(nil)
+    case "viewStatus":
+      guard let args = call.arguments as? [String: Any],
+            let id = (args["id"] as? NSNumber)?.int64Value else {
+        result(FlutterError(code: "bad_args", message: "viewStatus 须传 id", details: nil))
+        return
+      }
+      // 视图销毁竞态:回 null(Dart 侧按 0/0/false 兜底)。
+      result(Self.embeddedViews[id]?.status())
+    case "viewSeek":
+      guard let args = call.arguments as? [String: Any],
+            let id = (args["id"] as? NSNumber)?.int64Value,
+            let position = args["position"] as? Double else {
+        result(FlutterError(code: "bad_args", message: "viewSeek 须传 id/position", details: nil))
+        return
+      }
+      Self.embeddedViews[id]?.seek(to: position)
+      result(nil)
     case "thumbnail":
       guard let args = call.arguments as? [String: Any],
             let path = args["path"] as? String,
@@ -221,5 +260,94 @@ final class _CloseHostViewController: UIViewController {
     dismiss(animated: true) { [onClose] in
       onClose()
     }
+  }
+}
+
+/// 内嵌播放平台视图工厂:creationParams 只收 path(Dart 侧
+/// EmbeddedVideoViewBuilder 传参;起播/速率走 viewControl 通道,
+/// 不在创建时定死 —— 翻页 settle 才起播)。
+final class EmbeddedVideoViewFactory: NSObject, FlutterPlatformViewFactory {
+  func create(
+    withFrame frame: CGRect, viewIdentifier viewId: Int64, arguments args: Any?
+  ) -> FlutterPlatformView {
+    let path = (args as? [String: Any])?["path"] as? String
+    return EmbeddedVideoPlatformView(viewId: viewId, path: path)
+  }
+
+  func createArgsCodec() -> FlutterMessageCodec {
+    FlutterStandardMessageCodec.sharedInstance()
+  }
+}
+
+/// 内嵌播放视图:AVPlayerViewController 以子视图进 Flutter 树(图库
+/// 查看器视频页)。播放控制用 AVKit 自带传输条(点按视频出控制);
+/// 起播/暂停/顺帧速率由 Dart 侧 viewControl 驱动(翻页离场即暂停)。
+/// 非全屏子视图上下文,AVKit 不画自家关闭钮(全屏 modal 语境才画,
+/// 与 _CloseHostViewController 的关闭钮叠加成双 × 的老问题不复发)。
+final class EmbeddedVideoPlatformView: NSObject, FlutterPlatformView {
+  private let viewId: Int64
+  private let player: AVPlayer?
+  private let controller = AVPlayerViewController()
+
+  init(viewId: Int64, path: String?) {
+    self.viewId = viewId
+    if let path, FileManager.default.fileExists(atPath: path) {
+      let p = AVPlayer(url: URL(fileURLWithPath: path))
+      player = p
+      controller.player = p
+    } else {
+      player = nil // 文件缺失:黑底空视图(Dart 侧另有海报帧兜底)
+    }
+    // 播放控制由 Flutter 侧自绘(Dart _VideoPage):原生传输条关掉,
+    // 横滑手势才归 PageView 翻页、点按归 Flutter 切控制浮层。
+    controller.showsPlaybackControls = false
+    super.init()
+    VideoPlugin.embeddedViews[viewId] = self
+  }
+
+  func view() -> UIView {
+    controller.view
+  }
+
+  func dispose() {
+    player?.pause()
+    controller.player = nil
+    VideoPlugin.embeddedViews.removeValue(forKey: viewId)
+  }
+
+  /// 起播/暂停 + 速率(顺帧):rate != 1 静音(变速下音轨无意义,
+  /// OpenZCine conform 同款)。playing 时 rate != 1 用 rate 直接起播
+  /// (play() 后再设 rate 会有 1× 起步闪一下)。
+  func apply(playing: Bool, rate: Double) {
+    guard let player else { return }
+    player.isMuted = abs(rate - 1.0) > 0.001
+    if playing {
+      if abs(rate - 1.0) > 0.001 {
+        player.rate = Float(rate)
+      } else {
+        player.play()
+      }
+    } else {
+      player.pause()
+    }
+  }
+
+  /// 播放控制的轮询数据(位置/时长秒 + 是否在播)。时长未就绪/直传流
+  /// (CMTime 非数值)= 0,Dart 侧按无进度条处理。
+  func status() -> [String: Any] {
+    guard let player else {
+      return ["position": 0.0, "duration": 0.0, "playing": false]
+    }
+    let current = player.currentTime().seconds
+    let dur = player.currentItem?.duration.seconds ?? 0
+    return [
+      "position": current.isFinite ? current : 0.0,
+      "duration": dur.isFinite ? dur : 0.0,
+      "playing": player.timeControlStatus == .playing,
+    ]
+  }
+
+  func seek(to seconds: Double) {
+    player?.seek(to: CMTime(seconds: seconds, preferredTimescale: 600))
   }
 }
