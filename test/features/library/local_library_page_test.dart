@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -11,12 +12,17 @@ import 'package:nikon_pill/core/transfer/transfer_task.dart';
 import 'package:nikon_pill/features/library/local_library_page.dart';
 import 'package:nikon_pill/features/transfers/transfers_page.dart';
 import 'package:nikon_pill/platform/gallery_saver.dart';
+import 'package:nikon_pill/platform/raw_decoder.dart';
+import 'package:nikon_pill/platform/video_player.dart';
 
-/// 伪相册服务:downloadsDir 指向临时目录,importFiles 落账可断言。
+/// 伪相册服务:downloadsDir 指向临时目录,importFiles 落账可断言;
+/// thumbsDir 用独立子目录(NEF 网格缩略落盘,不污染 downloadsDir 清单)。
 final class _FakeGallery implements GallerySaver {
   _FakeGallery(this.dir);
 
   final Directory dir;
+  late final Directory thumbs = Directory('${dir.path}/_thumbs')
+    ..createSync();
   final importCalls = <List<GalleryImportRequest>>[];
   List<Uri> importResult = [Uri.parse('content://media/1')];
 
@@ -27,7 +33,7 @@ final class _FakeGallery implements GallerySaver {
   Future<String> tempDir() async => dir.path;
 
   @override
-  Future<String> thumbsDir() async => dir.path;
+  Future<String> thumbsDir() async => thumbs.path;
 
   @override
   Future<String> previewsDir() async => dir.path;
@@ -39,6 +45,49 @@ final class _FakeGallery implements GallerySaver {
   Future<List<Uri>> importFiles(List<GalleryImportRequest> requests) async {
     importCalls.add(requests);
     return importResult;
+  }
+}
+
+/// 伪 RAW 解码器:记录 (路径, 长边上限) 调用;fail = 模拟无解码器/失败。
+final class _FakeRawDecoder implements RawDecoder {
+  _FakeRawDecoder({this.fail = false});
+
+  final bool fail;
+  final calls = <(String, int)>[];
+
+  @override
+  Future<Uint8List> decodeJpeg(String path, {required int maxPixelSize}) async {
+    calls.add((path, maxPixelSize));
+    if (fail) {
+      throw const FormatException('无解码器');
+    }
+    // 假 JPEG(SOI+EOI):Image 解码失败走 errorBuilder,但组件与
+    // 落盘路径可断言。
+    return Uint8List.fromList(const [0xFF, 0xD8, 0xFF, 0xD9]);
+  }
+}
+
+/// 伪播放器:记录播放路径;抽帧 [failThumbs] 默认失败(= 无抽帧回落
+/// 图标格,与生产 Android/ohos 无通道同形),海报帧用例置 false。
+final class _FakeVideoPlayer implements VideoPlayer {
+  _FakeVideoPlayer({this.failThumbs = true});
+
+  final bool failThumbs;
+  final played = <String>[];
+  final thumbs = <(String, int)>[];
+
+  @override
+  Future<void> play(String path) async {
+    played.add(path);
+  }
+
+  @override
+  Future<Uint8List> thumbnail(String path, {required int maxPixelSize}) async {
+    thumbs.add((path, maxPixelSize));
+    if (failThumbs) {
+      throw const FormatException('无抽帧');
+    }
+    return Uint8List.fromList(const [0xFF, 0xD8, 0xFF, 0xD9]);
   }
 }
 
@@ -83,9 +132,15 @@ void main() {
     return f;
   }
 
-  Widget host(_FakeGallery gallery, TransfersController controller) =>
+  Widget host(_FakeGallery gallery, TransfersController controller,
+          {RawDecoder? rawDecoder, VideoPlayer? videoPlayer}) =>
       MaterialApp(
-          home: LocalLibraryPage(controller: controller, gallery: gallery));
+          home: LocalLibraryPage(
+        controller: controller,
+        gallery: gallery,
+        rawDecoder: rawDecoder ?? _FakeRawDecoder(fail: true),
+        videoPlayer: videoPlayer ?? _FakeVideoPlayer(),
+      ));
 
   testWidgets('空态:应用内还没有文件', (tester) async {
     final gallery = _FakeGallery(dir);
@@ -255,5 +310,96 @@ void main() {
     // 传输页(真单例控制器,任务列表空态)
     expect(find.text('传输'), findsOneWidget);
     expect(find.text('暂无传输任务\n(在相机相册里多选或大图页单张下载)'), findsOneWidget);
+  });
+
+  // ── NEF/视频可看可点(2026-10-09 补齐:原生格式不再只落图标格) ──
+
+  testWidgets('NEF:网格缩略解码落盘,点进查看器解码大图', (tester) async {
+    writeFile('c.nef', modified: DateTime(2026, 10, 3));
+    final gallery = _FakeGallery(dir);
+    final decoder = _FakeRawDecoder();
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    await tester.pumpWidget(host(gallery, controller, rawDecoder: decoder));
+    await tester.pumpAndSettle();
+
+    // 网格缩略:512px 解码一次(会话内合并),落盘 thumbsDir
+    // (内容键 + lib_ 前缀,不与相机侧缩略键串台)。
+    expect(decoder.calls, [('${dir.path}/c.nef', 512)]);
+    expect(
+        File('${gallery.thumbs.path}/lib_c.nef_3.jpg').existsSync(), isTrue);
+
+    // 点 NEF 格进查看器:标题 + 2560px 全尺寸解码(假 JPEG 解不开走
+    // errorBuilder,Image 组件在即可)。格键 = 文件名(缩略解码后
+    // 图标格文案不再保证在场,按格点)。
+    await tester.tap(find.byKey(const ValueKey('c.nef')));
+    await tester.pumpAndSettle();
+    expect(find.text('c.nef'), findsWidgets); // 查看器 AppBar
+    expect(decoder.calls.last, ('${dir.path}/c.nef', 2560));
+    expect(find.byType(Image), findsOneWidget);
+  });
+
+  testWidgets('NEF 无解码器:网格图标格顶位,查看器报错占位', (tester) async {
+    writeFile('c.nef', modified: DateTime(2026, 10, 3));
+    final gallery = _FakeGallery(dir);
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    // host 缺省注入 failing 解码器。
+    await tester.pumpWidget(host(gallery, controller));
+    await tester.pumpAndSettle();
+
+    expect(find.text('NEF'), findsOneWidget); // 图标格
+    expect(find.byType(Image), findsNothing);
+
+    await tester.tap(find.text('NEF'));
+    await tester.pumpAndSettle();
+    expect(find.text('RAW 解码失败(该平台可能不支持)'), findsOneWidget);
+  });
+
+  testWidgets('MOV:查看器播放钮 → 原生播放,应用内档保留', (tester) async {
+    writeFile('c.mov', modified: DateTime(2026, 10, 3));
+    final gallery = _FakeGallery(dir);
+    final player = _FakeVideoPlayer();
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    await tester.pumpWidget(host(gallery, controller, videoPlayer: player));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.videocam_outlined));
+    await tester.pumpAndSettle();
+    expect(find.text('c.mov'), findsWidgets); // 查看器 AppBar
+    expect(find.byIcon(Icons.play_arrow), findsOneWidget); // 播放钮
+
+    await tester.tap(find.byIcon(Icons.play_arrow));
+    await tester.pumpAndSettle();
+    expect(player.played, ['${dir.path}/c.mov']);
+    // 应用内常驻档:播完不删(与相机相册临时下载播放不同)
+    expect(File('${dir.path}/c.mov').existsSync(), isTrue);
+  });
+
+  testWidgets('MOV:网格海报帧抽帧落盘,查看器共用缓存不重复抽', (tester) async {
+    writeFile('c.mov', modified: DateTime(2026, 10, 3));
+    final gallery = _FakeGallery(dir);
+    final player = _FakeVideoPlayer(failThumbs: false);
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    await tester.pumpWidget(host(gallery, controller, videoPlayer: player));
+    await tester.pumpAndSettle();
+
+    // 抽帧一次(会话内合并),落盘 thumbsDir(lib_ 前缀内容键,与
+    // NEF 同管线)。假 JPEG 解不开走 errorBuilder,按格键点进。
+    expect(player.thumbs, [('${dir.path}/c.mov', 512)]);
+    expect(
+        File('${gallery.thumbs.path}/lib_c.mov_3.jpg').existsSync(), isTrue);
+
+    await tester.tap(find.byKey(const ValueKey('c.mov')));
+    await tester.pumpAndSettle();
+    // 查看器海报帧走页面级缓存:不重复抽帧,播放钮在场。
+    expect(player.thumbs, hasLength(1));
+    expect(find.byIcon(Icons.play_arrow), findsOneWidget);
+
+    await tester.tap(find.byIcon(Icons.play_arrow));
+    await tester.pumpAndSettle();
+    expect(player.played, ['${dir.path}/c.mov']);
   });
 }

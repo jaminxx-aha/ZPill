@@ -2,9 +2,11 @@
 /// 顶栏打星(本地评分,1-5 星/清除)。
 ///
 /// 双格式(RAW+JPG)组下载前弹格式选择(仅 JPG/仅 RAW/两者);单格式
-/// 组与视频直接下载。预览走 ThumbnailCache preview 档(Nikon
-/// GetLargeThumb 的 JPEG,NEF 也有内嵌预览;相机不支持时缓存层回落
-/// GetThumb)。视频显示预览帧 + 信息(播放不在本期)。
+/// 组与视频直接下载。预览走 ThumbnailCache preview 档:JPG = Nikon
+/// GetLargeThumb 的 640×424;NEF = 整档下载 + 原生 RAW 解码
+/// (2026-10-09 定案:NEF 档内无大 JPEG,见 thumbnail_cache.dart)。
+/// 视频组叠加播放钮:整档下载到临时目录(可取消)→ 全屏原生播放
+/// (AVKit)→ 播完删档。
 library;
 
 import 'dart:async';
@@ -21,6 +23,7 @@ import '../../core/transfer/transfer_task.dart';
 import '../../design/app_colors.dart';
 import '../../platform/gallery_saver.dart';
 import '../../platform/services.dart';
+import '../../platform/video_player.dart';
 import '../common/format.dart';
 import '../common/widgets/loading_overlay.dart';
 import '../edit/edit_page.dart';
@@ -37,6 +40,7 @@ class PhotoViewerPage extends StatefulWidget {
     this.ratings,
     this.downloader,
     this.gallery,
+    this.videoPlayer,
   });
 
   final List<PhotoGroup> items;
@@ -57,6 +61,9 @@ class PhotoViewerPage extends StatefulWidget {
   /// 测试注入(编辑:导出相册);缺省平台通道。
   final GallerySaver? gallery;
 
+  /// 测试注入(视频播放);缺省平台通道。
+  final VideoPlayer? videoPlayer;
+
   @override
   State<PhotoViewerPage> createState() => _PhotoViewerPageState();
 }
@@ -76,6 +83,8 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
   ObjectDownloader get _downloader =>
       widget.downloader ?? AppServices.instance.downloader;
   GallerySaver get _gallery => widget.gallery ?? PlatformServices.gallery;
+  VideoPlayer get _videoPlayer =>
+      widget.videoPlayer ?? PlatformServices.videoPlayer;
 
   @override
   void dispose() {
@@ -194,6 +203,62 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
     }
   }
 
+  /// 播放视频:整档下载到临时目录(进度对话框,可取消)→ 全屏原生
+  /// 播放 → 播完删档。PTP 相机没有流式播放(Nikon moov 原子位置未验,
+  /// 亦无 HTTP range 语义),大文件需等下载;取消 = 删半成品。
+  Future<void> _playVideo(PhotoGroup group) async {
+    final video = group.movie;
+    if (video == null) return;
+    final cancel = _DownloadCancel();
+    unawaited(showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => _VideoDownloadDialog(
+          totalBytes: video.sizeInBytes, cancel: cancel),
+    ));
+    ObjectDownload? dl;
+    try {
+      dl = await _downloader.download(video,
+          targetDir: await _gallery.tempDir(),
+          onProgress: (received) => cancel.progress.value = received,
+          isCancelled: () => cancel.cancelled);
+    } on DownloadCancelledException {
+      _closeDialog();
+      _snack('已取消');
+      return;
+    } on Exception {
+      _closeDialog();
+      _snack('下载失败,请检查连接后重试');
+      return;
+    }
+    _closeDialog();
+    try {
+      await _videoPlayer.play(dl.path);
+    } on Exception {
+      // 通道未实现(Android/ohos 待补)或原生播放失败
+      if (mounted) _snack('该平台暂不支持视频播放');
+    } finally {
+      try {
+        await File(dl.path).delete();
+      } on FileSystemException {
+        // 删失败不挡播放(临时目录系统可回收)
+      }
+    }
+  }
+
+  void _closeDialog() {
+    if (mounted) {
+      Navigator.of(context).pop(); // 进度对话框
+    }
+  }
+
+  void _snack(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
   @override
   Widget build(BuildContext context) {
     final group = widget.items[_index];
@@ -238,7 +303,7 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
   }
 
   Widget _page(PhotoGroup group) {
-    return InteractiveViewer(
+    final zoomable = InteractiveViewer(
       maxScale: 8,
       child: Center(
         child: FutureBuilder<String>(
@@ -260,22 +325,29 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
             }
             final path = snap.data;
             if (path == null || snap.hasError) {
-              return const Column(
+              return Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(Icons.broken_image_outlined,
-                      color: AppMedia.onMediaSubtle, size: 48),
-                  SizedBox(height: 8),
-                  Text('预览不可用',
-                      style: TextStyle(color: AppMedia.onMediaMuted)),
+                  Icon(
+                      group.isVideo
+                          ? Icons.movie_outlined
+                          : Icons.broken_image_outlined,
+                      color: AppMedia.onMediaSubtle,
+                      size: 48),
+                  const SizedBox(height: 8),
+                  Text(
+                      group.isVideo ? '点按播放键观看' : '预览不可用',
+                      style: const TextStyle(color: AppMedia.onMediaMuted)),
                 ],
               );
             }
             return Image.file(
               File(path),
               fit: BoxFit.contain,
-              errorBuilder: (context, error, stackTrace) => const Icon(
-                Icons.broken_image_outlined,
+              errorBuilder: (context, error, stackTrace) => Icon(
+                group.isVideo
+                    ? Icons.movie_outlined
+                    : Icons.broken_image_outlined,
                 color: AppMedia.onMediaSubtle,
                 size: 48,
               ),
@@ -283,6 +355,29 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
           },
         ),
       ),
+    );
+    if (!group.isVideo) {
+      return zoomable;
+    }
+    // 播放钮浮层在 InteractiveViewer 之外:不随双指缩放/拖动移位。
+    return Stack(
+      alignment: Alignment.center,
+      children: [
+        zoomable,
+        Material(
+          color: AppMedia.onMediaDim,
+          shape: const CircleBorder(),
+          child: InkWell(
+            customBorder: const CircleBorder(),
+            onTap: () => _playVideo(group),
+            child: const Padding(
+              padding: EdgeInsets.all(20),
+              child: Icon(Icons.play_arrow,
+                  color: AppMedia.onMedia, size: 48),
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -352,6 +447,56 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// 视频下载的进度与取消态(onProgress 回调线程 → ValueNotifier 单向驱动)。
+final class _DownloadCancel {
+  final ValueNotifier<int> progress = ValueNotifier<int>(0);
+  bool cancelled = false;
+}
+
+/// 视频下载进度对话框:进度条 + 已收/总量 + 取消(置位后下载层删
+/// 半成品抛 DownloadCancelledException,对话框由 _playVideo 收口)。
+class _VideoDownloadDialog extends StatelessWidget {
+  const _VideoDownloadDialog(
+      {required this.totalBytes, required this.cancel});
+
+  final int totalBytes;
+  final _DownloadCancel cancel;
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('下载视频'),
+      content: ListenableBuilder(
+        listenable: cancel.progress,
+        builder: (context, _) {
+          final received = cancel.progress.value;
+          final ratio =
+              totalBytes > 0 ? (received / totalBytes).clamp(0.0, 1.0) : null;
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              LinearProgressIndicator(value: ratio),
+              const SizedBox(height: 12),
+              Text(
+                '${formatBytes(received)}'
+                ' / ${formatBytes(totalBytes)}'
+                '${ratio == null ? '' : ' · ${(ratio * 100).toInt()}%'}',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
+          );
+        },
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => cancel.cancelled = true,
+          child: const Text('取消'),
+        ),
+      ],
     );
   }
 }
