@@ -368,13 +368,18 @@ final class PtpSession {
 
   /// Nikon GetLargeThumb(0x90C4):大图预览 JPEG(NEF 也能看)。
   /// 相机不支持时抛 [UnsupportedError](上层回落 GetThumb 放大)。
-  /// [force] 跳过能力检查直发(诊断用:operationsSupported 可信度
-  /// 本身在验证中时,以相机真实响应码为准)。
+  /// [force] 跳过能力检查直发 —— **生产路径**(缩略图缓存预览取大图
+  /// 即 force):无线 STA 的 operationsSupported 是假门(9 op 小表常态
+  /// 人设,在册校验会拒掉 0x90C4,直发相机却正常回 JPEG —— 2026-10-01
+  /// 真机诊断⑥实证;见 memory zf-wifi-mode-gate「勿按表拒连」)。相机
+  /// 真不支持时回错误码,调用方按 [PtpResponseException] 回落。
   Future<Uint8List> getLargeThumb(int handle, {bool force = false}) async {
-    // 能力检查走缓存的 GetDeviceInfo(命中时无锁,不会与本方法的锁嵌套)。
-    final info = await getDeviceInfo();
-    if (!force && !info.supportsOperation(NikonOperationCode.getLargeThumb)) {
-      throw UnsupportedError('相机不支持 Nikon GetLargeThumb(0x90C4)');
+    if (!force) {
+      // 能力检查走缓存的 GetDeviceInfo(命中时无锁,不会与本方法的锁嵌套)。
+      final info = await getDeviceInfo();
+      if (!info.supportsOperation(NikonOperationCode.getLargeThumb)) {
+        throw UnsupportedError('相机不支持 Nikon GetLargeThumb(0x90C4)');
+      }
     }
     final result = await _serialized(() => transport.execute(
           PtpRequest(

@@ -24,6 +24,22 @@ void main() {
     expect(find.byType(AspectRatio), findsNothing);
   });
 
+  testWidgets('小图 contain 也撑满:松约束下 RenderImage 按固有像素排布'
+      '不上放(2026-10-09 复报「点进去很小」—— 160×120 缩略 ≈ 4% 屏宽)',
+      (tester) async {
+    await tester.pumpWidget(MaterialApp(
+        home: Center(
+            child: DeSqueezedImage(
+                image: MemoryImage(_png(32, 24)), deSqueeze: 1.0))));
+    await tester.pump();
+
+    // SizedBox.expand 把 contain 盒顶满可用空间:800×600 视口里
+    // 32×24 的小图也铺满(不再是 32×24 的原尺寸小盒)
+    final rect = tester.getRect(find.byType(Image));
+    expect(rect.width, closeTo(800, 0.01));
+    expect(rect.height, closeTo(600, 0.01));
+  });
+
   testWidgets('ds > 1 解码未完先 contain(不白屏不炸)', (tester) async {
     await tester.pumpWidget(MaterialApp(
         home: Center(

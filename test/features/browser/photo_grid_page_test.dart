@@ -97,6 +97,12 @@ final class _FakeThumbs implements ThumbnailCache {
   void reset() {}
 
   @override
+  Stream<PreviewUpgrade> get previewUpgrades => const Stream.empty();
+
+  @override
+  Future<void> warmPreview(ObjectEntry entry) async {}
+
+  @override
   int get gridLimitBytes => 0;
 
   @override
