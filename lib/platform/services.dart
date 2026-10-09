@@ -60,8 +60,8 @@ final class PlatformServices {
   /// 见 raw_decoder.dart 头注释。
   static late final RawDecoder rawDecoder;
 
-  /// 视频全屏播放(`nikonpill/video`;iOS 已实现,Android/ohos 待补,
-  /// 缺失时调用报错按「平台不支持」提示)。
+  /// 视频播放(`nikonpill/video`:全屏 play + 内嵌平台视图两路;iOS
+  /// 已实现,Android/ohos 待补,缺失时调用报错按「平台不支持」提示)。
   static late final VideoPlayer videoPlayer;
 
   static bool _bootstrapped = false;

@@ -120,6 +120,21 @@ final class _FakeVideoPlayer implements VideoPlayer {
   @override
   Future<double?> frameRate(String path) async =>
       frameRateOf == null ? null : frameRateOf!(path);
+
+  @override
+  bool get supportsEmbeddedView => false;
+
+  @override
+  Future<void> controlEmbeddedView(int viewId,
+      {required bool playing, required double rate}) async {}
+
+  @override
+  Future<({double position, double duration, bool playing})>
+      embeddedViewStatus(int viewId) async =>
+          (position: 0.0, duration: 0.0, playing: false);
+
+  @override
+  Future<void> seekEmbeddedView(int viewId, {required double position}) async {}
 }
 
 /// 假相册:视频播放只用到 tempDir,其余照抛。
