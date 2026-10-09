@@ -94,15 +94,21 @@ final class _FakeDownloader implements ObjectDownloader {
   }
 }
 
-/// 假播放器:记录播放路径,[pending] 挂住播放中状态供断言。
-/// 抽帧与该页无关(相机侧走 ThumbnailCache),照抛即可。
+/// 假播放器:记录播放路径与速率,[pending] 挂住播放中状态供断言。
+/// 抽帧/帧率与该页顺帧路径无关时置 null(实时直放),帧率用例另注。
 final class _FakeVideoPlayer implements VideoPlayer {
+  _FakeVideoPlayer({this.frameRateOf});
+
+  /// 顺帧门禁数据(按路径;null = 探测不到/无视频轨)。
+  final double? Function(String path)? frameRateOf;
   final List<String> played = [];
+  final List<double> rates = [];
   Completer<void>? pending;
 
   @override
-  Future<void> play(String path) {
+  Future<void> play(String path, {double rate = 1.0}) {
     played.add(path);
+    rates.add(rate);
     return (pending = Completer<void>()).future;
   }
 
@@ -110,6 +116,10 @@ final class _FakeVideoPlayer implements VideoPlayer {
   Future<Uint8List> thumbnail(String path, {required int maxPixelSize}) async {
     throw UnimplementedError();
   }
+
+  @override
+  Future<double?> frameRate(String path) async =>
+      frameRateOf == null ? null : frameRateOf!(path);
 }
 
 /// 假相册:视频播放只用到 tempDir,其余照抛。
@@ -240,6 +250,7 @@ void main() {
     expect(entry.name, 'DSC_0001.MOV');
     expect(dir, gallery.temp.path);
     expect(player.played, ['${gallery.temp.path}/DSC_0001.MOV']);
+    expect(player.rates, [1.0]); // 帧率未知 → 实时直放不弹门
     // 播放中:临时档还在(播完才删)
     expect(File(player.played.single).existsSync(), isTrue);
 
@@ -252,6 +263,47 @@ void main() {
       }
     });
     expect(File(player.played.single).existsSync(), isFalse); // 播完删档
+  });
+
+  testWidgets('视频组:高帧率先问顺帧,24fps 档按 24/fps 播放', (tester) async {
+    final gallery = _FakeGallery();
+    final downloader = _FakeDownloader();
+    final player = _FakeVideoPlayer(frameRateOf: (_) => 60);
+    final group = PhotoGroup([
+      _file(101, 'DSC_0001.MOV',
+          format: ObjectFormatCode.quickTime, kind: ObjectKind.video),
+    ]);
+    await tester.pumpWidget(_host(PhotoViewerPage(
+      items: [group],
+      initialIndex: 0,
+      thumbnails: _FakeThumbs(),
+      downloader: downloader,
+      gallery: gallery,
+      videoPlayer: player,
+    )));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.play_arrow));
+    await tester.pumpAndSettle();
+
+    // 下载完先进顺帧门,未起播
+    expect(find.text('下载视频'), findsNothing);
+    expect(find.text('高帧率素材'), findsOneWidget);
+    expect(find.text('24fps 顺帧 · 40%'), findsOneWidget);
+    expect(player.played, isEmpty);
+
+    await tester.tap(find.text('24fps 顺帧 · 40%'));
+    await tester.pumpAndSettle();
+    expect(player.rates.single, closeTo(0.4, 1e-9)); // 24 / 60
+    expect(player.played, ['${gallery.temp.path}/DSC_0001.MOV']);
+
+    player.pending!.complete();
+    await tester.runAsync(() async {
+      for (var i = 0; i < 100 && File(player.played.single).existsSync(); i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 1));
+      }
+    });
+    expect(File(player.played.single).existsSync(), isFalse);
   });
 
   testWidgets('视频组:取消下载 → 半途而废,弹「已取消」,不播放', (tester) async {

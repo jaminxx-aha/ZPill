@@ -31,3 +31,6 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  # 取景「高质量」上采样/时域降噪(Catmull-Rom fragment shader)。
+  shaders:
+    - shaders/feed_quality.frag

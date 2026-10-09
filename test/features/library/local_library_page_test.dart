@@ -67,18 +67,20 @@ final class _FakeRawDecoder implements RawDecoder {
   }
 }
 
-/// 伪播放器:记录播放路径;抽帧 [failThumbs] 默认失败(= 无抽帧回落
-/// 图标格,与生产 Android/ohos 无通道同形),海报帧用例置 false。
+/// 伪播放器:记录播放路径与速率;抽帧 [failThumbs] 默认失败(= 无抽帧回落
+/// 图标格,与生产 Android/ohos 无通道同形),海报帧用例置 false;
+/// [frameRateOf] 供顺帧用例注入帧率。
 final class _FakeVideoPlayer implements VideoPlayer {
-  _FakeVideoPlayer({this.failThumbs = true});
+  _FakeVideoPlayer({this.failThumbs = true, this.frameRateOf});
 
   final bool failThumbs;
-  final played = <String>[];
+  final double? Function(String path)? frameRateOf;
+  final played = <(String, double)>[];
   final thumbs = <(String, int)>[];
 
   @override
-  Future<void> play(String path) async {
-    played.add(path);
+  Future<void> play(String path, {double rate = 1.0}) async {
+    played.add((path, rate));
   }
 
   @override
@@ -89,6 +91,10 @@ final class _FakeVideoPlayer implements VideoPlayer {
     }
     return Uint8List.fromList(const [0xFF, 0xD8, 0xFF, 0xD9]);
   }
+
+  @override
+  Future<double?> frameRate(String path) async =>
+      frameRateOf == null ? null : frameRateOf!(path);
 }
 
 /// 任务流由测试驱动的伪引擎(sync 广播:事件在 add 时刻同步送达,
@@ -372,8 +378,33 @@ void main() {
 
     await tester.tap(find.byIcon(Icons.play_arrow));
     await tester.pumpAndSettle();
-    expect(player.played, ['${dir.path}/c.mov']);
+    expect(player.played, [('${dir.path}/c.mov', 1.0)]);
     // 应用内常驻档:播完不删(与相机相册临时下载播放不同)
+    expect(File('${dir.path}/c.mov').existsSync(), isTrue);
+  });
+
+  testWidgets('MOV:高帧率先问顺帧,24fps 档按 0.4 播', (tester) async {
+    writeFile('c.mov', modified: DateTime(2026, 10, 3));
+    final gallery = _FakeGallery(dir);
+    final player = _FakeVideoPlayer(frameRateOf: (_) => 60);
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    await tester.pumpWidget(host(gallery, controller, videoPlayer: player));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.videocam_outlined));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byIcon(Icons.play_arrow));
+    await tester.pumpAndSettle();
+
+    // 顺帧门:未选不起播
+    expect(find.text('高帧率素材'), findsOneWidget);
+    expect(player.played, isEmpty);
+
+    await tester.tap(find.text('24fps 顺帧 · 40%'));
+    await tester.pumpAndSettle();
+    expect(player.played, [('${dir.path}/c.mov', 0.4)]);
+    // 常驻档保留
     expect(File('${dir.path}/c.mov').existsSync(), isTrue);
   });
 
@@ -400,6 +431,6 @@ void main() {
 
     await tester.tap(find.byIcon(Icons.play_arrow));
     await tester.pumpAndSettle();
-    expect(player.played, ['${dir.path}/c.mov']);
+    expect(player.played, [('${dir.path}/c.mov', 1.0)]);
   });
 }

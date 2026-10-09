@@ -84,6 +84,11 @@ Widget _assistToggles(
           (v) => onTogglesChanged(toggles.copyWith(falseColor: v))),
       toggle(Icons.blur_on, '峰值', toggles.peaking,
           (v) => onTogglesChanged(toggles.copyWith(peaking: v))),
+      toggle(Icons.vertical_align_center, '拉焦轮', toggles.focusDial,
+          (v) {
+        if (v) controller.resetFocusDial(); // 重开清失败预算,从可用态起步
+        onTogglesChanged(toggles.copyWith(focusDial: v));
+      }),
       const SizedBox(width: 6),
       _smallChip(
         live: live,

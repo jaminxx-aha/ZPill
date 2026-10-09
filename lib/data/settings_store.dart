@@ -19,6 +19,16 @@ enum WatermarkStyle { off, corner, card }
 /// 的 ThemeMode 枚举 —— data 层不依赖 Flutter,app 根再做映射。
 enum AppThemeMode { system, light, dark }
 
+/// 取景画面上采样档(OpenZCine FeedUpscaler 口径,AI 档未引 ——
+/// 无 CoreML 接线,不虚设):off = 现状(低质采样);fast = Flutter
+/// 内建 cubic(FilterQuality.high,零额外开销);quality = 片元着色器
+/// (Catmull-Rom 上采样 + 锐化,可叠时域降噪)。
+enum FeedUpscaler { off, fast, quality }
+
+/// 变宽还原(anamorphic de-squeeze)倍率预设:1.0 = 关。OpenZCine
+/// 口径 1.6× 为常用预设;自定义 1.00–2.00(0.01 步进)在设置页滑杆。
+const kDeSqueezePresets = [1.0, 1.3, 1.5, 1.6, 2.0];
+
 final class AppSettings {
   const AppSettings({
     this.autoTransfer = false,
@@ -33,6 +43,10 @@ final class AppSettings {
     this.xmpInjectGps = false,
     this.watermarkStyle = WatermarkStyle.off,
     this.watermarkText,
+    this.feedUpscaler = FeedUpscaler.off,
+    this.temporalDenoise = false,
+    this.autoRotateFeed = true,
+    this.deSqueeze = 1.0,
   });
 
   final bool autoTransfer;
@@ -65,6 +79,20 @@ final class AppSettings {
   /// 水印文本:角标 = 水印字样(空 = 相机型号);卡片 = 追加落款。
   final String? watermarkText;
 
+  /// 取景画面上采样档(默认关 = 现状路径)。
+  final FeedUpscaler feedUpscaler;
+
+  /// 时域降噪(前后帧运动自适应混合;仅 [FeedUpscaler.quality] 档
+  /// 生效 —— 着色器管线才有前帧采样器)。
+  final bool temporalDenoise;
+
+  /// 画面自动旋转(默认开):相机竖持/倒置时按帧头 @839 把画面转正
+  /// 显示(纯显示层,不动帧数据)。
+  final bool autoRotateFeed;
+
+  /// 变宽还原倍率(1.0 = 关;显示层水平拉伸,拍照/视频/查看器同源)。
+  final double deSqueeze;
+
   AppSettings copyWith({
     bool? autoTransfer,
     PhotoDownloadFormat? autoTransferFormat,
@@ -78,6 +106,10 @@ final class AppSettings {
     bool? xmpInjectGps,
     WatermarkStyle? watermarkStyle,
     String? watermarkText,
+    FeedUpscaler? feedUpscaler,
+    bool? temporalDenoise,
+    bool? autoRotateFeed,
+    double? deSqueeze,
   }) =>
       AppSettings(
         autoTransfer: autoTransfer ?? this.autoTransfer,
@@ -92,6 +124,10 @@ final class AppSettings {
         xmpInjectGps: xmpInjectGps ?? this.xmpInjectGps,
         watermarkStyle: watermarkStyle ?? this.watermarkStyle,
         watermarkText: watermarkText ?? this.watermarkText,
+        feedUpscaler: feedUpscaler ?? this.feedUpscaler,
+        temporalDenoise: temporalDenoise ?? this.temporalDenoise,
+        autoRotateFeed: autoRotateFeed ?? this.autoRotateFeed,
+        deSqueeze: deSqueeze ?? this.deSqueeze,
       );
 
   @override
@@ -108,13 +144,18 @@ final class AppSettings {
       other.xmpInjectRating == xmpInjectRating &&
       other.xmpInjectGps == xmpInjectGps &&
       other.watermarkStyle == watermarkStyle &&
-      other.watermarkText == watermarkText;
+      other.watermarkText == watermarkText &&
+      other.feedUpscaler == feedUpscaler &&
+      other.temporalDenoise == temporalDenoise &&
+      other.autoRotateFeed == autoRotateFeed &&
+      other.deSqueeze == deSqueeze;
 
   @override
   int get hashCode => Object.hash(
       autoTransfer, autoTransferFormat, quality, batterySaver, customSavePath,
       themeMode, xmpCreator, xmpRights, xmpInjectRating, xmpInjectGps,
-      watermarkStyle, watermarkText);
+      watermarkStyle, watermarkText, feedUpscaler, temporalDenoise,
+      autoRotateFeed, deSqueeze);
 
   Map<String, Object?> toJson() => {
         'autoTransfer': autoTransfer,
@@ -129,6 +170,10 @@ final class AppSettings {
         'xmpInjectGps': xmpInjectGps,
         'watermarkStyle': watermarkStyle.name,
         if (watermarkText != null) 'watermarkText': watermarkText,
+        'feedUpscaler': feedUpscaler.name,
+        'temporalDenoise': temporalDenoise,
+        'autoRotateFeed': autoRotateFeed,
+        'deSqueeze': deSqueeze,
       };
 
   static AppSettings fromJson(Map<String, Object?> json) => AppSettings(
@@ -151,7 +196,20 @@ final class AppSettings {
         watermarkStyle: _enumByName(WatermarkStyle.values, json['watermarkStyle'])
             ?? WatermarkStyle.off,
         watermarkText: json['watermarkText'] as String?,
+        feedUpscaler:
+            _enumByName(FeedUpscaler.values, json['feedUpscaler']) ??
+                FeedUpscaler.off,
+        temporalDenoise: json['temporalDenoise'] == true,
+        // 兼容旧档缺省 + 越界钳回 [1, 2](NaN/负数按关)。
+        autoRotateFeed: json['autoRotateFeed'] == null ||
+            json['autoRotateFeed'] == true,
+        deSqueeze: _clampDeSqueeze(json['deSqueeze']),
       );
+
+  static double _clampDeSqueeze(Object? raw) {
+    if (raw is! num || raw.isNaN || raw.isNegative) return 1.0;
+    return raw.clamp(1.0, 2.0).toDouble();
+  }
 
   static T? _enumByName<T extends Enum>(List<T> values, Object? raw) {
     if (raw is! String) return null;

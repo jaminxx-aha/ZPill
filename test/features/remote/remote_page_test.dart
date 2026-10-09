@@ -14,7 +14,9 @@ import 'package:nikon_pill/core/ptp/ptp_transport.dart';
 import 'package:nikon_pill/core/remote/live_view_engine.dart';
 import 'package:nikon_pill/core/remote/live_view_header.dart';
 import 'package:nikon_pill/core/utils/byte_writer.dart';
+import 'package:nikon_pill/data/settings_store.dart';
 import 'package:nikon_pill/design/app_theme.dart';
+import 'package:nikon_pill/features/remote/feed_quality.dart';
 import 'package:nikon_pill/features/remote/live_view_overlays.dart';
 import 'package:nikon_pill/features/remote/remote_banner.dart';
 import 'package:nikon_pill/features/remote/remote_controller.dart';
@@ -594,8 +596,10 @@ void main() {
     transport
       ..ok() // changeAfArea
       ..ok(); // afDrive
-    // contain 居中:画面中心 = 图像中心 → 归一化 (0.5, 0.5)
-    await tester.tap(find.byType(Image).first);
+    // contain 居中:画面中心 = 图像中心 → 归一化 (0.5, 0.5)。
+    // Image 住图像坐标系且 Transform transformHitTests: false —— 点按
+    // 由外层取景手势(屏幕系收口)接收,命不中 Image 本体是设计使然。
+    await tester.tap(find.byType(Image).first, warnIfMissed: false);
     await tester.pumpAndSettle();
 
     final af = transport.requests.singleWhere(
@@ -621,6 +625,215 @@ void main() {
               border.top.color == amber;
         }),
         findsOneWidget);
+  });
+
+  testWidgets('双指缩放:外扩即放大出角标,角标/双击复位,内收不小于适配',
+      (tester) async {
+    _portrait(tester);
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = RemoteController(
+        session: PtpSession(transport: transport),
+        connection: conn,
+        engine: LiveViewEngine(
+            session: PtpSession(transport: transport), delay: _parkedDelay),
+        delay: _parkedDelay,
+        aeDelay: _parkedDelay);
+    addTearDown(controller.dispose);
+
+    transport
+      ..ok() // 0x9201 开取景
+      ..ok(data: _realJpeg()); // 首帧(此后 delay 挂起)
+    await tester
+        .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
+    await tester.tap(find.text('取景'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('feed-zoom-badge')), findsNothing,
+        reason: '适配态无角标');
+
+    // ① 双指外扩:间距 200 → 400 = 放大,角标现身(倍率精确值取决于
+    //    识别器在越过 slop 时锚定的初始跨距,不硬断言小数位)
+    final c1 = await tester.startGesture(const Offset(300, 1100), pointer: 1);
+    final c2 = await tester.startGesture(const Offset(500, 1100), pointer: 2);
+    await tester.pump();
+    await c1.moveBy(const Offset(-100, 0));
+    await tester.pump();
+    await c2.moveBy(const Offset(100, 0));
+    await tester.pump();
+    await c1.up();
+    await c2.up();
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('feed-zoom-badge')), findsOneWidget,
+        reason: '缩放角标现身');
+    expect(
+        find.descendant(
+            of: find.byKey(const ValueKey('feed-zoom-badge')),
+            matching: find.byWidgetPredicate(
+                (w) => w is Text && RegExp(r'^\d+(\.\d+)?×$').hasMatch(w.data!))),
+        findsOneWidget,
+        reason: '角标显倍率(如 1.3×)');
+
+    // ② 缩放态点画面 → 对焦照常(screenToNorm 逆映射含缩放/平移;
+    //    点图像中心,归一化仍是 (0.5, 0.5))
+    transport
+      ..ok() // changeAfArea
+      ..ok(); // afDrive
+    await tester.tap(find.byType(Image).first, warnIfMissed: false);
+    await tester.pumpAndSettle();
+    final af = transport.requests.singleWhere(
+        (r) => r.opcode == NikonOperationCode.changeAfArea);
+    expect(af.params, [16, 12], reason: '缩放/平移后逆映射仍回图像中心');
+
+    // ③ 点角标复位
+    await tester.tap(find.byKey(const ValueKey('feed-zoom-badge')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('feed-zoom-badge')), findsNothing,
+        reason: '角标点按复位');
+
+    // ④ 再放大后双击画面复位(第二击不再对焦)
+    final c3 = await tester.startGesture(const Offset(300, 1100), pointer: 3);
+    final c4 = await tester.startGesture(const Offset(500, 1100), pointer: 4);
+    await tester.pump();
+    await c3.moveBy(const Offset(-100, 0));
+    await tester.pump();
+    await c4.moveBy(const Offset(100, 0));
+    await tester.pump();
+    await c3.up();
+    await c4.up();
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('feed-zoom-badge')), findsOneWidget);
+    final focusCountBefore = transport.requests
+        .where((r) => r.opcode == NikonOperationCode.changeAfArea)
+        .length;
+    transport
+      ..ok() // 双击第一击的 changeAfArea
+      ..ok(); // afDrive
+    await tester.tap(find.byType(Image).first, warnIfMissed: false);
+    await tester.pump(const Duration(milliseconds: 100)); // 双击窗内(<300ms)
+    await tester.tap(find.byType(Image).first, warnIfMissed: false);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('feed-zoom-badge')), findsNothing,
+        reason: '双击复位');
+    expect(
+        transport.requests
+            .where((r) => r.opcode == NikonOperationCode.changeAfArea)
+            .length,
+        focusCountBefore + 1,
+        reason: '双击的第二击不再对焦(只有第一击对焦一次)');
+
+    // ⑤ 内收(缩小)钳到 1:不出角标不出 letterbox
+    final c5 = await tester.startGesture(const Offset(300, 1100), pointer: 5);
+    final c6 = await tester.startGesture(const Offset(500, 1100), pointer: 6);
+    await tester.pump();
+    await c5.moveBy(const Offset(50, 0));
+    await tester.pump();
+    await c6.moveBy(const Offset(-50, 0));
+    await tester.pump();
+    await c5.up();
+    await c6.up();
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('feed-zoom-badge')), findsNothing,
+        reason: '缩不放小于适配');
+  });
+
+  testWidgets('拉焦轮:开关出竖条,竖拖驱动 0x9204(下=向近),点轮子不对焦',
+      (tester) async {
+    _portrait(tester);
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = RemoteController(
+        session: PtpSession(transport: transport),
+        connection: conn,
+        engine: LiveViewEngine(
+            session: PtpSession(transport: transport), delay: _parkedDelay),
+        delay: _parkedDelay,
+        aeDelay: _parkedDelay);
+    addTearDown(controller.dispose);
+
+    transport
+      ..ok() // 0x9201 开取景
+      ..ok(data: _realJpeg()); // 首帧(此后 delay 挂起)
+    await tester
+        .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
+    await tester.tap(find.text('取景'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('focus-dial-rail')), findsNothing,
+        reason: '默认不占取景画面');
+
+    // 辅助浮层开「拉焦轮」
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('拉焦轮'));
+    await tester.pumpAndSettle();
+    final rail = find.byKey(const ValueKey('focus-dial-rail'));
+    expect(rail, findsOneWidget, reason: '开关即出竖条');
+
+    // 竖拖(分两段:首段 20px 越过触摸 slop 起手势 —— 该段不入拖距;
+    // 第二段干净 30px > 一步 24px)→ 0x9204 向近 60 脉冲
+    transport.ok(); // 0x9204 应答
+    final g = await tester.startGesture(tester.getCenter(rail));
+    await g.moveBy(const Offset(0, 20)); // 越过 slop,起手势
+    await tester.pump();
+    await g.moveBy(const Offset(0, 30)); // +30 → 一步
+    await tester.pump();
+    await g.up();
+    await tester.pumpAndSettle();
+    final mf = transport.requests.singleWhere(
+        (r) => r.opcode == NikonOperationCode.mfDrive);
+    expect(mf.params, [1, 60], reason: '向下拖 = 向近一步(24px → 60 脉冲)');
+
+    // 点轮子本体不触发触控对焦(自吃点按)
+    await tester.tap(rail);
+    await tester.pumpAndSettle();
+    expect(
+        transport.requests
+            .where((r) => r.opcode == NikonOperationCode.changeAfArea),
+        isEmpty,
+        reason: '轮子点按不落到画面手势');
+  });
+
+  testWidgets('画质档路由:默认关 = 低采样 Image;高质量 → ShaderFeed',
+      (tester) async {
+    _portrait(tester);
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = RemoteController(
+        session: PtpSession(transport: transport),
+        connection: conn,
+        engine: LiveViewEngine(
+            session: PtpSession(transport: transport), delay: _parkedDelay),
+        delay: _parkedDelay,
+        aeDelay: _parkedDelay);
+    addTearDown(controller.dispose);
+    final settings = ValueNotifier<AppSettings>(const AppSettings());
+
+    transport
+      ..ok() // 0x9201 开取景
+      ..ok(data: _realJpeg()); // 首帧(此后 delay 挂起)
+    await tester.pumpWidget(MaterialApp(
+        home: RemotePage(
+            controller: controller, settingsListenable: settings)));
+    await tester.tap(find.text('取景'));
+    await tester.pumpAndSettle();
+
+    // 默认关:普通 Image + 低采样(最省)
+    expect(find.byType(ShaderFeed), findsNothing);
+    expect(tester.widget<Image>(find.byType(Image).first).filterQuality,
+        FilterQuality.low);
+
+    // 切「快速」:同一 Image,filterQuality 升 high
+    settings.value =
+        const AppSettings(feedUpscaler: FeedUpscaler.fast);
+    await tester.pump();
+    expect(tester.widget<Image>(find.byType(Image).first).filterQuality,
+        FilterQuality.high);
+
+    // 切「高质量」:ShaderFeed 上树(时域降噪随设置带入)
+    settings.value = const AppSettings(
+        feedUpscaler: FeedUpscaler.quality, temporalDenoise: true);
+    await tester.pump();
+    expect(find.byType(ShaderFeed), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('「对焦后拍」开关:横滚行尾,点选即切换(零相机流量)',
@@ -817,11 +1030,16 @@ void main() {
     await tester.pumpAndSettle();
     expect(controller.liveViewActive, isTrue);
 
-    // 画面打底占满整屏(Image 组件盒 = 全屏尺寸),不再是竖屏 Column
-    // 里被控制条挤剩的一条
-    final imageSize = tester.getSize(find.byType(Image).first);
-    expect(imageSize.width, 1600);
-    expect(imageSize.height, 800, reason: '画面打底,控制件浮在其上');
+    // 画面打底占满整屏:Image 住在图像坐标系(32×24),经 Transform
+    // 投到屏幕 contain 矩形 —— 断言画出来的矩形(getRect 含 paint 变换):
+    // 32×24 在 1600×800 → fitScale 800/24 = 33.33…,
+    // 宽 32×33.33 = 1066.67、居中左右各留 266.67 letterbox、高 800。
+    final imageRect = tester.getRect(find.byType(Image).first);
+    expect(imageRect.left, closeTo(1600 / 2 - 1600 / 3, 0.01));
+    expect(imageRect.top, closeTo(0, 0.01));
+    expect(imageRect.width, closeTo(3200 / 3, 0.01));
+    expect(imageRect.height, closeTo(800, 0.01),
+        reason: '画面打底,控制件浮在其上');
 
     // 参数读出 = 左栏竖向滚动(竖屏的横滚条在横屏不复存在)
     expect(

@@ -12,6 +12,7 @@ class MonitorToggles {
     this.level = false,
     this.falseColor = false,
     this.peaking = false,
+    this.focusDial = false,
   });
 
   final bool grid;
@@ -21,6 +22,9 @@ class MonitorToggles {
   final bool falseColor;
   final bool peaking;
 
+  /// 屏上对焦滚轮(取景画面右缘竖条,拖动 = 0x9204 连续拉焦)。
+  final bool focusDial;
+
   MonitorToggles copyWith({
     bool? grid,
     bool? zebra,
@@ -28,6 +32,7 @@ class MonitorToggles {
     bool? level,
     bool? falseColor,
     bool? peaking,
+    bool? focusDial,
   }) =>
       MonitorToggles(
         grid: grid ?? this.grid,
@@ -36,5 +41,6 @@ class MonitorToggles {
         level: level ?? this.level,
         falseColor: falseColor ?? this.falseColor,
         peaking: peaking ?? this.peaking,
+        focusDial: focusDial ?? this.focusDial,
       );
 }

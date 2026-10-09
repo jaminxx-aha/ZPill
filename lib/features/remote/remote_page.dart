@@ -54,11 +54,13 @@ library;
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../app_services.dart';
 import '../../core/browser/album.dart';
+import '../../data/settings_store.dart';
 import '../../platform/motion_host.dart';
 import '../../platform/services.dart';
 import '../browser/photo_grid_page.dart';
@@ -74,7 +76,12 @@ import 'remote_param_sheet.dart';
 import 'shooting_param_catalog.dart';
 
 class RemotePage extends StatefulWidget {
-  const RemotePage({super.key, this.controller, this.active = true});
+  const RemotePage({
+    super.key,
+    this.controller,
+    this.active = true,
+    this.settingsListenable,
+  });
 
   final RemoteController? controller;
 
@@ -83,12 +90,20 @@ class RemotePage extends StatefulWidget {
   /// 跟连接走,只停 USB 流量)。
   final bool active;
 
+  /// 取景设置监听(画面自动旋转/变宽还原;测试注入;null = AppServices
+  /// 单例的 SettingsController)。
+  final ValueListenable<AppSettings>? settingsListenable;
+
   @override
   State<RemotePage> createState() => _RemotePageState();
 }
 
 class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   late final RemoteController controller;
+
+  /// 取景设置(画面自动旋转/变宽还原;下传取景区)。
+  late final ValueListenable<AppSettings> _settings =
+      widget.settingsListenable ?? AppServices.instance.settingsController;
 
   /// 监看辅助开关(页面级视图偏好,不入持久化设置)。
   MonitorToggles _toggles = const MonitorToggles();
@@ -271,6 +286,8 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                   phoneAttitudes: () => _phoneAttitudes,
                   onTapFocus: _handleTapFocus,
                   topInset: kPortraitTopInset,
+                  settingsListenable: _settings,
+                  hideChrome: _chromeHidden,
                 ),
               ),
               // 顶部浮层:信息胶囊(链路/张数/REC/接管 + tune/方向钮)
@@ -420,6 +437,10 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
             topInset: kLandscapeTopInset,
             leftInset: kLandscapeLeftInset,
             bottomInset: kLandscapeBottomInset,
+            settingsListenable: _settings,
+            hideChrome: _chromeHidden,
+            // 拉焦轮让位右缘快门柱:上移到顶栏下方。
+            dialAlignment: Alignment.topRight,
           ),
         ),
         Positioned.fill(
@@ -576,18 +597,15 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
 
   // ── 触控对焦 ───────────────────────────────────────────────────
 
-  /// 点按 → 触控对焦:屏幕坐标经 contain 矩阵归一化到取景帧坐标系。
-  /// 横屏辅助浮层开着时,点画面顺带收起浮层(画面本身即「外点」——
-  /// 不用 TapRegion:它在外点 down 时关面板,锚按钮的 tap 在 up 时
-  /// 又重开,两者打架)。
-  void _handleTapFocus(TapUpDetails d, Rect? imageRect) {
+  /// 点按 → 触控对焦:取景区已把屏幕点逆映射为**归一化图像坐标**
+  /// (缩放/旋转/变宽一次收口,见 FeedTransform.screenToNorm;null = 无
+  /// 画面)。横屏辅助浮层开着时,点画面顺带收起浮层(画面本身即「外
+  /// 点」—— 不用 TapRegion:它在外点 down 时关面板,锚按钮的 tap 在
+  /// up 时又重开,两者打架)。
+  void _handleTapFocus(TapUpDetails d, Offset? norm) {
     if (_assistPanelOpen) setState(() => _assistPanelOpen = false);
-    if (imageRect == null) return;
-    final nx = ((d.localPosition.dx - imageRect.left) / imageRect.width)
-        .clamp(0.0, 1.0);
-    final ny = ((d.localPosition.dy - imageRect.top) / imageRect.height)
-        .clamp(0.0, 1.0);
-    unawaited(controller.touchFocus(nx, ny));
+    if (norm == null) return;
+    unawaited(controller.touchFocus(norm.dx, norm.dy));
   }
 
   // ── 参数面板入口与接管确认 ─────────────────────────────────────
