@@ -27,27 +27,28 @@ const _stripOrder = <int>[
   PtpDevicePropCode.activePicCtrlItem,
 ];
 
-/// 读出条/参数栏的参数序:固定序(对齐 OpenZCine
+/// 读出条/参数栏/设置面板共用的参数序:固定序(对齐 OpenZCine
 /// photographyCaptureValues:MODE/ISO/SHUTTER/IRIS/DRIVE/FOCUS/WB/
 /// METER/PROFILE,见 _stripOrder)+ 目录余量按目录序追加(新参数
-/// 默认上栏)。
-List<ShootingParam> _orderedParams() => [
+/// 默认上栏)。2026-10-10 拍摄设置面板成为第二消费方,公开之。
+List<ShootingParam> orderedCaptureParams() => [
       for (final code in _stripOrder)
         if (shootingParamByCode[code] != null) shootingParamByCode[code]!,
       for (final p in kShootingParams)
         if (!_stripOrder.contains(p.code)) p,
     ];
 
-/// 读出条 tile / 读出行 chip 共用的取值状态打包(值经控制器路由:
-/// 优化校准槽位真名 0x90CC 优先)。
-typedef _ParamState = ({
+/// 读出条 tile / 读出行 chip / 设置面板 tile 共用的取值状态打包(值经
+/// 控制器路由:优化校准槽位真名 0x90CC 优先)。
+typedef CaptureParamState = ({
   String value,
   bool auto,
   bool writable,
   bool locked,
 });
 
-_ParamState _paramStateOf(RemoteController controller, ShootingParam p) => (
+CaptureParamState captureParamState(RemoteController controller, ShootingParam p) =>
+    (
       value: controller.displayParamValue(
           p.code, controller.paramProps[p.code]?.value),
       auto: controller.paramAutoControlled(p.code),
@@ -55,17 +56,17 @@ _ParamState _paramStateOf(RemoteController controller, ShootingParam p) => (
       locked: controller.lockedProps.contains(p.code),
     );
 
-/// 读出条 tile(横屏左参数栏竖列)的取值打包;[dense] 为紧凑态
-/// (值 14px + 省略号)。
-Widget _captureTileOf(
+/// 读出条 tile(横屏左参数栏竖列/设置面板参数区)的取值打包与落 tile;
+/// [dense] 为紧凑态(值 14px + 省略号)。
+Widget captureParamTileOf(
     BuildContext context,
     RemoteController controller,
     int? activeParam,
     void Function(BuildContext, ShootingParam) onEditParam,
     ShootingParam p,
     {bool dense = false}) {
-  final s = _paramStateOf(controller, p);
-  return _CaptureTile(
+  final s = captureParamState(controller, p);
+  return CaptureParamTile(
     param: p,
     displayValue: s.value,
     auto: s.auto,
@@ -115,7 +116,7 @@ class CaptureReadoutLine extends StatelessWidget {
           scrollDirection: Axis.horizontal,
           padding: const EdgeInsets.symmetric(horizontal: 18),
           children: [
-            for (final p in _orderedParams())
+            for (final p in orderedCaptureParams())
               _readoutChipOf(context, controller, activeParam, onEditParam, p),
           ],
         ),
@@ -130,7 +131,7 @@ Widget _readoutChipOf(
     int? activeParam,
     void Function(BuildContext, ShootingParam) onEditParam,
     ShootingParam p) {
-  final s = _paramStateOf(controller, p);
+  final s = captureParamState(controller, p);
   return _ReadoutChip(
     param: p,
     displayValue: s.value,
@@ -265,8 +266,9 @@ class ParamRail extends StatelessWidget {
           padding: const EdgeInsets.symmetric(vertical: 12),
           itemExtent: 52,
           children: [
-            for (final p in _orderedParams())
-              _captureTileOf(context, controller, activeParam, onEditParam, p,
+            for (final p in orderedCaptureParams())
+              captureParamTileOf(context, controller, activeParam, onEditParam,
+                  p,
                   dense: true),
           ],
         ),
@@ -275,12 +277,13 @@ class ParamRail extends StatelessWidget {
   }
 }
 
-/// 拍摄读出条的单个 tile(OpenZCine CaptureSettingButton 同款):
-/// 小标签(9pt,faint;面板打开时金色)+ 大号等宽数字值(自动变量加
-/// 「(自动)」后缀并置灰)。不可调(总闸关断/模式门锁定/相机只读)时
-/// 整体降透明度且不可点。
-class _CaptureTile extends StatelessWidget {
-  const _CaptureTile({
+/// 拍摄读出条的单个 tile(OpenZCine CaptureSettingButton 同款;2026-10-10
+/// 随设置面板复用公开):小标签(9pt,faint;面板打开时金色)+ 大号
+/// 等宽数字值(自动变量加「(自动)」后缀并置灰)。不可调(总闸关断/
+/// 模式门锁定/相机只读)时整体降透明度且不可点。
+class CaptureParamTile extends StatelessWidget {
+  const CaptureParamTile({
+    super.key,
     required this.param,
     required this.displayValue,
     required this.auto,

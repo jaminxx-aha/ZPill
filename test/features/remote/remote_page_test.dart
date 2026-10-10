@@ -17,10 +17,12 @@ import 'package:nikon_pill/core/utils/byte_writer.dart';
 import 'package:nikon_pill/data/settings_store.dart';
 import 'package:nikon_pill/design/app_theme.dart';
 import 'package:nikon_pill/features/remote/feed_quality.dart';
+import 'package:nikon_pill/features/remote/live_design.dart';
 import 'package:nikon_pill/features/remote/live_view_overlays.dart';
 import 'package:nikon_pill/features/remote/remote_banner.dart';
 import 'package:nikon_pill/features/remote/remote_controller.dart';
 import 'package:nikon_pill/features/remote/remote_page.dart';
+import 'package:nikon_pill/features/remote/remote_settings_panel.dart';
 
 /// 按序回放假传输(同 remote_controller_test;脚本耗尽抛 StateError,
 /// 页面测试靠它兜住意外的多余请求)。
@@ -172,6 +174,28 @@ void _scriptParams(_ScriptTransport t, {int mode = 1}) {
 /// 不与被测路径抢脚本应答。
 Future<void> _parkedDelay(Duration _) => Completer<void>().future;
 
+/// 直挂拍摄页控制器(2026-10-10 取景默认打开后,直挂用例一律停摆引擎 +
+/// 停摆 delay:进页自动起景的 0x9201 + 首帧两请求后一切驻停,真定时器
+/// 不泄漏,后续脚本全归被测路径)。
+RemoteController _directRemoteController(_ScriptTransport transport,
+        {required _FakeConnection conn, bool Function()? setPropGate}) =>
+    RemoteController(
+        session: PtpSession(transport: transport),
+        connection: conn,
+        engine: LiveViewEngine(
+            session: PtpSession(transport: transport), delay: _parkedDelay),
+        delay: _parkedDelay,
+        aeDelay: _parkedDelay,
+        setPropGate: setPropGate);
+
+/// 直挂拍摄页的自动起景前置(FIFO 头两位:0x9201 + 首帧;initState 的
+/// 自动起景同步入队 0x9201,首帧紧随其后,无初始延迟)。
+void _scriptAutoStart(_ScriptTransport t) {
+  t
+    ..ok() // 0x9201(进页自动起景)
+    ..ok(data: _realJpeg()); // 首帧(真实 JPEG,Image.memory 要渲染)
+}
+
 /// 真实可解码 32×24 JPEG(Image.memory 要渲染,不能用手拼 SOF 假帧)。
 Uint8List _realJpeg() {
   final image = img.Image(width: 32, height: 24);
@@ -240,9 +264,9 @@ void main() {
     _portrait(tester);
     final transport = _ScriptTransport();
     final conn = _FakeConnection();
-    final controller = RemoteController(
-        session: PtpSession(transport: transport), connection: conn);
+    final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
+    _scriptAutoStart(transport); // 进页自动起景先吃 FIFO 头两位
     _scriptParams(transport);
     await tester
         .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
@@ -294,9 +318,9 @@ void main() {
     addTearDown(() => PtpSession.kSetPropEnabled = true);
     final transport = _ScriptTransport();
     final conn = _FakeConnection();
-    final controller = RemoteController(
-        session: PtpSession(transport: transport), connection: conn);
+    final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
+    _scriptAutoStart(transport); // 进页自动起景先吃 FIFO 头两位
     _scriptParams(transport);
     await tester
         .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
@@ -320,11 +344,10 @@ void main() {
     addTearDown(() => PtpSession.kSetPropEnabled = true);
     final transport = _ScriptTransport();
     final conn = _FakeConnection();
-    final controller = RemoteController(
-        session: PtpSession(transport: transport),
-        connection: conn,
-        setPropGate: () => true);
+    final controller = _directRemoteController(transport,
+        conn: conn, setPropGate: () => true);
     addTearDown(controller.dispose);
+    _scriptAutoStart(transport); // 进页自动起景先吃 FIFO 头两位
     _scriptParams(transport);
     // 写路径脚本:0x1016 成功 + 回读 PropDesc(相机收下 4 = 直射阳光)
     transport
@@ -359,11 +382,10 @@ void main() {
     addTearDown(() => PtpSession.kSetPropEnabled = true);
     final transport = _ScriptTransport();
     final conn = _FakeConnection();
-    final controller = RemoteController(
-        session: PtpSession(transport: transport),
-        connection: conn,
-        setPropGate: () => true);
+    final controller = _directRemoteController(transport,
+        conn: conn, setPropGate: () => true);
     addTearDown(controller.dispose);
+    _scriptAutoStart(transport); // 进页自动起景先吃 FIFO 头两位
     _scriptParams(transport);
     transport
       ..ok() // 0x90C2 [1] 启用接管
@@ -408,13 +430,14 @@ void main() {
     _portrait(tester);
     final transport = _ScriptTransport();
     final conn = _FakeConnection();
-    final controller = RemoteController(
-        session: PtpSession(transport: transport), connection: conn);
+    final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
+    _scriptAutoStart(transport); // 进页自动起景(0x9201 + 首帧)
     await tester
         .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
+    await tester.pumpAndSettle();
 
-    // 辅助芯片收进胶囊 tune 钮的非模态浮层(手机相机式排版):
+    // 辅助芯片收进控制行 tune 钮的设置浮层(手机相机式排版):
     // 开面板再点
     await tester.tap(find.byIcon(Icons.tune));
     await tester.pumpAndSettle();
@@ -425,7 +448,7 @@ void main() {
     await tester.tap(find.text('启用'));
     await tester.pumpAndSettle();
     expect(controller.takeoverActive, isTrue);
-    // 「APP 接管中」两处:信息胶囊徽标 + 辅助条芯片
+    // 「APP 接管中」两处:信息胶囊徽标 + 设置浮层芯片
     expect(find.text('APP 接管中'), findsNWidgets(2));
 
     transport.ok(); // 0x90C2 [0]
@@ -446,9 +469,9 @@ void main() {
     _portrait(tester);
     final transport = _ScriptTransport();
     final conn = _FakeConnection();
-    final controller = RemoteController(
-        session: PtpSession(transport: transport), connection: conn);
+    final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
+    _scriptAutoStart(transport); // 进页自动起景先吃 FIFO 头两位
     _scriptParams(transport, mode: 3); // 光圈优先 A:快门是自动曝光变量
     await tester
         .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
@@ -473,9 +496,9 @@ void main() {
     _portrait(tester);
     final transport = _ScriptTransport();
     final conn = _FakeConnection();
-    final controller = RemoteController(
-        session: PtpSession(transport: transport), connection: conn);
+    final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
+    _scriptAutoStart(transport); // 进页自动起景先吃 FIFO 头两位
     _scriptParams(transport); // M 模式,自动 ISO 关
     await tester
         .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
@@ -517,11 +540,10 @@ void main() {
     addTearDown(() => PtpSession.kSetPropEnabled = true);
     final transport = _ScriptTransport();
     final conn = _FakeConnection();
-    final controller = RemoteController(
-        session: PtpSession(transport: transport),
-        connection: conn,
-        setPropGate: () => true);
+    final controller = _directRemoteController(transport,
+        conn: conn, setPropGate: () => true);
     addTearDown(controller.dispose);
+    _scriptAutoStart(transport); // 进页自动起景先吃 FIFO 头两位
     _scriptParams(transport); // EV PropDesc 无 FORM:无枚举无范围
     await tester
         .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
@@ -543,17 +565,18 @@ void main() {
       (tester) async {
     final transport = _ScriptTransport();
     final conn = _FakeConnection();
-    final controller = RemoteController(
-        session: PtpSession(transport: transport), connection: conn);
+    final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
-    _scriptParams(transport); // 连接时全量
+    _scriptParams(transport); // 连接时全量(首挂 active:false,不自动起景)
     await tester.pumpWidget(
         MaterialApp(home: RemotePage(controller: controller, active: false)));
     conn.statesCtrl.add(CameraLinkState.connected);
     await tester.pumpAndSettle();
     expect(controller.exposure?.fNumber, 280);
 
-    // 切回 tab:对表刷一次(脚本耗尽会以 StateError 炸出 —— 刷了才消费)
+    // 切回 tab:先自动起景(0x9201 + 首帧)再对表刷一次(FIFO 按消费序;
+    // 刷了才消费,脚本耗尽会以 StateError 炸出)
+    _scriptAutoStart(transport);
     _scriptParams(transport);
     await tester.pumpWidget(
         MaterialApp(home: RemotePage(controller: controller, active: true)));
@@ -572,22 +595,12 @@ void main() {
     _portrait(tester);
     final transport = _ScriptTransport();
     final conn = _FakeConnection();
-    final controller = RemoteController(
-        session: PtpSession(transport: transport),
-        connection: conn,
-        engine: LiveViewEngine(
-            session: PtpSession(transport: transport), delay: _parkedDelay),
-        delay: _parkedDelay,
-        aeDelay: _parkedDelay);
+    final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
 
-    transport
-      ..ok() // 0x9201 开取景
-      ..ok(data: _realJpeg()); // 首帧(真实 JPEG,Image.memory 要解码)
+    _scriptAutoStart(transport); // 进页自动起景(0x9201 + 首帧)
     await tester
         .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
-    // 取景开关 = 动作行按钮(点其「取景」标签)
-    await tester.tap(find.text('取景'));
     await tester.pumpAndSettle();
     expect(controller.liveViewActive, isTrue);
     expect(controller.frameSize.value, (width: 32, height: 24));
@@ -632,21 +645,12 @@ void main() {
     _portrait(tester);
     final transport = _ScriptTransport();
     final conn = _FakeConnection();
-    final controller = RemoteController(
-        session: PtpSession(transport: transport),
-        connection: conn,
-        engine: LiveViewEngine(
-            session: PtpSession(transport: transport), delay: _parkedDelay),
-        delay: _parkedDelay,
-        aeDelay: _parkedDelay);
+    final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
 
-    transport
-      ..ok() // 0x9201 开取景
-      ..ok(data: _realJpeg()); // 首帧(此后 delay 挂起)
+    _scriptAutoStart(transport); // 进页自动起景(0x9201 + 首帧)
     await tester
         .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
-    await tester.tap(find.text('取景'));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('feed-zoom-badge')), findsNothing,
         reason: '适配态无角标');
@@ -741,27 +745,18 @@ void main() {
     _portrait(tester);
     final transport = _ScriptTransport();
     final conn = _FakeConnection();
-    final controller = RemoteController(
-        session: PtpSession(transport: transport),
-        connection: conn,
-        engine: LiveViewEngine(
-            session: PtpSession(transport: transport), delay: _parkedDelay),
-        delay: _parkedDelay,
-        aeDelay: _parkedDelay);
+    final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
 
-    transport
-      ..ok() // 0x9201 开取景
-      ..ok(data: _realJpeg()); // 首帧(此后 delay 挂起)
+    _scriptAutoStart(transport); // 进页自动起景(0x9201 + 首帧)
     await tester
         .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
-    await tester.tap(find.text('取景'));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('focus-dial-rail')), findsNothing,
         reason: '默认不占取景画面');
 
-    // 辅助浮层开「拉焦轮」
-    await tester.tap(find.byIcon(Icons.tune));
+    // 对焦钮(控制行)开对焦浮层 → 开「拉焦轮」
+    await tester.tap(find.byIcon(Icons.center_focus_strong));
     await tester.pumpAndSettle();
     await tester.tap(find.text('拉焦轮'));
     await tester.pumpAndSettle();
@@ -797,23 +792,14 @@ void main() {
     _portrait(tester);
     final transport = _ScriptTransport();
     final conn = _FakeConnection();
-    final controller = RemoteController(
-        session: PtpSession(transport: transport),
-        connection: conn,
-        engine: LiveViewEngine(
-            session: PtpSession(transport: transport), delay: _parkedDelay),
-        delay: _parkedDelay,
-        aeDelay: _parkedDelay);
+    final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
     final settings = ValueNotifier<AppSettings>(const AppSettings());
 
-    transport
-      ..ok() // 0x9201 开取景
-      ..ok(data: _realJpeg()); // 首帧(此后 delay 挂起)
+    _scriptAutoStart(transport); // 进页自动起景(0x9201 + 首帧)
     await tester.pumpWidget(MaterialApp(
         home: RemotePage(
             controller: controller, settingsListenable: settings)));
-    await tester.tap(find.text('取景'));
     await tester.pumpAndSettle();
 
     // 默认关:普通 Image + 低采样(最省)
@@ -841,25 +827,23 @@ void main() {
     _portrait(tester);
     final transport = _ScriptTransport();
     final conn = _FakeConnection();
-    final controller = RemoteController(
-        session: PtpSession(transport: transport),
-        connection: conn,
-        engine: LiveViewEngine(
-            session: PtpSession(transport: transport), delay: _parkedDelay),
-        delay: _parkedDelay,
-        aeDelay: _parkedDelay);
+    final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
 
+    _scriptAutoStart(transport); // 进页自动起景(0x9201 + 首帧入账)
     await tester
         .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
+    await tester.pumpAndSettle();
     expect(controller.focusBeforeCapture, isFalse);
-    // 对焦后拍收进胶囊 tune 钮的非模态浮层(手机相机式排版):开面板再点
+    final requestsBefore = transport.requests.length;
+    // 对焦后拍收进控制行 tune 钮的设置浮层:开面板再点
     await tester.tap(find.byIcon(Icons.tune));
     await tester.pumpAndSettle();
     await tester.tap(find.text('对焦后拍'));
     await tester.pumpAndSettle();
     expect(controller.focusBeforeCapture, isTrue);
-    expect(transport.requests, isEmpty, reason: '纯本地开关,不发相机命令');
+    expect(transport.requests.length, requestsBefore,
+        reason: '纯本地开关,开关前后零相机流量');
   });
 
   testWidgets('监看辅助开关:直方图等四个分析开关须同步启用帧分析器'
@@ -867,19 +851,15 @@ void main() {
     _portrait(tester);
     final transport = _ScriptTransport();
     final conn = _FakeConnection();
-    final controller = RemoteController(
-        session: PtpSession(transport: transport),
-        connection: conn,
-        engine: LiveViewEngine(
-            session: PtpSession(transport: transport), delay: _parkedDelay),
-        delay: _parkedDelay,
-        aeDelay: _parkedDelay);
+    final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
+    _scriptAutoStart(transport); // 进页自动起景(0x9201 + 首帧)
     await tester
         .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
+    await tester.pumpAndSettle();
     expect(controller.analyzer.enabled.value, isFalse);
 
-    // 辅助开关收进胶囊 tune 钮浮层(手机相机式排版):开面板后点
+    // 监看开关收进控制行 tune 钮的设置浮层:开面板后点
     // 图标盒(InkWell 只包图标,标签文字不在点击区)
     await tester.tap(find.byIcon(Icons.tune));
     await tester.pumpAndSettle();
@@ -898,21 +878,12 @@ void main() {
     _portrait(tester);
     final transport = _ScriptTransport();
     final conn = _FakeConnection();
-    final controller = RemoteController(
-        session: PtpSession(transport: transport),
-        connection: conn,
-        engine: LiveViewEngine(
-            session: PtpSession(transport: transport), delay: _parkedDelay),
-        delay: _parkedDelay,
-        aeDelay: _parkedDelay);
+    final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
 
-    transport
-      ..ok() // 0x9201
-      ..ok(data: _realJpeg()); // 首帧(SOF 尺寸入册 → imageRect 可算)
+    _scriptAutoStart(transport); // 进页自动起景(0x9201 + 首帧,SOF 入册)
     await tester
         .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
-    await tester.tap(find.text('取景'));
     await tester.pumpAndSettle();
     expect(find.byType(AfAreasOverlay), findsNothing,
         reason: '无头/未取景不画相机 AF 框');
@@ -940,38 +911,50 @@ void main() {
         reason: '头在册 = 相机真实框已在屏,占位框再画即双框');
   });
 
-  testWidgets('竖屏手机相机式排版:浮胶囊 + 底部三行(读出/动作/快门),'
-      '辅助收 tune 浮层,纯净监看两段淡出可恢复', (tester) async {
+  testWidgets('竖屏 iPhone 相机式排版:模式条 + 底行五键(相册|对焦|'
+      '快门|设置|旋转),辅助收 tune 浮层,隐藏/恢复同位两段淡出',
+      (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
     final conn = _FakeConnection();
-    final controller = RemoteController(
-        session: PtpSession(transport: transport), connection: conn);
+    final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
+    _scriptAutoStart(transport); // 进页自动起景(0x9201 + 首帧)
     await tester
         .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
     await tester.pumpAndSettle();
 
-    // 底部三行:参数读出行(内联小标签+数值)→ 动作行 → 快门行
-    expect(find.text('模式'), findsOneWidget, reason: '读出行参数标签');
-    expect(find.text('取景'), findsOneWidget, reason: '动作行取景钮');
-    expect(find.text('对焦'), findsOneWidget);
-    expect(find.text('录制'), findsOneWidget);
-    expect(find.text('MF'), findsOneWidget);
-    expect(find.byIcon(Icons.photo_library_outlined), findsOneWidget,
-        reason: '快门行相册钮(无即拍图时图标占位)');
-    expect(find.byIcon(Icons.visibility_off), findsOneWidget,
-        reason: '快门行纯净监看钮');
+    // 模式条在快门上方:照片|视频
+    expect(find.text('照片'), findsOneWidget);
+    expect(find.text('视频'), findsOneWidget);
 
-    // 辅助开关收进胶囊 tune 钮的非模态浮层:默认不在树
-    expect(find.text('对焦后拍'), findsNothing);
-    await tester.tap(find.byIcon(Icons.tune));
-    await tester.pumpAndSettle();
-    expect(find.text('对焦后拍'), findsOneWidget);
+    // 底行五键自左向右:相册 | 对焦 | 快门(78)| 设置 | 旋转
+    final ordered = [
+      find.byIcon(Icons.photo_library_outlined),
+      find.byIcon(Icons.center_focus_strong),
+      find.byWidgetPredicate(
+          (w) => w is SizedBox && w.width == 78 && w.height == 78),
+      find.byIcon(Icons.tune),
+      find.byIcon(Icons.screen_rotation),
+    ];
+    var lastDx = -1.0;
+    for (final f in ordered) {
+      expect(f, findsOneWidget);
+      final dx = tester.getCenter(f).dx;
+      expect(dx, greaterThan(lastDx), reason: '底行按键自左向右居排');
+      lastDx = dx;
+    }
 
-    // 纯净监看:顶部浮层与底部三行两段淡出 + 放行点击(AnimatedOpacity
-    // 不裁树 —— 断言透明度与忽略指针;眼睛钮恢复)。
-    await tester.tap(find.byIcon(Icons.visibility_off));
+    // 旧动作行文案退场:取景默认开、录像并快门、MF 步进在对焦浮层
+    expect(find.text('取景'), findsNothing);
+    expect(find.text('录制'), findsNothing);
+    expect(find.text('MF'), findsNothing);
+
+    // 隐藏钮在信息胶囊行尾(右上角);隐藏后恢复钮出现在同一处
+    final hide = find.byIcon(Icons.visibility_off);
+    expect(hide, findsOneWidget, reason: '信息胶囊行尾纯净监看钮');
+    final hideCorner = tester.getTopRight(hide);
+    await tester.tap(hide);
     await tester.pumpAndSettle();
     for (final key in const ['portrait-chrome-top', 'portrait-chrome-bottom']) {
       final chrome = find.byKey(ValueKey(key));
@@ -985,50 +968,44 @@ void main() {
           0.0,
           reason: '$key 淡出');
     }
-    await tester.tap(find.byIcon(Icons.visibility));
+    final restore = find.byIcon(Icons.visibility);
+    expect(restore, findsOneWidget, reason: '恢复钮现身');
+    final restoreCorner = tester.getTopRight(restore);
+    expect(restoreCorner.dx, closeTo(hideCorner.dx, 20),
+        reason: '隐藏/恢复同位(右上角,横向)');
+    expect(restoreCorner.dy, closeTo(hideCorner.dy, 10),
+        reason: '隐藏/恢复同位(纵向)');
+    await tester.tap(restore);
     await tester.pumpAndSettle();
-    for (final key in const ['portrait-chrome-top', 'portrait-chrome-bottom']) {
-      final chrome = find.byKey(ValueKey(key));
-      expect(tester.widget<IgnorePointer>(chrome).ignoring, isFalse);
-      expect(
-          tester
-              .widget<AnimatedOpacity>(
-                  find.descendant(of: chrome, matching: find.byType(AnimatedOpacity)))
-              .opacity,
-          1.0,
-          reason: '$key 回来');
-    }
     expect(find.byIcon(Icons.tune), findsOneWidget, reason: 'chrome 回来');
+
+    // 辅助开关收进设置浮层:默认不在树,tune 展开即出
+    expect(find.text('对焦后拍'), findsNothing);
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
+    expect(find.text('对焦后拍'), findsOneWidget);
+    expect(find.text('网格'), findsOneWidget, reason: '监看开关入设置浮层');
   });
 
-  testWidgets('横屏监看:画面全幅打底,参数竖列贴左、快门柱居右、'
-      '动作行贴底,辅助开关收进顶栏浮层', (tester) async {
+  testWidgets('横屏监看:画面全幅打底,参数竖列贴左、快门柱四件居右、'
+      '模式条+旋转贴底,设置浮层让位快门柱', (tester) async {
     _landscape(tester);
     final transport = _ScriptTransport();
     final conn = _FakeConnection();
-    final controller = RemoteController(
-        session: PtpSession(transport: transport),
-        connection: conn,
-        engine: LiveViewEngine(
-            session: PtpSession(transport: transport), delay: _parkedDelay),
-        delay: _parkedDelay,
-        aeDelay: _parkedDelay);
+    final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
-
-    // 单 FIFO 按消费顺序入队:connected 先吃掉 21 应答参数脚本,
-    // 之后 tap 的 0x9201、首帧、AF 点按两应答依次就位。
+    // 单 FIFO 按消费顺序入队:进页自动起景(0x9201+首帧)先于连接沿的
+    // 对表刷参,AF 点按两应答随后。
+    _scriptAutoStart(transport);
     _scriptParams(transport);
     transport
-      ..ok() // 0x9201(tap 后)
-      ..ok(data: _realJpeg()); // 首帧(此后 delay 挂起)
+      ..ok() // changeAfArea(点画面收浮层时)
+      ..ok(); // afDrive
     await tester
         .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
     conn.statesCtrl.add(CameraLinkState.connected);
     await tester.pumpAndSettle();
-    // 横屏取景钮 = 底部动作行(同竖屏一行)
-    await tester.tap(find.byIcon(Icons.videocam_off_outlined));
-    await tester.pumpAndSettle();
-    expect(controller.liveViewActive, isTrue);
+    expect(controller.liveViewActive, isTrue, reason: '进页自动起景');
 
     // 画面打底占满整屏:Image 住在图像坐标系(32×24),经 Transform
     // 投到屏幕 contain 矩形 —— 断言画出来的矩形(getRect 含 paint 变换):
@@ -1049,36 +1026,37 @@ void main() {
     expect(_chipsRow, findsNothing);
     expect(find.text('模式'), findsOneWidget, reason: '左栏参数 tile');
 
-    // 动作行贴底 + 顶栏按钮在场
-    expect(find.byIcon(Icons.center_focus_strong), findsOneWidget,
-        reason: '底部动作行对焦钮');
-    expect(find.byIcon(Icons.tune), findsOneWidget, reason: '辅助面板入口');
-
-    // 快门柱纵向居右(2026-10-08 用户定案「拍照按钮在右侧中间」,
-    // 非底部居中):锚右缘(10 边距),纵向中点在顶栏下沿(64)与
-    // 底部动作行上沿(800-80)之间 → 中点 392。
-    final shutter =
-        find.byWidgetPredicate((w) => w is SizedBox && w.width == 78);
+    // 快门柱四件竖排居右(2026-10-10):相册/对焦/快门(64)/设置,
+    // 锚右缘(10 边距),纵向居中于顶栏下沿(64)与贴底条上沿(800-64)
+    // 之间 —— 柱内容 250(54+8+54+8+64+8+54)在 672 高区居中,
+    // 快门中点 dy = 64+(672-250)/2+124+32 = 431。
+    final shutter = find.byWidgetPredicate(
+        (w) => w is SizedBox && w.width == 64 && w.height == 64);
     expect(shutter, findsOneWidget);
     expect(tester.getCenter(shutter).dx, 1551,
-        reason: '快门贴右缘(10 边距 + 78/2)');
-    expect(tester.getCenter(shutter).dy, 392, reason: '快门纵向居中');
+        reason: '快门贴右缘(10 边距 + 78 柱宽,柱内居中)');
+    expect(tester.getCenter(shutter).dy, 431, reason: '快门纵向居中');
     expect(find.byIcon(Icons.photo_library_outlined), findsOneWidget,
         reason: '快门柱相册钮(无即拍图时图标占位)');
+    expect(find.byIcon(Icons.center_focus_strong), findsOneWidget,
+        reason: '快门柱对焦钮');
+    expect(find.byIcon(Icons.tune), findsOneWidget, reason: '快门柱设置钮');
     expect(find.byIcon(Icons.visibility_off), findsOneWidget,
-        reason: '快门柱纯净监看钮(顶栏不再重复)');
+        reason: '顶栏纯净监看钮');
 
-    // 辅助开关收浮层:默认不在树,点 tune 展开
+    // 贴底条:模式条居中 + 旋转钮右端
+    expect(find.text('照片'), findsOneWidget, reason: '贴底模式条');
+    expect(find.byIcon(Icons.screen_rotation), findsOneWidget,
+        reason: '贴底条右端旋转钮');
+
+    // 设置浮层:tune 展开 → 监看开关在树;让位右缘快门柱(right: 98)
     expect(find.byIcon(Icons.grid_on), findsNothing, reason: '默认收起');
     await tester.tap(find.byIcon(Icons.tune));
     await tester.pumpAndSettle();
     expect(find.byIcon(Icons.grid_on), findsOneWidget, reason: '面板开');
 
     // 点取景画面即收浮层 + 照常触控对焦(点左栏右沿与画幅左沿之间的
-    // 空白;预置 AF 两应答)。
-    transport
-      ..ok() // changeAfArea
-      ..ok(); // afDrive
+    // 空白;AF 两应答已在队首)。
     await tester.tapAt(const Offset(200, 400));
     await tester.pumpAndSettle();
     expect(find.byIcon(Icons.grid_on), findsNothing, reason: '点画面收起面板');
@@ -1093,16 +1071,12 @@ void main() {
     _landscape(tester);
     final transport = _ScriptTransport();
     final conn = _FakeConnection();
-    final controller = RemoteController(
-        session: PtpSession(transport: transport),
-        connection: conn,
-        engine: LiveViewEngine(
-            session: PtpSession(transport: transport), delay: _parkedDelay),
-        delay: _parkedDelay,
-        aeDelay: _parkedDelay);
+    final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
+    _scriptAutoStart(transport); // 进页自动起景(0x9201 + 首帧)
     await tester
         .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
+    await tester.pumpAndSettle();
 
     expect(find.byIcon(Icons.tune), findsOneWidget, reason: '隐前 chrome 在场');
     await tester.tap(find.byIcon(Icons.visibility_off));
@@ -1147,9 +1121,9 @@ void main() {
 
     final transport = _ScriptTransport();
     final conn = _FakeConnection();
-    final controller = RemoteController(
-        session: PtpSession(transport: transport), connection: conn);
+    final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
+    _scriptAutoStart(transport); // 进页自动起景(0x9201 + 首帧)
     await tester
         .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
 
@@ -1193,6 +1167,9 @@ void main() {
 
     // 5) 同控制器重建页面:锁仍是横 —— 竖屏视口下点一下发 portraitUp
     // 即证(若锁丢回 auto,竖屏首击会发 landscape 对;图标恒定,靠消息断言)。
+    // 引擎已在跑(首挂自动起景)→ 重建的 initState 走「进页对表」沿,
+    // 预置参数脚本。
+    _scriptParams(transport);
     await tester.pumpWidget(
         MaterialApp(home: RemotePage(controller: controller)));
     await tester.pumpAndSettle();
@@ -1235,9 +1212,9 @@ void main() {
 
     final transport = _ScriptTransport();
     final conn = _FakeConnection();
-    final controller = RemoteController(
-        session: PtpSession(transport: transport), connection: conn);
+    final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
+    _scriptAutoStart(transport); // 进页自动起景(0x9201 + 首帧)
     await tester
         .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
 
@@ -1252,9 +1229,9 @@ void main() {
       '(2026-10-08「改成跟随主题」)', (tester) async {
     final transport = _ScriptTransport();
     final conn = _FakeConnection();
-    final controller = RemoteController(
-        session: PtpSession(transport: transport), connection: conn);
+    final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
+    _scriptAutoStart(transport); // 进页自动起景(0x9201 + 首帧)
 
     Color scaffoldBackground() =>
         tester.widget<Scaffold>(find.byType(Scaffold)).backgroundColor!;
@@ -1305,5 +1282,286 @@ void main() {
     await tester.pumpAndSettle();
     expect(bannerGlass(), const Color(0xB81B1713),
         reason: '深色主题下横幅同一块暗面玻璃');
+  });
+
+  testWidgets('取景默认打开:进页零点按,恰一条 0x9201 + 首帧上屏',
+      (tester) async {
+    _portrait(tester);
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = _directRemoteController(transport, conn: conn);
+    addTearDown(controller.dispose);
+    _scriptAutoStart(transport); // 0x9201 + 首帧(本测的全部脚本)
+    await tester
+        .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
+    await tester.pumpAndSettle();
+
+    expect(controller.liveViewActive, isTrue, reason: '未点任何按钮即取景中');
+    expect(
+        transport.requests
+            .where((r) => r.opcode == NikonOperationCode.startLiveView),
+        hasLength(1),
+        reason: '进页自动起景恰一条 0x9201');
+    expect(
+        transport.requests
+            .where((r) => r.opcode == NikonOperationCode.getLiveViewImageEx),
+        hasLength(1),
+        reason: '首帧恰一条 0x9428(取帧主力码;此后停摆 delay 驻停)');
+    expect(find.byType(Image), findsOneWidget, reason: '首帧已上屏');
+  });
+
+  testWidgets('拍照/录像合一:模式条切视频 → 红芯快门整段点按起/停录像,'
+      '录制中锁模式', (tester) async {
+    _portrait(tester);
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = _directRemoteController(transport, conn: conn);
+    addTearDown(controller.dispose);
+    transport
+      ..ok() // 0x9201(进页自动起景)
+      ..ok(data: _realJpeg()) // 首帧
+      ..ok() // 0x920A 起录
+      ..ok(); // 0x920B 停录
+    await tester
+        .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
+    await tester.pumpAndSettle();
+    expect(controller.liveViewActive, isTrue);
+
+    final shutter = find.byWidgetPredicate(
+        (w) => w is SizedBox && w.width == 78 && w.height == 78);
+    expect(shutter, findsOneWidget);
+    // 快门芯(圆芯 Container,ring 无色不计)
+    Color coreColor() => (tester.widget<Container>(find
+                .descendant(
+                    of: shutter,
+                    matching: find.byWidgetPredicate((w) =>
+                        w is Container &&
+                        w.decoration is BoxDecoration &&
+                        (w.decoration as BoxDecoration).shape ==
+                            BoxShape.circle &&
+                        (w.decoration as BoxDecoration).color != null))
+                .first)
+            .decoration as BoxDecoration)
+        .color!;
+
+    // 照片模式:芯非红
+    expect(coreColor(), isNot(LiveDesign.light.bad));
+    // 切视频模式:红芯(iPhone 语义,进入即红非仅录制中)
+    await tester.tap(find.text('视频'));
+    await tester.pumpAndSettle();
+    expect(coreColor(), LiveDesign.light.bad);
+
+    // 整段点按起录:0x920A 恰一条,recording 真,芯内白色停止方块
+    await tester.tap(shutter);
+    await tester.pumpAndSettle();
+    expect(controller.recording, isTrue);
+    expect(
+        transport.requests
+            .where((r) => r.opcode == NikonOperationCode.startMovieRecInCard),
+        hasLength(1));
+    expect(
+        find.byWidgetPredicate((w) =>
+            w is Container &&
+            w.decoration is BoxDecoration &&
+            (w.decoration as BoxDecoration).color == Colors.white &&
+            (w.decoration as BoxDecoration).borderRadius ==
+                BorderRadius.circular(4)),
+        findsOneWidget,
+        reason: '录制中芯内白色停止方块');
+    expect(find.textContaining('REC'), findsOneWidget, reason: 'REC 时长入胶囊');
+
+    // 录制中模式条锁:点「照片」无效(条已 IgnorePointer,命中被吞即
+    // 证锁;停录入口不被模式切换甩开)
+    await tester.tap(find.text('照片'), warnIfMissed: false);
+    await tester.pumpAndSettle();
+    expect(coreColor(), LiveDesign.light.bad, reason: '录制中模式条锁死');
+
+    // 再点快门停录:0x920B 恰一条
+    await tester.tap(shutter);
+    await tester.pumpAndSettle();
+    expect(controller.recording, isFalse);
+    expect(
+        transport.requests
+            .where((r) => r.opcode == NikonOperationCode.endMovieRec),
+        hasLength(1));
+  });
+
+  testWidgets('照片模式快门:点按走快门码(0x9207),零录像请求', (tester) async {
+    _portrait(tester);
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = _directRemoteController(transport, conn: conn);
+    addTearDown(controller.dispose);
+    transport
+      ..ok() // 0x9201(进页自动起景)
+      ..ok(data: _realJpeg()) // 首帧
+      ..ok(); // 0x9207(落卡拍,CaptureSort 0xFFFFFFFF 直发)
+    await tester
+        .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byWidgetPredicate(
+        (w) => w is SizedBox && w.width == 78 && w.height == 78));
+    // capturing 转圈永驻(落定等待走停摆 delay),pumpAndSettle 永不静
+    // —— 定长 pump 让捕获链入队即可断言。
+    await tester.pump();
+    await tester.pump();
+    expect(
+        transport.requests.where((r) =>
+            r.opcode == NikonOperationCode.initiateCaptureRecInMedia ||
+            r.opcode == PtpOperationCode.initiateCapture),
+        hasLength(1),
+        reason: '快门码直发一条(落定等待走停摆 delay,不炸)');
+    expect(
+        transport.requests.where((r) =>
+            r.opcode == NikonOperationCode.startMovieRecInCard ||
+            r.opcode == NikonOperationCode.endMovieRec),
+        isEmpty,
+        reason: '照片模式不发任何录像命令');
+  });
+
+  testWidgets('设置浮层参数区:tile 第二入口直达参数编辑底单,底单收后浮层仍在',
+      (tester) async {
+    _portrait(tester);
+    PtpSession.kSetPropEnabled = true;
+    addTearDown(() => PtpSession.kSetPropEnabled = true);
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = _directRemoteController(transport,
+        conn: conn, setPropGate: () => true);
+    addTearDown(controller.dispose);
+    _scriptAutoStart(transport); // 进页自动起景先吃 FIFO 头两位
+    _scriptParams(transport); // 连接沿对表(白平衡枚举在册)
+    transport
+      ..ok() // 0x1016 写白平衡 = 4
+      ..ok(data: _propDescDataset(PtpDevicePropCode.whiteBalance,
+          PtpDataType.uint16, 4,
+          enums: [2, 4, 5, 6, 7, 0x8010])); // 回读
+    await tester
+        .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
+    conn.statesCtrl.add(CameraLinkState.connected);
+    await tester.pumpAndSettle();
+
+    // tune 开设置浮层:拍摄参数区(读出条之外的第二入口)
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
+    expect(find.text('拍摄参数'), findsOneWidget, reason: '浮层三段头之一');
+    final wbInPanel = find.descendant(
+        of: find.byType(CaptureSettingsPanel), matching: find.text('白平衡'));
+    expect(wbInPanel, findsOneWidget, reason: '白平衡 tile 在浮层参数区');
+
+    // 点浮层 tile → 参数编辑底单(枚举上树)
+    await tester.tap(wbInPanel);
+    await tester.pumpAndSettle();
+    expect(find.text('直射阳光'), findsOneWidget, reason: '编辑底单枚举');
+
+    // 点选枚举:写路径照常,底单收口后浮层仍在(第二入口不吞浮层)
+    await tester.tap(find.text('直射阳光'));
+    await tester.pumpAndSettle();
+    expect(controller.paramProps[PtpDevicePropCode.whiteBalance]?.value, 4,
+        reason: '0x1016 写 + 回读落值');
+    expect(find.byType(CaptureSettingsPanel), findsOneWidget,
+        reason: '底单收口,浮层仍在');
+  });
+
+  testWidgets('对焦浮层:AF 驱动 0x90C1、MF 步进 0x9204、拉焦轮开关',
+      (tester) async {
+    _portrait(tester);
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = _directRemoteController(transport, conn: conn);
+    addTearDown(controller.dispose);
+    transport
+      ..ok() // 0x9201(进页自动起景)
+      ..ok(data: _realJpeg()) // 首帧
+      ..ok() // afDrive 0x90C1
+      ..ok() // mfDrive 0x9204 向近
+      ..ok(); // mfDrive 0x9204 向远
+    await tester
+        .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
+    await tester.pumpAndSettle();
+
+    // 控制行对焦钮开对焦浮层
+    await tester.tap(find.byIcon(Icons.center_focus_strong));
+    await tester.pumpAndSettle();
+    expect(find.text('AF 对焦'), findsOneWidget, reason: '对焦浮层开');
+
+    // AF:一条 0x90C1
+    await tester.tap(find.text('AF 对焦'));
+    await tester.pumpAndSettle();
+    expect(
+        transport.requests
+            .where((r) => r.opcode == NikonOperationCode.afDrive),
+        hasLength(1));
+    expect(controller.focusing, isFalse, reason: '脚本应答即回,不转圈');
+
+    // MF 步进:向近 [1,300] / 向远 [2,300](0x9204 相对量)
+    await tester.tap(find.byIcon(Icons.remove));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byIcon(Icons.add));
+    await tester.pumpAndSettle();
+    final mf = transport.requests
+        .where((r) => r.opcode == NikonOperationCode.mfDrive)
+        .toList();
+    expect(mf, hasLength(2));
+    expect(mf[0].params, [1, 300], reason: '向近一步(300 脉冲)');
+    expect(mf[1].params, [2, 300], reason: '向远一步');
+
+    // 拉焦轮开关:开即出竖条(取景画面右缘)
+    expect(find.byKey(const ValueKey('focus-dial-rail')), findsNothing);
+    await tester.tap(find.text('拉焦轮'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('focus-dial-rail')), findsOneWidget);
+  });
+
+  testWidgets('对焦/设置浮层互斥单开,再点锚钮即收,点取景画面即收',
+      (tester) async {
+    _portrait(tester);
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = _directRemoteController(transport, conn: conn);
+    addTearDown(controller.dispose);
+    transport
+      ..ok() // 0x9201(进页自动起景)
+      ..ok(data: _realJpeg()) // 首帧
+      ..ok() // changeAfArea(点画面收浮层时顺带触控对焦)
+      ..ok(); // afDrive
+    await tester
+        .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
+    await tester.pumpAndSettle();
+
+    // 控制行对焦钮(底行;浮层开前的唯一 center_focus_strong)
+    final controlFocus = find.descendant(
+        of: find.byKey(const ValueKey('portrait-chrome-bottom')),
+        matching: find.byIcon(Icons.center_focus_strong));
+
+    // 设置开 → 点对焦钮:互斥换开
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
+    expect(find.byType(CaptureSettingsPanel), findsOneWidget);
+    await tester.tap(controlFocus);
+    await tester.pumpAndSettle();
+    expect(find.byType(CaptureSettingsPanel), findsNothing,
+        reason: '互斥:开对焦收设置');
+    expect(find.text('AF 对焦'), findsOneWidget, reason: '对焦浮层在场');
+
+    // 再点对焦钮:收
+    await tester.tap(controlFocus);
+    await tester.pumpAndSettle();
+    expect(find.text('AF 对焦'), findsNothing, reason: '再点锚钮即收');
+
+    // 设置再开 → 点画面即收(顺带触控对焦照常)
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
+    expect(find.byType(CaptureSettingsPanel), findsOneWidget);
+    await tester.tap(find.byType(Image).first, warnIfMissed: false);
+    await tester.pumpAndSettle();
+    expect(find.byType(CaptureSettingsPanel), findsNothing,
+        reason: '点画面收浮层');
+    expect(
+        transport.requests
+            .where((r) => r.opcode == NikonOperationCode.changeAfArea),
+        hasLength(1),
+        reason: '点画面顺带触控对焦');
   });
 }

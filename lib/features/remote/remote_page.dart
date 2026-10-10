@@ -10,30 +10,40 @@
 /// (横幅/即拍即览/监看叠层/AF 框)恒定暗面不随主题。
 /// 功能层为本仓 [RemoteController](拨盘级接管/曝光变量模式门/值回读
 /// 路由/连拍按住,见其头注)—— 本页只做视图,交互全部走控制器。
-/// 视图件已拆至同目录:取景区/横幅/信息胶囊/动作行/读出条/辅助条/
-/// 参数面板各成文件,本文件只剩页面 State 与横竖屏组装。
+/// 视图件已拆至同目录:取景区/横幅/信息胶囊/控制行/读出条/模式条/
+/// 对焦浮层/设置浮层/参数面板各成文件,本文件只剩页面 State 与横竖
+/// 屏组装。
 ///
-/// 布局(竖屏,2026-10-08 参考手机原生相机重排):
-/// - 取景画面占大头:信息胶囊(链路点 + 设备名 + 接管徽标 + 监看
-///   辅助 tune 钮 + 方向钮)浮在画面顶部,监看开关/「对焦后拍」/
-///   「自拍」/「APP 接管」收进 tune 钮的非模态浮层;
-/// - 错误/提示横幅贴画面底边(OpenZCine「坐在画面下沿」的口径);
-/// - 底部三行平铺在页面底色上:参数读出行(小标签 + 数值内联横滚,
-///   自动变量标「(自动)」置灰,顺序对齐 OpenZCine
-///   photographyCaptureValues:MODE/ISO/SHUTTER/IRIS/DRIVE/FOCUS/
-///   WB/METER/PROFILE,其余随后)→ 紧凑动作行(取景/对焦/录制/
-///   MF 步进)→ 快门行(相册缩略图 | 大圆环快门 | 纯净监看)。
+/// 布局(竖屏,2026-10-10 iPhone 相机式重排,用户六条需求:取景默认
+/// 开 / 拍照录像并一钮 / 对焦居中 / 设置右侧收参数与监看 / 隐藏显示
+/// 同位 / 旋转到底):
+/// - 取景画面占大头:信息胶囊(链路点 + 设备名 + 接管徽标 + REC +
+///   纯净监看隐藏钮)浮在画面顶部;隐藏后恢复钮在**同一处**(右上
+///   角,与胶囊行尾隐藏钮同位 —— 旧版隐藏在快门行右/恢复在顶部两处
+///   不一,用户点名);
+/// - **取景默认打开**:进页/回页沿未跑则自动起景(取景开关钮撤除;
+///   失败态占位里「重试取景」兜底);
+/// - 底部三行平铺:参数读出行(点 chip 仍可直接改,现状保留)→ 模式
+///   条「照片|视频」(录制中锁,保证停录入口不被模式切换甩开)→
+///   控制行(相册缩略图 | 对焦 | 大圆环快门 | 设置 | 方向旋转;快门
+///   在视频模式红芯、整段点按起/停录像 —— 拍照/录像合一);
+/// - 对焦/设置为**非模态玻璃浮层**(单开互斥,点画面即收):对焦浮层
+///   = AF / MF 步进 / 拉焦轮;设置浮层 = 拍摄参数(全目录,点 tile
+///   走读出条同款编辑底单)+ 监看开关(网格/斑马纹/直方图/水平仪/
+///   伪色/峰值)+ 辅助芯片(对焦后拍/自拍/APP 接管;吸收原 tune 辅
+///   助浮层)。
 ///
-/// 横屏**侧栏监看 + 居右快门柱**(2026-10-08 随竖屏手机相机式重排定稿,
-/// 用户点名「拍照按钮在右侧中间」):取景画面全幅铺底,顶栏一条(信息
-/// 胶囊 + tune 钮),参数读出竖列贴左;**快门柱纵向居右** —— 相册
-/// 缩略图 / 大圆环快门 / 纯净监看竖排,锚在右缘纵向中点(手机相机
-/// 横屏的快门位);动作行贴底(取景/对焦/录制/MF,同竖屏一行平铺)。
-/// 贴底叠层(横幅/直方图)经 bottomInset 让位动作行。辅助开关收进
-/// 顶栏 tune 按钮的非模态浮层;纯净监看隐去全部控制浮层,只留画面与
-/// 监看叠层。方向按钮(恒显转屏图标,点按横↔竖直切,初始态跟随
-/// 系统)经 SystemChrome 强制,系统转屏锁开着也能切,不依赖系统自动
-/// 横竖屏设置。
+/// 横屏**侧栏监看 + 居右快门柱**(2026-10-08 用户定案「拍照按钮在右
+/// 侧中间」;2026-10-10 动作行撤除后快门柱四件化):取景画面全幅铺
+/// 底,顶栏一条(信息胶囊 + 纯净监看钮),参数读出竖列贴左;快门柱
+/// 纵向居右 —— 相册缩略图 / 对焦 / 大圆环快门(64)/ 设置竖排(高
+/// 度账 54+8+54+8+64+8+54=250,390pt 屏右列区 262 可容;320pt SE 级
+/// 窄屏溢出为存量问题),锚在右缘纵向中点;贴底条 = 模式条(居中)+
+/// 方向旋转(右端);对焦/设置浮层让位快门柱(right: 98)。贴底叠层
+/// (横幅/直方图)经 bottomInset 让位。纯净监看隐去全部控制浮层,只
+/// 留画面与监看叠层,恢复钮与顶栏隐藏钮同位。方向按钮(恒显转屏图
+/// 标,点按横↔竖直切,初始态跟随系统)经 SystemChrome 强制,系统
+/// 转屏锁开着也能切,不依赖系统自动横竖屏设置。
 ///
 /// 水平仪数据源:相机帧头虚拟水平仪(LiveViewHeader.level,机身侧水平
 /// 仪,OpenZCine 同源)优先,手机姿态流只作相机未报时的兜底。
@@ -42,9 +52,10 @@
 /// 全屏 push,返回(pop/系统返回手势)即回相机页 —— 底栏全程不占监看
 /// 画面。离页即挂起帧轮询(取景生命周期跟连接走 —— 0x9201 已随连接沿
 /// 发出、相机保持取景,这里只停 USB 帧流量,不发 0x9202);每次进入
-/// 都是新建页面,initState 恢复轮询并对表刷一次参数(原 tab 模式的
-/// 「回台对表」沿移到此)。取景的显式开关仍在动作行;连接即取景由
-/// HomeShell 在 connected 沿驱动(RemoteController.autoLiveViewOnConnect)。
+/// 都是新建页面,initState 恢复轮询、自动起景并对表刷一次参数(原
+/// tab 模式的「回台对表」沿移到此)。连接即取景由 HomeShell 在
+/// connected 沿驱动(RemoteController.autoLiveViewOnConnect),进页
+/// 自动起景是对「用户显式关过/引擎失败后重进」的兜底,幂等。
 ///
 /// 离页两收口(2026-10-08 真机反馈):①横锁还竖 —— 方向钮是监看页
 /// 专属控件而 SystemChrome 全局生效,离页把外壳还竖(portraitUp 具体
@@ -67,13 +78,19 @@ import '../browser/photo_grid_page.dart';
 import 'live_design.dart';
 import 'monitor_toggles.dart';
 import 'remote_action_row.dart';
-import 'remote_assist_strip.dart';
 import 'remote_capture_strip.dart';
 import 'remote_controller.dart';
 import 'remote_feed_area.dart';
+import 'remote_focus_panel.dart';
 import 'remote_info_pill.dart';
+import 'remote_mode_strip.dart';
 import 'remote_param_sheet.dart';
+import 'remote_settings_panel.dart';
 import 'shooting_param_catalog.dart';
+
+/// 当前展开的非模态浮层(对焦/设置,单开互斥;点取景画面或再点锚
+/// 钮即收,纯净监看一并收)。
+enum _OpenPanel { none, focus, settings }
 
 class RemotePage extends StatefulWidget {
   const RemotePage({
@@ -111,10 +128,14 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   /// 读出条中当前打开面板的参数(金高亮 tile)。
   int? _activeParam;
 
-  /// 横屏辅助浮层(监看开关 + 芯片组)是否展开。
-  bool _assistPanelOpen = false;
+  /// 拍摄模式(照片/视频):页面级 UI 态,横竖屏重建不丢(控制器无
+  /// 模式概念,Zf 实体拨杆决定)。
+  CaptureMode _mode = CaptureMode.photo;
 
-  /// 横屏纯净监看:隐去全部控制浮层(横幅/监看叠层/触控对焦保留)。
+  /// 当前展开的非模态浮层(对焦/设置,单开互斥)。
+  _OpenPanel _openPanel = _OpenPanel.none;
+
+  /// 纯净监看:隐去全部控制浮层(横幅/监看叠层/触控对焦保留)。
   bool _chromeHidden = false;
 
   /// 手机姿态流(缓存单实例:MovtionHost 的 getter 每次返回**新**流,
@@ -135,6 +156,13 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     controller.setViewerVisible(widget.active);
     _wasLinkUp = controller.linkUp;
     controller.addListener(_onControllerChanged);
+    // 取景默认打开(2026-10-10 用户需求,取景开关钮撤除):未跑则自动
+    // 起景 —— 幂等(HomeShell 连接沿的 autoLiveViewOnConnect 同款),
+    // 引擎 failed 态进页也由此重试。直挂/未连接场景 linkUp 是冷启乐观
+    // 门闩(恒真)照样发,失败落占位「重试取景」,与真连接同形。
+    if (widget.active && !controller.liveViewActive) {
+      unawaited(controller.autoLiveViewOnConnect());
+    }
     // 进页对表刷一次参数(路由模式每次进入都是新建页面,原 tab 模式
     // 「回台对表」沿不存在;机身侧拨盘/菜单改动的事件不一定送达,同
     // didUpdateWidget 的兜底口径)。门 = 取景在跑:连接即取景使真连接
@@ -153,9 +181,18 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     if (widget.active != oldWidget.active) {
       controller.setViewerVisible(widget.active);
     }
-    // 回台对表刷一次参数(机身侧拨盘/菜单改动的事件不一定送达)。
-    if (widget.active && !oldWidget.active && controller.linkUp) {
-      unawaited(controller.refreshParams());
+    // 回台沿:先自动起景(0x9201 + 首帧入队)再对表刷参 —— 串成一条
+    // 链而非两个并发 unawaited(引擎帧请求会穿插进刷参链,FIFO 脚本序
+    // 无法预置;顺序化后请求序恒 [0x9201, 首帧, 参数…])。
+    if (widget.active && !oldWidget.active) {
+      unawaited(() async {
+        if (!controller.liveViewActive) {
+          await controller.autoLiveViewOnConnect();
+        }
+        if (controller.linkUp) {
+          await controller.refreshParams();
+        }
+      }());
     }
   }
 
@@ -192,10 +229,22 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     }
   }
 
-  /// 辅助开关组落定(监看开关 + 帧分析器启停同步)。
+  /// 开关组落定(监看开关 + 帧分析器启停同步)。
   void _updateToggles(MonitorToggles toggles) {
     setState(() => _toggles = toggles);
     _syncAnalyzerEnabled();
+  }
+
+  /// 浮层开/关(对焦/设置互斥单开:开一个收另一个;再点同钮即收)。
+  void _togglePanel(_OpenPanel p) {
+    setState(() => _openPanel = _openPanel == p ? _OpenPanel.none : p);
+  }
+
+  /// 模式切换(模式条在录制中已禁用,这里再守一道 —— 模式条不可达
+  /// 路径(测试直调/竞态)不至于把停录入口甩在视频模式外)。
+  void _setMode(CaptureMode m) {
+    if (controller.recording || m == _mode) return;
+    setState(() => _mode = m);
   }
 
   @override
@@ -217,7 +266,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     // 横屏 = 监看布局(OpenZCine MonitorLayoutPolicy 口径):取景画面
-    // 全幅铺底占大块屏幕,控制件(信息胶囊/辅助条/读出条/动作行)以
+    // 全幅铺底占大块屏幕,控制件(信息胶囊/读出条/快门柱/浮层)以
     // 玻璃浮层叠在画面上,而不是竖屏的「上下挤出」。
     final body = MediaQuery.orientationOf(context) == Orientation.landscape
         ? _landscapeBody(context)
@@ -254,17 +303,18 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     );
   }
 
-  /// 竖屏手机相机式排版(2026-10-08 参考手机原生相机重排):取景画面
-  /// 占大头,信息胶囊浮在画面顶部(辅助开关收进胶囊 tune 钮的非模态
-  /// 浮层);底部三行平铺在页面底色上 —— 参数读出行(内联小标签 +
-  /// 数值)→ 紧凑动作行 → 快门行(相册缩略图 | 大圆环快门 | 纯净
-  /// 监看)。纯净监看隐去顶部浮层与底部三行(眼睛钮恢复),监看叠层/
-  /// 横幅保留。
+  /// 竖屏 iPhone 相机式排版(2026-10-10 重排):取景画面占大头,信息
+  /// 胶囊(含纯净监看隐藏钮)浮在画面顶部;底部三行平铺 —— 参数读出
+  /// 行 → 模式条(照片|视频,录制中锁)→ 控制行(相册 | 对焦 | 快门
+  /// | 设置 | 旋转)。对焦/设置为非模态浮层,底锚居中浮在底栏上方。
+  /// 纯净监看隐去顶部浮层与底部三行(恢复钮在右上角同位),监看叠
+  /// 层/横幅保留。
   ///
   /// 监听拆两层(同横屏):feed 区 merge(controller+frame+status)
   /// 逐帧刷;chrome 层只听 controller —— 帧到达只写 ValueNotifier 不
   /// notifyListeners,胶囊/读出行/按钮不必逐帧重建。
   Widget _portraitBody(BuildContext context) {
+    final panelMaxHeight = MediaQuery.sizeOf(context).height * 0.55;
     return Column(
       children: [
         Expanded(
@@ -290,10 +340,10 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                   hideChrome: _chromeHidden,
                 ),
               ),
-              // 顶部浮层:信息胶囊(链路/张数/REC/接管 + tune/方向钮)
-              // + 辅助浮层;经 IgnorePointer + AnimatedOpacity 支持纯净
-              // 监看淡出。key 供测试定位(全树按类型找不到「chrome
-              // 这一层」,同横屏)。
+              // 顶部浮层:信息胶囊(链路/张数/REC/接管 + 隐藏钮)+ 对焦/
+              // 设置浮层(底锚居中,浮在底栏上方);经 IgnorePointer +
+              // AnimatedOpacity 支持纯净监看淡出。key 供测试定位(全树
+              // 按类型找不到「chrome 这一层」,同横屏)。
               Positioned.fill(
                 child: IgnorePointer(
                   key: const ValueKey('portrait-chrome-top'),
@@ -311,24 +361,43 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                             right: 12,
                             child: RemoteInfoPill(
                               controller: controller,
-                              onToggleOrientation: _cycleOrientationLock,
-                              onToggleAssist: () => setState(() =>
-                                  _assistPanelOpen = !_assistPanelOpen),
-                              assistSelected: _assistPanelOpen,
+                              onHideChrome: _hideChrome,
                               margin: EdgeInsets.zero,
                             ),
                           ),
-                          // 辅助浮层:锚在胶囊下方、右对齐。
-                          if (_assistPanelOpen)
+                          if (_openPanel == _OpenPanel.settings)
                             Positioned(
-                              top: kPortraitTopInset + 4,
+                              bottom: 8,
+                              left: 12,
                               right: 12,
-                              width: kAssistPanelWidth,
-                              child: RemoteAssistPanel(
+                              child: Center(
+                                child: ConstrainedBox(
+                                  constraints: const BoxConstraints(
+                                      maxWidth: kCapturePanelWidth + 60),
+                                  child: CaptureSettingsPanel(
+                                    controller: controller,
+                                    toggles: _toggles,
+                                    activeParam: _activeParam,
+                                    onEditParam: _editParam,
+                                    onTogglesChanged: _updateToggles,
+                                    onTakeoverRequest: _confirmTakeover,
+                                    maxHeight: panelMaxHeight,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          if (_openPanel == _OpenPanel.focus)
+                            Positioned(
+                              bottom: 8,
+                              left: 12,
+                              right: 12,
+                              child: Center(
+                                child: CaptureFocusPanel(
                                   controller: controller,
                                   toggles: _toggles,
                                   onTogglesChanged: _updateToggles,
-                                  onTakeoverRequest: _confirmTakeover),
+                                ),
+                              ),
                             ),
                         ],
                       ),
@@ -336,7 +405,8 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                   ),
                 ),
               ),
-              // 纯净监看恢复钮:chrome 全隐后唯一入口(监看叠层/横幅仍在)。
+              // 纯净监看恢复钮:chrome 全隐后唯一入口(监看叠层/横幅仍在),
+              // 与胶囊行尾隐藏钮同位(右上角)。
               if (_chromeHidden)
                 Positioned(
                   top: 8,
@@ -350,7 +420,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
             ],
           ),
         ),
-        // 底部三行:参数读出 → 紧凑动作 → 快门行;同受纯净监看淡出
+        // 底部三行:参数读出 → 模式条 → 控制行;同受纯净监看淡出
         // 支配(高度保留不跳版,画面区不重排)。
         IgnorePointer(
           key: const ValueKey('portrait-chrome-bottom'),
@@ -367,11 +437,23 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                       controller: controller,
                       activeParam: _activeParam,
                       onEditParam: _editParam),
-                  CaptureActionBar(controller: controller),
-                  CaptureShutterRow(
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4, bottom: 2),
+                    child: Center(
+                      child: CaptureModeStrip(
+                        mode: _mode,
+                        enabled: !controller.recording,
+                        onModeChanged: _setMode,
+                      ),
+                    ),
+                  ),
+                  CaptureControlRow(
                     controller: controller,
+                    mode: _mode,
                     onOpenAlbum: _openAlbum,
-                    onHideChrome: _hideChrome,
+                    onOpenFocus: () => _togglePanel(_OpenPanel.focus),
+                    onOpenSettings: () => _togglePanel(_OpenPanel.settings),
+                    onToggleOrientation: _cycleOrientationLock,
                   ),
                 ],
               ),
@@ -382,7 +464,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     );
   }
 
-  /// 相册缩略图钮(快门行左)→ 相机相册(手机相机语言 —— 拍完即看;
+  /// 相册缩略图钮(控制行左)→ 相机相册(手机相机语言 —— 拍完即看;
   /// 同相机页「相册」入口)。相册页期间本页在路由栈下保持挂载,帧
   /// 轮询照旧(PtpSession 串行锁排队,不与缩略图请求抢总线)。
   void _openAlbum() {
@@ -397,27 +479,32 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     );
   }
 
-  /// 纯净监看(竖横屏共用,悬底快门行右钮):隐去全部控制浮层,同步
-  /// 收起辅助浮层(不留一个看不见却开着的面板态)。
+  /// 纯净监看(竖横屏共用):隐去全部控制浮层,同步收起对焦/设置
+  /// 浮层(不留一个看不见却开着的面板态)。恢复钮在右上角同位。
   void _hideChrome() {
     setState(() {
       _chromeHidden = true;
-      _assistPanelOpen = false;
+      _openPanel = _OpenPanel.none;
     });
   }
 
   /// 横屏监看(2026-10-08 用户定案「拍照按钮在右侧中间」):全幅取景
-  /// 打底,顶栏一条(信息胶囊 + tune 钮)、左参数栏;**快门柱纵向居右**
-  /// (相册缩略图 / 大圆环快门 / 纯净监看 —— 竖屏快门行旋转 90° 的
-  /// 同组三件,锚右缘中点);动作行贴底(取景/对焦/录制/MF,同竖屏
-  /// 一行)。辅助开关收进顶栏 tune 按钮的非模态浮层。chrome 整体
-  /// (顶栏 + 参数栏 + 快门柱 + 动作行 + 浮层)经 IgnorePointer +
+  /// 打底,顶栏一条(信息胶囊 + 纯净监看钮)、左参数栏;**快门柱纵向
+  /// 居右**(相册缩略图 / 对焦 / 大圆环快门 64 / 设置,锚右缘中点);
+  /// 贴底条 = 模式条(居中)+ 方向旋转(右端)。对焦/设置浮层让位
+  /// 快门柱(right: 98 = 10 边距 + 78 柱宽 + 10 间隙)。chrome 整体
+  /// (顶栏 + 参数栏 + 快门柱 + 贴底条 + 浮层)经 IgnorePointer +
   /// AnimatedOpacity 支持纯净监看淡出。
   ///
   /// 监听拆两层:feed 区照旧 merge(controller+frame+status)逐帧刷;
   /// chrome 层只听 controller —— 帧到达只写 ValueNotifier 不
-  /// notifyListeners,参数栏/快门柱/动作行不必逐帧重建。
+  /// notifyListeners,参数栏/快门柱/贴底条不必逐帧重建。
   Widget _landscapeBody(BuildContext context) {
+    final panelMaxHeight = MediaQuery.sizeOf(context).height -
+        kLandscapeTopInset -
+        8 -
+        kLandscapeBottomInset -
+        8;
     return Stack(
       fit: StackFit.expand,
       children: [
@@ -456,8 +543,8 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                 animation: controller,
                 builder: (context, _) => Stack(
                   children: [
-                    // 顶栏:信息胶囊收缩包内容(中部透出画面)+ tune 钮
-                    // 撑到右端(辅助浮层入口;纯净监看移至悬底快门行)。
+                    // 顶栏:信息胶囊收缩包内容(中部透出画面)+ 纯净
+                    // 监看钮撑到右端(隐藏后恢复钮在同位)。
                     Positioned(
                       top: 8,
                       left: 10,
@@ -468,18 +555,15 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                           Flexible(
                             child: RemoteInfoPill(
                               controller: controller,
-                              onToggleOrientation: _cycleOrientationLock,
                               margin: EdgeInsets.zero,
                               compact: true,
                             ),
                           ),
                           const Spacer(),
                           ChromeIconButton(
-                            icon: Icons.tune,
-                            tooltip: '监看辅助(网格/斑马纹/直方图/水平仪…)',
-                            selected: _assistPanelOpen,
-                            onTap: () => setState(
-                                () => _assistPanelOpen = !_assistPanelOpen),
+                            icon: Icons.visibility_off,
+                            tooltip: '纯净监看(隐藏全部控制,只留画面)',
+                            onTap: _hideChrome,
                           ),
                         ],
                       ),
@@ -495,9 +579,9 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                           activeParam: _activeParam,
                           onEditParam: _editParam),
                     ),
-                    // 快门柱纵向居右(2026-10-08 用户定案「拍照按钮在
-                    // 右侧中间」):缩略图/快门/纯净监看竖排,锚右缘
-                    // 纵向中点(顶栏下沿与底部动作行之间取中)。
+                    // 快门柱纵向居右(2026-10-10 四件化):缩略图/对焦/
+                    // 快门(64)/设置竖排,锚右缘纵向中点(顶栏下沿与
+                    // 贴底条之间取中)。
                     Positioned(
                       top: kLandscapeTopInset + 8,
                       bottom: kLandscapeBottomInset,
@@ -506,33 +590,69 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                       child: Center(
                         child: CaptureShutterColumn(
                           controller: controller,
+                          mode: _mode,
                           onOpenAlbum: _openAlbum,
-                          onHideChrome: _hideChrome,
+                          onOpenFocus: () => _togglePanel(_OpenPanel.focus),
+                          onOpenSettings: () =>
+                              _togglePanel(_OpenPanel.settings),
                         ),
                       ),
                     ),
-                    // 动作行贴底(同竖屏一行:取景/对焦/录制/MF 平铺;
-                    // 贴底叠层已让位 bottomInset)。
+                    // 贴底条:模式条居中 + 方向旋转右端(贴底叠层已让位
+                    // bottomInset)。
                     Positioned(
                       left: 0,
                       right: 0,
                       bottom: 0,
                       child: Padding(
-                        padding: const EdgeInsets.only(bottom: 6),
-                        child: CaptureActionBar(controller: controller),
+                        padding: const EdgeInsets.only(
+                            left: 10, right: 10, bottom: 6),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Center(
+                                child: CaptureModeStrip(
+                                  mode: _mode,
+                                  enabled: !controller.recording,
+                                  onModeChanged: _setMode,
+                                ),
+                              ),
+                            ),
+                            // 方向钮不包 Tooltip(长按抬起须等同点按,
+                            // 见 CaptureCircleButton 类注)
+                            CaptureCircleButton(
+                              icon: Icons.screen_rotation,
+                              onTap: _cycleOrientationLock,
+                            ),
+                          ],
+                        ),
                       ),
                     ),
-                    // 辅助浮层:锚在 tune 钮下方、让位右缘快门柱。
-                    if (_assistPanelOpen)
+                    // 对焦/设置浮层:让位右缘快门柱。
+                    if (_openPanel == _OpenPanel.settings)
                       Positioned(
                         top: kLandscapeTopInset + 8,
                         right: 98,
-                        width: kAssistPanelWidth,
-                        child: RemoteAssistPanel(
-                            controller: controller,
-                            toggles: _toggles,
-                            onTogglesChanged: _updateToggles,
-                            onTakeoverRequest: _confirmTakeover),
+                        width: kCapturePanelWidth,
+                        child: CaptureSettingsPanel(
+                          controller: controller,
+                          toggles: _toggles,
+                          activeParam: _activeParam,
+                          onEditParam: _editParam,
+                          onTogglesChanged: _updateToggles,
+                          onTakeoverRequest: _confirmTakeover,
+                          maxHeight: panelMaxHeight,
+                        ),
+                      ),
+                    if (_openPanel == _OpenPanel.focus)
+                      Positioned(
+                        top: kLandscapeTopInset + 8,
+                        right: 98,
+                        child: CaptureFocusPanel(
+                          controller: controller,
+                          toggles: _toggles,
+                          onTogglesChanged: _updateToggles,
+                        ),
                       ),
                   ],
                 ),
@@ -540,7 +660,8 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
             ),
           ),
         ),
-        // 纯净监看恢复钮:chrome 全隐后唯一入口(监看叠层/横幅仍在)。
+        // 纯净监看恢复钮:chrome 全隐后唯一入口(监看叠层/横幅仍在),
+        // 与顶栏右端隐藏钮同位(右上角)。
         if (_chromeHidden)
           Positioned(
             top: 8,
@@ -599,20 +720,22 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
 
   /// 点按 → 触控对焦:取景区已把屏幕点逆映射为**归一化图像坐标**
   /// (缩放/旋转/变宽一次收口,见 FeedTransform.screenToNorm;null = 无
-  /// 画面)。横屏辅助浮层开着时,点画面顺带收起浮层(画面本身即「外
-  /// 点」—— 不用 TapRegion:它在外点 down 时关面板,锚按钮的 tap 在
-  /// up 时又重开,两者打架)。
+  /// 画面)。对焦/设置浮层开着时,点画面顺带收起浮层(画面本身即
+  /// 「外点」—— 不用 TapRegion:它在外点 down 时关面板,锚按钮的 tap
+  /// 在 up 时又重开,两者打架)。
   void _handleTapFocus(TapUpDetails d, Offset? norm) {
-    if (_assistPanelOpen) setState(() => _assistPanelOpen = false);
+    if (_openPanel != _OpenPanel.none) {
+      setState(() => _openPanel = _OpenPanel.none);
+    }
     if (norm == null) return;
     unawaited(controller.touchFocus(norm.dx, norm.dy));
   }
 
   // ── 参数面板入口与接管确认 ─────────────────────────────────────
 
-  /// 参数编辑入口(读出条 tile / 左参数栏 tile):打开即弹面板;拨盘
-  /// 拥有参数的接管确认**在面板头**(双层跳合一,见 showParamEditSheet)。
-  /// 面板期 tile 金框([_activeParam])。
+  /// 参数编辑入口(读出条 tile / 左参数栏 tile / 设置浮层 tile):打开
+  /// 即弹面板;拨盘拥有参数的接管确认**在面板头**(双层跳合一,见
+  /// showParamEditSheet)。面板期 tile 金框([_activeParam])。
   Future<void> _editParam(BuildContext context, ShootingParam p) async {
     setState(() => _activeParam = p.code);
     try {
