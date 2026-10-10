@@ -170,7 +170,29 @@ img.ExifData? readJpegExif(Uint8List jpeg) {
   return null;
 }
 
+/// 文件头统一解析 EXIF 摘要:JPG(FFD8 → APP1)与 NEF/TIFF(II/MM
+/// 开头,文件头即 IFD0)同路;非两者 / 无 EXIF / 解析失败回 null。
+/// 查看器信息栏用(头读 ≤64KB,不整档下载;NEF 与 JPG 头部结构
+/// 同源,APP1 段本就是一段裸 TIFF)。
+ExifCardData? exifCardFromHead(Uint8List head) {
+  if (head.length < 8) return null;
+  img.ExifData? exif;
+  if (head[0] == 0xFF && head[1] == 0xD8) {
+    exif = readJpegExif(head);
+  } else if ((head[0] == 0x49 && head[1] == 0x49) ||
+      (head[0] == 0x4D && head[1] == 0x4D)) {
+    try {
+      exif = img.ExifData.fromInputBuffer(img.InputBuffer(head));
+    } on Exception {
+      return null;
+    }
+  }
+  if (exif == null) return null;
+  return exifCardDataOf(exif);
+}
+
 /// EXIF → 卡片摘要;畸形数据(缺 IFD 等)按缺项处理,不抛。
+/// 无 Exif 子表的头(如只有 Make/Model 的裁剪档)也保留 IFD0 字段。
 ExifCardData exifCardDataOf(img.ExifData exif) {
   try {
     final ifd0 = exif.imageIfd;

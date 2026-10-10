@@ -33,6 +33,7 @@ import 'package:flutter/foundation.dart';
 import '../../platform/gallery_saver.dart';
 import '../../platform/raw_decoder.dart';
 import '../media/jpeg_orientation.dart';
+import '../media/watermark.dart' show ExifCardData, exifCardFromHead;
 import '../ptpip/object_format.dart' show ObjectKind;
 import '../ptp/ptp_session.dart';
 import '../transfer/object_downloader.dart';
@@ -90,6 +91,11 @@ class ThumbnailCache {
   /// 原文件 EXIF 方向(内容键 → 1-8;0 = 未知/无转正含义)。取一次
   /// 2KB 头读(见 [_orientThumb]),网格缩略与预览两档共用。
   final Map<String, Future<int>> _orientationOf = {};
+
+  /// 原文件 EXIF 摘要(内容键 → 卡;null = 无 EXIF)。64KB 头读一次
+  /// (IFD0/ExifIFD/LensModel 全在前段,Zf 实测),查看器信息栏用;
+  /// 协议层失败不驻留(下次点开重试)。
+  final Map<String, Future<ExifCardData?>> _exifCards = {};
 
   /// 高清席位升级事件总线([previewUpgrades] 的源)。
   final StreamController<PreviewUpgrade> _upgradeCtrl =
@@ -199,6 +205,37 @@ class ThumbnailCache {
     final fetch = _fetch(entry, source, key);
     _pending[pendingKey] = fetch;
     return fetch.whenComplete(() => _pending.remove(pendingKey));
+  }
+
+  /// 取 [entry] 原文件的 EXIF 摘要(查看器信息栏):64KB→16KB 头读
+  /// 阶梯 → [exifCardFromHead](JPG APP1 / NEF TIFF 头同路)。视频无
+  /// EXIF 语义直接 null;协议失败(旧机身拒 0x101B/链路忙)不缓存,
+  /// 下次点开重试;解析出的卡(含「确无 EXIF」的 null)按内容键驻留
+  /// 本会话,翻回不再拉。
+  Future<ExifCardData?> exifCardOf(ObjectEntry entry) {
+    if (entry.kind == ObjectKind.video) return Future.value(null);
+    final key = _keyFor(entry);
+    return _exifCards.putIfAbsent(key, () async {
+      Uint8List? head;
+      for (final size in const [64 * 1024, 16 * 1024]) {
+        try {
+          final chunk = await _session.getPartialObject(entry.handle, 0, size);
+          if (chunk.isNotEmpty) {
+            head = chunk;
+            break;
+          }
+        } on Exception {
+          // 该档失败:试下一档(镜头卡 _readLens 同款阶梯)
+        }
+      }
+      if (head == null) {
+        // 协议失败不驻留:下次点开重试(remove 掉的是本在途 future,
+        // 并发共享者已各自持有,不受影响)。
+        unawaited(_exifCards.remove(key));
+        return null;
+      }
+      return exifCardFromHead(head);
+    });
   }
 
   /// 断连时清内存索引;缓存键是内容键(文件名+大小),跨会话稳定,

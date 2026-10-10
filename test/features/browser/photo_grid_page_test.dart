@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:nikon_pill/core/browser/album.dart';
 import 'package:nikon_pill/core/browser/object_entry.dart';
+import 'package:nikon_pill/core/media/watermark.dart' show ExifCardData;
 import 'package:nikon_pill/core/browser/object_repository.dart';
 import 'package:nikon_pill/core/browser/photo_group.dart';
 import 'package:nikon_pill/core/browser/thumbnail_cache.dart';
@@ -92,6 +93,9 @@ final class _FakeThumbs implements ThumbnailCache {
   @override
   Future<String> pathFor(ObjectEntry entry, ThumbSource source) async =>
       '/tmp/nikonpill_test_thumb_${entry.handle}.jpg';
+
+  @override
+  Future<ExifCardData?> exifCardOf(ObjectEntry entry) async => null;
 
   @override
   void reset() {}

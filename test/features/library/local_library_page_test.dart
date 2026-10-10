@@ -9,6 +9,7 @@ import 'package:nikon_pill/core/browser/object_entry.dart';
 import 'package:nikon_pill/core/ptpip/object_format.dart';
 import 'package:nikon_pill/core/transfer/transfer_engine.dart';
 import 'package:nikon_pill/core/transfer/transfer_task.dart';
+import 'package:nikon_pill/core/utils/byte_writer.dart';
 import 'package:nikon_pill/features/library/local_library_page.dart';
 import 'package:nikon_pill/features/transfers/transfers_page.dart';
 import 'package:nikon_pill/platform/gallery_saver.dart';
@@ -186,6 +187,49 @@ final class _FakeEngine implements TransferEngine {
   Future<void> clearHistory() async {}
 }
 
+/// 带 EXIF 的「JPG」字节(SOI + APP1 Exif + EOI,无图像数据):IFD0
+/// Make/Model + Exif 子表 光圈/快门/ISO/焦距,无 takenAt(时间行走
+/// mtime 兜底的用例语义)。布局:头 8 + IFD0 42(8..49,3 条目)+
+/// Exif 54(50..103)+ 数据区(104..)。Make/Model 用真实长度(>4B)
+/// —— EXIF 规则:值 ≤4 字节内联存储,短串会踩中内联路径测不到偏移。
+Uint8List _jpgExifBytes() {
+  const ascii = 2, short = 3, long = 4, rational = 5;
+  const makeOff = 104, modelOff = 122, fNumOff = 131, expOff = 139,
+      focalOff = 147;
+  final w = ByteWriter()
+    ..u16(0x4949)
+    ..u16(42)
+    ..u32(8)
+    // IFD0:Make / Model / Exif 指针(count 含结尾 NUL:17 字符 → 18)
+    ..u16(3)
+    ..u16(0x010F)..u16(ascii)..u32(18)..u32(makeOff)
+    ..u16(0x0110)..u16(ascii)..u32(9)..u32(modelOff)
+    ..u16(0x8769)..u16(long)..u32(1)..u32(50)
+    ..u32(0)
+    // Exif 子表:光圈 / 快门 / ISO / 焦距
+    ..u16(4)
+    ..u16(0x829D)..u16(rational)..u32(1)..u32(fNumOff)
+    ..u16(0x829A)..u16(rational)..u32(1)..u32(expOff)
+    ..u16(0x8827)..u16(short)..u32(1)..u16(100)..u16(0)
+    ..u16(0x920A)..u16(rational)..u32(1)..u32(focalOff)
+    ..u32(0)
+    // 数据区
+    ..raw('NIKON CORPORATION'.codeUnits)..u8(0)
+    ..raw('NIKON Zf'.codeUnits)..u8(0)
+    ..u32(2)..u32(1) // ƒ/2
+    ..u32(1)..u32(250) // 1/250s
+    ..u32(40)..u32(1); // 40mm
+  final payload = w.takeBytes();
+  final segLen = 2 + 6 + payload.length;
+  return Uint8List.fromList([
+    0xFF, 0xD8, //
+    0xFF, 0xE1, (segLen >> 8) & 0xFF, segLen & 0xFF, //
+    ...'Exif'.codeUnits, 0, 0, //
+    ...payload, //
+    0xFF, 0xD9, //
+  ]);
+}
+
 void main() {
   late Directory dir;
 
@@ -343,6 +387,53 @@ void main() {
     // 冲掉 snackbar 的自动消失 timer(不能留 pending 到测试末)
     await tester.pump(const Duration(seconds: 5));
     await tester.pumpAndSettle();
+  });
+
+  testWidgets('信息底单:本地 JPG 头读 EXIF(机身/参数/兜底时间),'
+      'MOV 只走文件级信息', (tester) async {
+    // 带 EXIF 的「JPG」(SOI+APP1+EOI,无图像数据:网格解码走占位,
+    // 头读只认头部)。无 takenAt → 时间行回落文件 mtime(「时间」非
+    // 「拍摄时间」)。
+    File('${dir.path}/exif.jpg').writeAsBytesSync(_jpgExifBytes());
+    writeFile('v.mov', modified: DateTime(2026, 10, 4));
+    final gallery = _FakeGallery(dir);
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    await tester.pumpWidget(host(gallery, controller));
+    await tester.pumpAndSettle();
+
+    // JPG 页(修改时间倒序,exif.jpg 最新在前)
+    await tester.tap(find.byType(Image).first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('照片信息'));
+    await tester.pumpAndSettle();
+    Finder inSheet(String text) => find.descendant(
+        of: find.byType(BottomSheet), matching: find.text(text));
+    expect(inSheet('exif.jpg'), findsOneWidget);
+    expect(inSheet('NIKON Zf'), findsOneWidget, reason: '机身(titleLine)');
+    expect(inSheet('40mm ƒ/2 · 1/250s · ISO 100'), findsOneWidget);
+    expect(find.descendant(
+        of: find.byType(BottomSheet), matching: find.text('拍摄时间')),
+        findsNothing, reason: 'EXIF 无时间 → 不出「拍摄时间」行');
+
+    await tester.tapAt(const Offset(10, 10)); // 关底单
+    await tester.pumpAndSettle();
+
+    // 翻到视频页:文件级信息在场,EXIF 段不出(负 x = 下一页)
+    await tester.fling(find.byType(PageView), const Offset(-400, 0), 1000);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('照片信息'));
+    await tester.pumpAndSettle();
+    expect(inSheet('v.mov'), findsOneWidget);
+    expect(find.descendant(
+        of: find.byType(BottomSheet), matching: find.text('机身')),
+        findsNothing);
+    expect(
+        find.descendant(
+            of: find.byType(BottomSheet),
+            matching: find.textContaining('2026-10-04')),
+        findsOneWidget,
+        reason: '时间行(mtime 兜底)');
   });
 
   testWidgets('长按删除:确认对话框把关,删后网格收缩', (tester) async {
