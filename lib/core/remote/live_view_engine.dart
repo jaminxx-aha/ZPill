@@ -13,6 +13,14 @@
 /// 取帧挤占串行锁)与拍摄页不可见时(RemoteController.setViewerVisible,
 /// 取景生命周期跟连接走,页面离台只停轮询不发 0x9202)。末帧保留
 /// (pause 不闪黑,failed 后回到页面仍见最后画面)。
+///
+/// **帧签名看门狗**(2026-10-10,见 [LiveViewWatchdog]):只管「事务
+/// 成功但内容冻结」(楔死机身持续回放同一张缓存 JPEG)—— 同帧重放
+/// 超时 → 探测命令通道(0x90C8):忙(写卡/下载 flush)→ BUSY 保持
+/// 不重启(重启会把机身菜单摔回拍摄屏),有界窗口;不忙 → 重启取景
+/// (EndLiveView + 自愈梯);预算耗尽 → [onEscalateToLinkRecovery]
+/// 升级整链重连(连接层接管)。「链路静默/坏帧连击」仍由本引擎既有
+/// 失败退避(连续 5 帧失败转 failed)覆盖,不重复实现。
 library;
 
 import 'dart:async';
@@ -22,22 +30,43 @@ import 'package:flutter/foundation.dart';
 import '../ptp/operation_codes.dart';
 import '../ptp/ptp_session.dart';
 import 'live_view_header.dart';
+import 'live_view_watchdog.dart';
 
 enum LiveViewStatus { idle, running, failed }
+
+/// 取景流健康度(看门狗产物,UI 横幅用):ok = 正常;busy = 机身忙
+/// (写卡/下载 flush 中),画面保持不重启;frozen = 冻结判死重启中。
+enum LiveViewHealth { ok, busy, frozen }
 
 final class LiveViewEngine {
   LiveViewEngine({
     required this.session,
     this.interval = const Duration(milliseconds: 200),
+    LiveViewWatchdog? watchdog,
+    this.onEscalateToLinkRecovery,
     Future<void> Function(Duration)? delay,
-  }) : _delay = delay ?? Future<void>.delayed;
+    DateTime Function()? clock,
+  })  : _watchdog = watchdog ?? LiveViewWatchdog(),
+        _delay = delay ?? Future<void>.delayed,
+        _now = clock ?? (() => DateTime.now());
 
   final PtpSession session;
 
   /// 轮询基础间隔(失败退避从它翻倍)。
   final Duration interval;
 
+  /// 帧签名看门狗:事务成功但内容冻结的检测与分级(纯值类,阈值全
+  /// verify-on-HW;测试注入小窗)。
+  final LiveViewWatchdog _watchdog;
+
+  /// 看门狗重启预算耗尽时的升级回调(AppServices 装配 →
+  /// CameraConnectionImpl.requestRecovery,整链重连由连接层接管)。
+  final void Function()? onEscalateToLinkRecovery;
+
   final Future<void> Function(Duration) _delay;
+
+  /// 看门狗喂入的时钟(测试注入合成时钟;生产墙钟)。
+  final DateTime Function() _now;
 
   /// 最近一帧(JPEG 字节,SOI 起);null = 尚未收到/从未开启。
   final frame = ValueNotifier<Uint8List?>(null);
@@ -47,6 +76,9 @@ final class LiveViewEngine {
   final header = ValueNotifier<LiveViewHeader?>(null);
 
   final status = ValueNotifier<LiveViewStatus>(LiveViewStatus.idle);
+
+  /// 取景流健康度(帧签名看门狗驱动;UI 横幅「相机忙/画面保持」等)。
+  final health = ValueNotifier<LiveViewHealth>(LiveViewHealth.ok);
 
   /// 转 failed 时的最后错误(展示用)。
   String? lastError;
@@ -58,6 +90,11 @@ final class LiveViewEngine {
   /// start/stop 轮换世代:旧循环的迟到迭代不得触碰新状态。
   int _runId = 0;
   bool _paused = false;
+
+  /// 看门狗处置在途(探测/重启):取帧循环挂起 tick 等待(仿 _paused),
+  /// 不与新事务抢串行锁。
+  bool _recovering = false;
+
   int _failures = 0;
 
   /// 取景是否已向相机开启(EndLiveView 只在开启过才发 —— 断连兜底的
@@ -71,7 +108,10 @@ final class LiveViewEngine {
     if (status.value == LiveViewStatus.running) return;
     _failures = 0;
     _paused = false;
+    _recovering = false;
     lastError = null;
+    health.value = LiveViewHealth.ok;
+    _watchdog.reset();
     try {
       await _startLiveViewHealing();
     } on Exception catch (e) {
@@ -162,6 +202,9 @@ final class LiveViewEngine {
   Future<void> stop() async {
     _runId++;
     _paused = false;
+    _recovering = false;
+    _watchdog.reset();
+    health.value = LiveViewHealth.ok;
     if (status.value != LiveViewStatus.failed) {
       status.value = LiveViewStatus.idle;
     }
@@ -181,16 +224,28 @@ final class LiveViewEngine {
 
   Future<void> _loop(int run) async {
     while (status.value == LiveViewStatus.running && run == _runId) {
-      if (_paused) {
+      if (_paused || _recovering) {
         await _delay(_pausedTick);
         continue;
       }
       try {
         final raw = await session.getLiveViewObject();
         if (run != _runId) return; // 停止后的迟到结果不发布
+        final jpeg = extractLiveViewJpeg(raw);
         header.value = parseLiveViewHeader(raw);
-        frame.value = extractLiveViewJpeg(raw);
+        frame.value = jpeg;
         _failures = 0;
+        // 冻结检测(事务成功但内容冻结;静默/坏帧由下方退避覆盖):
+        // 处置器入口同步置 _recovering,本循环下一拍起挂起取帧。
+        final signal = _watchdog.inspect(jpeg, _now());
+        if (signal != null) {
+          unawaited(_handleWatchdogSignal(run, signal));
+        } else if (health.value != LiveViewHealth.ok &&
+            !_watchdog.frozen(_now())) {
+          // BUSY 保持的自我恢复:新内容到达、冻结解除 —— 横幅撤下
+          //(看门狗新签名即清零,无信号可发,由宿主就地收口)。
+          health.value = LiveViewHealth.ok;
+        }
         await _delay(interval);
       } on Object catch (e) {
         if (run != _runId) return;
@@ -204,6 +259,81 @@ final class LiveViewEngine {
         await _delay(_backoff());
       }
     }
+  }
+
+  /// 看门狗信号处置(世代门:每步查 run == _runId,stop/升级即废)。
+  /// 处置全程挂起取帧(_recovering),完成后恢复;health 随阶段更新。
+  Future<void> _handleWatchdogSignal(
+      int run, LiveViewWatchdogSignal signal) async {
+    _recovering = true;
+    try {
+      switch (signal) {
+        case LiveViewWatchdogSignal.probe:
+          bool busy;
+          try {
+            busy = !(await session.deviceReady());
+          } on Object {
+            // 命令通道异常:按不忙走重启(重启失败自然转 failed 路径)。
+            busy = false;
+          }
+          if (run != _runId) return;
+          if (_watchdog.noteProbeResult(busy: busy, now: _now()) ==
+              LiveViewWatchdogSignal.busyHold) {
+            // 机身忙(写卡/下载 flush):保持不重启,取帧照旧等自我恢复
+            //(重启会把机身菜单摔回拍摄屏);有界窗口由看门狗把守。
+            health.value = LiveViewHealth.busy;
+            return;
+          }
+          await _restartLiveViewOrGiveUp(run);
+        case LiveViewWatchdogSignal.restart:
+        case LiveViewWatchdogSignal.busyHoldExpired:
+          await _restartLiveViewOrGiveUp(run);
+        case LiveViewWatchdogSignal.busyHold:
+          // 不会从 inspect 到达(仅 noteProbeResult 返回,已在上面内联
+          // 处理);防御空处理。
+          break;
+      }
+    } finally {
+      _recovering = false;
+    }
+  }
+
+  /// 冻结判死后的处置:预算耗尽 → 升级整链重连(不再重启取景,防无限
+  /// 重启风暴);否则 EndLiveView(尽力)→ 自愈梯重启 → 记账 + health
+  /// 回 ok。自愈梯抛错 → 既有 failed 路径(lastError 带梯)。
+  Future<void> _restartLiveViewOrGiveUp(int run) async {
+    if (_watchdog.restartBudgetExhausted) {
+      // 废本循环(不发 0x9202 —— 拆链是连接层的事)、回 idle 待重连
+      // 成功后由 autoLiveViewOnConnect 重新起景;升级回调最后发。
+      _watchdog.reset();
+      _runId++;
+      status.value = LiveViewStatus.idle;
+      health.value = LiveViewHealth.ok;
+      onEscalateToLinkRecovery?.call();
+      return;
+    }
+    health.value = LiveViewHealth.frozen;
+    try {
+      await session.endLiveView();
+    } on Object {
+      // 尽力而为:楔死机身的 0x9202 可能被拒/链路异常,重启序列照走
+    }
+    try {
+      await _startLiveViewHealing();
+    } on Exception catch (e) {
+      if (run != _runId) return;
+      final ladder = session.connectLadder.join(' ');
+      lastError = ladder.isEmpty
+          ? '取景流冻结,重启失败:$e'
+          : '取景流冻结,重启失败:$e〔梯:$ladder〕';
+      status.value = LiveViewStatus.failed;
+      _runId++;
+      return;
+    }
+    if (run != _runId) return;
+    _watchdog.noteRestarted(_now());
+    _failures = 0;
+    health.value = LiveViewHealth.ok;
   }
 
   Duration _backoff() {

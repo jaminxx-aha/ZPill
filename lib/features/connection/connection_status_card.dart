@@ -42,7 +42,8 @@ class ConnectionStatusCard extends StatelessWidget {
     final busy = switch (state) {
       CameraLinkState.detecting ||
       CameraLinkState.connecting ||
-      CameraLinkState.pairing => true,
+      CameraLinkState.pairing ||
+      CameraLinkState.reconnecting => true,
       _ => false,
     };
     final (label, color) = switch (state) {
@@ -53,6 +54,7 @@ class ConnectionStatusCard extends StatelessWidget {
       CameraLinkState.connecting => ('连接中…', scheme.primary),
       CameraLinkState.pairing => ('等待配对确认…', scheme.secondary),
       CameraLinkState.connected => ('已连接', AppColors.success(context)),
+      CameraLinkState.reconnecting => ('正在重连…', scheme.secondary),
       CameraLinkState.failed => ('连接失败', scheme.error),
     };
     return Card(

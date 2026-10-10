@@ -10,6 +10,7 @@ import 'package:nikon_pill/core/ptp/ptp_session.dart';
 import 'package:nikon_pill/core/ptp/ptp_transport.dart';
 import 'package:nikon_pill/core/remote/live_view_engine.dart';
 import 'package:nikon_pill/core/remote/live_view_header.dart';
+import 'package:nikon_pill/core/remote/live_view_watchdog.dart';
 
 /// 按序回放的假传输层(与 ptp_session_test 同构,精简版)。
 final class _ScriptTransport implements PtpTransport {
@@ -61,6 +62,13 @@ final class _GatedDelay {
   }
 
   void release() => _gates.removeFirst().complete();
+}
+
+/// 合成时钟:引擎喂看门狗用(阈值 4s 是生产默认,重放帧前推进 5s)。
+final class _TestClock {
+  DateTime value = DateTime(2026, 10, 10, 12);
+  DateTime call() => value;
+  void advance(Duration d) => value = value.add(d);
 }
 
 Uint8List _frame(int marker) =>
@@ -434,5 +442,252 @@ void main() {
             .params,
         [0],
         reason: '进过 remote 必配对退出:失败路径也要还机身自由');
+  });
+
+  group('帧签名看门狗(冻结检测,2026-10-10)', () {
+    LiveViewEngine wireEngine(
+      _ScriptTransport transport,
+      _GatedDelay delay,
+      _TestClock clock, {
+      int maxRestarts = 3,
+      void Function()? onEscalate,
+    }) =>
+        LiveViewEngine(
+          session: PtpSession(transport: transport),
+          watchdog: LiveViewWatchdog(maxRestarts: maxRestarts),
+          delay: delay.call,
+          clock: clock.call,
+          onEscalateToLinkRecovery: onEscalate,
+        );
+
+    test('同帧重放 >4s → 探测忙(0x2019)→ BUSY 保持:health=busy 不发 0x9202,'
+        '新帧到达自我恢复 → health 回 ok', () async {
+      final transport = _ScriptTransport()
+        ..ok() // 0x9201
+        ..ok(data: _frame(1)) // 取帧 1:新签名
+        ..ok(data: _frame(1)) // 取帧 2:同签名重放 5s → 探测
+        ..reject(PtpResponseCode.deviceBusy) // 0x90C8 → 忙(false)
+        ..ok(data: _frame(2)); // 取帧 3:真新内容 → 横幅撤下
+      final delay = _GatedDelay();
+      final clock = _TestClock();
+      final engine = wireEngine(transport, delay, clock);
+
+      await engine.start();
+      await pumpEventQueue(); // 取帧 1 发布,挂在 interval 门 1
+      expect(engine.health.value, LiveViewHealth.ok);
+
+      clock.advance(const Duration(seconds: 5)); // 重放 > 4s 判冻结
+      delay.release(); // → 取帧 2(重放)→ 探测在途,循环挂 interval 门 2
+      await pumpEventQueue();
+
+      expect(engine.health.value, LiveViewHealth.busy,
+          reason: '机身忙(写卡/下载 flush):保持不重启');
+      expect(
+          transport.requests
+              .where((r) => r.opcode == NikonOperationCode.endLiveView),
+          isEmpty,
+          reason: 'BUSY 保持不发 0x9202(重启会把机身菜单摔回拍摄屏)');
+      expect(transport.requests.last.opcode, NikonOperationCode.deviceReady);
+
+      clock.advance(const Duration(milliseconds: 100));
+      delay.release(); // → 取帧 3(新内容):冻结解除,横幅撤下
+      await pumpEventQueue();
+      expect(engine.health.value, LiveViewHealth.ok);
+      expect(engine.frame.value![2], 2);
+      expect(engine.status.value, LiveViewStatus.running);
+      expect(transport.liveViewFetches, 3);
+    });
+
+    test('探测不忙 → 重启取景:0x9202(尽力)+ 自愈梯 0x9201 → 记账、'
+        'health 回 ok、取帧续跑', () async {
+      final transport = _ScriptTransport()
+        ..ok() // 0x9201(初始)
+        ..ok(data: _frame(1)) // 取帧 1
+        ..ok(data: _frame(1)) // 取帧 2:重放 → 探测
+        ..ok() // 0x90C8 → 不忙(true)
+        ..ok() // 0x9202 EndLiveView(尽力)
+        ..ok() // 0x9201 重启(自愈梯直过)
+        ..ok(data: _frame(2)); // 取帧 3:重启后的新帧
+      final delay = _GatedDelay();
+      final clock = _TestClock();
+      final engine = wireEngine(transport, delay, clock);
+
+      await engine.start();
+      await pumpEventQueue(); // 取帧 1,interval 门 1
+      clock.advance(const Duration(seconds: 5));
+      delay.release(); // → 取帧 2(重放)→ 探测 → 重启序列,interval 门 2
+      await pumpEventQueue(); // 处置器(探测/重启)全在门上完成
+
+      expect(engine.health.value, LiveViewHealth.ok, reason: '重启成功回 ok');
+      expect(engine.status.value, LiveViewStatus.running);
+      expect(transport.requests.map((r) => r.opcode), [
+        NikonOperationCode.startLiveView,
+        NikonOperationCode.getLiveViewImageEx,
+        NikonOperationCode.getLiveViewImageEx,
+        NikonOperationCode.deviceReady,
+        NikonOperationCode.endLiveView,
+        NikonOperationCode.startLiveView,
+      ], reason: '重启 = EndLiveView + 自愈梯 StartLiveView');
+
+      clock.advance(const Duration(milliseconds: 100));
+      delay.release(); // → 取帧 3:重启后取景续跑
+      await pumpEventQueue();
+      expect(engine.frame.value![2], 2);
+      expect(transport.liveViewFetches, 3);
+    });
+
+    test('探测异常(链路类)→ 按不忙走重启,不让异常吞掉冻结判决', () async {
+      final transport = _ScriptTransport()
+        ..ok() // 0x9201(初始)
+        ..ok(data: _frame(1)) // 取帧 1
+        ..ok(data: _frame(1)) // 取帧 2:重放 → 探测
+        ..fail(const PtpResponseException(
+            opcode: NikonOperationCode.deviceReady,
+            responseCode: 0x2002)) // 探测抛错 → 视不忙
+        ..ok() // 0x9202
+        ..ok() // 0x9201 重启
+        ..ok(data: _frame(2)); // 取帧 3
+      final delay = _GatedDelay();
+      final clock = _TestClock();
+      final engine = wireEngine(transport, delay, clock);
+
+      await engine.start();
+      await pumpEventQueue();
+      clock.advance(const Duration(seconds: 5));
+      delay.release(); // → 重放帧 → 探测异常 → 重启序列
+      await pumpEventQueue();
+
+      expect(engine.health.value, LiveViewHealth.ok);
+      expect(transport.requests.map((r) => r.opcode), [
+        NikonOperationCode.startLiveView,
+        NikonOperationCode.getLiveViewImageEx,
+        NikonOperationCode.getLiveViewImageEx,
+        NikonOperationCode.deviceReady,
+        NikonOperationCode.endLiveView,
+        NikonOperationCode.startLiveView,
+      ]);
+    });
+
+    test('重启预算耗尽(maxRestarts:1)→ 升级整链重连恰一次:'
+        'status 回 idle、不再发 0x9202、循环即废', () async {
+      var escalations = 0;
+      final transport = _ScriptTransport()
+        ..ok() // 0x9201(初始)
+        ..ok(data: _frame(1)) // 取帧 1
+        ..ok(data: _frame(1)) // 取帧 2:重放 → 探测 → 重启(第 1 次,预算记满)
+        ..ok() // 0x90C8 不忙
+        ..ok() // 0x9202
+        ..ok() // 0x9201(重启 #1)
+        ..ok(data: _frame(2)) // 取帧 3:重启后的新帧
+        ..ok(data: _frame(2)) // 取帧 4:再次重放 → 探测 → 预算耗尽
+        ..ok(); // 0x90C8 不忙
+      final delay = _GatedDelay();
+      final clock = _TestClock();
+      final engine = wireEngine(transport, delay, clock,
+          maxRestarts: 1, onEscalate: () => escalations++);
+
+      await engine.start();
+      await pumpEventQueue(); // 取帧 1
+      clock.advance(const Duration(seconds: 5));
+      delay.release(); // → 取帧 2 → 探测不忙 → 重启 #1(记账 1/1)
+      await pumpEventQueue();
+      expect(engine.health.value, LiveViewHealth.ok);
+
+      clock.advance(const Duration(milliseconds: 100));
+      delay.release(); // → 取帧 3(新帧)
+      await pumpEventQueue();
+      clock.advance(const Duration(seconds: 5));
+      delay.release(); // → 取帧 4(再次重放)→ 探测 → 预算耗尽 → 升级
+      await pumpEventQueue();
+
+      expect(escalations, 1, reason: '升级回调恰一次');
+      expect(engine.status.value, LiveViewStatus.idle,
+          reason: '回 idle 待重连成功后 autoLiveViewOnConnect 重新起景');
+      expect(engine.health.value, LiveViewHealth.ok);
+      expect(
+          transport.requests
+              .where((r) => r.opcode == NikonOperationCode.endLiveView),
+          hasLength(1),
+          reason: '只有重启 #1 发过 0x9202;升级路径拆链是连接层的事');
+      expect(
+          transport.requests
+              .where((r) => r.opcode == NikonOperationCode.startLiveView)
+              .length,
+          2,
+          reason: '初始 + 重启 #1 各一次;升级路径不再重启取景');
+
+      delay.release(); // 放行最后的 interval 门:循环世代已废,不得再取帧
+      await pumpEventQueue();
+      expect(transport.liveViewFetches, 4);
+    });
+
+    test('冻结重启被拒(自愈梯全败)→ failed 带梯,取景中断文案可辨', () async {
+      final transport = _ScriptTransport()
+        ..ok() // 0x9201(初始)
+        ..ok(data: _frame(1)) // 取帧 1
+        ..ok(data: _frame(1)) // 取帧 2:重放 → 探测
+        ..ok() // 0x90C8 不忙
+        ..ok() // 0x9202(尽力)
+        ..fail(const PtpResponseException(
+            opcode: NikonOperationCode.startLiveView,
+            responseCode: NikonResponseCode.invalidStatus)) // 重启被拒
+        ..reject(PtpResponseCode.operationNotSupported) // 0x90C2 钥匙缺
+        ..reject(PtpResponseCode.operationNotSupported); // 0xD406 钥匙缺
+      final delay = _GatedDelay();
+      final clock = _TestClock();
+      final engine = wireEngine(transport, delay, clock);
+
+      await engine.start();
+      await pumpEventQueue();
+      clock.advance(const Duration(seconds: 5));
+      delay.release(); // → 重放帧 → 探测不忙 → 重启序列全败
+      await pumpEventQueue();
+
+      expect(engine.status.value, LiveViewStatus.failed);
+      expect(engine.lastError, contains('取景流冻结'));
+      expect(engine.lastError, contains('〔梯:'),
+          reason: '连接梯浮出:真机定案仪器');
+    });
+
+    test('pause 期不判冻结:看门狗纯帧驱动,挂起期时钟流逝不触发探测/重启',
+        () async {
+      final transport = _ScriptTransport()
+        ..ok() // 0x9201
+        ..ok(data: _frame(1)) // 取帧 1
+        ..ok(data: _frame(2)); // 取帧 2(resume 后的新帧)
+      final delay = _GatedDelay();
+      final clock = _TestClock();
+      final engine = wireEngine(transport, delay, clock);
+
+      await engine.start();
+      await pumpEventQueue(); // 取帧 1 发布,挂 interval 门 1
+      expect(engine.frame.value![2], 1);
+
+      engine.pause();
+      delay.release(); // 放行门 1 → 循环进 paused tick(50ms 门 2)
+      await pumpEventQueue();
+
+      // 挂起期时钟流逝 10 分钟:看门狗无帧输入,不发探测/重启
+      clock.advance(const Duration(minutes: 10));
+      await pumpEventQueue();
+      expect(
+          transport.requests
+              .where((r) =>
+                  r.opcode == NikonOperationCode.deviceReady ||
+                  r.opcode == NikonOperationCode.endLiveView),
+          isEmpty,
+          reason: '看门狗纯帧驱动:pause 期无输入即无判决');
+      expect(engine.health.value, LiveViewHealth.ok);
+      expect(engine.status.value, LiveViewStatus.running);
+      expect(engine.frame.value![2], 1, reason: '末帧保留不闪黑');
+
+      engine.resume();
+      delay.release(); // 放行 paused tick 门 2 → 恢复取帧 2(新签名)
+      await pumpEventQueue();
+      expect(engine.frame.value![2], 2);
+      expect(engine.health.value, LiveViewHealth.ok,
+          reason: '恢复后新帧到达,无冻结误报');
+      expect(transport.liveViewFetches, 2);
+    });
   });
 }

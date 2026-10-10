@@ -360,6 +360,10 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea> {
                   ],
                 ),
               ),
+            // 自动重连期压暗画面(冻结帧非实时的视觉暗示;不挡手势 ——
+            // ColoredBox 不吃命中,点按对焦照常上浮)。
+            if (controller.reconnecting)
+              const ColoredBox(color: Colors.black26),
             // ── 屏幕坐标层(不随画面变换)─────────────────────────
             // 即拍即览:新照片缩略图小卡(几秒后自动撤)—— 画面上的
             // 内容层,恒用暗面玻璃。
@@ -425,7 +429,25 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea> {
             // 上的内容层,恒用暗面玻璃与暗面语义色,不随主题。
             // 未连接横幅常驻;错误 8s 收圆丸点按展开、提示 4s 淡出
             // (节律在 LiveBannerHost 视图层,不侵入控制器)。
-            if (!controller.linkUp)
+            // **自动重连横幅排最前**(恢复期 linkUp 已闩 false,「未
+            // 连接」不得抢屏):常驻不走 LiveBannerHost 节律,重连成功
+            // 沿自动消失;相机忙横幅同源(看门狗 BUSY 保持)。
+            if (controller.reconnecting)
+              Align(
+                alignment: Alignment.bottomCenter,
+                child: LiveBanner(
+                    '连接中断 —— 正在自动重连;画面为断开前的保持帧,非实时',
+                    LiveDesign.dark.accent,
+                    bottomInset: widget.bottomInset),
+              )
+            else if (controller.liveViewBusyHold)
+              Align(
+                alignment: Alignment.bottomCenter,
+                child: LiveBanner('相机忙(写卡/下载中),取景画面保持',
+                    LiveDesign.dark.accent,
+                    bottomInset: widget.bottomInset),
+              )
+            else if (!controller.linkUp)
               Align(
                 alignment: Alignment.bottomCenter,
                 child: LiveBanner('未连接相机 —— 请先在「相机」页建立连接',

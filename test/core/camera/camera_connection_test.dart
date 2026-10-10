@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:nikon_pill/core/camera/camera_connection.dart';
 import 'package:nikon_pill/core/camera/camera_info.dart';
+import 'package:nikon_pill/core/camera/reconnect_policy.dart';
 import 'package:nikon_pill/core/ptp/operation_codes.dart';
 import 'package:nikon_pill/core/ptp/ptp_link_router.dart';
 import 'package:nikon_pill/core/ptp/ptp_session.dart';
@@ -69,14 +70,22 @@ PtpResult _ok({Uint8List? data}) =>
     PtpResult(responseCode: PtpResponseCode.ok, data: data);
 
 /// USB 线装配:fake 传输层同时充当路由器内层(生产拓扑:usbTransport
-/// 即 router 的 inner,connect 时由连接层 attach)。
+/// 即 router 的 inner,connect 时由连接层 attach)。[reconnectPolicy]/
+/// [delay] 注入恢复循环(断链测试停摆/零时延用)。
 (CameraConnectionImpl, PtpLinkRouter, PtpSession) wireUsb(
-    FakeUsbHostChannel usb, FakePtpTransport fake) {
+    FakeUsbHostChannel usb, FakePtpTransport fake,
+    {ReconnectPolicy? reconnectPolicy,
+    Future<void> Function(Duration)? delay}) {
   final link = PtpLinkRouter()..attach(fake);
   final session = PtpSession(transport: link);
   return (
     CameraConnectionImpl(
-        usb: usb, usbTransport: fake, link: link, session: session),
+        usb: usb,
+        usbTransport: fake,
+        link: link,
+        session: session,
+        reconnectPolicy: reconnectPolicy,
+        delay: delay),
     link,
     session,
   );
@@ -97,7 +106,10 @@ PtpIpFrame _frameOf(PtpIpPacket packet) {
 /// 同生产语义),经 createIpTransport 注入连接层。
 (CameraConnectionImpl, PtpLinkRouter, PtpSession, FakePtpIpChannel,
         FakePtpIpChannel, PtpIpTransport)
-    wireWireless(FakeUsbHostChannel usb, {Duration? connectBudget}) {
+    wireWireless(FakeUsbHostChannel usb,
+        {Duration? connectBudget,
+        ReconnectPolicy? reconnectPolicy,
+        Future<void> Function(Duration)? delay}) {
   final command = FakePtpIpChannel();
   final event = FakePtpIpChannel();
   final channels = <PtpIpChannel>[command, event];
@@ -115,6 +127,8 @@ PtpIpFrame _frameOf(PtpIpPacket packet) {
       session: session,
       createIpTransport: () async => ip,
       wirelessConnectBudget: connectBudget,
+      reconnectPolicy: reconnectPolicy,
+      delay: delay,
     ),
     link,
     session,
@@ -250,6 +264,50 @@ Future<void> scriptAppMode(FakePtpIpChannel command) async {
         createChannel: () => pool.removeAt(0),
         transactionTimeout: const Duration(milliseconds: 500),
       ),
+    ),
+    link,
+    session,
+    command,
+    event,
+  );
+}
+
+/// 恢复循环装配(2026-10-10 自动重连):每拍拨号新建传输实例(同生产
+/// 语义),通道池顺序出队 —— 连接 1 用 command[0]/event[0],恢复拨号
+/// 依次取 [connects] 内的后续组;拨号拍数超过 [connects] 后池尾是
+/// [RefusingChannel](SocketException → normal 分类)—— 通道池越界会抛
+/// RangeError(Error)逃逸恢复循环的 on Exception 收口,拒连尾巴兜住。
+(CameraConnectionImpl, PtpLinkRouter, PtpSession, List<FakePtpIpChannel>,
+        List<FakePtpIpChannel>)
+    wireRecovery(
+  FakeUsbHostChannel usb, {
+  PairedCamerasStore? paired,
+  ReconnectPolicy? reconnectPolicy,
+  Future<void> Function(Duration)? delay,
+  int connects = 2,
+}) {
+  final command = List.generate(connects, (_) => FakePtpIpChannel());
+  final event = List.generate(connects, (_) => FakePtpIpChannel());
+  final pool = <PtpIpChannel>[
+    for (var i = 0; i < connects; i++) ...[command[i], event[i]],
+    ...List.filled(8, RefusingChannel()),
+  ];
+  final link = PtpLinkRouter();
+  final session = PtpSession(transport: link);
+  return (
+    CameraConnectionImpl(
+      usb: usb,
+      usbTransport: FakePtpTransport(),
+      link: link,
+      session: session,
+      pairedCameras: paired,
+      postPairingRetryDelays: const [Duration(milliseconds: 10)],
+      createIpTransport: () async => PtpIpTransport(
+        createChannel: () => pool.removeAt(0),
+        transactionTimeout: const Duration(milliseconds: 500),
+      ),
+      reconnectPolicy: reconnectPolicy,
+      delay: delay,
     ),
     link,
     session,
@@ -427,10 +485,14 @@ void main() {
     expect(conn.deviceName, 'TestModel');
   });
 
-  test('断链事件(breakages):connected → failed,清理会话与 USB', () async {
+  test('断链事件(breakages):connected → reconnecting(自动恢复),清理会话与 USB',
+      () async {
     final usb = FakeUsbHostChannel(const [_zf]);
     final fake = FakePtpTransport();
-    final (conn, _, session) = wireUsb(usb, fake);
+    final park = Completer<void>();
+    final (conn, _, session) = wireUsb(usb, fake,
+        reconnectPolicy: ReconnectPolicy(jitterRatio: 0),
+        delay: (_) => park.future); // settle 即停摆:恢复循环不再前进
     final states = <CameraLinkState>[];
     conn.states.listen(states.add);
 
@@ -445,7 +507,9 @@ void main() {
     usb.breakageCtrl.add('相机已断开(USB 连接消失)');
     await pumpEventQueue();
 
-    expect(conn.state, CameraLinkState.failed);
+    // 2026-10-10 自动重连:connected 断链按 _lastGood 档案转恢复期
+    //(不再直接 failed;预算耗尽/未归位超限才终态,见恢复循环 group)
+    expect(conn.state, CameraLinkState.reconnecting);
     expect(conn.error, '相机已断开(USB 连接消失)');
     expect(session.isSessionOpen, isFalse);
     expect(usb.closeCalls, 1);
@@ -461,7 +525,7 @@ void main() {
     expect(states, [
       CameraLinkState.connecting,
       CameraLinkState.connected,
-      CameraLinkState.failed,
+      CameraLinkState.reconnecting,
     ]);
   });
 
@@ -541,10 +605,13 @@ void main() {
       expect(session.isSessionOpen, isTrue);
     });
 
-    test('断链(command 通道被关):connected → failed,实例/USB/路由全收口',
-        () async {
+    test('断链(command 通道被关):connected → reconnecting(自动恢复),'
+        '实例/USB/路由全收口', () async {
       final usb = FakeUsbHostChannel(const []);
-      final (conn, link, session, command, event, ip) = wireWireless(usb);
+      final park = Completer<void>();
+      final (conn, link, session, command, event, ip) = wireWireless(usb,
+          reconnectPolicy: ReconnectPolicy(jitterRatio: 0),
+          delay: (_) => park.future); // settle 即停摆:恢复循环不再前进
 
       await scriptWirelessConnect(
           command, event, conn.connect(ip: '192.168.1.1'));
@@ -553,7 +620,8 @@ void main() {
       command.emitClosed();
       await pumpEventQueue();
 
-      expect(conn.state, CameraLinkState.failed);
+      // 2026-10-10 自动重连:断链转恢复期,链路全量收口语义不变
+      expect(conn.state, CameraLinkState.reconnecting);
       expect(conn.error, contains('command 通道'));
       expect(session.isSessionOpen, isFalse);
       expect(command.closed, isTrue);
@@ -1036,6 +1104,359 @@ void main() {
       expect(conn.pairingCode, isNull);
     });
   });
+
+  group('自动重连(断链恢复循环,2026-10-10)', () {
+    test('断链 → reconnecting → 完整重拨成功 → connected(恢复建立的连接)',
+        () async {
+      final usb = FakeUsbHostChannel(const []);
+      final delays = <Duration>[];
+      final (conn, _, session, command, event) = wireRecovery(usb,
+          reconnectPolicy: ReconnectPolicy(jitterRatio: 0),
+          delay: (d) async => delays.add(d), // 全零时延:settle/退避即过
+          connects: 2);
+      final states = <CameraLinkState>[];
+      conn.states.listen(states.add);
+
+      await scriptWirelessConnect(
+          command[0], event[0], conn.connect(ip: '192.168.0.104'));
+      expect(conn.state, CameraLinkState.connected);
+
+      command[0].emitClosed();
+      await pumpEventQueue();
+
+      expect(conn.state, CameraLinkState.reconnecting);
+      expect(conn.error, contains('command 通道'));
+      expect(session.isSessionOpen, isFalse);
+
+      // settle 静置已过(注入零时延):恢复拨号即刻发出(新传输实例新通道)
+      await scriptHandshakeAndOpen(command[1], event[1]);
+      await scriptAppMode(command[1]);
+      for (var k = 0; conn.state != CameraLinkState.connected && k < 100; k++) {
+        await Future<void>.delayed(const Duration(milliseconds: 1));
+      }
+
+      expect(conn.state, CameraLinkState.connected);
+      expect(conn.error, isNull);
+      expect(session.isSessionOpen, isTrue);
+      expect(command[1].host, '192.168.0.104');
+      expect(delays, [
+        const Duration(milliseconds: 1200), // settle:相机拆会话槽需要时间
+      ], reason: '首拨成功,无退避拍');
+      expect(states, [
+        CameraLinkState.connecting,
+        CameraLinkState.connected,
+        CameraLinkState.reconnecting,
+        CameraLinkState.connected,
+      ]);
+    });
+
+    test('busy 慢拍:InitFail 0x1 恒 5s 不耗预算(maxAttempts:0 也不终态);'
+        '连拍 ≥2 换「相机被占用」文案', () async {
+      final usb = FakeUsbHostChannel(const []);
+      final delays = <Duration>[];
+      var beat = 0;
+      final park = Completer<void>();
+      final (conn, _, _, command, event) = wireRecovery(usb,
+          // normal 预算 0:busy 若误耗预算,首拍即 null → failed(断言捕获)
+          reconnectPolicy: ReconnectPolicy(maxAttempts: 0, jitterRatio: 0),
+          delay: (d) async {
+            delays.add(d);
+            beat++;
+            if (beat >= 3) await park.future; // settle + busy 拍 1 放行,其后停摆
+          },
+          connects: 3);
+
+      await scriptWirelessConnect(
+          command[0], event[0], conn.connect(ip: '192.168.1.1'));
+      command[0].emitClosed();
+      await pumpEventQueue();
+      expect(conn.state, CameraLinkState.reconnecting);
+
+      // 拨号 1:InitFail 0x1(单连接槽位被 SnapBridge 占用)→ busy 拍 5s
+      for (var i = 0; command[1].sent.isEmpty && i < 100; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 1));
+      }
+      command[1].emit(_frameOf(const InitFailPacket(reason: 0x1)));
+      await pumpEventQueue();
+      expect(conn.state, CameraLinkState.reconnecting,
+          reason: 'busy 不耗预算:maxAttempts=0 下误耗即 null → failed');
+
+      // 拨号 2:再拒 → busyStreak≥2 → 换占用文案(不再闪裸异常串)
+      for (var i = 0; command[2].sent.isEmpty && i < 100; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 1));
+      }
+      command[2].emit(_frameOf(const InitFailPacket(reason: 0x1)));
+      await pumpEventQueue();
+
+      expect(conn.state, CameraLinkState.reconnecting,
+          reason: 'busy 恒 5s 慢拍,永不终态(理论;停摆防真跑 5s)');
+      expect(conn.error, contains('相机被占用'));
+      expect(conn.error, contains('每 5 秒'));
+      expect(delays, [
+        const Duration(milliseconds: 1200), // settle
+        const Duration(seconds: 5), // busy 拍 1
+        const Duration(seconds: 5), // busy 拍 2(其后停摆)
+      ]);
+    });
+
+    test('恢复拨号连续失败:预算耗尽 → failed + 「已试 N 次」指引', () async {
+      final usb = FakeUsbHostChannel(const []);
+      // connects=1:恢复拨号全部走池尾拒连通道(SocketException → normal 分类)
+      final (conn, _, session, command, event) = wireRecovery(usb,
+          reconnectPolicy: ReconnectPolicy(maxAttempts: 2, jitterRatio: 0),
+          delay: (d) async {}, // 全零时延:退避拍即过
+          connects: 1);
+
+      await scriptWirelessConnect(
+          command[0], event[0], conn.connect(ip: '192.168.1.1'));
+      expect(conn.state, CameraLinkState.connected);
+
+      command[0].emitClosed();
+      for (var k = 0; conn.state != CameraLinkState.failed && k < 200; k++) {
+        await Future<void>.delayed(const Duration(milliseconds: 1));
+      }
+
+      // maxAttempts=2 → 拨 3 次(第 0 拍零延迟立即重试)后预算耗尽
+      expect(conn.state, CameraLinkState.failed);
+      expect(conn.error, contains('自动重连未成功'));
+      expect(conn.error, contains('已试 3 次'));
+      expect(conn.error, contains('重试'));
+      expect(session.isSessionOpen, isFalse);
+    });
+
+    test('USB 断链未归位:cameraAbsent 慢拍(不耗预算);插回即拨成 connected',
+        () async {
+      final usb = FakeUsbHostChannel([_zf]); // 非 const:要 clear/add
+      final fake = FakePtpTransport();
+      var beat = 0;
+      final park = Completer<void>();
+      final (conn, _, session) = wireUsb(usb, fake,
+          // normal 预算 0:cameraAbsent 若误耗预算,首拍即 null → failed
+          reconnectPolicy: ReconnectPolicy(maxAttempts: 0, jitterRatio: 0),
+          delay: (d) async {
+            beat++;
+            if (beat >= 2) await park.future; // settle 放行;cameraAbsent 首拍停摆
+          });
+
+      fake.reply(_ok(data: buildDeviceInfoDataset()));
+      fake.reply(_ok()); // OpenSession
+      fake.reply(_ok()); // 0x9435
+      fake.reply(_ok()); // 0x90C2(1)
+      fake.reply(_ok()); // 0x90C2(0)
+      await conn.connect();
+      expect(conn.state, CameraLinkState.connected);
+
+      // 拔出:listCameras 空 → cameraAbsent(不是 normal:预算/文案都不同)
+      usb.devices.clear();
+      usb.breakageCtrl.add('相机已断开(USB 连接消失)');
+      await pumpEventQueue();
+      expect(conn.state, CameraLinkState.reconnecting);
+      expect(conn.error, contains('正在等待相机重新接入 USB'));
+      expect(usb.openedIdentifiers, ['1-2'], reason: '未归位拍不重复 open');
+
+      // 插回 + 预置完整拨号脚本,放行停摆拍 → 下一拨即成
+      usb.devices.add(_zf);
+      fake.reply(_ok(data: buildDeviceInfoDataset()));
+      fake.reply(_ok()); // OpenSession
+      fake.reply(_ok()); // 0x9435
+      fake.reply(_ok()); // 0x90C2(1)
+      fake.reply(_ok()); // 0x90C2(0)
+      park.complete();
+      for (var k = 0; conn.state != CameraLinkState.connected && k < 200; k++) {
+        await Future<void>.delayed(const Duration(milliseconds: 1));
+      }
+
+      expect(conn.state, CameraLinkState.connected);
+      expect(conn.error, isNull);
+      expect(session.isSessionOpen, isTrue);
+      expect(usb.openedIdentifiers, ['1-2', '1-2'], reason: '恢复拨号重新 open');
+    });
+
+    test('USB 未归位超限(absentMaxAttempts):failed + 重新插线指引终态',
+        () async {
+      final usb = FakeUsbHostChannel([_zf]);
+      final fake = FakePtpTransport();
+      final (conn, _, _) = wireUsb(usb, fake,
+          reconnectPolicy: ReconnectPolicy(
+              maxAttempts: 0, jitterRatio: 0, absentMaxAttempts: 2),
+          delay: (d) async {}); // 全零时延:未归位退避拍即过
+
+      fake.reply(_ok(data: buildDeviceInfoDataset()));
+      fake.reply(_ok()); // OpenSession
+      fake.reply(_ok()); // 0x9435
+      fake.reply(_ok()); // 0x90C2(1)
+      fake.reply(_ok()); // 0x90C2(0)
+      await conn.connect();
+      expect(conn.state, CameraLinkState.connected);
+
+      usb.devices.clear();
+      usb.breakageCtrl.add('相机已断开(USB 连接消失)');
+      for (var k = 0; conn.state != CameraLinkState.failed && k < 200; k++) {
+        await Future<void>.delayed(const Duration(milliseconds: 1));
+      }
+
+      expect(conn.state, CameraLinkState.failed);
+      expect(conn.error, contains('相机未重新接入'));
+      expect(conn.error, contains('USB 数据线'));
+    });
+
+    test('退避中 disconnect 即止(世代护栏);reconnecting 态 connect() 不抢拨号',
+        () async {
+      final usb = FakeUsbHostChannel(const []);
+      var beat = 0;
+      final park = Completer<void>();
+      final (conn, _, _, command, event) = wireRecovery(usb,
+          reconnectPolicy: ReconnectPolicy(jitterRatio: 0),
+          delay: (d) async {
+            beat++;
+            if (beat >= 2) await park.future; // settle 放行;首拍退避停摆
+          },
+          connects: 1); // 恢复拨号走池尾拒连通道(normal 分类)
+
+      await scriptWirelessConnect(
+          command[0], event[0], conn.connect(ip: '192.168.1.1'));
+      expect(conn.state, CameraLinkState.connected);
+
+      command[0].emitClosed();
+      await pumpEventQueue();
+      expect(conn.state, CameraLinkState.reconnecting);
+      expect(conn.error, contains('正在自动重连'),
+          reason: '首拍退避期(ScriptException→normal)的动态文案');
+
+      // 护栏:reconnecting 态 connect() 立即返回,不抢拨号
+      //(用户路径 = 页面「取消重连」→ disconnect → 手动连)
+      await conn.connect(ip: '192.168.1.1');
+      expect(conn.state, CameraLinkState.reconnecting, reason: '不抢拨号');
+      expect(conn.error, contains('正在自动重连'), reason: '未被 connect() 覆盖');
+
+      // 退避停摆期用户主动断开 → 即止
+      await conn.disconnect();
+      expect(conn.state, CameraLinkState.disconnected);
+
+      // 放行停摆的退避拍:世代护栏让旧循环退出,不再有拨号/teardown
+      final closeCalls = usb.closeCalls;
+      park.complete();
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+      expect(usb.closeCalls, closeCalls, reason: '旧恢复循环不再拨号');
+    });
+
+    test('requestRecovery(取景看门狗升级入口):仅 connected 生效', () async {
+      final usb = FakeUsbHostChannel(const [_zf]);
+      final fake = FakePtpTransport();
+      final park = Completer<void>();
+      final (conn, _, session) = wireUsb(usb, fake,
+          reconnectPolicy: ReconnectPolicy(jitterRatio: 0),
+          delay: (_) => park.future); // settle 即停摆:恢复循环不前进
+
+      // 非 connected:disconnected 态 no-op(不清理、不转态)
+      conn.requestRecovery('取景流多次重启未恢复');
+      await pumpEventQueue();
+      expect(conn.state, CameraLinkState.disconnected);
+      expect(usb.closeCalls, 0);
+
+      fake.reply(_ok(data: buildDeviceInfoDataset()));
+      fake.reply(_ok()); // OpenSession
+      fake.reply(_ok()); // 0x9435
+      fake.reply(_ok()); // 0x90C2(1)
+      fake.reply(_ok()); // 0x90C2(0)
+      await conn.connect();
+      expect(conn.state, CameraLinkState.connected);
+
+      // connected:升级进恢复路(与断链同一条)
+      conn.requestRecovery('取景流多次重启未恢复');
+      await pumpEventQueue();
+      expect(conn.state, CameraLinkState.reconnecting);
+      expect(conn.error, '取景流多次重启未恢复');
+      expect(session.isSessionOpen, isFalse);
+      expect(usb.closeCalls, 1);
+    });
+
+    test('DROP 风暴:恢复建立的连接 3 次断链(120s 窗)→ 粘住暂停 failed', () async {
+      final usb = FakeUsbHostChannel(const []);
+      final (conn, _, _, command, event) = wireRecovery(usb,
+          reconnectPolicy: ReconnectPolicy(jitterRatio: 0), // 风暴默认 120s/3 次
+          delay: (d) async {}, // 全零时延:每轮恢复即拨即成
+          connects: 4);
+      final states = <CameraLinkState>[];
+      conn.states.listen(states.add);
+
+      await scriptWirelessConnect(
+          command[0], event[0], conn.connect(ip: '192.168.1.1'));
+
+      // 首断不是 DROP(本次运行从未由恢复建立过):进恢复,拨 1 成 → 断(DROP 1)
+      for (var round = 1; round <= 3; round++) {
+        command[round - 1].emitClosed();
+        await pumpEventQueue();
+        expect(conn.state, CameraLinkState.reconnecting,
+            reason: '第 $round 轮断链进恢复期');
+        await scriptHandshakeAndOpen(command[round], event[round]);
+        await scriptAppMode(command[round]);
+        for (var k = 0;
+            conn.state != CameraLinkState.connected && k < 100;
+            k++) {
+          await Future<void>.delayed(const Duration(milliseconds: 1));
+        }
+        expect(conn.state, CameraLinkState.connected, reason: '第 $round 轮拨成');
+      }
+
+      // 第 3 次 DROP:恢复建立的连接再断 → 120s 窗内 3 次 → 风暴粘住
+      command[3].emitClosed();
+      await pumpEventQueue();
+
+      expect(conn.state, CameraLinkState.failed);
+      expect(conn.error, contains('反复中断'));
+      expect(conn.error, contains('自动重连已暂停'));
+      expect(states.where((s) => s == CameraLinkState.reconnecting),
+          hasLength(3), reason: '首断 + DROP 1/2 进恢复期;DROP 3 直接 failed(风暴)');
+    });
+
+    test('迟到转正守卫:恢复拨号成功在途被 disconnect → 不得覆盖 disconnected',
+        () async {
+      final usb = FakeUsbHostChannel(const []);
+      final store = _GatedPairedStore(const [
+        CameraInfo(
+          id: '12345678901',
+          name: 'Z_f_8014411',
+          model: 'TestModel',
+          lastIp: '192.168.0.104',
+          wirelessPaired: true,
+        ),
+      ]);
+      final (conn, _, _, command, event) = wireRecovery(usb,
+          paired: store,
+          reconnectPolicy: ReconnectPolicy(jitterRatio: 0),
+          delay: (d) async {},
+          connects: 2);
+
+      await scriptWirelessConnect(
+          command[0], event[0], conn.connect(ip: '192.168.0.104'));
+      expect(conn.state, CameraLinkState.connected);
+
+      command[0].emitClosed();
+      await pumpEventQueue();
+      expect(conn.state, CameraLinkState.reconnecting);
+
+      // 恢复拨号走完握手/会话/切模式 → 落账 save(转正前最后一步)停摆
+      await scriptHandshakeAndOpen(command[1], event[1]);
+      await scriptAppMode(command[1]);
+      for (var k = 0; store.saves < 2 && k < 100; k++) {
+        await Future<void>.delayed(const Duration(milliseconds: 1));
+      }
+      expect(store.saves, 2, reason: '恢复拨号已走到转正前的落账步');
+
+      // 停摆期内用户主动断开
+      await conn.disconnect();
+      expect(conn.state, CameraLinkState.disconnected);
+
+      // 放行迟到的落账 → 守卫生效:不转 connected
+      store.releaseSecondSave();
+      for (var k = 0; k < 50; k++) {
+        await Future<void>.delayed(const Duration(milliseconds: 1));
+      }
+      expect(conn.state, CameraLinkState.disconnected,
+          reason: '迟到续体不得把已收口的 disconnected 覆盖成 connected');
+    });
+  });
 }
 
 /// save 必炸的档案库(模拟写盘失败):list 正常,save 抛 FileSystemException。
@@ -1048,6 +1469,32 @@ final class _SaveFailingStore implements PairedCamerasStore {
   @override
   Future<void> save(CameraInfo camera) async =>
       throw const FileSystemException('disk full');
+
+  @override
+  Future<void> remove(String id) async {}
+}
+
+/// 第 2 次 save(恢复拨号转正前的落账)停摆的档案库:制造「拨号成功
+/// 在途、转正前一刻被外部收口」的竞态窗口。
+final class _GatedPairedStore implements PairedCamerasStore {
+  _GatedPairedStore(List<CameraInfo> seed) : records = [...seed];
+
+  final List<CameraInfo> records;
+  final Completer<void> _secondSaveGate = Completer<void>();
+  int saves = 0;
+
+  void releaseSecondSave() => _secondSaveGate.complete();
+
+  @override
+  Future<List<CameraInfo>> list() async => List.unmodifiable(records);
+
+  @override
+  Future<void> save(CameraInfo camera) async {
+    records.removeWhere((c) => c.id == camera.id);
+    records.add(camera);
+    saves++;
+    if (saves == 2) await _secondSaveGate.future;
+  }
 
   @override
   Future<void> remove(String id) async {}

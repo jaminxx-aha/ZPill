@@ -1,0 +1,133 @@
+import 'dart:typed_data';
+
+import 'package:flutter_test/flutter_test.dart';
+
+import 'package:nikon_pill/core/remote/live_view_watchdog.dart';
+
+void main() {
+  final t0 = DateTime(2026, 10, 10, 12);
+  final frameA =
+      Uint8List.fromList(List.generate(2048, (i) => i & 0xFF));
+  final frameB = Uint8List.fromList(
+      List.generate(2048, (i) => (i * 7 + 3) & 0xFF));
+
+  group('liveViewFrameSignature', () {
+    test('同字节同签名;采样点内单字节差即变;长度折叠', () {
+      final a = liveViewFrameSignature(frameA);
+      expect(liveViewFrameSignature(frameA), a);
+      // 单字节差(恰好落在采样步长 2048/512=4 上必被采到)
+      final mutated = Uint8List.fromList(frameA)..[100] ^= 0x01;
+      expect(liveViewFrameSignature(mutated), isNot(a));
+      // 同内容不同长度:长度折叠进哈希
+      final padded = Uint8List.fromList([...frameA, 0x00]);
+      expect(liveViewFrameSignature(padded), isNot(a));
+      // 长度差落在采样间隙也不漏:两个同尾字节、长度差 1 的帧
+      final x = Uint8List.fromList(List.filled(4096, 0xAB));
+      final y = Uint8List.fromList([...List.filled(4095, 0xAB), 0xAB, 0xAB]);
+      expect(liveViewFrameSignature(x), isNot(liveViewFrameSignature(y)));
+    });
+  });
+
+  group('LiveViewWatchdog 冻结检测(合成时钟)', () {
+    test('新签名 self-heal:一切清零;重复窗口内不报', () {
+      final w = LiveViewWatchdog(
+          repeatTimeout: const Duration(seconds: 4));
+      expect(w.inspect(frameA, t0), isNull);
+      expect(w.inspect(frameA, t0.add(const Duration(seconds: 3))), isNull,
+          reason: '未到 repeatTimeout 不判');
+      // 新内容:重置后重新起算
+      expect(w.inspect(frameB, t0.add(const Duration(seconds: 3, milliseconds: 1))),
+          isNull);
+      expect(w.inspect(frameA, t0.add(const Duration(seconds: 10))), isNull,
+          reason: '换回 A 也是新签名序列(首见重新起算)');
+      expect(w.inspect(frameA, t0.add(const Duration(seconds: 13))), isNull);
+      expect(w.inspect(frameA, t0.add(const Duration(seconds: 14))), isNotNull,
+          reason: '持续 4s 判冻结');
+    });
+
+    test('探测忙 → busyHold:保持不重启,按 busyProbeInterval 复查', () {
+      final w = LiveViewWatchdog(
+          repeatTimeout: const Duration(seconds: 4),
+          busyProbeInterval: const Duration(seconds: 2));
+      w.inspect(frameA, t0);
+      final tFrozen = t0.add(const Duration(seconds: 4, milliseconds: 1));
+      expect(w.inspect(frameA, tFrozen), LiveViewWatchdogSignal.probe);
+      expect(
+          w.noteProbeResult(busy: true, now: tFrozen),
+          LiveViewWatchdogSignal.busyHold);
+      expect(w.frozen(tFrozen), isTrue, reason: '忙保持期仍在冻结态');
+      // 1s 后:未到复查节拍,不再探测
+      expect(w.inspect(frameA, tFrozen.add(const Duration(seconds: 1))), isNull);
+      // 2s 后:复查探测
+      expect(w.inspect(frameA, tFrozen.add(const Duration(seconds: 2))),
+          LiveViewWatchdogSignal.probe);
+      expect(
+          w.noteProbeResult(busy: true, now: tFrozen.add(const Duration(seconds: 2))),
+          LiveViewWatchdogSignal.busyHold);
+    });
+
+    test('BUSY 保持超窗(busyHoldTimeout)→ busyHoldExpired 真楔死收口', () {
+      final w = LiveViewWatchdog(
+          repeatTimeout: const Duration(seconds: 4),
+          busyHoldTimeout: const Duration(seconds: 60));
+      w.inspect(frameA, t0);
+      final tFrozen = t0.add(const Duration(seconds: 5));
+      expect(w.inspect(frameA, tFrozen), LiveViewWatchdogSignal.probe);
+      w.noteProbeResult(busy: true, now: tFrozen);
+      // 4s 判死 + 59.9s 忙保持:未过窗,仍按复查探测
+      final tEdge = t0
+          .add(const Duration(seconds: 4))
+          .add(const Duration(seconds: 59, milliseconds: 900));
+      expect(w.inspect(frameA, tEdge), isNotNull);
+      w.noteProbeResult(busy: true, now: tEdge);
+      // 过窗:真楔死
+      expect(w.inspect(frameA, t0.add(const Duration(seconds: 65))),
+          LiveViewWatchdogSignal.busyHoldExpired);
+      // 判死清态:签名重新评估
+      expect(w.frozen(t0.add(const Duration(seconds: 65))), isFalse);
+    });
+
+    test('探测不忙 → restart;判死后签名重新评估(frozen 复位)', () {
+      final w = LiveViewWatchdog(
+          repeatTimeout: const Duration(seconds: 4));
+      w.inspect(frameA, t0);
+      final tFrozen = t0.add(const Duration(seconds: 5));
+      expect(w.inspect(frameA, tFrozen), LiveViewWatchdogSignal.probe);
+      expect(w.noteProbeResult(busy: false, now: tFrozen),
+          LiveViewWatchdogSignal.restart);
+      expect(w.frozen(tFrozen), isFalse, reason: '_lastSignature 已清');
+    });
+
+    test('重启预算:窗口内 3 次耗尽;窗口滑出不累', () {
+      final w = LiveViewWatchdog(maxRestarts: 3,
+          restartWindow: const Duration(minutes: 5));
+      w.noteRestarted(t0);
+      w.noteRestarted(t0.add(const Duration(minutes: 1)));
+      expect(w.restartBudgetExhausted, isFalse);
+      w.noteRestarted(t0.add(const Duration(minutes: 2)));
+      expect(w.restartBudgetExhausted, isTrue);
+      // 静默 7 分钟后再次重启:0/1 分双双滑出窗(>5min),窗内只剩
+      // 2/7 两次 → 预算回充不耗尽
+      w.noteRestarted(t0.add(const Duration(minutes: 7)));
+      expect(w.restartBudgetExhausted, isFalse);
+    });
+
+    test('reset 全清(stop/start/新连接口径)', () {
+      final w = LiveViewWatchdog(
+          repeatTimeout: const Duration(seconds: 4));
+      w.inspect(frameA, t0);
+      expect(w.inspect(frameA, t0.add(const Duration(seconds: 5))),
+          LiveViewWatchdogSignal.probe);
+      w.noteRestarted(t0);
+      w.reset();
+      expect(w.restartBudgetExhausted, isFalse);
+      expect(w.frozen(t0), isFalse);
+      // reset 后同一帧序列从头评估(首见重新起算)
+      expect(w.inspect(frameA, t0), isNull);
+      expect(w.inspect(frameA, t0.add(const Duration(seconds: 3))), isNull,
+          reason: '4s 窗口从 reset 后重新起算');
+      expect(w.inspect(frameA, t0.add(const Duration(seconds: 4))),
+          isNotNull);
+    });
+  });
+}

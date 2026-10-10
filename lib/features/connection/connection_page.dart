@@ -123,6 +123,9 @@ class ConnectionController extends ChangeNotifier {
     }
     return switch (state) {
       CameraLinkState.pairing => '正在配对(自动确认)',
+      // 恢复循环的动态文案(退避分类/busy 慢拍/初始断链原因):连接层
+      // 只改 error 不发状态沿,本页 build 期读到的是最近一次。
+      CameraLinkState.reconnecting => c.error ?? '正在自动重连…',
       CameraLinkState.failed => c.error ?? '连接失败',
       _ => null,
     };
@@ -434,7 +437,9 @@ class _ConnectionPageState extends State<ConnectionPage>
 
   Widget _methodsView(BuildContext context, ConnectionController controller) {
     final busy = switch (controller.state) {
-      CameraLinkState.connecting || CameraLinkState.pairing => true,
+      CameraLinkState.connecting ||
+      CameraLinkState.pairing ||
+      CameraLinkState.reconnecting => true,
       _ => false,
     };
     return GestureDetector(
@@ -454,15 +459,18 @@ class _ConnectionPageState extends State<ConnectionPage>
             hint: controller.hint,
             onRetry: controller.retry,
           ),
-          // connecting 逃生口:输入框/按钮全禁用期间(死 IP 的 TCP 超时
-          // 最长 ~3s,建链/开会话/切模式另有 10s 总预算),用户得有取
-          // 消手段,否则像「卡死」。
-          if (controller.state == CameraLinkState.connecting)
+          // connecting/reconnecting 逃生口:输入框/按钮全禁用期间(死 IP
+          // 的 TCP 超时最长 ~3s,建链/开会话/切模式另有 10s 总预算;自动
+          // 重连的退避可拖到分钟级),用户得有取消手段,否则像「卡死」。
+          if (controller.state == CameraLinkState.connecting ||
+              controller.state == CameraLinkState.reconnecting)
             Padding(
               padding: const EdgeInsets.only(top: 8),
               child: OutlinedButton.icon(
                 icon: const Icon(Icons.close),
-                label: const Text('取消连接'),
+                label: controller.state == CameraLinkState.reconnecting
+                    ? const Text('取消重连')
+                    : const Text('取消连接'),
                 onPressed: controller.disconnect,
               ),
             ),

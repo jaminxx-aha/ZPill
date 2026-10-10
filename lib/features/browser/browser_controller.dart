@@ -23,6 +23,10 @@ final class BrowserController extends ChangeNotifier {
       if (s == CameraLinkState.connected) {
         _linkUp = true;
         load();
+      } else if (s == CameraLinkState.reconnecting) {
+        // 自动重连期:门闩挡迟到的块事件,数据冻结不清 —— 重连成功沿
+        // load() 照旧重载(connected 分支在上)。
+        _linkUp = false;
       } else if (s == CameraLinkState.disconnected ||
           s == CameraLinkState.failed) {
         _invalidate();
