@@ -11,6 +11,7 @@ import 'package:nikon_pill/core/camera/camera_info.dart';
 import 'package:nikon_pill/core/ptp/operation_codes.dart';
 import 'package:nikon_pill/core/ptp/ptp_session.dart';
 import 'package:nikon_pill/core/ptp/ptp_transport.dart';
+import 'package:nikon_pill/core/remote/live_view_engine.dart';
 import 'package:nikon_pill/core/utils/byte_writer.dart';
 import 'package:nikon_pill/data/paired_cameras_store.dart';
 import 'package:nikon_pill/features/connection/camera_overview_controller.dart';
@@ -117,6 +118,9 @@ final class _ScriptTransport implements PtpTransport {
   @override
   Future<void> close() async {}
 }
+
+/// 挂起的 delay(永不完成):遥控页引擎帧轮询/AE 轮询在测试里驻停。
+Future<void> _parkedDelay(Duration _) => Completer<void>().future;
 
 /// 手搓 GetDeviceInfo 数据集(布局独立于被测代码;deviceProps 可覆盖)。
 Uint8List _deviceInfoDataset({List<int> deviceProps = const [0x5001, 0x5007]}) {
@@ -645,10 +649,20 @@ void main() {
       final overview =
           CameraOverviewController(session: session, connection: conn);
       final controller = ConnectionController(connection: conn);
-      // 「进入拍摄」push 的遥控控制器:connection 置空(不接状态流,
-      // 零协议脚本)—— 本测只验路由进出,取景/参数由 remote 系测试覆盖。
+      // 「进入拍摄」push 的遥控控制器:connection 置空(不接状态流)。
+      // 2026-10-10 取景默认打开:进页自动起景发 0x9201 → 预置失败应答
+      // (引擎转 failed 收口,不发帧请求不转圈;本测只验路由进出,
+      // 取景/参数由 remote 系测试覆盖)。
+      final remoteTransport = _ScriptTransport();
+      remoteTransport.reply(
+          PtpResult(responseCode: PtpResponseCode.generalError)); // 0x9201
       final remote = RemoteController(
-          session: PtpSession(transport: _ScriptTransport()));
+          session: PtpSession(transport: remoteTransport),
+          engine: LiveViewEngine(
+              session: PtpSession(transport: remoteTransport),
+              delay: _parkedDelay),
+          delay: _parkedDelay,
+          aeDelay: _parkedDelay);
       addTearDown(remote.dispose);
       await tester.pumpWidget(MaterialApp(
         home: ConnectionPage(

@@ -315,7 +315,9 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     // 等待首帧:取景机图标 + 金色细进度条(不定进度);
-                    // 失败:警示图标 + 重试钮。已关闭:纯文案(原样)。
+                    // 失败:警示图标 + 重试钮。未开启:纯文案(2026-10-10
+                    // 取景默认开后近乎不可达,留作引擎态穷举;真恢复路径
+                    // 是失败态「重试取景」)。
                     if (status.value == LiveViewStatus.running) ...[
                       Icon(Icons.videocam_outlined,
                           size: 44, color: live.faint),
@@ -330,7 +332,7 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea> {
                           ? '取景中…(等待首帧)'
                           : status.value == LiveViewStatus.failed
                               ? '取景失败(${controller.engine.lastError ?? "未知错误"})'
-                              : '取景已关闭\n开启「取景」查看实时画面\n点按画面可触控对焦',
+                              : '取景未开启\n点按画面可触控对焦',
                       textAlign: TextAlign.center,
                       style: TextStyle(color: live.faint),
                     ),
