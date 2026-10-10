@@ -143,6 +143,40 @@ void main() {
     expect(readJpegExif(jpeg), isNull);
   });
 
+  group('exifCardFromHead:文件头统一解析(JPG / NEF 同路)', () {
+    test('JPG 头:与 readJpegExif 同出', () {
+      final card = exifCardFromHead(_exifJpeg());
+      expect(card, isNotNull);
+      expect(card!.model, 'NIKON Z f');
+      expect(card.paramLine, '85mm ƒ/1.8 · 1/250s · ISO 100');
+    });
+
+    test('NEF 头:文件头即 TIFF(IFD0@8)直进解析', () {
+      // 本载荷与 NEF 头同构(II 42 IFD0@8);真实 NEF 的 Exif 子表
+      // 走同一 0x8769 指针。缺 LensModel 不炸,缺项为 null。
+      final card = exifCardFromHead(_exifPayload());
+      expect(card, isNotNull);
+      expect(card!.model, 'NIKON Z f');
+      expect(card.focalLengthMm, 85);
+      expect(card.lens, isNull);
+    });
+
+    test('非 JPG/TIFF 头(MOV / 乱字节 / 太短)→ null 不抛', () {
+      expect(exifCardFromHead(Uint8List(0)), isNull);
+      expect(exifCardFromHead(Uint8List.fromList([0, 1, 2])), isNull);
+      // MOV:ftyp 盒头
+      expect(
+          exifCardFromHead(Uint8List.fromList(
+              [0, 0, 0, 0x14, ...'ftypqt  '.codeUnits])),
+          isNull);
+      // 单 'I' 不是 TIFF(II 对校验)
+      expect(
+          exifCardFromHead(
+              Uint8List.fromList([0x49, 0x4D, ...List.filled(16, 0)])),
+          isNull);
+    });
+  });
+
   test('格式化:厂牌去重、整档光圈、秒级快门、焦段取整', () {
     expect(
         const ExifCardData(make: 'NIKON', model: 'NIKON Z f').titleLine,

@@ -38,6 +38,7 @@ import '../common/format.dart';
 import '../common/widgets/de_squeezed_image.dart';
 import '../common/widgets/embedded_video_player.dart';
 import '../common/widgets/loading_overlay.dart';
+import '../common/widgets/photo_info_sheet.dart';
 import '../edit/edit_page.dart';
 import 'download_format_sheet.dart';
 import 'ratings_controller.dart';
@@ -215,6 +216,24 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
     );
   }
 
+  /// 照片信息底单:文件级信息立显(名称/大小/连拍/时间),EXIF(机身/
+  /// 镜头/参数/拍摄时间)走 64KB 头读懒加载 —— 优先组内 JPG(Zf 实证
+  /// 头读形状),无 JPG 的 RAW 组走 NEF TIFF 头(同路);视频只走
+  /// 第一段。
+  void _showInfo(PhotoGroup group) {
+    final pair = group.hasJpg && group.hasRaw;
+    showPhotoInfoSheet(
+      context,
+      filename: pair ? '${group.jpg!.name} + ${group.raw!.name}' : group.name,
+      sizeBytes: group.totalBytes,
+      burstLabel: group.isBurst ? '连拍 ×${group.shotCount}' : null,
+      fallbackTime: formatDateTime(group.capturedAt),
+      loadExif: group.isVideo
+          ? null
+          : () => _thumbnails.exifCardOf(group.jpg ?? group.primary),
+    );
+  }
+
   /// 下载:双格式组先选格式(取消即放弃);单格式/视频直接整组。
   Future<void> _download(
       PhotoGroup group, TransferDestination destination) async {
@@ -342,6 +361,11 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
                   foregroundColor: AppMedia.onMedia,
                   title: Text('${_index + 1} / ${widget.items.length}'),
                   actions: [
+                    IconButton(
+                      tooltip: '照片信息',
+                      onPressed: () => _showInfo(group),
+                      icon: const Icon(Icons.info_outline),
+                    ),
                     if (group.hasJpg)
                       IconButton(
                         tooltip: '编辑',

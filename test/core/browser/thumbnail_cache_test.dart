@@ -85,6 +85,46 @@ Uint8List _jpgHead(int orientation) {
   ]);
 }
 
+/// 手搓带 Make/Model 的 JPG 头(exifCardOf 用):SOI + APP1 Exif(IFD0
+/// 两条内联字符串条目)+ EOI。字段全的载荷解析见 watermark_test,这里
+/// 只验证「头读 → 出卡 → 记忆」的协议行为。
+Uint8List _jpgExifHead() {
+  final tiff = ByteData(38);
+  void u16(int off, int v) => tiff.setUint16(off, v, Endian.little);
+  void u32(int off, int v) => tiff.setUint32(off, v, Endian.little);
+  tiff.setUint8(0, 0x49);
+  tiff.setUint8(1, 0x49);
+  u16(2, 42);
+  u32(4, 8);
+  u16(8, 2); // IFD0 条目数
+  // Make 0x010F ASCII count=4 'NIKN'(4B 内联)
+  u16(10, 0x010F);
+  u16(12, 2);
+  u32(14, 4);
+  tiff.setUint8(18, 0x4E);
+  tiff.setUint8(19, 0x49);
+  tiff.setUint8(20, 0x4B);
+  tiff.setUint8(21, 0x4E);
+  // Model 0x0110 ASCII count=3 'Zf\0'(内联 + 补齐;内联路径不摆空格,
+  // 带空格字符串的偏移路径解析见 watermark_test)
+  u16(22, 0x0110);
+  u16(24, 2);
+  u32(26, 3);
+  tiff.setUint8(30, 0x5A);
+  tiff.setUint8(31, 0x66);
+  tiff.setUint8(32, 0);
+  tiff.setUint8(33, 0);
+  u32(34, 0); // 下一 IFD = 0
+  final payload = [...'Exif'.codeUnits, 0, 0, ...tiff.buffer.asUint8List()];
+  final segLen = 2 + payload.length;
+  return Uint8List.fromList([
+    0xFF, 0xD8, //
+    0xFF, 0xE1, (segLen >> 8) & 0xFF, segLen & 0xFF, //
+    ...payload, //
+    0xFF, 0xD9,
+  ]);
+}
+
 /// 假下载器:落一个伪对象文件并回报;记录调用入参供断言;[gate] 挂住
 /// 供排队用例摆拍在途。
 final class _FakeDownloader implements ObjectDownloader {
@@ -339,6 +379,74 @@ void main() {
     expect(File(path).readAsBytesSync(), _jpeg); // 裸缩略照常(不转正)
     expect(fake.requests.map((r) => r.opcode),
         [PtpOperationCode.getThumb, PtpOperationCode.getPartialObject]);
+  });
+
+  // ── exifCardOf:查看器信息栏的 EXIF 头读 ──
+
+  test('exifCardOf:64KB 头读一次出卡,内容键记忆不重拉', () async {
+    final fake = FakePtpTransport()..reply(_okData(_jpgExifHead()));
+    final cache = ThumbnailCache(
+        session: PtpSession(transport: fake), gallery: FakeGallerySaver());
+    final entry = _entry(0x12);
+
+    final card = await cache.exifCardOf(entry);
+    expect(card?.model, 'Zf');
+    final again = await cache.exifCardOf(entry);
+    expect(again?.model, 'Zf', reason: '记忆命中');
+
+    expect(fake.requests, hasLength(1));
+    expect(fake.requests.single.opcode, PtpOperationCode.getPartialObject);
+    expect(fake.requests.single.params, [0x12, 0, 64 * 1024]);
+  });
+
+  test('exifCardOf:64KB 档被拒 → 16KB 档兜底出卡', () async {
+    final fake = FakePtpTransport()
+      ..reply(PtpResult(responseCode: PtpResponseCode.operationNotSupported))
+      ..reply(_okData(_jpgExifHead()));
+    final cache = ThumbnailCache(
+        session: PtpSession(transport: fake), gallery: FakeGallerySaver());
+
+    expect((await cache.exifCardOf(_entry(0x12)))?.model, 'Zf');
+    expect(fake.requests.map((r) => r.params[2]),
+        [64 * 1024, 16 * 1024], reason: '先 64KB 再 16KB');
+  });
+
+  test('exifCardOf:协议全败 → null 且不驻留(下次点开重试成功)', () async {
+    final fake = FakePtpTransport()
+      ..reply(PtpResult(responseCode: PtpResponseCode.operationNotSupported))
+      ..reply(PtpResult(responseCode: PtpResponseCode.deviceBusy))
+      ..reply(_okData(_jpgExifHead()));
+    final cache = ThumbnailCache(
+        session: PtpSession(transport: fake), gallery: FakeGallerySaver());
+    final entry = _entry(0x12);
+
+    expect(await cache.exifCardOf(entry), isNull);
+    expect((await cache.exifCardOf(entry))?.model, 'Zf',
+        reason: '失败未驻留,第二次重试读到');
+    expect(fake.requests, hasLength(3));
+  });
+
+  test('exifCardOf:确无 EXIF 的头(解析 null)驻留,不反复头读', () async {
+    final fake = FakePtpTransport()..reply(_okData(_jpeg)); // 无 APP1 的头
+    final cache = ThumbnailCache(
+        session: PtpSession(transport: fake), gallery: FakeGallerySaver());
+    final entry = _entry(0x12);
+
+    expect(await cache.exifCardOf(entry), isNull);
+    expect(await cache.exifCardOf(entry), isNull);
+    expect(fake.requests, hasLength(1), reason: '「确无」是结论,驻留');
+  });
+
+  test('exifCardOf:视频条目 → null 且零请求', () async {
+    final fake = FakePtpTransport();
+    final cache = ThumbnailCache(
+        session: PtpSession(transport: fake), gallery: FakeGallerySaver());
+
+    expect(
+        await cache.exifCardOf(
+            _entry(0x12, name: 'DSC_0001.MOV', kind: ObjectKind.video)),
+        isNull);
+    expect(fake.requests, isEmpty);
   });
 
   // ── preview 分流 ──

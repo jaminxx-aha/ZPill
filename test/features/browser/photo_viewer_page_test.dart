@@ -8,6 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:nikon_pill/core/browser/object_entry.dart';
 import 'package:nikon_pill/core/browser/photo_group.dart';
 import 'package:nikon_pill/core/browser/thumbnail_cache.dart';
+import 'package:nikon_pill/core/media/watermark.dart' show ExifCardData;
 import 'package:nikon_pill/core/ptpip/object_format.dart';
 import 'package:nikon_pill/core/transfer/object_downloader.dart';
 import 'package:nikon_pill/core/transfer/transfer_engine.dart';
@@ -21,12 +22,19 @@ import 'package:nikon_pill/platform/video_player.dart';
 final class _FakeThumbs implements ThumbnailCache {
   final warmed = <ObjectEntry>[];
 
+  /// 信息底单的 EXIF 桩:handle → 卡;未脚本 = null(无 EXIF)。
+  final Map<int, ExifCardData> exifByHandle = {};
+
   @override
   int get previewMaxPixelSize => 2560;
 
   @override
   Future<String> pathFor(ObjectEntry entry, ThumbSource source) async =>
       '/tmp/nikonpill_test_preview_${entry.handle}.jpg';
+
+  @override
+  Future<ExifCardData?> exifCardOf(ObjectEntry entry) async =>
+      exifByHandle[entry.handle];
 
   @override
   void reset() {}
@@ -321,6 +329,72 @@ void main() {
     expect(find.textContaining('已开始下载到相册(RAW)'), findsOneWidget);
 
     await _drainSnackBar(tester);
+  });
+
+  testWidgets('信息底单:照片组 EXIF 头读出机身/镜头/参数/拍摄时间,'
+      '双格式组两份文件名', (tester) async {
+    final thumbs = _FakeThumbs()
+      ..exifByHandle[101] = ExifCardData(
+          make: 'NIKON CORPORATION',
+          model: 'NIKON Z f',
+          lens: 'NIKKOR Z 40mm f/2',
+          focalLengthMm: 40,
+          fNumber: 2,
+          exposureSec: 1 / 250,
+          iso: 100,
+          takenAt: DateTime(2026, 10, 1, 12));
+    final group = PhotoGroup([
+      _file(101, 'DSC_0001.JPG'),
+      _file(102, 'DSC_0001.NEF', format: 0x3000),
+    ]);
+    await _openViewer(
+        tester,
+        PhotoViewerPage(
+          items: [group],
+          initialIndex: 0,
+          thumbnails: thumbs,
+          engine: _FakeEngine(),
+        ));
+
+    await tester.tap(find.byTooltip('照片信息'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('照片信息'), findsOneWidget);
+    expect(find.text('DSC_0001.JPG + DSC_0001.NEF'), findsOneWidget);
+    expect(find.text('NIKON Z f'), findsOneWidget, reason: '机身(titleLine 去厂牌)');
+    expect(find.text('NIKKOR Z 40mm f/2'), findsOneWidget);
+    expect(find.text('40mm ƒ/2 · 1/250s · ISO 100'), findsOneWidget);
+    expect(
+        find.descendant(
+            of: find.byType(BottomSheet),
+            matching: find.text('2026-10-01 12:00')),
+        findsOneWidget,
+        reason: '拍摄时间(EXIF 本地时间;底栏的 UTC 换算时间在底单外)');
+
+    await tester.tapAt(const Offset(10, 10)); // 点外关闭底单
+    await tester.pumpAndSettle();
+    expect(find.text('照片信息'), findsNothing);
+  });
+
+  testWidgets('信息底单:视频组只走文件级信息(无 EXIF 段无转圈)',
+      (tester) async {
+    await _openViewer(
+        tester,
+        PhotoViewerPage(
+          items: [_videoGroup()],
+          initialIndex: 0,
+          thumbnails: _FakeThumbs(),
+          engine: _FakeEngine(),
+        ));
+
+    await tester.tap(find.byTooltip('照片信息'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('照片信息'), findsOneWidget);
+    expect(find.text('DSC_0001.MOV'), findsOneWidget);
+    expect(find.text('机身'), findsNothing);
+    expect(find.text('参数'), findsNothing);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
   });
 
   testWidgets('单格式组:不弹面板直接整组入队', (tester) async {

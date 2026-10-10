@@ -32,9 +32,11 @@ import '../../platform/gallery_saver.dart';
 import '../../platform/raw_decoder.dart';
 import '../../platform/services.dart';
 import '../../platform/video_player.dart';
+import '../common/format.dart' show formatDateTime;
 import '../common/widgets/confirm_dialog.dart';
 import '../common/widgets/de_squeezed_image.dart';
 import '../common/widgets/embedded_video_player.dart';
+import '../common/widgets/photo_info_sheet.dart';
 import '../common/widgets/states.dart';
 import '../transfers/transfers_page.dart';
 
@@ -519,6 +521,11 @@ class _LibraryViewerState extends State<_LibraryViewer> {
                   maxLines: 1, overflow: TextOverflow.ellipsis),
               actions: [
                 IconButton(
+                  tooltip: '照片信息',
+                  onPressed: () => _showInfo(_current),
+                  icon: const Icon(Icons.info_outline),
+                ),
+                IconButton(
                   tooltip: '导入系统相册',
                   onPressed: _importToGallery,
                   icon: const Icon(Icons.photo_library_outlined),
@@ -625,6 +632,20 @@ class _LibraryViewerState extends State<_LibraryViewer> {
           return const CircularProgressIndicator();
         },
       );
+
+  /// 照片信息底单:文件级信息立显,EXIF(机身/镜头/参数/拍摄时间)本地
+  /// 头读懒加载;视频无 EXIF 语义只走第一段。
+  void _showInfo(File file) {
+    final name = _nameOf(file);
+    showPhotoInfoSheet(
+      context,
+      filename: name,
+      sizeBytes: file.lengthSync(),
+      fallbackTime: formatDateTime(file.lastModifiedSync()),
+      loadExif:
+          isVideoFilename(name) ? null : () => readExifCardFromFile(file),
+    );
+  }
 
   /// 删除当前页:列表收缩,当前页位显示下一张滑入;删的是尾页先翻回
   /// 前一页(PageView 页位越界会白屏);最后一份则收查看器再删。
