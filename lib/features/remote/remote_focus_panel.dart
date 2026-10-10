@@ -33,23 +33,38 @@ class CaptureFocusPanel extends StatelessWidget {
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: live.hairline),
       ),
-      child: Row(
+      child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          _afButton(live, controller),
-          const SizedBox(width: 14),
-          _mfStepButtons(live, controller),
-          const SizedBox(width: 14),
-          _focusDialToggle(live),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _afButton(live, controller),
+              const SizedBox(width: 14),
+              _mfStepButtons(live, controller),
+              const SizedBox(width: 14),
+              _focusDialToggle(live),
+            ],
+          ),
+          // 机身对焦模式为 MF:AF/拉焦控制全部失效(机内马达脱开),
+          // 面板常驻一行提示(控制同时灰化)—— 盲按无响应的困惑根源。
+          if (controller.focusModeIsMf) ...[
+            const SizedBox(height: 6),
+            Text('机身对焦模式为 MF,远程对焦已停用',
+                style: TextStyle(fontSize: 10, color: live.muted)),
+          ],
         ],
       ),
     );
   }
 
   /// AF 钮:驱动一次自动对焦(0x90C1;取景开启是前置 —— 未开取景机身
-  /// 回 0xA00B)。40px 玻璃方 + 10px 下标签,对焦中转圈禁点。
+  /// 回 0xA00B)。40px 玻璃方 + 10px 下标签,对焦中转圈禁点;机身对焦
+  /// 模式为 MF 时灰化(远程对焦失效)。
   Widget _afButton(LivePalette live, RemoteController controller) {
-    final usable = controller.linkUp && controller.liveViewActive;
+    final usable = controller.linkUp &&
+        controller.liveViewActive &&
+        !controller.focusModeIsMf;
     return InkWell(
       onTap: usable && !controller.focusing ? controller.afDriveNow : null,
       customBorder:
@@ -89,9 +104,12 @@ class CaptureFocusPanel extends StatelessWidget {
   }
 
   /// MF 步进(0x9204 相对量,跟焦环语义;近在左、远在右,同镜头距离
-  /// 刻度):34×40 横排小钮对 + MF 小标。
+  /// 刻度):34×40 横排小钮对 + MF 小标;机身对焦模式为 MF 时灰化
+  /// (远程拉焦失效,只有镜头对焦环能动焦)。
   Widget _mfStepButtons(LivePalette live, RemoteController controller) {
-    final usable = controller.linkUp && controller.liveViewActive;
+    final usable = controller.linkUp &&
+        controller.liveViewActive &&
+        !controller.focusModeIsMf;
     Widget step(IconData icon, bool towardNear, String tip) {
       return Tooltip(
         message: tip,
