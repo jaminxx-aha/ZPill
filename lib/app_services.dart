@@ -22,6 +22,7 @@ import 'core/ptp/ptp_link_router.dart';
 import 'core/ptp/ptp_session.dart';
 import 'core/ptpip/transport.dart';
 import 'core/ptpusb/usb_transport.dart';
+import 'core/remote/live_view_engine.dart';
 import 'core/transfer/auto_transfer.dart';
 import 'core/transfer/object_downloader.dart';
 import 'core/transfer/transfer_engine.dart';
@@ -204,9 +205,19 @@ final class AppServices {
       session: session,
       connection: connection,
     );
+    // 取景引擎先行创建再注入控制器:看门狗重启预算耗尽时升级整链重连
+    // (engine → connection.requestRecovery,恢复循环由连接层接管;
+    // 引擎无连接引用,回调装配在此收口)。接口零新增 —— 此处持具体
+    // 类型 CameraConnectionImpl。
+    final lvEngine = LiveViewEngine(
+      session: session,
+      onEscalateToLinkRecovery: () =>
+          connection.requestRecovery('取景流多次重启未恢复'),
+    );
     remoteController = RemoteController(
       session: session,
       connection: connection,
+      engine: lvEngine,
     );
     transfersController = TransfersController(
       engine: transferEngine,
@@ -238,12 +249,15 @@ final class AppServices {
     // 见 debug/ptp_diagnostics.dart)。
     var diagRan = false;
     connection.states.listen((s) {
-      if (s == CameraLinkState.connected && !diagRan) {
-        diagRan = true;
-        PtpDiagnostics.run(session: session, repository: repository);
-        eventPoller.start();
-      }
+      // 连接成功沿(含重连成功)每沿必启轮询器(start 幂等);诊断只
+      // 跑一次。2026-10-10 修:旧结构把 start() 关在 !diagRan 门里,
+      // 首连后重连成功的 connected 沿轮询器永远不再跑。
       if (s == CameraLinkState.connected) {
+        if (!diagRan) {
+          diagRan = true;
+          PtpDiagnostics.run(session: session, repository: repository);
+        }
+        eventPoller.start();
         // 相机时钟校准(OpenZCine CameraClockSync 口径:漂移 > 5s 才写,
         // 尽力而为不影响连接)。
         unawaited(session.syncCameraClock());
@@ -253,6 +267,14 @@ final class AppServices {
         diagRan = false;
         repository.reset();
         thumbnails.reset();
+      }
+      if (s == CameraLinkState.reconnecting) {
+        // 自动重连期:停轮询、弃对象缓存(断连窗口里可能拍了新照,
+        // 重连成功的 connected 沿 BrowserController.load() 会重枚举;
+        // 浏览页的冻结靠控制器自持的列表,不靠仓库缓存);缩略图内存
+        // 索引保留 —— 内容键跨会话稳定,冻结 UI 滚动照常出图。
+        eventPoller.stop();
+        repository.reset();
       }
     });
   }

@@ -1564,4 +1564,99 @@ void main() {
         hasLength(1),
         reason: '点画面顺带触控对焦');
   });
+
+  testWidgets('断链三态沿(2026-10-10):connected→reconnecting 不弹页出横幅压暗,'
+      '重连成功就地恢复;reconnecting→failed 才弹回根页', (tester) async {
+    _portrait(tester);
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = _directRemoteController(transport, conn: conn);
+    addTearDown(controller.dispose);
+    _scriptAutoStart(transport); // 进页自动起景(0x9201 + 首帧)
+    _scriptParams(transport); // connected 沿对表刷参
+    transport.ok(); // 0x9202(reconnecting 沿引擎 stop 尽力)
+    _scriptParams(transport); // 重连成功的 connected 沿再对表
+
+    // 根页 + 推入拍摄页:popUntil(isFirst) 的弹回才可观测
+    await tester.pumpWidget(MaterialApp(
+        home: Builder(
+            builder: (context) => Scaffold(
+                body: Center(
+                    child: TextButton(
+                        onPressed: () => Navigator.of(context).push(
+                            MaterialPageRoute(
+                                builder: (_) =>
+                                    RemotePage(controller: controller))),
+                        child: const Text('根页')))))));
+    await tester.tap(find.text('根页'));
+    await tester.pumpAndSettle();
+    expect(find.byIcon(Icons.tune), findsOneWidget, reason: '拍摄页已推入');
+    expect(find.byType(Image), findsOneWidget, reason: '首帧已上屏');
+
+    conn.statesCtrl.add(CameraLinkState.connected);
+    await tester.pumpAndSettle();
+    expect(controller.linkUp, isTrue);
+
+    // ① connected → reconnecting:页面保留 + 横幅 + 压暗 + 冻结帧
+    conn.statesCtrl.add(CameraLinkState.reconnecting);
+    await tester.pumpAndSettle();
+    expect(find.text('连接中断 —— 正在自动重连;画面为断开前的保持帧,非实时'),
+        findsOneWidget, reason: '重连横幅(常驻)');
+    expect(find.text('未连接相机 —— 请先在「相机」页建立连接'), findsNothing,
+        reason: '「未连接」不得抢屏(横幅链重连最前)');
+    expect(
+        find.byWidgetPredicate(
+            (w) => w is ColoredBox && w.color == Colors.black26),
+        findsOneWidget,
+        reason: '冻结帧压暗(非实时的视觉暗示)');
+    expect(find.byType(Image), findsOneWidget, reason: '冻结帧保留不闪黑');
+    expect(find.byIcon(Icons.tune), findsOneWidget, reason: '不弹页');
+
+    // ② 重连成功:横幅/压暗撤下,就地恢复
+    conn.statesCtrl.add(CameraLinkState.connected);
+    await tester.pumpAndSettle();
+    expect(find.text('连接中断 —— 正在自动重连;画面为断开前的保持帧,非实时'),
+        findsNothing);
+    expect(
+        find.byWidgetPredicate(
+            (w) => w is ColoredBox && w.color == Colors.black26),
+        findsNothing);
+    expect(find.byIcon(Icons.tune), findsOneWidget, reason: '仍在拍摄页');
+
+    // ③ 再断 + 放弃(reconnecting → failed 预算耗尽):弹回根页
+    conn.statesCtrl.add(CameraLinkState.reconnecting);
+    await tester.pumpAndSettle();
+    expect(find.byIcon(Icons.tune), findsOneWidget, reason: '恢复期仍不弹');
+    conn.statesCtrl.add(CameraLinkState.failed);
+    await tester.pumpAndSettle();
+    expect(find.text('根页'), findsOneWidget, reason: '弹回根页拿重试入口');
+    expect(find.byIcon(Icons.tune), findsNothing, reason: '拍摄页已出栈');
+  });
+
+  testWidgets('相机忙横幅(看门狗 BUSY 保持):连接在、画面保持的提示沿',
+      (tester) async {
+    _portrait(tester);
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = _directRemoteController(transport, conn: conn);
+    addTearDown(controller.dispose);
+    _scriptAutoStart(transport); // 进页自动起景(0x9201 + 首帧)
+    await tester
+        .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
+    await tester.pumpAndSettle();
+
+    expect(find.text('相机忙(写卡/下载中),取景画面保持'), findsNothing);
+    controller.engine.health.value = LiveViewHealth.busy;
+    await tester.pump();
+    expect(find.text('相机忙(写卡/下载中),取景画面保持'), findsOneWidget);
+    expect(
+        find.byWidgetPredicate(
+            (w) => w is ColoredBox && w.color == Colors.black26),
+        findsNothing,
+        reason: 'BUSY 保持不压暗(画面仍在实时,只是机身忙)');
+    controller.engine.health.value = LiveViewHealth.ok;
+    await tester.pump();
+    expect(find.text('相机忙(写卡/下载中),取景画面保持'), findsNothing,
+        reason: '新帧到达自我恢复,横幅撤下');
+  });
 }

@@ -148,6 +148,11 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   /// 乐观门闩 true 起步,直挂未连接场景与真连接在此同形,只在沿上分。
   bool _wasLinkUp = true;
 
+  /// 上拍自动重连态:connected→reconnecting **不弹页**(取景区保留
+  /// 冻结帧 + 横幅「正在自动重连」);reconnecting→failed(预算耗尽/
+  /// 风暴暂停)才弹,回根页拿重试入口。
+  bool _wasRecovering = false;
+
   @override
   void initState() {
     super.initState();
@@ -155,6 +160,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     controller.setViewerVisible(widget.active);
     _wasLinkUp = controller.linkUp;
+    _wasRecovering = controller.reconnecting;
     controller.addListener(_onControllerChanged);
     // 取景默认打开(2026-10-10 用户需求,取景开关钮撤除):未跑则自动
     // 起景 —— 幂等(HomeShell 连接沿的 autoLiveViewOnConnect 同款),
@@ -208,13 +214,17 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
 
   /// 断连即退页(2026-10-08 真机反馈):链路没了监看页无从看,自动
   /// pop 回相机页 —— 重连入口在彼,相机页也随断连切回连接方式视图。
-  /// 参数面板/确认框若开着一并收掉(popUntil 到壳);直挂首页场景
-  /// (单测)isFirst 即自身,no-op。方向收口在 pop 前先发(幂等,
-  /// PopScope 亦会走一遍)。
+  /// **自动重连例外**(2026-10-10):reconnecting 期不弹 —— 画面保留
+  /// 断开前的冻结帧(非实时),重连成功就地恢复;弹页只发生在重连
+  /// 放弃(转 failed)的沿上。参数面板/确认框若开着一并收掉(popUntil
+  /// 到壳);直挂首页场景(单测)isFirst 即自身,no-op。方向收口在
+  /// pop 前先发(幂等,PopScope 亦会走一遍)。
   void _onControllerChanged() {
     final up = controller.linkUp;
-    final dropped = _wasLinkUp && !up;
+    final recovering = controller.reconnecting;
+    final dropped = (_wasLinkUp || _wasRecovering) && !up && !recovering;
     _wasLinkUp = up;
+    _wasRecovering = recovering;
     if (!dropped || !mounted) return;
     _exitOrientationReset();
     Navigator.of(context).popUntil((r) => r.isFirst);

@@ -1790,4 +1790,84 @@ void main() {
     await pumpEventQueue();
     expect(aeController.exposure?.iso, 400, reason: '停取景后不得再刷');
   });
+
+  group('断链自动重连沿(2026-10-10)', () {
+    test('reconnecting 沿:_invalidate 清态 + reconnecting=true;'
+        '引擎停转但末帧保留(页面冻结帧不闪黑)', () async {
+      _scriptParams(transport);
+      conn.statesCtrl.add(CameraLinkState.connected);
+      await pumpEventQueue();
+      transport
+        ..ok() // 0x9201
+        ..ok(data: _fakeFrame()); // 首帧
+      await controller.autoLiveViewOnConnect();
+      await pumpEventQueue();
+      expect(controller.linkUp, isTrue);
+      expect(controller.exposure?.fNumber, 280);
+      expect(controller.liveViewActive, isTrue);
+      final frozenFrame = controller.engine.frame.value;
+      expect(frozenFrame, isNotNull);
+
+      var notified = 0;
+      controller.addListener(() => notified++);
+      transport.ok(); // 0x9202(恢复期引擎 stop 尽力)
+
+      conn.statesCtrl.add(CameraLinkState.reconnecting);
+      await pumpEventQueue();
+      expect(controller.reconnecting, isTrue);
+      expect(controller.linkUp, isFalse, reason: '断连收口门闩(迟到值/事件被挡)');
+      expect(controller.paramProps, isEmpty);
+      expect(controller.exposure, isNull, reason: '参数清态');
+      expect(controller.liveViewActive, isFalse, reason: '引擎停转(相机侧收景)');
+      expect(controller.engine.frame.value, same(frozenFrame),
+          reason: '末帧保留:页面横幅压暗下保留冻结帧等重连');
+      expect(notified, greaterThan(0), reason: '_invalidate 通知页面(横幅驱动)');
+      expect(transport.count(NikonOperationCode.endLiveView), 1);
+    });
+
+    test('reconnecting → connected:旗标清、参数重载(重连成功自动恢复)', () async {
+      _scriptParams(transport);
+      conn.statesCtrl.add(CameraLinkState.connected);
+      await pumpEventQueue();
+      conn.statesCtrl.add(CameraLinkState.reconnecting);
+      await pumpEventQueue();
+      expect(controller.reconnecting, isTrue);
+      expect(controller.linkUp, isFalse);
+
+      _scriptParams(transport);
+      conn.statesCtrl.add(CameraLinkState.connected);
+      await pumpEventQueue();
+      expect(controller.reconnecting, isFalse);
+      expect(controller.linkUp, isTrue);
+      expect(controller.exposure?.fNumber, 280, reason: '重连成功全量刷参');
+    });
+
+    test('reconnecting → failed:旗标清,终态留给页面弹回(预算耗尽)', () async {
+      _scriptParams(transport);
+      conn.statesCtrl.add(CameraLinkState.connected);
+      await pumpEventQueue();
+      conn.statesCtrl.add(CameraLinkState.reconnecting);
+      await pumpEventQueue();
+      expect(controller.reconnecting, isTrue);
+
+      conn.statesCtrl.add(CameraLinkState.failed);
+      await pumpEventQueue();
+      expect(controller.reconnecting, isFalse);
+      expect(controller.linkUp, isFalse);
+    });
+
+    test('liveViewBusyHold:引擎健康度透传,BUSY 保持沿通知页面(横幅)', () async {
+      expect(controller.liveViewBusyHold, isFalse);
+      var notified = 0;
+      controller.addListener(() => notified++);
+
+      controller.engine.health.value = LiveViewHealth.busy;
+      expect(controller.liveViewBusyHold, isTrue);
+      expect(notified, 1, reason: '_onEngineHealth → notifyListeners');
+
+      controller.engine.health.value = LiveViewHealth.ok;
+      expect(controller.liveViewBusyHold, isFalse);
+      expect(notified, 2);
+    });
+  });
 }

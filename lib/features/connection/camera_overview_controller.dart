@@ -36,6 +36,10 @@ final class CameraOverviewController extends ChangeNotifier {
       if (s == CameraLinkState.connected) {
         _linkUp = true;
         unawaited(refresh());
+      } else if (s == CameraLinkState.reconnecting) {
+        // 自动重连期:门闩挡迟到的读数,数据冻结不清 —— 重连成功沿
+        // refresh() 照旧重载。
+        _linkUp = false;
       } else if (s == CameraLinkState.disconnected ||
           s == CameraLinkState.failed) {
         _invalidate();

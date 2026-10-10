@@ -32,6 +32,9 @@ final class _FakeConnection implements CameraConnection {
   int confirmCalls = 0;
   int cancelCalls = 0;
 
+  /// 连接层动态文案(reconnecting 期恢复循环逐拍更新;failed 的终态)。
+  String? err;
+
   @override
   String? deviceName;
 
@@ -42,7 +45,7 @@ final class _FakeConnection implements CameraConnection {
   Stream<CameraLinkState> get states => statesCtrl.stream;
 
   @override
-  String? get error => null;
+  String? get error => err;
 
   @override
   bool get isWireless => wireless;
@@ -193,6 +196,24 @@ void main() {
       conn.statesCtrl.add(CameraLinkState.failed);
       await pumpEventQueue();
       expect(controller.hint, '连接失败'); // error null → 兜底文案
+    });
+
+    test('hint:reconnecting 读连接层动态文案(恢复循环逐拍更新),'
+        'error 缺席回落「正在自动重连…」', () async {
+      final conn = _FakeConnection()
+        ..err = '正在等待相机重新接入 USB(重新插好数据线后自动续连)';
+      final controller = ConnectionController(connection: conn);
+
+      conn.statesCtrl.add(CameraLinkState.reconnecting);
+      await pumpEventQueue();
+      expect(controller.state, CameraLinkState.reconnecting);
+      expect(controller.hint,
+          '正在等待相机重新接入 USB(重新插好数据线后自动续连)');
+
+      conn.err = null;
+      conn.statesCtrl.add(CameraLinkState.reconnecting); // 重复 notify 重读
+      await pumpEventQueue();
+      expect(controller.hint, '正在自动重连…');
     });
 
     test('activeIp:各连接方式落账(USB null / 发现 / 档案 / 手动)', () async {
@@ -480,6 +501,50 @@ void main() {
       await tester.tap(find.text('取消连接'));
       await tester.pump();
       expect(conn.disconnectCalls, 1);
+    });
+
+    testWidgets('reconnecting 态:状态卡「正在重连…」+ hint 动态文案 + '
+        '取消重连逃生口 + 方式卡禁用(2026-10-10)', (tester) async {
+      final conn = _FakeConnection()
+        ..err = '相机被占用(可能被 SnapBridge/尼享连接),每 5 秒慢速重试,可点「取消」';
+      final controller = ConnectionController(connection: conn);
+      await tester.pumpWidget(
+          MaterialApp(home: ConnectionPage(controller: controller)));
+
+      conn.statesCtrl.add(CameraLinkState.reconnecting);
+      // 状态卡尾槽 spinner(不定进度)永不 settle —— pump 走帧即可。
+      await tester.pump();
+
+      expect(find.text('正在重连…'), findsOneWidget, reason: '状态卡 label');
+      expect(find.byType(CircularProgressIndicator), findsOneWidget,
+          reason: 'busy 尾槽 spinner(重连进行中)');
+      expect(
+          find.text(
+              '相机被占用(可能被 SnapBridge/尼享连接),每 5 秒慢速重试,可点「取消」'),
+          findsOneWidget,
+          reason: 'hint 读连接层动态文案(busy 慢拍分类)');
+      expect(find.text('取消重连'), findsOneWidget, reason: '重连中逃生口');
+      expect(find.text('取消连接'), findsNothing, reason: '文案按态区分');
+
+      // 方式卡 busy 禁用(恢复期不可换连接方式/发起连接)
+      expect(
+        tester
+            .widget<SegmentedButton<ConnectionMethod>>(
+                find.byType(SegmentedButton<ConnectionMethod>))
+            .onSelectionChanged,
+        isNull,
+      );
+      expect(
+        tester
+            .widget<FilledButton>(
+                find.widgetWithText(FilledButton, 'USB 连接'))
+            .onPressed,
+        isNull,
+      );
+
+      await tester.tap(find.text('取消重连'));
+      await tester.pump();
+      expect(conn.disconnectCalls, 1, reason: '取消重连 = disconnect(恢复循环即止)');
     });
 
     testWidgets('无感配对:进 pairing 态自动确认,全程不弹窗', (tester) async {

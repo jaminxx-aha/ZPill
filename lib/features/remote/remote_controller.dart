@@ -119,10 +119,12 @@ final class RemoteController extends ChangeNotifier {
         _aeDelay = aeDelay ?? delay ?? Future<void>.delayed,
         _setPropEnabled = setPropGate ?? _sessionSetPropGate {
     this.engine.status.addListener(_onEngineStatus);
+    this.engine.health.addListener(_onEngineHealth);
     this.engine.frame.addListener(_onFrame);
     this.engine.header.addListener(_onHeader);
     _statesSub = connection?.states.listen((s) {
       if (s == CameraLinkState.connected) {
+        _reconnecting = false;
         final wasUp = _linkUp;
         _linkUp = true;
         if (!wasUp) {
@@ -147,8 +149,15 @@ final class RemoteController extends ChangeNotifier {
           unawaited(_endRemoteModeQuietly());
         }
         unawaited(refreshParams());
+      } else if (s == CameraLinkState.reconnecting) {
+        // 断链自动恢复期:按断连收口门闩(停引擎/清态,迟到的参数值/
+        // 事件被挡),但**不弹页** —— 页面保留冻结帧等重连成功;横幅由
+        // reconnecting getter 驱动。
+        _reconnecting = true;
+        _invalidate();
       } else if (s == CameraLinkState.disconnected ||
           s == CameraLinkState.failed) {
+        _reconnecting = false;
         _invalidate();
       }
     });
@@ -283,6 +292,14 @@ final class RemoteController extends ChangeNotifier {
 
   /// 链路是否在(断连/失败后闩上,页面据此显示连接指引)。
   bool get linkUp => _linkUp;
+
+  /// 断链自动重连中(连接层恢复循环跑着):页面保留冻结帧不弹回,
+  /// 横幅「正在自动重连」由消费端按此驱动。
+  bool get reconnecting => _reconnecting;
+
+  /// 取景流 BUSY 保持(机身忙:写卡/下载 flush 中,画面保持不重启;
+  /// 看门狗产物,见 [LiveViewEngine.health])。
+  bool get liveViewBusyHold => engine.health.value == LiveViewHealth.busy;
 
   /// 拍摄参数调节总开关(生产 = [PtpSession.kSetPropEnabled],真机实证已开)。
   bool get canAdjustParams => _setPropEnabled();
@@ -456,6 +473,10 @@ final class RemoteController extends ChangeNotifier {
   }
 
   bool _linkUp = true;
+
+  /// 断链自动重连中(连接层 reconnecting 态;connected/disconnected/
+  /// failed 沿清)。_invalidate 不碰它 —— 由状态沿独占管理。
+  bool _reconnecting = false;
   bool _disposed = false;
 
   /// 拍摄页是否可见(IndexedStack 常驻,页面离台/回台、应用退后台/回
@@ -955,6 +976,9 @@ final class RemoteController extends ChangeNotifier {
     _syncAePolling();
     notifyListeners();
   }
+
+  /// 看门狗健康度变化(busy/frozen 横幅的驱动沿):纯透传。
+  void _onEngineHealth() => notifyListeners();
 
   /// 取景帧到达:SOF 嗅探帧尺寸(只走标记结构不解码,开销可忽略;
   /// 失败保留旧值)。
@@ -1602,6 +1626,7 @@ final class RemoteController extends ChangeNotifier {
     _eventsSub?.cancel();
     _statesSub?.cancel();
     engine.status.removeListener(_onEngineStatus);
+    engine.health.removeListener(_onEngineHealth);
     engine.frame.removeListener(_onFrame);
     engine.header.removeListener(_onHeader);
     frameSize.dispose();
