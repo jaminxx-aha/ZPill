@@ -7,18 +7,17 @@
 /// 用户明示):由相机页已连接视图「进入拍摄」全屏 push,返回即回相机
 /// 页 —— 底栏/侧栏全程不占监看画面。IndexedStack 常驻保三 tab 状态。
 ///
-/// 连接转正沿(有线/无线同一状态机)只做一件事:调 RemoteController
-/// .autoLiveViewOnConnect 连接即取景(OpenZCine 口径:连接成功直接
-/// 驱动进监看,相机侧由此进及时取景)。**应用侧不因连接切 tab**
-/// (2026-10-07 用户明示:连接后停在原页,进拍摄页由用户点击)。
+/// 连接转正沿(有线/无线同一状态机)的「连接即取景」由 RemoteController
+/// 在自己的 states 订阅串链驱动([RemoteController._onConnectedChain],
+/// 2026-10-11 移入:原先在本地听 ConnectionController 通知沿调用,装配
+/// 序使通知先于控制器置位 _linkUp,重连沿取景无人重启)。
+/// **应用侧不因连接切 tab**(2026-10-07 用户明示:连接后停在原页,
+/// 进拍摄页由用户点击)。
 library;
-
-import 'dart:async';
 
 import 'package:flutter/material.dart';
 
 import '../../app_services.dart';
-import '../../core/camera/camera_connection.dart';
 import '../connection/connection_page.dart';
 import '../library/local_library_page.dart';
 import '../remote/remote_controller.dart';
@@ -49,42 +48,19 @@ class HomeShell extends StatefulWidget {
 class _HomeShellState extends State<HomeShell> {
   int _index = 0;
 
-  ConnectionController? _conn;
   RemoteController? _remote;
-  CameraLinkState _lastLinkState = CameraLinkState.disconnected;
 
   @override
   void initState() {
     super.initState();
-    _conn =
-        widget.connectionController ?? AppServices.instance.connectionController;
     _remote =
         widget.remoteController ?? AppServices.instance.remoteController;
-    _lastLinkState = _conn!.state;
-    _conn!.addListener(_onConnChanged);
     // 拍摄页不再常驻 tab:未 push 挂载即不可见(原 tab 模式由
     // RemotePage(active:false) initState 汇报)。push 进页/返回由页面
     // 自身翻转;本句管住「停在相机页期间不流 USB 帧」(相机侧取景照
-    // 开,只挂轮询)。
+    // 开,只挂轮询)。连接即取景由 RemoteController 的 connected 沿
+    // 串链自驱(见类注),本组件不再监听连接状态。
     _remote!.setViewerVisible(false);
-  }
-
-  @override
-  void dispose() {
-    _conn?.removeListener(_onConnChanged);
-    super.dispose();
-  }
-
-  void _onConnChanged() {
-    final s = _conn!.state;
-    final becameConnected = s == CameraLinkState.connected &&
-        _lastLinkState != CameraLinkState.connected;
-    _lastLinkState = s;
-    // 连接即取景,不切 tab:相机侧进及时取景(用户在哪页就停在哪页,
-    // 拍摄页可见性自行管理帧轮询挂起/恢复)。
-    if (becameConnected) {
-      unawaited(_remote!.autoLiveViewOnConnect());
-    }
   }
 
   @override

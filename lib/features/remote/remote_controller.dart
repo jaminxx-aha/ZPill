@@ -14,7 +14,9 @@
 /// [releaseTakeover] 与重连防御性收口(见 [_takeoverDangling])。
 ///
 /// **连接即取景**(OpenZCine 口径:连接成功直接驱动进监看,相机侧由
-/// 此进及时取景):HomeShell 在 connected 沿调 [autoLiveViewOnConnect]。
+/// 此进及时取景):本控制器在 connected 沿串链驱动([_onConnectedChain],
+/// 2026-10-11 从 HomeShell 移入 —— 装配序使 HomeShell 的调用先于
+/// _linkUp 置位,重连沿取景无人重启)。
 /// 取景生命周期跟连接走 —— 0x9202 只在用户显式关取景或断连时发;
 /// 拍摄页不可见只挂起帧轮询([setViewerVisible]),相机保持取景。
 /// 应用侧**不因连接切 tab**(用户明示)。
@@ -148,7 +150,7 @@ final class RemoteController extends ChangeNotifier {
           _takeoverDangling = false;
           unawaited(_endRemoteModeQuietly());
         }
-        unawaited(refreshParams());
+        unawaited(_onConnectedChain());
       } else if (s == CameraLinkState.reconnecting) {
         // 断链自动恢复期:按断连收口门闩(停引擎/清态,迟到的参数值/
         // 事件被挡),但**不弹页** —— 页面保留冻结帧等重连成功;横幅由
@@ -1209,18 +1211,59 @@ final class RemoteController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// connected 沿串链:自动起景(0x9201 + 首帧入队)先行,再对表刷参
+  /// —— 回台沿(41c6bba)同款序,请求序恒 [0x9201, 首帧, 参数…];两个
+  /// 并发 unawaited 会让引擎帧请求穿插进刷参链。
+  ///
+  /// 起景驱动移到本控制器自己的 connected 沿,背景(2026-10-11 真机
+  /// 修复):原先由 HomeShell 在 ConnectionController 的通知沿调用
+  /// [autoLiveViewOnConnect],但 AppServices 装配序里 ConnectionController
+  /// 先订阅 states 流(构造器先于本控制器),connected 事件派发时它先
+  /// notifyListeners、HomeShell 的调用先到,而本控制器的 _linkUp 要在
+  /// 自己的订阅(排在其后)里才置位 —— 首连靠 _linkUp 冷启乐观门闩
+  /// (恒真起步)蒙混过关,重连沿 _invalidate 已把它压成 false,调用
+  /// 全数早退:引擎停在 idle,画面冻结在断链前末帧、无「重试取景」、
+  /// 录像被 liveViewActive 门拦住,唯退出拍摄页重进才恢复。由持有
+  /// _linkUp 的本控制器自驱,顺序不再寄望装配序。
+  Future<void> _onConnectedChain() async {
+    await autoLiveViewOnConnect();
+    await refreshParams();
+  }
+
   /// 连接即取景(OpenZCine 口径:连接成功直接驱动进监看,相机侧由此
-  /// 进及时取景 —— 退出上传优先的收尾一步)。HomeShell 在 connected
-  /// 沿调用;参数刷新由 connected 沿照常先行(0x9201 与取帧不抢命令
-  /// 通道)。拍摄页不在前台也无妨:0x9201 照发(相机进取景),帧轮询
+  /// 进及时取景 —— 退出上传优先的收尾一步)。由本控制器的 connected
+  /// 沿串链驱动([_onConnectedChain]),进页/回台沿(RemotePage)同款
+  /// 幂等调用。拍摄页不在前台也无妨:0x9201 照发(相机进取景),帧轮询
   /// 挂起等页面可见([setViewerVisible])。用户显式关过取景(session
   /// 内)也照样重开 —— 每次新连接都是「连接即监看」(OpenZCine 同款)。
-  Future<void> autoLiveViewOnConnect() async {
-    if (!_linkUp) return;
-    if (engine.status.value == LiveViewStatus.running) return;
-    await engine.start();
-    if (!_viewerVisible) engine.pause();
+  ///
+  /// 单飞:连接沿/进页沿/回台沿可能同拍到达(连接成功恰逢进页),
+  /// 共享在途 Future —— 否则两个 start() 都过 status==running 门
+  /// (running 要等 0x9201 应答才置),双发 0x9201、双起轮询循环。
+  Future<void> autoLiveViewOnConnect() {
+    final inFlight = _autoStartInFlight;
+    if (inFlight != null) return inFlight;
+    final completer = Completer<void>();
+    _autoStartInFlight = completer.future;
+    () async {
+      try {
+        if (!_linkUp) return;
+        if (engine.status.value == LiveViewStatus.running) return;
+        await engine.start();
+        if (!_viewerVisible) engine.pause();
+      } on Object {
+        // 引擎自身的失败已落在 status=failed/lastError(「重试取景」
+        // 兜底);此处异常属意外(如 transport 已关),单飞共享面不上抛。
+      } finally {
+        _autoStartInFlight = null;
+        completer.complete();
+      }
+    }();
+    return completer.future;
   }
+
+  /// 在途的自动起景([autoLiveViewOnConnect] 单飞槽)。
+  Future<void>? _autoStartInFlight;
 
   /// 拍摄页可见性汇报(离台/回台、退后台/回前台):不可见挂起帧轮询
   /// 与 AE 轮询(相机侧保持取景,不发 0x9202),可见恢复。拍照/对焦
@@ -1265,7 +1308,11 @@ final class RemoteController extends ChangeNotifier {
           error = '快门释放失败:相机不接受快门参数(0x201D,已试全部'
               '已知形态)—— 请反馈当时的「APP 接管」与「对焦后拍」状态';
         } else {
-          error = '快门释放失败:${_nikonHint(e.responseCode) ?? e}';
+          // 码随文浮出(〔0x????〕,同连接梯诊断风格):机身在影片波轮
+          // 位/菜单/回放等状态拒拍时提示文案可能不够指向性,真机报障
+          // 凭码定案(2026-10-11:Zf 影片位远程拍照被拒待对码)。
+          error = '快门释放失败:${_nikonHint(e.responseCode) ?? e}'
+              '〔0x${e.responseCode.toRadixString(16).toUpperCase()}〕';
         }
         return;
       } on Exception catch (e) {
