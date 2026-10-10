@@ -281,6 +281,18 @@ Uint8List _deviceInfoDataset({required List<int> ops}) {
 /// 不与被测路径抢脚本应答。
 Future<void> _parkedDelay(Duration _) => Completer<void>().future;
 
+/// 发 connected 沿(预置串链自动起景的 FIFO 头两位,插队首):控制器
+/// connected 沿串链 [0x9201, 首帧, 参数…] 先消费,故必须排在
+/// [_scriptParams] 应答之前(2026-10-11 起景驱动移入控制器 connected
+/// 沿);引擎轮询首帧后驻停于门控/parked delay,不与后续脚本抢位。
+void _emitConnected(_ScriptTransport t, _FakeConnection c) {
+  t.script
+    ..addFirst(PtpResult(
+        responseCode: PtpResponseCode.ok, data: _fakeFrame())) // 首帧
+    ..addFirst(PtpResult(responseCode: PtpResponseCode.ok)); // 0x9201
+  c.statesCtrl.add(CameraLinkState.connected);
+}
+
 /// SOF-only 假帧(SOI + SOF0 段头,32×24):够 jpegSofSize 取尺寸,
 /// 不必是可解码 JPEG(控制器测试不渲染)。
 Uint8List _fakeFrame({int width = 32, int height = 24}) =>
@@ -344,7 +356,7 @@ void main() {
 
   test('连接成功 → 参数自动刷新(目录全量:三要素 + 模式/白平衡等)', () async {
     _scriptParams(transport);
-    conn.statesCtrl.add(CameraLinkState.connected);
+    _emitConnected(transport, conn);
     await pumpEventQueue();
     expect(controller.exposure?.fNumber, 280);
     expect(controller.exposure?.shutterRaw, 1 << 16 | 100,
@@ -606,7 +618,7 @@ void main() {
       // 重连:先防御性解除,再全量刷参
       transport.ok(); // 0x90C2 [0]
       _scriptParams(transport);
-      conn.statesCtrl.add(CameraLinkState.connected);
+      _emitConnected(transport, conn);
       await pumpEventQueue();
       final modes = transport.requests
           .where((r) => r.opcode == NikonOperationCode.changeCameraMode)
@@ -630,7 +642,7 @@ void main() {
           reason: '开闩即还身,remote 不持有');
 
       _scriptParams(transport);
-      conn.statesCtrl.add(CameraLinkState.connected);
+      _emitConnected(transport, conn);
       await pumpEventQueue();
       expect(controller.takeoverActive, isFalse,
           reason: '连接流已还身,接管芯片从 OFF 起步');
@@ -669,7 +681,7 @@ void main() {
       expect(controller.session.remoteModeActive, isTrue,
           reason: '退步被拒 → remote 仍持有');
       _scriptParams(transport);
-      conn.statesCtrl.add(CameraLinkState.connected);
+      _emitConnected(transport, conn);
       await pumpEventQueue();
       expect(controller.takeoverActive, isTrue,
           reason: '新链的 remote 是连接括号抬的,不是悬挂残留');
@@ -696,7 +708,7 @@ void main() {
 
     test('拨盘参数写被拒(0x200F)→ 提示先启用 APP 接管', () async {
       _scriptParams(transport);
-      conn.statesCtrl.add(CameraLinkState.connected);
+      _emitConnected(transport, conn);
       await pumpEventQueue();
       transport.reply(PtpResponseCode.accessDenied); // 0x1016 0xD100 被拒
       await controller.setParam(PtpDevicePropCode.exposureTime, 1 << 16 | 100);
@@ -707,7 +719,7 @@ void main() {
   test('0x4006 事件(机身拨盘/菜单改动)→ 定向刷新被点名参数;表外码忽略',
       () async {
     _scriptParams(transport);
-    conn.statesCtrl.add(CameraLinkState.connected);
+    _emitConnected(transport, conn);
     await pumpEventQueue();
 
     // 表外属性码:不触发刷新
@@ -738,7 +750,7 @@ void main() {
       PtpDevicePropCode.exposureIndex,
       PtpDevicePropCode.exposureTime
     });
-    conn.statesCtrl.add(CameraLinkState.connected);
+    _emitConnected(transport, conn);
     await pumpEventQueue();
     expect(controller.propWritable(PtpDevicePropCode.exposureIndex), isTrue,
         reason: 'ISO 写走厂商码,标准码 getSet 不作数');
@@ -750,7 +762,7 @@ void main() {
       '同样不能改快门)', () {
     test('A(光圈优先):快门本地拒绝零流量,光圈可调;芯片标「自动」', () async {
       _scriptParams(transport, mode: 3); // A
-      conn.statesCtrl.add(CameraLinkState.connected);
+      _emitConnected(transport, conn);
       await pumpEventQueue();
       expect(controller.shutterAdjustable, isFalse);
       expect(controller.apertureAdjustable, isTrue);
@@ -772,7 +784,7 @@ void main() {
 
     test('S(快门优先):光圈拒绝,快门可调', () async {
       _scriptParams(transport, mode: 4); // S
-      conn.statesCtrl.add(CameraLinkState.connected);
+      _emitConnected(transport, conn);
       await pumpEventQueue();
       expect(controller.apertureAdjustable, isFalse);
       expect(controller.shutterAdjustable, isTrue);
@@ -783,7 +795,7 @@ void main() {
 
     test('场景档:快门/光圈/ISO 全由相机拥有', () async {
       _scriptParams(transport, mode: 0x8010); // 自动(场景段)
-      conn.statesCtrl.add(CameraLinkState.connected);
+      _emitConnected(transport, conn);
       await pumpEventQueue();
       expect(controller.shutterAdjustable, isFalse);
       expect(controller.apertureAdjustable, isFalse);
@@ -794,7 +806,7 @@ void main() {
 
     test('U 档/模式未读:不猜锁,交给相机应答', () async {
       _scriptParams(transport, mode: 0x8050); // U1
-      conn.statesCtrl.add(CameraLinkState.connected);
+      _emitConnected(transport, conn);
       await pumpEventQueue();
       expect(controller.shutterAdjustable, isTrue, reason: 'U 档按内部程序跑');
       expect(controller.apertureAdjustable, isTrue);
@@ -803,10 +815,14 @@ void main() {
       final t2 = _ScriptTransport();
       final conn2 = _FakeConnection();
       final c2 = RemoteController(
-          session: PtpSession(transport: t2), connection: conn2);
+          session: PtpSession(transport: t2),
+          connection: conn2,
+          // connected 沿串链会自动起景(取帧轮询),停摆 delay 驻住不抢脚本
+          engine: LiveViewEngine(
+              session: PtpSession(transport: t2), delay: _parkedDelay));
       addTearDown(c2.dispose);
       _scriptParams(t2, modeUnreadable: true);
-      conn2.statesCtrl.add(CameraLinkState.connected);
+      _emitConnected(t2, conn2);
       await pumpEventQueue();
       expect(
           c2.paramProps[PtpDevicePropCode.exposureProgramMode]?.value, isNull);
@@ -823,7 +839,7 @@ void main() {
       transport
         ..ok(data: Uint8List.fromList([1])) // 0xD054 自动开
         ..script.add(last); // 0xD1F1 摆回
-      conn.statesCtrl.add(CameraLinkState.connected);
+      _emitConnected(transport, conn);
       await pumpEventQueue();
       expect(controller.isoAuto, isTrue);
       expect(controller.paramAutoControlled(PtpDevicePropCode.exposureIndex),
@@ -849,7 +865,7 @@ void main() {
 
     test('setIsoAuto(true):写 0xD054=1,ISO 工作值跟随刷新', () async {
       _scriptParams(transport);
-      conn.statesCtrl.add(CameraLinkState.connected);
+      _emitConnected(transport, conn);
       await pumpEventQueue();
       expect(controller.isoAuto, isFalse);
 
@@ -872,8 +888,20 @@ void main() {
   group('连拍按住(OpenZCine shutterPressLatchedBurst 同款)', () {
     test('连续释放档按下:括持(0x90C2[1] + burstNumber 65535)+ 释放;'
         '抬起:0x920C 终止 + 0x90C2[0] 解除', () async {
+      // connected 沿串链自动起景(引擎轮询驻停):换 parked 引擎,不与
+      // 连拍帧间等待抢门控 delay 的放行。
+      controller.dispose();
+      controller = RemoteController(
+        session: PtpSession(transport: transport),
+        connection: conn,
+        engine: LiveViewEngine(
+            session: PtpSession(transport: transport), delay: _parkedDelay),
+        delay: delay.call,
+      );
+      controller.setViewerVisible(false); // 拍摄页不在前台口径:AE 轮询
+      // 不启,门控 delay 放行全部留给连拍/快门流程
       _scriptParams(transport, drive: 2); // 释放档 = 高速连拍
-      conn.statesCtrl.add(CameraLinkState.connected);
+      _emitConnected(transport, conn);
       await pumpEventQueue();
 
       transport
@@ -909,8 +937,19 @@ void main() {
     });
 
     test('单张释放档按下 = 原单张路径(无括持无终止);抬起静默', () async {
+      // 同上:parked 引擎,DeviceReady 轮询的门控放行不被引擎轮询抢走。
+      controller.dispose();
+      controller = RemoteController(
+        session: PtpSession(transport: transport),
+        connection: conn,
+        engine: LiveViewEngine(
+            session: PtpSession(transport: transport), delay: _parkedDelay),
+        delay: delay.call,
+      );
+      controller.setViewerVisible(false); // 拍摄页不在前台口径:AE 轮询
+      // 不启,门控 delay 放行全部留给连拍/快门流程
       _scriptParams(transport); // 释放档 = 单张
-      conn.statesCtrl.add(CameraLinkState.connected);
+      _emitConnected(transport, conn);
       await pumpEventQueue();
 
       transport
@@ -930,8 +969,19 @@ void main() {
     });
 
     test('断连即终止连拍状态(链发循环止步)', () async {
+      // 同组口径:parked 引擎,链发循环的等待独享门控放行。
+      controller.dispose();
+      controller = RemoteController(
+        session: PtpSession(transport: transport),
+        connection: conn,
+        engine: LiveViewEngine(
+            session: PtpSession(transport: transport), delay: _parkedDelay),
+        delay: delay.call,
+      );
+      controller.setViewerVisible(false); // 拍摄页不在前台口径:AE 轮询
+      // 不启,门控 delay 放行全部留给连拍/快门流程
       _scriptParams(transport, drive: 0x8010); // 低速连拍
-      conn.statesCtrl.add(CameraLinkState.connected);
+      _emitConnected(transport, conn);
       await pumpEventQueue();
 
       transport
@@ -951,7 +1001,7 @@ void main() {
   test('色温写入:先切 WB=色温档(0x8012)再写 0xD01E(WB 非色温档时联动)',
       () async {
     _scriptParams(transport); // WB desc value = 2(自动)
-    conn.statesCtrl.add(CameraLinkState.connected);
+    _emitConnected(transport, conn);
     await pumpEventQueue();
 
     transport
@@ -1012,8 +1062,20 @@ void main() {
 
   group('B 门/Time:按住开曝光', () {
     test('快门值 Bulb(0xFFFFFFFF):按下释放不等待,抬起 0x920C 结束', () async {
+      // connected 沿串链自动起景(引擎轮询驻停):换 parked 引擎,不与
+      // B 门按住等待环抢门控 delay 的放行。
+      controller.dispose();
+      controller = RemoteController(
+        session: PtpSession(transport: transport),
+        connection: conn,
+        engine: LiveViewEngine(
+            session: PtpSession(transport: transport), delay: _parkedDelay),
+        delay: delay.call,
+      );
+      controller.setViewerVisible(false); // 拍摄页不在前台口径:AE 轮询
+      // 不启,门控 delay 放行全部留给连拍/快门流程
       _scriptParams(transport);
-      conn.statesCtrl.add(CameraLinkState.connected);
+      _emitConnected(transport, conn);
       await pumpEventQueue();
       // 快门值直接置 Bulb 哨兵(0xD100 打包分数空间)
       controller.paramProps[PtpDevicePropCode.exposureTime] =
@@ -1079,7 +1141,7 @@ void main() {
   group('控制锁(0x200F 拒绝 → tile 锁标)', () {
     test('写被拒打锁标;写通解除;断连清空', () async {
       _scriptParams(transport);
-      conn.statesCtrl.add(CameraLinkState.connected);
+      _emitConnected(transport, conn);
       await pumpEventQueue();
 
       transport.reply(PtpResponseCode.accessDenied); // 0x1016 白平衡被拒
@@ -1107,7 +1169,7 @@ void main() {
 
   test('剩余张数:refreshParams 读 0xD1F1 上屏', () async {
     _scriptParams(transport);
-    conn.statesCtrl.add(CameraLinkState.connected);
+    _emitConnected(transport, conn);
     await pumpEventQueue();
     expect(controller.shotsRemaining, 1234, reason: '_scriptParams 末尾预置');
   });
@@ -1120,7 +1182,7 @@ void main() {
       ..ok(data: _picCtrlData('My Landscape')) // 201
       ..ok(data: _picCtrlData('')) // 202:空名 → 回落静态占位
       ..ok(data: _picCtrlData('Cloud 9')); // 301
-    conn.statesCtrl.add(CameraLinkState.connected);
+    _emitConnected(transport, conn);
     await pumpEventQueue();
     expect(
         controller
@@ -1159,7 +1221,7 @@ void main() {
       () async {
     _scriptParams(transport, picCtrlEnums: [201, 202], picCtrlValue: 202);
     transport.reply(PtpResponseCode.operationNotSupported);
-    conn.statesCtrl.add(CameraLinkState.connected);
+    _emitConnected(transport, conn);
     await pumpEventQueue();
     expect(transport.count(NikonOperationCode.getPictCtrlData), 1,
         reason: '首异常即停:202 不再试');
@@ -1172,7 +1234,7 @@ void main() {
       () async {
     _scriptParams(transport, picCtrlEnums: [201], picCtrlValue: 201);
     transport.ok(data: _picCtrlData('My Fav'));
-    conn.statesCtrl.add(CameraLinkState.connected);
+    _emitConnected(transport, conn);
     await pumpEventQueue();
     expect(controller.displayParamValue(PtpDevicePropCode.activePicCtrlItem, 201),
         'My Fav');
@@ -1186,7 +1248,7 @@ void main() {
     // 重连:再次拉取(新连接档案重建)。
     _scriptParams(transport, picCtrlEnums: [201], picCtrlValue: 201);
     transport.ok(data: _picCtrlData('My Fav'));
-    conn.statesCtrl.add(CameraLinkState.connected);
+    _emitConnected(transport, conn);
     await pumpEventQueue();
     expect(controller.displayParamValue(PtpDevicePropCode.activePicCtrlItem, 201),
         'My Fav');
@@ -1195,7 +1257,7 @@ void main() {
 
     // 状态未离开的重复 connected 沿:不重拉(一次性旗标)。
     _scriptParams(transport, picCtrlEnums: [201], picCtrlValue: 201);
-    conn.statesCtrl.add(CameraLinkState.connected);
+    _emitConnected(transport, conn);
     await pumpEventQueue();
     expect(transport.count(NikonOperationCode.getPictCtrlData), 2,
         reason: '同连接内已拉过,不重复');
@@ -1203,7 +1265,7 @@ void main() {
 
   test('ObjectAdded → 「已拍摄」提示 + 参数刷新;断连后迟到事件丢弃', () async {
     _scriptParams(transport);
-    conn.statesCtrl.add(CameraLinkState.connected);
+    _emitConnected(transport, conn);
     await pumpEventQueue();
     expect(controller.exposure?.iso, 200);
 
@@ -1239,7 +1301,7 @@ void main() {
 
   test('PropDesc 驱动:desc 域入状态(枚举值/可写性可见)', () async {
     _scriptParams(transport);
-    conn.statesCtrl.add(CameraLinkState.connected);
+    _emitConnected(transport, conn);
     await pumpEventQueue();
     final f = controller.paramProps[PtpDevicePropCode.fNumber]!;
     expect(f.value, 280);
@@ -1253,7 +1315,7 @@ void main() {
 
   test('PropDesc 不可用退回裸值 0x1015(域未知但值可用)', () async {
     _scriptParamsRawFallback(transport);
-    conn.statesCtrl.add(CameraLinkState.connected);
+    _emitConnected(transport, conn);
     await pumpEventQueue();
     expect(controller.exposure?.fNumber, 280);
     expect(controller.exposure?.shutterRaw, 1 << 16 | 100,
@@ -1278,7 +1340,7 @@ void main() {
       setPropGate: () => true,
     );
     _scriptParams(transport);
-    conn.statesCtrl.add(CameraLinkState.connected);
+    _emitConnected(transport, conn);
     await pumpEventQueue();
 
     transport
@@ -1310,7 +1372,7 @@ void main() {
       setPropGate: () => true,
     );
     _scriptParams(transport);
-    conn.statesCtrl.add(CameraLinkState.connected);
+    _emitConnected(transport, conn);
     await pumpEventQueue();
 
     transport
@@ -1330,7 +1392,7 @@ void main() {
       () async {
     // 真机形态:0x500E 拨盘拥有,相机 PropDesc 上报 getSet=false
     _scriptParams(transport, readonlyCodes: {PtpDevicePropCode.exposureProgramMode});
-    conn.statesCtrl.add(CameraLinkState.connected);
+    _emitConnected(transport, conn);
     await pumpEventQueue();
     expect(controller.propWritable(PtpDevicePropCode.exposureProgramMode),
         isTrue,
@@ -1355,7 +1417,7 @@ void main() {
   test('对焦单一芯片:0x500A 镜像移出目录,0xD061 可调(pickValues 直供)',
       () async {
     _scriptParams(transport);
-    conn.statesCtrl.add(CameraLinkState.connected);
+    _emitConnected(transport, conn);
     await pumpEventQueue();
     expect(shootingParamByCode.containsKey(PtpDevicePropCode.focusMode),
         isFalse,
@@ -1387,7 +1449,7 @@ void main() {
     );
 
     _scriptParams(transport);
-    conn.statesCtrl.add(CameraLinkState.connected);
+    _emitConnected(transport, conn);
     await pumpEventQueue();
     expect(controller.canAdjustParams, isTrue);
     expect(controller.propWritable(PtpDevicePropCode.fNumber), isTrue);
@@ -1428,7 +1490,7 @@ void main() {
       PtpDevicePropCode.whiteBalance,
       PtpDevicePropCode.fNumber
     });
-    conn.statesCtrl.add(CameraLinkState.connected);
+    _emitConnected(transport, conn);
     await pumpEventQueue();
 
     await controller.setParam(PtpDevicePropCode.whiteBalance, 4);
@@ -1456,7 +1518,7 @@ void main() {
     );
 
     _scriptParams(transport);
-    conn.statesCtrl.add(CameraLinkState.connected);
+    _emitConnected(transport, conn);
     await pumpEventQueue();
 
     transport.reply(PtpResponseCode.deviceBusy); // 0x1016 忙
@@ -1516,13 +1578,10 @@ void main() {
     test('setViewerVisible(false):帧轮询与 AE 轮询挂起,不发 0x9202;'
         '回台恢复', () async {
       _scriptParams(transport);
-      conn.statesCtrl.add(CameraLinkState.connected);
+      _emitConnected(transport, conn); // 串链自动起景(0x9201 + 首帧)
       await pumpEventQueue();
-      transport.ok(); // 0x9201
-      transport.ok(data: _fakeFrame()); // 首帧(轮询首拍)
-      await controller.toggleLiveView();
-      await pumpEventQueue();
-      expect(controller.liveViewActive, isTrue);
+      expect(controller.liveViewActive, isTrue,
+          reason: 'connected 沿串链起景(2026-10-11 移入)');
       expect(transport.count(NikonOperationCode.getLiveViewImageEx), 1);
 
       // 离台:放行挂着的 delay(AE 间隔 + 引擎间隔 + 若干挂起 tick),
@@ -1562,16 +1621,11 @@ void main() {
           reason: 'AE 轮询照常刷读数');
     });
 
-    test('autoLiveViewOnConnect:页面不可见时连接转正,0x9201 照发、'
-        '帧轮询挂起(相机侧进取景)', () async {
+    test('connected 沿串链起景:页面不可见也 0x9201 照发、帧轮询挂起'
+        '(相机侧进取景)', () async {
+      controller.setViewerVisible(false); // 拍摄页不在前台
       _scriptParams(transport);
-      conn.statesCtrl.add(CameraLinkState.connected);
-      await pumpEventQueue();
-
-      controller.setViewerVisible(false); // 拍摄 tab 不在前台
-      transport.ok(); // 0x9201
-      transport.ok(data: _fakeFrame()); // 首帧(pause 落地前已在途)
-      await controller.autoLiveViewOnConnect();
+      _emitConnected(transport, conn);
       await pumpEventQueue();
       expect(controller.liveViewActive, isTrue,
           reason: '连接即取景:0x9201 不等页面可见');
@@ -1591,6 +1645,23 @@ void main() {
       // 幂等:已运行再调不重发 0x9201。
       await controller.autoLiveViewOnConnect();
       expect(transport.count(NikonOperationCode.startLiveView), 1);
+    });
+
+    test('autoLiveViewOnConnect 单飞:同拍双调用共享一次 start'
+        '(连接沿串链与进页沿同到的防线)', () async {
+      transport
+        ..ok() // 0x9201(两次调用共享这一次)
+        ..ok(data: _fakeFrame()); // 首帧
+      final a = controller.autoLiveViewOnConnect();
+      // 首个仍在途(running 要等 0x9201 应答才置,并发 start() 会双发):
+      // 单飞共享 Future,第二个调用不再过 start 门。
+      final b = controller.autoLiveViewOnConnect();
+      await Future.wait([a, b]);
+      await pumpEventQueue();
+      expect(controller.liveViewActive, isTrue);
+      expect(transport.count(NikonOperationCode.startLiveView), 1);
+      expect(transport.count(NikonOperationCode.getLiveViewImageEx), 1,
+          reason: '轮询循环仅一条');
     });
   });
 
@@ -1846,12 +1917,7 @@ void main() {
     test('reconnecting 沿:_invalidate 清态 + reconnecting=true;'
         '引擎停转但末帧保留(页面冻结帧不闪黑)', () async {
       _scriptParams(transport);
-      conn.statesCtrl.add(CameraLinkState.connected);
-      await pumpEventQueue();
-      transport
-        ..ok() // 0x9201
-        ..ok(data: _fakeFrame()); // 首帧
-      await controller.autoLiveViewOnConnect();
+      _emitConnected(transport, conn); // 串链自动起景(0x9201 + 首帧)
       await pumpEventQueue();
       expect(controller.linkUp, isTrue);
       expect(controller.exposure?.fNumber, 280);
@@ -1876,26 +1942,37 @@ void main() {
       expect(transport.count(NikonOperationCode.endLiveView), 1);
     });
 
-    test('reconnecting → connected:旗标清、参数重载(重连成功自动恢复)', () async {
+    test('reconnecting → connected:旗标清、参数重载、取景自愈重启'
+        '(重连成功自动恢复 —— 2026-10-11 修复:connected 沿串链自动起景,'
+        '画面就地恢复,不再须退出拍摄页重进)', () async {
       _scriptParams(transport);
-      conn.statesCtrl.add(CameraLinkState.connected);
+      _emitConnected(transport, conn); // 首连:串链起景 + 刷参
       await pumpEventQueue();
+      expect(controller.liveViewActive, isTrue);
+      transport.ok(); // 0x9202(reconnecting 沿引擎 stop 尽力)
       conn.statesCtrl.add(CameraLinkState.reconnecting);
       await pumpEventQueue();
       expect(controller.reconnecting, isTrue);
       expect(controller.linkUp, isFalse);
+      expect(controller.liveViewActive, isFalse, reason: '恢复期引擎停转');
 
       _scriptParams(transport);
-      conn.statesCtrl.add(CameraLinkState.connected);
+      _emitConnected(transport, conn); // 重连成功:串链再起景 + 再刷参
       await pumpEventQueue();
       expect(controller.reconnecting, isFalse);
       expect(controller.linkUp, isTrue);
       expect(controller.exposure?.fNumber, 280, reason: '重连成功全量刷参');
+      expect(controller.liveViewActive, isTrue,
+          reason: '重连成功取景自愈重启(画面就地恢复)');
+      expect(transport.count(NikonOperationCode.startLiveView), 2,
+          reason: '两次 connected 沿各一次 0x9201');
+      expect(controller.engine.frame.value, isNotNull,
+          reason: '自愈首帧已发布,冻结画面已被替换');
     });
 
     test('reconnecting → failed:旗标清,终态留给页面弹回(预算耗尽)', () async {
       _scriptParams(transport);
-      conn.statesCtrl.add(CameraLinkState.connected);
+      _emitConnected(transport, conn);
       await pumpEventQueue();
       conn.statesCtrl.add(CameraLinkState.reconnecting);
       await pumpEventQueue();

@@ -567,20 +567,28 @@ void main() {
     final conn = _FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
-    _scriptParams(transport); // 连接时全量(首挂 active:false,不自动起景)
+    // 首挂 active:false 页面自身不自动起景,但 connected 沿串链照发
+    //(连接即监看,相机侧进取景;帧轮询由页面可见性挂起)
+    _scriptAutoStart(transport);
+    _scriptParams(transport); // 连接时全量
     await tester.pumpWidget(
         MaterialApp(home: RemotePage(controller: controller, active: false)));
     conn.statesCtrl.add(CameraLinkState.connected);
     await tester.pumpAndSettle();
     expect(controller.exposure?.fNumber, 280);
 
-    // 切回 tab:先自动起景(0x9201 + 首帧)再对表刷一次(FIFO 按消费序;
-    // 刷了才消费,脚本耗尽会以 StateError 炸出)
-    _scriptAutoStart(transport);
+    // 切回 tab:引擎已在跑(connected 沿串链起景),回台沿只对表刷参
+    //(0x9201 不再重发 —— autoLiveViewOnConnect 幂等门)
     _scriptParams(transport);
     await tester.pumpWidget(
         MaterialApp(home: RemotePage(controller: controller, active: true)));
     await tester.pumpAndSettle();
+    expect(
+        transport.requests
+            .where((r) => r.opcode == NikonOperationCode.startLiveView)
+            .length,
+        1,
+        reason: '取景不重开,回台沿只刷参');
     expect(controller.exposure?.fNumber, 280);
 
     // 回前台:同样对表
@@ -1668,6 +1676,7 @@ void main() {
     _scriptAutoStart(transport); // 进页自动起景(0x9201 + 首帧)
     _scriptParams(transport); // connected 沿对表刷参
     transport.ok(); // 0x9202(reconnecting 沿引擎 stop 尽力)
+    _scriptAutoStart(transport); // 重连成功的 connected 沿自愈重启(0x9201 + 首帧)
     _scriptParams(transport); // 重连成功的 connected 沿再对表
 
     // 根页 + 推入拍摄页:popUntil(isFirst) 的弹回才可观测
@@ -1715,6 +1724,10 @@ void main() {
             (w) => w is ColoredBox && w.color == Colors.black26),
         findsNothing);
     expect(find.byIcon(Icons.tune), findsOneWidget, reason: '仍在拍摄页');
+    expect(controller.liveViewActive, isTrue,
+        reason: '重连成功取景自愈重启(2026-10-11 修复:connected 沿串链,'
+        '画面就地恢复,不再须退出拍摄页重进)');
+    expect(find.byType(Image), findsOneWidget, reason: '自愈首帧替换冻结帧');
 
     // ③ 再断 + 放弃(reconnecting → failed 预算耗尽):弹回根页
     conn.statesCtrl.add(CameraLinkState.reconnecting);
