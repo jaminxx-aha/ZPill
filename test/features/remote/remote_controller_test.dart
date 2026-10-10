@@ -426,6 +426,33 @@ void main() {
         reason: '忙不是换码信号,不得回退');
   });
 
+  test('capture:0x200F 拒(机顶拨杆在视频档)→ 拨杆指向性提示;'
+      '换码重试同拒不成功', () async {
+    transport
+      ..reply(PtpResponseCode.accessDenied) // 0x9207(波轮视频档,相机锁定)
+      ..reply(PtpResponseCode.accessDenied); // 0x100E 换码重试同拒
+    await controller.capture();
+    expect(controller.error, contains('照片/视频'));
+    expect(controller.error, contains('拨回照片档'));
+    expect(controller.capturing, isFalse);
+    expect(transport.count(NikonOperationCode.deviceReady), 0,
+        reason: '被拒不进入落地等待');
+  });
+
+  test('capture:0x2013 双因提示(卡检查 + 视频档别名),换码重试同拒不成功',
+      () async {
+    transport
+      ..reply(PtpResponseCode.storeNotAvailable) // 0x9207(视频档另证/无卡)
+      ..reply(PtpResponseCode.storeNotAvailable); // 0x100E 换码重试同拒
+    await controller.capture();
+    expect(controller.error, contains('存储卡与插槽'),
+        reason: '标准义在先:无卡/卡错误照旧指卡槽');
+    expect(controller.error, contains('视频档'),
+        reason: '卡在位时的别名也指(2026-10-11 真机)');
+    expect(controller.capturing, isFalse);
+    expect(transport.count(NikonOperationCode.deviceReady), 0);
+  });
+
   test('capture:首选 0x9207 被拒(无 op 表缓存时默认现代面)→ 回退 0x100E,'
       '后续直发', () async {
     transport

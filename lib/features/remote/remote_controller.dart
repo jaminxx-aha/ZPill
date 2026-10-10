@@ -1303,16 +1303,29 @@ final class RemoteController extends ChangeNotifier {
         await _fireShutter();
       } on PtpResponseException catch (e) {
         if (e.responseCode == PtpResponseCode.storeNotAvailable) {
-          error = '快门释放失败:相机存储不可用(请检查存储卡与插槽)';
+          // 0x2013:标准义 = 存储不可用(无卡/卡错误);2026-10-11 真机
+          // 另证:机身拨杆在视频档时远程拍照除 0x200F 外也会报此码
+          //(存储卡在位,具体子态待核)—— 双因都指,别把用户支去翻卡槽。
+          error = '快门释放失败:相机存储不可用 —— 请检查存储卡与插槽;'
+              '若卡在位,可能是机身拨杆在视频档拒绝了远程拍照,'
+              '请拨回照片档重试(视频档请用拍摄页的录制钮拍视频)';
         } else if (e.responseCode == PtpResponseCode.invalidParameter) {
           error = '快门释放失败:相机不接受快门参数(0x201D,已试全部'
               '已知形态)—— 请反馈当时的「APP 接管」与「对焦后拍」状态';
+        } else if (e.responseCode == PtpResponseCode.accessDenied) {
+          // 0x200F:相机锁定拍照控制 —— Zf 机顶「照片/视频」切换拨杆在
+          // 视频档时 0x9207 即被拒(2026-10-11 真机定案;对称于录像侧
+          // 0xA004 的拨杆提示)。
+          error = '相机当前状态不允许拍照 —— 请把机顶「照片/视频」切换'
+              '拨杆拨回照片档后重试(视频档请用拍摄页的录制钮拍视频)';
         } else {
-          // 码随文浮出(〔0x????〕,同连接梯诊断风格):机身在影片波轮
-          // 位/菜单/回放等状态拒拍时提示文案可能不够指向性,真机报障
-          // 凭码定案(2026-10-11:Zf 影片位远程拍照被拒待对码)。
-          error = '快门释放失败:${_nikonHint(e.responseCode) ?? e}'
-              '〔0x${e.responseCode.toRadixString(16).toUpperCase()}〕';
+          // 码随文浮出:有提示语时附 〔0x????〕(同连接梯诊断风格);
+          // 无提示语时异常文本自带码,不再重复。
+          final hint = _nikonHint(e.responseCode);
+          error = hint == null
+              ? '快门释放失败:$e'
+              : '快门释放失败:$hint'
+                  '〔0x${e.responseCode.toRadixString(16).toUpperCase()}〕';
         }
         return;
       } on Exception catch (e) {
