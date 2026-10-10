@@ -1,7 +1,7 @@
 /// 尼康 LiveViewObject(0x9428 GetLiveViewImageEx 数据相)帧头解析:
 /// display-info header + JPEG。头里带**相机自己每帧报告**的状态 ——
 /// 对焦框数组(真实尺寸/位置,随 AF 区域设置变化)、虚拟水平仪角度、
-/// 机身录制态、持机旋转方向。
+/// 机身录制态、持机旋转方向、声音电平、录制时间码。
 ///
 /// 布局源 = OpenZCine PTPLiveViewObject(ZR/Z7 原始 dump 确认,MIT):
 /// - **头只在 0x9428(Ex)的应答里** —— 老码 0x9203 的应答在 Zf 上
@@ -13,9 +13,12 @@
 ///   像素);
 /// - 头长三代机 1024B / 一代机 512B(以 SOI 位置判定),其余未知机身
 ///   在前 2KB 内扫 SOI 定头长(域读取一律以头长为界,宁缺不错);
+/// - 声音电平 @824-827(L/R × 峰值保持/当前,各 0-14 段,与机身自家
+///   屏同款分段表);
 /// - 水平仪角度 @840/844/848,BE 有符号 16.16 定点(度 = 值/65536),
 ///   0xFFFFFFFF = 本帧不可靠;**一代头无这些域**(512B 截断,读不到即 null);
 /// - 录制态 @828(0=取景,1=录制,机身侧自启的录制也能看到);
+/// - 时间码 @831-835(显示开关 + 时/分/秒/帧各 1 字节);
 /// - 旋转 @839(0=横/1=左转竖/2=右转竖/3=倒置)。
 ///
 /// 守卫口径对齐 OpenZCine(其守卫曾在真机 dump 上验证):whole-size
@@ -65,6 +68,57 @@ final class LiveViewLevelAngles {
   double get signedPitch => signedDegrees(pitch);
 }
 
+/// 相机声音电平指示(@824-827:L/R × 峰值保持/当前,各 0-14 段 ——
+/// 与机身自家屏同款分段表,0 = 静音)。相机侧已做电平动力学与峰值
+/// 保持,取值直接上屏无需本地衰减。
+final class LiveViewSound {
+  const LiveViewSound({
+    required this.peakLeft,
+    required this.peakRight,
+    required this.currentLeft,
+    required this.currentRight,
+  });
+
+  /// 分段表上限(0…14 共 15 段);越界段值钳到它(防误报字节撑爆表)。
+  static const int maxSegment = 14;
+
+  /// 峰值保持段,左声道(0…14)。
+  final int peakLeft;
+
+  /// 峰值保持段,右声道(0…14)。
+  final int peakRight;
+
+  /// 当前电平段,左声道(0…14)。
+  final int currentLeft;
+
+  /// 当前电平段,右声道(0…14)。
+  final int currentRight;
+}
+
+/// 录制时间码(@831-835:显示开关 + 时/分/秒/帧,各 1 字节)。on =
+/// 机身「时间码显示」开着(相机自家屏同款语义 —— 用户在相机菜单里
+/// 关掉它,监看端也不显示)。
+final class LiveViewTimecode {
+  const LiveViewTimecode({
+    required this.on,
+    required this.hour,
+    required this.minute,
+    required this.second,
+    required this.frame,
+  });
+
+  final bool on;
+  final int hour;
+  final int minute;
+  final int second;
+  final int frame;
+
+  /// 双位补零的 HH:MM:SS:FF(帧 = 录制帧号)。
+  String get display =>
+      '${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}:'
+      '${second.toString().padLeft(2, '0')}:${frame.toString().padLeft(2, '0')}';
+}
+
 /// 一帧的 display-info 头(裸 JPEG / 定位不到头 → null)。
 final class LiveViewHeader {
   const LiveViewHeader({
@@ -78,6 +132,8 @@ final class LiveViewHeader {
     required this.recording,
     required this.rotationRaw,
     required this.level,
+    required this.sound,
+    required this.timecode,
   });
 
   /// AF 框的坐标系宽高(whole size;框与 0x9205 参数共用)。
@@ -97,6 +153,12 @@ final class LiveViewHeader {
 
   /// 相机虚拟水平仪(null = 头太短/本帧不可靠)。
   final LiveViewLevelAngles? level;
+
+  /// 相机声音电平(null = 头太短,一代 512B 头无此域)。
+  final LiveViewSound? sound;
+
+  /// 录制时间码(null = 头太短;on=false = 机身时间码显示关)。
+  final LiveViewTimecode? timecode;
 
   bool get isVertical => rotationRaw == 1 || rotationRaw == 2;
 }
@@ -175,6 +237,30 @@ LiveViewHeader? parseLiveViewHeader(Uint8List object) {
   final recording = headerLen > 828 && object[828] == 1;
   final rotationRaw =
       headerLen > 839 ? (object[839] > 3 ? 0 : object[839]) : 0;
+
+  // 声音电平(@824-827)与时间码(@831-835):同为 Gen-3 域,与对焦/
+  // 水平仪互不连坐;段值越界钳 14(OpenZCine 同款防误报)。
+  LiveViewSound? sound;
+  if (headerLen >= 828) {
+    int seg(int o) =>
+        object[o] > LiveViewSound.maxSegment ? LiveViewSound.maxSegment : object[o];
+    sound = LiveViewSound(
+        peakLeft: seg(824),
+        peakRight: seg(825),
+        currentLeft: seg(826),
+        currentRight: seg(827));
+  }
+  LiveViewTimecode? timecode;
+  if (headerLen >= 836) {
+    timecode = LiveViewTimecode(
+      on: object[831] == 1,
+      hour: object[832],
+      minute: object[833],
+      second: object[834],
+      frame: object[835],
+    );
+  }
+
   LiveViewLevelAngles? level;
   if (headerLen >= 852) {
     double? angle(int o) {
@@ -206,6 +292,8 @@ LiveViewHeader? parseLiveViewHeader(Uint8List object) {
     recording: recording,
     rotationRaw: rotationRaw,
     level: level,
+    sound: sound,
+    timecode: timecode,
   );
 }
 

@@ -6,7 +6,8 @@
 /// (contain 适配 → 持机旋转 → 变宽还原 → 双指缩放/拖移)—— 叠层件
 /// 零改动即随画面旋转/拉伸/缩放;点按对焦坐标经 [FeedTransform.screenToNorm]
 /// 逆映射一次收口(见 feed_transform.dart 头注)。直方图/水平仪/即拍
-/// 即览/横幅/倍率角标/拉焦轮是屏幕坐标层,不随画面变换。
+/// 即览/横幅/倍率角标/拉焦轮/录制读出(时间码+电平表)是屏幕坐标层,
+/// 不随画面变换。
 ///
 /// [topInset]/[bottomInset]/[leftInset] 供横屏侧栏布局把贴边元素
 /// (即拍即览卡/直方图/横幅)让位给顶栏/底浮层/左参数栏。
@@ -399,6 +400,34 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea> {
                   ),
                 ),
               ),
+            // ── 录制读出:时间码 + 声音电平表(贴右上;可见性见
+            // recordingReadoutOf —— 时间码随机身显示开关,电平表录制
+            // 常驻)。监看信息非交互浮层:纯净监看保留、点按透传。
+            ValueListenableBuilder<LiveViewHeader?>(
+              valueListenable: controller.engine.header,
+              builder: (context, LiveViewHeader? h, _) {
+                final v =
+                    recordingReadoutOf(h, liveViewActive: controller.liveViewActive);
+                if (!v.timecode && !v.meters) return const SizedBox.shrink();
+                return Positioned(
+                  top: widget.topInset + 8,
+                  right: 12,
+                  child: IgnorePointer(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        if (v.timecode) TimecodeView(timecode: h!.timecode!),
+                        if (v.meters) ...[
+                          if (v.timecode) const SizedBox(height: 6),
+                          AudioMetersView(sound: h!.sound!),
+                        ],
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
             // 水平仪优先用**相机帧头**的虚拟水平仪(Zf 机身侧水平仪,
             // OpenZCine 同源字段;Gen-1 短头/相机未报时落回手机姿态)。
             // 屏幕坐标层不随画面旋转 —— 地平线参考系是手机。
