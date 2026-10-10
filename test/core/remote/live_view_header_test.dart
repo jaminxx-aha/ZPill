@@ -26,6 +26,8 @@ Uint8List _frame({
   double? levelRoll, // 度;null = 不写(0xFFFFFFFF 不可靠用 [unreliableLevel])
   double? levelPitch,
   bool unreliableLevel = false,
+  ({int peakL, int peakR, int curL, int curR})? sound,
+  ({bool on, int h, int m, int s, int f})? tc,
   int tailLen = 8,
   bool poisonPastHeader = false, // 在头长之后、828+ 域写垃圾,验不越界读
 }) {
@@ -59,6 +61,19 @@ Uint8List _frame({
   }
   if (recordingByte != null && b.length > 828) b[828] = recordingByte;
   if (rotationByte != null && b.length > 839) b[839] = rotationByte;
+  if (sound != null && b.length >= 828) {
+    b[824] = sound.peakL;
+    b[825] = sound.peakR;
+    b[826] = sound.curL;
+    b[827] = sound.curR;
+  }
+  if (tc != null && b.length >= 836) {
+    b[831] = tc.on ? 1 : 0;
+    b[832] = tc.h;
+    b[833] = tc.m;
+    b[834] = tc.s;
+    b[835] = tc.f;
+  }
   if (b.length >= 852) {
     if (unreliableLevel) {
       be32(840, 0xFFFFFFFF);
@@ -75,6 +90,16 @@ Uint8List _frame({
     }
     if (b.length > 828) b[828] = 1; // recording 陷阱
     if (b.length > 839) b[839] = 2; // rotation 陷阱
+    if (b.length >= 828) {
+      b[824] = 14; // 声音电平陷阱(非零段)
+      b[825] = 14;
+      b[826] = 14;
+      b[827] = 14;
+    }
+    if (b.length >= 836) {
+      b[831] = 1; // 时间码陷阱(on + 非零时码)
+      b[832] = 9;
+    }
     if (b.length >= 852) {
       b[840] = 0;
       b[841] = 0;
@@ -183,12 +208,36 @@ void main() {
     expect(vertical.isVertical, isTrue);
   });
 
+  test('声音电平与时间码:824-827/831-835 解析,段值越界钳 14', () {
+    final h = parseLiveViewHeader(_frame(
+      sound: (peakL: 20, peakR: 9, curL: 7, curR: 0), // 20 越界 → 钳 14
+      tc: (on: true, h: 1, m: 23, s: 45, f: 12),
+    ));
+    expect(h!.sound, isNotNull);
+    expect(h.sound!.peakLeft, 14); // 越界钳制
+    expect(h.sound!.peakRight, 9);
+    expect(h.sound!.currentLeft, 7);
+    expect(h.sound!.currentRight, 0);
+    expect(h.timecode, isNotNull);
+    expect(h.timecode!.on, isTrue);
+    expect(h.timecode!.display, '01:23:45:12');
+
+    // 机身「时间码显示」关:on=false,其余字节照读(域不连坐)。
+    final off = parseLiveViewHeader(_frame(
+      tc: (on: false, h: 2, m: 0, s: 0, f: 0),
+    ));
+    expect(off!.timecode!.on, isFalse);
+    expect(off.timecode!.display, '02:00:00:00');
+  });
+
   test('一代 512B 头:Gen-3 域读不到 → level null / recording false', () {
     final h = parseLiveViewHeader(_frame(headerLen: 512));
     expect(h, isNotNull);
     expect(h!.level, isNull);
     expect(h.recording, isFalse);
     expect(h.boxes.length, 1);
+    expect(h.sound, isNull, reason: '声音电平同为 Gen-3 域');
+    expect(h.timecode, isNull, reason: '时间码同为 Gen-3 域');
   });
 
   test('未知头长(SOI 位置定头长):域读取以头长为界,不读 JPEG 载荷', () {
@@ -205,6 +254,10 @@ void main() {
     expect(h.recording, isFalse); // @828 在头外 → 不读(垃圾 0xAB ≠ 1 也不该读)
     expect(h.rotationRaw, 0);
     expect(h.level, isNull);
+    expect(h.sound, isNull, reason: '@824-827 在头外 → 不读(陷阱 14 段)'
+        '不该亮成电平)');
+    expect(h.timecode, isNull, reason: '@831-835 在头外 → 不读(陷阱 on '
+        '+ 9 时不该亮成时间码)');
   });
 
   test('小坐标系合法(whole-size 只查 >0,不限区间)', () {

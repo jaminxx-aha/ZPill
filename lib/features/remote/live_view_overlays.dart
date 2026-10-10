@@ -1,6 +1,7 @@
 /// 监看辅助覆盖层(TODO §二 Live View 监看辅助):三分网格 / 斑马纹 /
 /// 直方图 / 水平仪 / 伪色 / 对焦峰值,全部画在取景画面上,随开关增减,
-/// 不改帧数据。
+/// 不改帧数据。另有录制读出(时间码 + 声音电平表)—— 屏幕坐标层,
+/// 取景画面右上角(见 [recordingReadoutOf] 的可见性口径)。
 ///
 /// 网格与斑马纹对齐**画面实际包含矩形**(BoxFit.contain 的 letterbox
 /// 数学),不是整个取景框 —— 斑马纹错位会误导曝光判断。
@@ -13,6 +14,7 @@ import 'package:flutter/material.dart';
 import '../../core/remote/frame_analysis.dart';
 import '../../core/remote/live_view_header.dart';
 import '../../platform/motion_host.dart';
+import 'live_design.dart';
 
 /// 伪色带色表(索引 = [FrameAnalysis.falseColorBandOf];OpenZCine
 /// ExposureScale 的视频监看惯例:紫=极暗,蓝=欠,绿=中灰附近,
@@ -413,4 +415,117 @@ final class _LevelPainter extends CustomPainter {
   bool shouldRepaint(_LevelPainter old) =>
       old.orientation.pitchRad != orientation.pitchRad ||
       old.orientation.rollRad != orientation.rollRad;
+}
+
+// ── 录制读出:时间码 + 声音电平表(OpenZCine 差集⑤)────────────────
+
+/// 录制读出可见性(纯决策,取景区接线用):
+/// - 时间码随机身「时间码显示」开关(@831)—— 用户在相机菜单关掉它,
+///   监看端同随(相机自家屏同款语义);
+/// - 电平表**录制中常驻**(@828;录没录上声一目了然,静音也显示 ——
+///   那正是要看见的),待机时相机报了非零电平才现身(拍照取景恒零 →
+///   不占屏;影片待机若机身报电平即成开录前的试音表);
+/// - 头解析不出 / 取景未开启一律不显示(末帧保留期取景已停,冻结的
+///   读出随 AF 框同规退场)。
+({bool timecode, bool meters}) recordingReadoutOf(
+    LiveViewHeader? header, {required bool liveViewActive}) {
+  final h = liveViewActive ? header : null;
+  final sound = h?.sound;
+  return (
+    timecode: h?.timecode?.on == true,
+    meters: sound != null &&
+        (h!.recording || sound.currentLeft > 0 || sound.currentRight > 0),
+  );
+}
+
+/// 录制时间码读出:暗面玻璃胶囊 + 等宽数字(监看口径,双位补零)。
+class TimecodeView extends StatelessWidget {
+  const TimecodeView({super.key, required this.timecode});
+
+  final LiveViewTimecode timecode;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: LiveDesign.dark.glass,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: LiveDesign.dark.hairline),
+      ),
+      child: Text(
+        timecode.display,
+        style: TextStyle(
+          fontSize: 12,
+          color: LiveDesign.dark.text,
+          fontFeatures: [FontFeature.tabularFigures()],
+        ),
+      ),
+    );
+  }
+}
+
+/// 声音电平表:机身同款 15 段双声道(L/R)—— 当前电平填色 + 峰值保持
+/// 亮标(段色见 [audioSegmentColor])。值直接来自帧头,相机侧已做电平
+/// 动力学,本地不衰减。
+class AudioMetersView extends StatelessWidget {
+  const AudioMetersView({super.key, required this.sound});
+
+  final LiveViewSound sound;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      decoration: BoxDecoration(
+        color: LiveDesign.dark.glass,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: LiveDesign.dark.hairline),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _channel('L', sound.currentLeft, sound.peakLeft),
+          const SizedBox(height: 3),
+          _channel('R', sound.currentRight, sound.peakRight),
+        ],
+      ),
+    );
+  }
+
+  static Widget _channel(String label, int current, int peak) {
+    return Row(
+      key: ValueKey('meter-$label'),
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(
+          width: 10,
+          child: Text(label,
+              style: TextStyle(fontSize: 9, color: LiveDesign.dark.muted)),
+        ),
+        for (var i = 0; i <= LiveViewSound.maxSegment; i++)
+          Container(
+            width: 3.5,
+            height: 6,
+            margin: const EdgeInsets.symmetric(horizontal: 0.5),
+            decoration: BoxDecoration(
+              color: audioSegmentColor(i, current: current, peak: peak),
+              borderRadius: BorderRadius.circular(1),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+/// 单段颜色:已亮段绿(顶部两段 ≥13 红 —— 广播表惯例:近削波);未亮
+/// 段近隐;峰值保持标(当前之上,静音 0 除外)半亮白。纯函数,测试直取。
+Color audioSegmentColor(int index, {required int current, required int peak}) {
+  if (index < current) {
+    return index >= 13 ? const Color(0xFFE53935) : const Color(0xFF2EC76B);
+  }
+  if (index == peak && peak >= current && peak > 0) {
+    return Colors.white.withValues(alpha: 0.6);
+  }
+  return Colors.white.withValues(alpha: 0.12);
 }

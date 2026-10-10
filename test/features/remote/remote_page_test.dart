@@ -911,6 +911,46 @@ void main() {
         reason: '头在册 = 相机真实框已在屏,占位框再画即双框');
   });
 
+  testWidgets('录制读出:时间码+电平表随帧头上屏,显示关/待机静音退场',
+      (tester) async {
+    _portrait(tester);
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = _directRemoteController(transport, conn: conn);
+    addTearDown(controller.dispose);
+    _scriptAutoStart(transport); // 进页自动起景(0x9201 + 首帧)
+    await tester
+        .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
+    await tester.pumpAndSettle();
+    expect(find.byType(TimecodeView), findsNothing);
+    expect(find.byType(AudioMetersView), findsNothing,
+        reason: '零头(无录制读出域)不显示');
+
+    // ① 录制中 + 机身时间码显示开:读数即帧头字节(@824-827 电平、
+    // @828 录制、@831-835 时码)。
+    final rec = _headerObject();
+    rec[824] = 9; // L 峰值保持
+    rec[825] = 9;
+    rec[826] = 5; // L 当前
+    rec[827] = 0; // R 静音(录制中也常驻 —— 静音正是要看见的)
+    rec[828] = 1; // 录制中
+    rec[831] = 1; // 时间码显示开
+    rec[832] = 1;
+    rec[833] = 23;
+    rec[834] = 45;
+    rec[835] = 12;
+    controller.engine.header.value = parseLiveViewHeader(rec);
+    await tester.pump();
+    expect(find.text('01:23:45:12'), findsOneWidget);
+    expect(find.byType(AudioMetersView), findsOneWidget);
+
+    // ② 机身时间码显示关 + 待机零电平:读出随帧头退场(画面照常)。
+    controller.engine.header.value = parseLiveViewHeader(_headerObject());
+    await tester.pump();
+    expect(find.byType(TimecodeView), findsNothing);
+    expect(find.byType(AudioMetersView), findsNothing);
+  });
+
   testWidgets('竖屏 iPhone 相机式排版:模式条 + 底行五键(相册|对焦|'
       '快门|设置|旋转),辅助收 tune 浮层,隐藏/恢复同位两段淡出',
       (tester) async {
