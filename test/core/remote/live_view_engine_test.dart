@@ -498,16 +498,18 @@ void main() {
       expect(transport.liveViewFetches, 3);
     });
 
-    test('探测不忙 → 重启取景:0x9202(尽力)+ 自愈梯 0x9201 → 记账、'
-        'health 回 ok、取帧续跑', () async {
+    test('探测不忙 → 礼让(不忙但未满 30s 不重启)→ 满窗重启取景:'
+        '0x9202(尽力)+ 自愈梯 0x9201 → 记账、health 回 ok、取帧续跑', () async {
       final transport = _ScriptTransport()
         ..ok() // 0x9201(初始)
         ..ok(data: _frame(1)) // 取帧 1
-        ..ok(data: _frame(1)) // 取帧 2:重放 → 探测
+        ..ok(data: _frame(1)) // 取帧 2:重放 5s → 探测不忙 → 礼让(不重启)
         ..ok() // 0x90C8 → 不忙(true)
+        ..ok(data: _frame(1)) // 取帧 3:重放 31s → 复查不忙 → 满礼让窗重启
+        ..ok() // 0x90C8 → 不忙
         ..ok() // 0x9202 EndLiveView(尽力)
         ..ok() // 0x9201 重启(自愈梯直过)
-        ..ok(data: _frame(2)); // 取帧 3:重启后的新帧
+        ..ok(data: _frame(2)); // 取帧 4:重启后的新帧
       final delay = _GatedDelay();
       final clock = _TestClock();
       final engine = wireEngine(transport, delay, clock);
@@ -515,7 +517,18 @@ void main() {
       await engine.start();
       await pumpEventQueue(); // 取帧 1,interval 门 1
       clock.advance(const Duration(seconds: 5));
-      delay.release(); // → 取帧 2(重放)→ 探测 → 重启序列,interval 门 2
+      delay.release(); // → 取帧 2(重放)→ 探测不忙 → 礼让,interval 门 2
+      await pumpEventQueue();
+      expect(engine.health.value, LiveViewHealth.ok,
+          reason: '礼让期不打摁机身:菜单浏览场景无横幅无重启');
+      expect(
+          transport.requests
+              .where((r) => r.opcode == NikonOperationCode.endLiveView),
+          isEmpty,
+          reason: '礼让窗内不重启(重启会把机身菜单摔回拍摄屏)');
+
+      clock.advance(const Duration(seconds: 26)); // 冻结满 31s ≥ 礼让窗 30s
+      delay.release(); // → 取帧 3(重放)→ 复查不忙 → 重启序列,interval 门 3
       await pumpEventQueue(); // 处置器(探测/重启)全在门上完成
 
       expect(engine.health.value, LiveViewHealth.ok, reason: '重启成功回 ok');
@@ -525,28 +538,35 @@ void main() {
         NikonOperationCode.getLiveViewImageEx,
         NikonOperationCode.getLiveViewImageEx,
         NikonOperationCode.deviceReady,
+        NikonOperationCode.getLiveViewImageEx,
+        NikonOperationCode.deviceReady,
         NikonOperationCode.endLiveView,
         NikonOperationCode.startLiveView,
-      ], reason: '重启 = EndLiveView + 自愈梯 StartLiveView');
+      ], reason: '礼让期复查探测 → 满窗重启 = EndLiveView + 自愈梯');
 
       clock.advance(const Duration(milliseconds: 100));
-      delay.release(); // → 取帧 3:重启后取景续跑
+      delay.release(); // → 取帧 4:重启后取景续跑
       await pumpEventQueue();
       expect(engine.frame.value![2], 2);
-      expect(transport.liveViewFetches, 3);
+      expect(transport.liveViewFetches, 4);
     });
 
-    test('探测异常(链路类)→ 按不忙走重启,不让异常吞掉冻结判决', () async {
+    test('探测异常(链路类)→ 按不忙走礼让,满窗重启,不让异常吞掉冻结判决',
+        () async {
       final transport = _ScriptTransport()
         ..ok() // 0x9201(初始)
         ..ok(data: _frame(1)) // 取帧 1
-        ..ok(data: _frame(1)) // 取帧 2:重放 → 探测
+        ..ok(data: _frame(1)) // 取帧 2:重放 5s → 探测异常 → 视不忙 → 礼让
         ..fail(const PtpResponseException(
             opcode: NikonOperationCode.deviceReady,
             responseCode: 0x2002)) // 探测抛错 → 视不忙
+        ..ok(data: _frame(1)) // 取帧 3:重放 31s → 复查再异常 → 满窗重启
+        ..fail(const PtpResponseException(
+            opcode: NikonOperationCode.deviceReady,
+            responseCode: 0x2002)) // 复查抛错 → 视不忙
         ..ok() // 0x9202
         ..ok() // 0x9201 重启
-        ..ok(data: _frame(2)); // 取帧 3
+        ..ok(data: _frame(2)); // 取帧 4
       final delay = _GatedDelay();
       final clock = _TestClock();
       final engine = wireEngine(transport, delay, clock);
@@ -554,13 +574,18 @@ void main() {
       await engine.start();
       await pumpEventQueue();
       clock.advance(const Duration(seconds: 5));
-      delay.release(); // → 重放帧 → 探测异常 → 重启序列
+      delay.release(); // → 重放帧 → 探测异常 → 礼让
+      await pumpEventQueue();
+      clock.advance(const Duration(seconds: 26)); // 满礼让窗
+      delay.release(); // → 重放帧 → 复查异常 → 重启序列
       await pumpEventQueue();
 
       expect(engine.health.value, LiveViewHealth.ok);
       expect(transport.requests.map((r) => r.opcode), [
         NikonOperationCode.startLiveView,
         NikonOperationCode.getLiveViewImageEx,
+        NikonOperationCode.getLiveViewImageEx,
+        NikonOperationCode.deviceReady,
         NikonOperationCode.getLiveViewImageEx,
         NikonOperationCode.deviceReady,
         NikonOperationCode.endLiveView,
@@ -574,12 +599,16 @@ void main() {
       final transport = _ScriptTransport()
         ..ok() // 0x9201(初始)
         ..ok(data: _frame(1)) // 取帧 1
-        ..ok(data: _frame(1)) // 取帧 2:重放 → 探测 → 重启(第 1 次,预算记满)
+        ..ok(data: _frame(1)) // 取帧 2:重放 5s → 探测不忙 → 礼让
+        ..ok() // 0x90C8 不忙
+        ..ok(data: _frame(1)) // 取帧 3:重放 31s → 复查不忙 → 满窗重启 #1
         ..ok() // 0x90C8 不忙
         ..ok() // 0x9202
-        ..ok() // 0x9201(重启 #1)
-        ..ok(data: _frame(2)) // 取帧 3:重启后的新帧
-        ..ok(data: _frame(2)) // 取帧 4:再次重放 → 探测 → 预算耗尽
+        ..ok() // 0x9201(重启 #1,预算记满 1/1)
+        ..ok(data: _frame(2)) // 取帧 4:重启后的新帧
+        ..ok(data: _frame(2)) // 取帧 5:重放 5s → 探测不忙 → 礼让
+        ..ok() // 0x90C8 不忙
+        ..ok(data: _frame(2)) // 取帧 6:重放 31s → 复查不忙 → 预算耗尽
         ..ok(); // 0x90C8 不忙
       final delay = _GatedDelay();
       final clock = _TestClock();
@@ -589,15 +618,21 @@ void main() {
       await engine.start();
       await pumpEventQueue(); // 取帧 1
       clock.advance(const Duration(seconds: 5));
-      delay.release(); // → 取帧 2 → 探测不忙 → 重启 #1(记账 1/1)
+      delay.release(); // → 取帧 2 → 探测不忙 → 礼让
+      await pumpEventQueue();
+      clock.advance(const Duration(seconds: 26)); // 满礼让窗
+      delay.release(); // → 取帧 3 → 复查不忙 → 重启 #1(记账 1/1)
       await pumpEventQueue();
       expect(engine.health.value, LiveViewHealth.ok);
 
       clock.advance(const Duration(milliseconds: 100));
-      delay.release(); // → 取帧 3(新帧)
+      delay.release(); // → 取帧 4(新帧)
       await pumpEventQueue();
       clock.advance(const Duration(seconds: 5));
-      delay.release(); // → 取帧 4(再次重放)→ 探测 → 预算耗尽 → 升级
+      delay.release(); // → 取帧 5(再次重放)→ 探测不忙 → 礼让
+      await pumpEventQueue();
+      clock.advance(const Duration(seconds: 26)); // 再满礼让窗
+      delay.release(); // → 取帧 6(重放)→ 复查不忙 → 预算耗尽 → 升级
       await pumpEventQueue();
 
       expect(escalations, 1, reason: '升级回调恰一次');
@@ -618,14 +653,16 @@ void main() {
 
       delay.release(); // 放行最后的 interval 门:循环世代已废,不得再取帧
       await pumpEventQueue();
-      expect(transport.liveViewFetches, 4);
+      expect(transport.liveViewFetches, 6);
     });
 
     test('冻结重启被拒(自愈梯全败)→ failed 带梯,取景中断文案可辨', () async {
       final transport = _ScriptTransport()
         ..ok() // 0x9201(初始)
         ..ok(data: _frame(1)) // 取帧 1
-        ..ok(data: _frame(1)) // 取帧 2:重放 → 探测
+        ..ok(data: _frame(1)) // 取帧 2:重放 5s → 探测不忙 → 礼让
+        ..ok() // 0x90C8 不忙
+        ..ok(data: _frame(1)) // 取帧 3:重放 31s → 复查不忙 → 满窗重启
         ..ok() // 0x90C8 不忙
         ..ok() // 0x9202(尽力)
         ..fail(const PtpResponseException(
@@ -640,7 +677,10 @@ void main() {
       await engine.start();
       await pumpEventQueue();
       clock.advance(const Duration(seconds: 5));
-      delay.release(); // → 重放帧 → 探测不忙 → 重启序列全败
+      delay.release(); // → 重放帧 → 探测不忙 → 礼让
+      await pumpEventQueue();
+      clock.advance(const Duration(seconds: 26)); // 满礼让窗
+      delay.release(); // → 重放帧 → 复查不忙 → 重启序列全败
       await pumpEventQueue();
 
       expect(engine.status.value, LiveViewStatus.failed);

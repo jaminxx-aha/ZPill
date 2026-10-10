@@ -465,9 +465,9 @@ class TimecodeView extends StatelessWidget {
   }
 }
 
-/// 声音电平表:机身同款 15 段双声道(L/R)—— 当前电平填色 + 峰值保持
-/// 亮标(段色见 [audioSegmentColor])。值直接来自帧头,相机侧已做电平
-/// 动力学,本地不衰减。
+/// 声音电平表:机身同款 15 段双声道(L/R)—— 当前电平三区色填充 +
+/// 峰值保持随区亮标(段色见 [audioSegmentColor])。值直接来自帧头,
+/// 相机侧已做电平动力学,本地不衰减。
 class AudioMetersView extends StatelessWidget {
   const AudioMetersView({super.key, required this.sound});
 
@@ -518,14 +518,31 @@ class AudioMetersView extends StatelessWidget {
   }
 }
 
-/// 单段颜色:已亮段绿(顶部两段 ≥13 红 —— 广播表惯例:近削波);未亮
-/// 段近隐;峰值保持标(当前之上,静音 0 除外)半亮白。纯函数,测试直取。
+/// 单段颜色(三区色,OpenZCine MonitorOverlays zoneColor 口径:-18dB 起
+/// 黄、-6dB 起红;离散 15 段为计数语义「值 v = 亮 v 段」,边界各下移
+/// 一段对齐其连续填充在每个值上的观感 —— current=13 即见红、10-12 顶
+/// 段黄):已亮段按所在区着色,段 0-8 绿(正常)/ 9-11 黄(偏大,注意
+/// 增益)/ 12-14 红(近削波);未亮段近隐;峰值保持标(当前之上,静音
+/// 0 除外)随所在区着色 —— 黄/红标 = 刚才冲进了警告区,绿区保持半亮
+/// 白。纯函数,测试直取。
 Color audioSegmentColor(int index, {required int current, required int peak}) {
   if (index < current) {
-    return index >= 13 ? const Color(0xFFE53935) : const Color(0xFF2EC76B);
+    return _audioZoneColor(index);
   }
   if (index == peak && peak >= current && peak > 0) {
-    return Colors.white.withValues(alpha: 0.6);
+    return index >= _audioYellowFromSegment
+        ? _audioZoneColor(index)
+        : Colors.white.withValues(alpha: 0.6);
   }
   return Colors.white.withValues(alpha: 0.12);
+}
+
+/// 黄区起点段(-18dB 起黄;计数语义下移一段);红区起点段(-6dB 起红)。
+const int _audioYellowFromSegment = 9;
+const int _audioRedFromSegment = 12;
+
+Color _audioZoneColor(int index) {
+  if (index >= _audioRedFromSegment) return const Color(0xFFFF5C52);
+  if (index >= _audioYellowFromSegment) return const Color(0xFFF5D052);
+  return const Color(0xFF56EB84);
 }

@@ -87,15 +87,78 @@ void main() {
       expect(w.frozen(t0.add(const Duration(seconds: 65))), isFalse);
     });
 
-    test('探测不忙 → restart;判死后签名重新评估(frozen 复位)', () {
+    test('探测不忙 → 重启礼让:未满窗不动用重启,按节拍复查,满窗才收口', () {
       final w = LiveViewWatchdog(
-          repeatTimeout: const Duration(seconds: 4));
+          repeatTimeout: const Duration(seconds: 4),
+          busyProbeInterval: const Duration(seconds: 2),
+          restartGraceTimeout: const Duration(seconds: 30));
       w.inspect(frameA, t0);
       final tFrozen = t0.add(const Duration(seconds: 5));
       expect(w.inspect(frameA, tFrozen), LiveViewWatchdogSignal.probe);
-      expect(w.noteProbeResult(busy: false, now: tFrozen),
+      expect(w.noteProbeResult(busy: false, now: tFrozen), isNull,
+          reason: '进菜单/回放同款冻结且不忙:礼让,不把机身摁回拍摄屏');
+      expect(w.frozen(tFrozen), isTrue, reason: '礼让期仍在冻结态');
+      // 节拍内(1s)不复查;满节拍(2s)再探,仍未满窗 → 继续礼让
+      expect(
+          w.inspect(frameA, tFrozen.add(const Duration(seconds: 1))), isNull);
+      expect(w.inspect(frameA, tFrozen.add(const Duration(seconds: 2))),
+          LiveViewWatchdogSignal.probe);
+      expect(
+          w.noteProbeResult(
+              busy: false, now: tFrozen.add(const Duration(seconds: 2))),
+          isNull);
+      // 冻结满 30s(礼让窗)复查仍不忙 → 动用重启;判死后签名重新评估
+      expect(w.inspect(frameA, t0.add(const Duration(seconds: 31))),
+          LiveViewWatchdogSignal.probe);
+      expect(
+          w.noteProbeResult(busy: false, now: t0.add(const Duration(seconds: 31))),
           LiveViewWatchdogSignal.restart);
-      expect(w.frozen(tFrozen), isFalse, reason: '_lastSignature 已清');
+      expect(w.frozen(t0.add(const Duration(seconds: 31))), isFalse);
+    });
+
+    test('礼让期内新帧到达 → 自我纠错一切清零,旧判决不压新序列', () {
+      final w = LiveViewWatchdog(
+          repeatTimeout: const Duration(seconds: 4),
+          restartGraceTimeout: const Duration(seconds: 30));
+      w.inspect(frameA, t0);
+      expect(w.inspect(frameA, t0.add(const Duration(seconds: 5))),
+          LiveViewWatchdogSignal.probe);
+      expect(
+          w.noteProbeResult(busy: false, now: t0.add(const Duration(seconds: 5))),
+          isNull);
+      // 礼让等待期机身自己恢复(如退出菜单回拍摄屏):新签名清零
+      expect(w.inspect(frameB, t0.add(const Duration(seconds: 10))), isNull);
+      expect(w.frozen(t0.add(const Duration(seconds: 10))), isFalse);
+      // 同帧再重放:从首见重新起算,另起一案
+      expect(w.inspect(frameB, t0.add(const Duration(seconds: 13))), isNull);
+      expect(w.inspect(frameB, t0.add(const Duration(seconds: 15))), isNotNull,
+          reason: '重新判冻另起一案');
+    });
+
+    test('忙保持期内转不忙:未满礼让窗不重启(继续忙保持口径),满窗收口', () {
+      final w = LiveViewWatchdog(
+          repeatTimeout: const Duration(seconds: 4),
+          busyHoldTimeout: const Duration(seconds: 60),
+          busyProbeInterval: const Duration(seconds: 2),
+          restartGraceTimeout: const Duration(seconds: 30));
+      w.inspect(frameA, t0);
+      expect(w.inspect(frameA, t0.add(const Duration(seconds: 5))),
+          LiveViewWatchdogSignal.probe);
+      expect(
+          w.noteProbeResult(busy: true, now: t0.add(const Duration(seconds: 5))),
+          LiveViewWatchdogSignal.busyHold);
+      // 忙保持中复查转不忙,但冻结仅 10s(< 礼让窗)→ 礼让,不重启
+      expect(w.inspect(frameA, t0.add(const Duration(seconds: 10))),
+          LiveViewWatchdogSignal.probe);
+      expect(
+          w.noteProbeResult(busy: false, now: t0.add(const Duration(seconds: 10))),
+          isNull);
+      // 满礼让窗(30s)复查仍不忙 → 重启
+      expect(w.inspect(frameA, t0.add(const Duration(seconds: 31))),
+          LiveViewWatchdogSignal.probe);
+      expect(
+          w.noteProbeResult(busy: false, now: t0.add(const Duration(seconds: 31))),
+          LiveViewWatchdogSignal.restart);
     });
 
     test('重启预算:窗口内 3 次耗尽;窗口滑出不累', () {
