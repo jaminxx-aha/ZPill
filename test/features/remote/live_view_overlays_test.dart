@@ -132,25 +132,42 @@ void main() {
     });
   });
 
-  group('audioSegmentColor:段色(纯函数)', () {
-    test('已亮绿 / 顶部两段红 / 未亮近隐 / 峰值保持亮标 / 静音零不亮标',
-        () {
-      // 当前 5 段:0-4 填绿
+  group('audioSegmentColor:三区段色(纯函数)', () {
+    test('绿 0-8 / 黄 9-11 / 红 12-14:current=13 顶亮段即红,10-12 见黄', () {
+      // current=13 → 亮 0-12:顶段 12 红(OpenZCine 连续填充 -6dB 起红,
+      // 计数语义下移一段 → 值 13 即红,不再须 14 满格)
+      expect(audioSegmentColor(12, current: 13, peak: 13),
+          const Color(0xFFFF5C52));
+      // current=14(钳制满格)→ 12/13 两段红
+      expect(audioSegmentColor(13, current: 14, peak: 14),
+          const Color(0xFFFF5C52));
+      // current=12 → 顶段 11 黄;current=10 → 顶段 9 黄(大声说话区)
+      expect(audioSegmentColor(11, current: 12, peak: 12),
+          const Color(0xFFF5D052));
+      expect(audioSegmentColor(9, current: 10, peak: 10),
+          const Color(0xFFF5D052));
+      // current=9 → 顶段 8 绿(安全区,正常说话)
+      expect(
+          audioSegmentColor(8, current: 9, peak: 9), const Color(0xFF56EB84));
       expect(audioSegmentColor(0, current: 5, peak: 9),
-          const Color(0xFF2EC76B));
-      expect(audioSegmentColor(4, current: 5, peak: 9),
-          const Color(0xFF2EC76B));
-      // 5 起(峰值标位之前)近隐
+          const Color(0xFF56EB84));
+    });
+
+    test('峰值保持标随区着色:红区红标/黄区黄标,绿区白标;未亮近隐;静音不亮标', () {
+      // 峰值冲进红区:红标 = 刚才差点削波
+      expect(audioSegmentColor(13, current: 5, peak: 13),
+          const Color(0xFFFF5C52));
+      expect(audioSegmentColor(12, current: 5, peak: 12),
+          const Color(0xFFFF5C52));
+      // 峰值在黄区:黄标
+      expect(audioSegmentColor(10, current: 5, peak: 10),
+          const Color(0xFFF5D052));
+      // 峰值在绿区:白标(中性)
+      expect(audioSegmentColor(8, current: 5, peak: 8),
+          Colors.white.withValues(alpha: 0.6));
+      // 未亮未标:近隐
       expect(audioSegmentColor(5, current: 5, peak: 9),
           Colors.white.withValues(alpha: 0.12));
-      // 峰值 9:半亮白标
-      expect(audioSegmentColor(9, current: 5, peak: 9),
-          Colors.white.withValues(alpha: 0.6));
-      // 顶部两段(13/14)红了:当前拉满时
-      expect(audioSegmentColor(13, current: 15, peak: 14),
-          const Color(0xFFE53935));
-      expect(audioSegmentColor(14, current: 15, peak: 14),
-          const Color(0xFFE53935));
       // 静音(0/0):全隐,不亮零段标
       expect(audioSegmentColor(0, current: 0, peak: 0),
           Colors.white.withValues(alpha: 0.12));

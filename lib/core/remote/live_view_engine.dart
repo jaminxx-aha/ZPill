@@ -277,14 +277,22 @@ final class LiveViewEngine {
             busy = false;
           }
           if (run != _runId) return;
-          if (_watchdog.noteProbeResult(busy: busy, now: _now()) ==
-              LiveViewWatchdogSignal.busyHold) {
-            // 机身忙(写卡/下载 flush):保持不重启,取帧照旧等自我恢复
-            //(重启会把机身菜单摔回拍摄屏);有界窗口由看门狗把守。
-            health.value = LiveViewHealth.busy;
-            return;
+          switch (_watchdog.noteProbeResult(busy: busy, now: _now())) {
+            case LiveViewWatchdogSignal.busyHold:
+              // 机身忙(写卡/下载 flush):保持不重启,取帧照旧等自我恢复
+              //(重启会把机身菜单摔回拍摄屏);有界窗口由看门狗把守。
+              health.value = LiveViewHealth.busy;
+            case LiveViewWatchdogSignal.restart:
+              await _restartLiveViewOrGiveUp(run);
+            case null:
+              // 不忙但冻结未满礼让窗:多为操作员在机身菜单/回放,
+              // 礼让等待 —— 下一帧按节拍复查,新帧到达即自我纠错。
+              break;
+            case LiveViewWatchdogSignal.probe:
+            case LiveViewWatchdogSignal.busyHoldExpired:
+              // 不会从 noteProbeResult 到达(防御空处理)。
+              break;
           }
-          await _restartLiveViewOrGiveUp(run);
         case LiveViewWatchdogSignal.restart:
         case LiveViewWatchdogSignal.busyHoldExpired:
           await _restartLiveViewOrGiveUp(run);
