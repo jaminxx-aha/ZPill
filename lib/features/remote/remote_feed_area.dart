@@ -487,6 +487,9 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea> {
                         right: 12, top: 8 + widget.topInset),
                     child: _FocusDialRail(
                         key: const ValueKey('focus-dial-rail'),
+                        // 机身对焦模式为 MF 时远程拉焦失效:轮子压暗
+                        // (拖动被控制器静默丢弃,姿态不消失)。
+                        enabled: !controller.focusModeIsMf,
                         onDrag: controller.focusDialDrag),
                   ),
                 ),
@@ -561,9 +564,13 @@ class _ZoomBadge extends StatelessWidget {
 /// 拉焦轮:取景画面右缘竖条,竖向拖动 = 连续手动对焦(0x9204,步进
 /// 标定见 RemoteController.focusDialDrag)。自吃竖拖与点按,不落到画面
 /// 手势;近/远方向 = 下/上(跟焦轮手感的「向自己转 = 向近」)。
+/// [enabled] = false(机身对焦模式为 MF)时压暗且不回调,手势照旧
+/// 自吃(松手漏给缩放手势反而更怪)。
 class _FocusDialRail extends StatelessWidget {
-  const _FocusDialRail({super.key, required this.onDrag});
+  const _FocusDialRail(
+      {super.key, this.enabled = true, required this.onDrag});
 
+  final bool enabled;
   final ValueChanged<double> onDrag;
 
   @override
@@ -571,16 +578,19 @@ class _FocusDialRail extends StatelessWidget {
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: () {}, // 自吃点按:点轮子不触发对焦
-      onVerticalDragUpdate: (d) => onDrag(d.delta.dy),
-      child: Container(
-        width: 44,
-        height: 180,
-        decoration: BoxDecoration(
-          color: LiveDesign.dark.glass,
-          borderRadius: BorderRadius.circular(22),
-          border: Border.all(color: LiveDesign.dark.hairline),
+      onVerticalDragUpdate: enabled ? (d) => onDrag(d.delta.dy) : null,
+      child: Opacity(
+        opacity: enabled ? 1 : 0.35,
+        child: Container(
+          width: 44,
+          height: 180,
+          decoration: BoxDecoration(
+            color: LiveDesign.dark.glass,
+            borderRadius: BorderRadius.circular(22),
+            border: Border.all(color: LiveDesign.dark.hairline),
+          ),
+          child: CustomPaint(painter: _DialTicksPainter()),
         ),
-        child: CustomPaint(painter: _DialTicksPainter()),
       ),
     );
   }

@@ -1514,6 +1514,59 @@ void main() {
     expect(find.byKey(const ValueKey('focus-dial-rail')), findsOneWidget);
   });
 
+  testWidgets('对焦浮层:机身对焦模式 MF → 常驻提示 + 控制灰化 + 盲按零流量,'
+      '拉焦轮压暗保留姿态', (tester) async {
+    _portrait(tester);
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = _directRemoteController(transport, conn: conn);
+    addTearDown(controller.dispose);
+    transport
+      ..ok() // 0x9201(进页自动起景)
+      ..ok(data: _realJpeg()); // 首帧
+    await tester
+        .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
+    await tester.pumpAndSettle();
+
+    // 0xD061 = 4(MF 选择,Zf 域内值):直置 paramProps(0x4006 事件 →
+    // 裸值读链路在控制器用例已覆盖,这里只验页面消费端)
+    controller.paramProps[PtpDevicePropCode.stillFocusMode] =
+        const PropState(value: 4);
+    controller.notifyListeners();
+    await tester.pumpAndSettle();
+
+    // 开对焦浮层:MF 常驻提示行在场
+    await tester.tap(find.byIcon(Icons.center_focus_strong));
+    await tester.pumpAndSettle();
+    expect(find.text('机身对焦模式为 MF,远程对焦已停用'), findsOneWidget,
+        reason: 'MF 常驻提示');
+
+    // 盲按 AF / MF 步进:零对焦流量(灰化是第二道,控制器拦截是第一道)
+    await tester.tap(find.text('AF 对焦'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byIcon(Icons.remove));
+    await tester.pumpAndSettle();
+    expect(
+        transport.requests
+            .where((r) => r.opcode == NikonOperationCode.afDrive),
+        isEmpty,
+        reason: 'AF 盲按零流量');
+    expect(
+        transport.requests
+            .where((r) => r.opcode == NikonOperationCode.mfDrive),
+        isEmpty,
+        reason: 'MF 步进盲按零流量');
+
+    // 开拉焦轮:MF 时压暗 0.35(姿态保留;拖动被控制器静默丢弃)
+    await tester.tap(find.text('拉焦轮'));
+    await tester.pumpAndSettle();
+    final rail = find.byKey(const ValueKey('focus-dial-rail'));
+    expect(rail, findsOneWidget, reason: 'MF 下拉焦轮保留姿态');
+    final opacity = tester.widget<Opacity>(
+        find.descendant(of: rail, matching: find.byType(Opacity)));
+    expect(opacity.opacity, 0.35, reason: 'MF 时拉焦轮压暗');
+  });
+
   testWidgets('对焦/设置浮层互斥单开,再点锚钮即收,点取景画面即收',
       (tester) async {
     _portrait(tester);

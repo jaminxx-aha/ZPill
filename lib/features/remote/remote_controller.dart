@@ -828,6 +828,7 @@ final class RemoteController extends ChangeNotifier {
       return;
     }
     if (focusing) return;
+    if (_rejectIfFocusModeMf()) return; // 机身 MF:远程拉焦同样失效
     error = null;
     notifyListeners();
     engine.pause();
@@ -858,6 +859,12 @@ final class RemoteController extends ChangeNotifier {
   /// 对焦按钮)抢占:代数自增,在途脉冲发完后不再续发。
   void focusDialDrag(double dy) {
     if (dy == 0 || !_linkUp || capturing) return;
+    if (focusModeIsMf) {
+      // 机身 MF:拖动无效。静默丢弃(拖动事件高频,不刷横幅)+ 清
+      // 余量,防锁定解除瞬间陈旧增量爆发成一次误驱动。
+      _dialAccum = 0;
+      return;
+    }
     _dialAccum += dy;
     _dialPump();
   }
@@ -1012,6 +1019,28 @@ final class RemoteController extends ChangeNotifier {
 
   // ---- 对焦域:触控对焦 + 对焦驱动(候选码,待真机核对)----
 
+  /// 机身对焦模式(0xD061)是否为 MF:是 → 远程对焦控制全部失效
+  /// (机身 MF 下 AF 马达脱开,0x90C1/0x9205/0x9204 均无效,只有镜头
+  /// 对焦环能动焦 —— libgphoto2/nico 实证口径,**3=MF(固定)/4=MF(选择)
+  /// 两态同拦**:值 3 在 Zf 取值域外、其余 Z 机身可能回,按全方言集
+  /// 判定)。值未知(desc 拒答/未读到)**不锁**:宁可按钮可按被机身拒,
+  /// 也不把可用控制锁死。机身拨杆改动经 0x4006 事件定向刷新,门控实时
+  /// 跟随。
+  bool get focusModeIsMf => kStillFocusModeMfValues
+      .contains(paramProps[PtpDevicePropCode.stillFocusMode]?.value);
+
+  /// MF 门闩的提示文案(触控对焦/AF 钮/MF 步进共用)。
+  static const _focusModeMfHint = '机身对焦模式为 MF —— 远程对焦不可用,'
+      '请切回 AF-S/AF-C(「对焦模式」芯片可直接切换)';
+
+  /// MF 门闩:锁定时设提示并返回 true,调用方即拦下本次操作。
+  bool _rejectIfFocusModeMf() {
+    if (!focusModeIsMf) return false;
+    notice = _focusModeMfHint;
+    notifyListeners();
+    return true;
+  }
+
   /// 0x9205 忙重试(OpenZCine 同款策略:对焦区域移动遇 0x2019 短退避重试)。
   static const _afBusyRetries = 3;
   static const _afBusyRetryDelay = Duration(milliseconds: 200);
@@ -1030,6 +1059,7 @@ final class RemoteController extends ChangeNotifier {
       return;
     }
     if (!liveViewActive || focusing) return; // 无取景/对焦中:静默忽略
+    if (_rejectIfFocusModeMf()) return; // 机身 MF:远程对焦失效
     _preemptFocusDial(); // AF 抢占在途滚轮驱动(焦点位置将改变)
     final h = engine.header.value;
     final size = h != null && h.coordinateWidth > 0 && h.coordinateHeight > 0
@@ -1078,6 +1108,7 @@ final class RemoteController extends ChangeNotifier {
       notifyListeners();
       return;
     }
+    if (_rejectIfFocusModeMf()) return; // 机身 MF:远程对焦失效
     _preemptFocusDial(); // 同 touchFocus:AF 抢占在途滚轮驱动
     error = null;
     notifyListeners();

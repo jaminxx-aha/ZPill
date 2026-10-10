@@ -30,6 +30,14 @@ library;
 import '../../core/ptp/device_prop.dart';
 import '../../core/ptp/operation_codes.dart';
 
+/// 0xD061 对焦模式的 MF 值集(尼康方言全表:0=AF-S/1=AF-C/2=AF-F/
+/// 3=MF(固定)/4=MF(选择)/5=AF-A;libgphoto2 config.c,nico Z fc 实证
+/// 两 MF 态同拦)。机身在任一 MF 态时 AF 马达脱开,远程对焦控制
+/// (0x90C1/0x9205/0x9204)全部无效、只有镜头对焦环能动焦 ——
+/// RemoteController 据此门控对焦域。多机型口径:值 3 在 Zf 取值域外、
+/// 其余 Z 机身可能回,门控按全方言集判定(fail-open 只对未知值)。
+const kStillFocusModeMfValues = {3, 4};
+
 /// 单个拍摄参数:属性码 + 中文名 + 值展示规则 + 读写路径路由。
 final class ShootingParam {
   const ShootingParam({
@@ -303,13 +311,23 @@ final kShootingParams = <ShootingParam>[
   // 对焦模式 0xD061(u8;静照权威源,单一芯片 —— 0x500A 是只读镜像已
   // 移出,0x801x 值空间与这里完全不同):pickValues 直供,厂商码
   // PropDesc 拒答时面板照常可调(0=AF-S/1=AF-C/4=MF/5=AF-A,OpenZCine
-  // stillFocusModeD061 同表)。
+  // stillFocusModeD061 同表)。**多机型**:全方言另有 2=AF-F/3=MF(固定)
+  //(libgphoto2 config.c),标签表收录(读侧展示);pickValues 仍按 Zf
+  // 取值域直供,其余机身 FORM 枚举优先、desc 拒答时 [0,1,4,5] 也能完成
+  // AF↔MF 切换(3/4 两值等价 MF)。门控值集见 [kStillFocusModeMfValues]。
   ShootingParam(
     code: PtpDevicePropCode.stillFocusMode,
     label: '对焦模式',
     writeType: PtpDataType.uint8,
     pickValues: [0, 1, 4, 5],
-    enumLabels: {0: 'AF-S', 1: 'AF-C', 4: 'MF', 5: 'AF-A'},
+    enumLabels: {
+      0: 'AF-S',
+      1: 'AF-C',
+      2: 'AF-F',
+      3: 'MF',
+      4: 'MF',
+      5: 'AF-A',
+    },
   ),
   // 释放:尼康方言全表(libgphoto2/OpenZCine StillDriveMode 候选;
   // ISO 标准表 2=连拍/3=间隔 对尼康不成立 —— C15-C120 为高速连拍档)。

@@ -11,6 +11,11 @@
       「不下载整档只拉预览段」的可行性在此定案。
   [M] 最新 MOV 头 64KB → 原子框走查(ftyp/moov/mdat 偏移)→ moov 在
       mdat 前 = faststart(未来流式播放的依据;下载后播放不依赖此)。
+  [S] 最新 NEF 全档拉回(1MB 分块 GetPartialObject)→ SOI/EOI 全档扫描
+      + 尺寸解析。2026-10-10 ① 证伪收尾:头 256KB 走查只见 160×120
+      缩略 JPEG,1620×1080/320×212 预览是 Compression=34713 NEF 条带
+      (非 JPEG)—— RAW 条带(止于 ~24.4MB)之后是否还藏大 JPEG,
+      本模式一次定案(nico 头读内嵌 JPEG 预览方案在 Zf 的终裁)。
 
 运行:tools/usb_probe/.venv/bin/python tools/usb_probe/media_probe.py
 """
@@ -18,6 +23,7 @@ from __future__ import annotations
 
 import struct
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -234,6 +240,76 @@ def walk_nef(dev, ep_out, ep_in, txid, handle, name: str) -> int:
     return txid
 
 
+def scan_nef_jpegs(dev, ep_out, ep_in, txid, handle, name: str, size: int) -> int:
+    """[S] NEF 全档拉回(1MB 分块)→ SOI/EOI 全档扫描 + 尺寸解析。
+
+    SOI 匹配 b"\\xff\\xd8\\xff"(SOI + 紧随标记字节 —— 真 JPEG 流必有;
+    熵编码区 0xFF 全部转义成 0xFF00,扫描数据里不会出现该序列,RAW
+    条带内的伪命中靠「找不到 EOI / 解不出 SOF」过滤)。
+    """
+    print(f"    [S] {name} 全档 SOI 扫描({size / 1e6:.1f}MB,1MB 分块):")
+    if size <= 0:
+        print("      对象大小异常,跳过")
+        return txid
+    whole = bytearray()
+    t0 = time.monotonic()
+    off = 0
+    while off < size:
+        want = min(1024 * 1024, size - off)
+        txid += 1
+        try:
+            txid, blob, rc = xact(dev, ep_out, ep_in, txid, GET_PARTIAL_OBJECT,
+                                  [handle, off, want])
+        except usb.core.USBError as e:
+            print(f"      @{off} 分块读 <- USB 错误:{e}(扫描中止)")
+            return txid
+        chunk = blob[HDR:] if blob is not None else b""
+        if rc != OK or len(chunk) != want:
+            print(f"      @{off} 请求 {want}B 实回 {len(chunk)}B(0x{rc:04X})"
+                  "—— 分块大小相机不接受,扫描中止")
+            return txid
+        whole += chunk
+        off += want
+    dt = time.monotonic() - t0
+    print(f"      全档拉回 {len(whole)}B,耗时 {dt:.1f}s"
+          f"({len(whole) / dt / 1e6:.1f}MB/s),本地扫描…")
+
+    soi = b"\xff\xd8\xff"
+    eoi_m = b"\xff\xd9"
+    jpegs = []  # (偏移, 长度, 尺寸|None)
+    pos = whole.find(soi)
+    while pos >= 0:
+        eoi = whole.find(eoi_m, pos + 2)
+        if eoi < 0:
+            print(f"        SOI @{pos} 无 EOI(截断/伪命中,忽略)")
+        else:
+            dims = jpeg_dimensions(bytes(whole[pos:pos + 65536]))
+            jpegs.append((pos, eoi + 2 - pos, dims))
+        pos = whole.find(soi, pos + 1)
+    if not jpegs:
+        print("      ✗ 全档无 SOI/EOI 完整对(连缩略都没有 = 结构异常)")
+        return txid
+    for off_j, ln, dims in jpegs:
+        dim_s = f"{dims[0]}x{dims[1]}" if dims else "SOF 未见(伪?)"
+        out = f"/tmp/nikonpill_nef_scan_{handle:08X}_{off_j}.jpg"
+        Path(out).write_bytes(whole[off_j:off_j + ln])
+        print(f"        JPEG @{off_j}  {ln}B  {dim_s}  已存 {out}")
+    real = [j for j in jpegs if j[2]]
+    if real:
+        off_b, len_b, dims_b = max(real, key=lambda j: j[2][0] * j[2][1])
+        if dims_b[0] <= 200:
+            print(f"      → 定案:最大 JPEG 仅 {dims_b[0]}x{dims_b[1]}"
+                  f"(@{off_b})—— Zf NEF 内无高清 JPEG,nico 头读方案对 Zf"
+                  "正式证伪,高清预览维持整档两席位管线")
+        else:
+            print(f"      → 最大 JPEG {dims_b[0]}x{dims_b[1]} @{off_b}"
+                  f" {len_b / 1e3:.0f}KB —— RAW 之外藏有预览!头读方案有救,"
+                  "回 NikonPill 重开 ①")
+    else:
+        print("      → 无可解析尺寸的 JPEG(伪命中或异常,人工看 /tmp)")
+    return txid
+
+
 def walk_mov_atoms(dev, ep_out, ep_in, txid, handle, name: str) -> int:
     """MOV 头 64KB → 顶层原子框(ftyp/moov/mdat…)偏移图。"""
     print(f"    [M] {name} 头读原子框走查:")
@@ -355,6 +431,8 @@ def main() -> int:
         if kind == "NEF":
             txid = walk_nef(dev, ep_out, ep_in, txid, newest["handle"],
                             newest["name"])
+            txid = scan_nef_jpegs(dev, ep_out, ep_in, txid, newest["handle"],
+                                  newest["name"], newest["size"])
         elif kind == "MOV":
             txid = walk_mov_atoms(dev, ep_out, ep_in, txid, newest["handle"],
                                   newest["name"])

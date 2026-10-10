@@ -1742,6 +1742,57 @@ void main() {
       await pumpEventQueue();
       expect(controller.afBox, isNull);
     });
+
+    test('机身对焦模式 MF(0xD061=3 固定/4 选择,全方言两态同拦)→ '
+        '触控对焦/AF 钮/MF 步进全拦,提示且零流量', () async {
+      await startLiveView();
+      for (final mf in kStillFocusModeMfValues) {
+        controller.paramProps[PtpDevicePropCode.stillFocusMode] =
+            PropState(value: mf);
+        await controller.touchFocus(0.5, 0.5);
+        await controller.afDriveNow();
+        await controller.mfDriveStep(towardNear: true);
+        expect(transport.count(NikonOperationCode.changeAfArea), 0,
+            reason: 'MF=$mf 触控对焦拦');
+        expect(transport.count(NikonOperationCode.afDrive), 0,
+            reason: 'MF=$mf AF 钮拦');
+        expect(transport.count(NikonOperationCode.mfDrive), 0,
+            reason: 'MF=$mf 步进拦');
+        expect(controller.notice, contains('MF'), reason: 'MF=$mf 提示');
+        expect(controller.error, isNull, reason: '门闩是状态说明不是错误');
+        expect(controller.afBox, isNull, reason: '对焦框不上屏');
+      }
+    });
+
+    test('机身对焦模式 MF → 拉焦轮拖动丢弃,切回 AF 后无陈旧爆发', () async {
+      await startLiveView();
+      controller.paramProps[PtpDevicePropCode.stillFocusMode] =
+          const PropState(value: 4); // MF(选择,Zf 域内值)
+      controller.focusDialDrag(48); // 攒了两步的量:MF 下全部丢弃
+      await pumpEventQueue();
+      expect(transport.count(NikonOperationCode.mfDrive), 0);
+
+      // 切回 AF-S(等价 0x4006 定向刷新落值):解锁后新拖动照常驱动,
+      // 锁定期余量不爆发(恰一步 = 恰一条 0x9204)。
+      controller.paramProps[PtpDevicePropCode.stillFocusMode] =
+          const PropState(value: 0);
+      transport.ok(); // 0x9204
+      controller.focusDialDrag(24);
+      await pumpEventQueue();
+      expect(transport.count(NikonOperationCode.mfDrive), 1);
+    });
+
+    test('0xD061 值未知(desc 拒答未读到)→ 不锁,触控对焦照常', () async {
+      await startLiveView();
+      // paramProps 无 stillFocusMode 条目 = 值未知(fail-open,不把可用
+      // 控制锁死)。
+      transport
+        ..ok() // changeAfArea
+        ..ok(); // afDrive
+      await controller.touchFocus(0.5, 0.5);
+      expect(transport.count(NikonOperationCode.afDrive), 1);
+      expect(controller.notice, isNull);
+    });
   });
 
   test('AE 轮换轮询:取景运行期间按节拍刷三要素,停取景即停', () async {
