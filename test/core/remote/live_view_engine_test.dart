@@ -444,6 +444,95 @@ void main() {
         reason: '进过 remote 必配对退出:失败路径也要还机身自由');
   });
 
+  group('接管持有期的 0xA004(2026-10-11 Zf 实证:模式写后瞬态忙,'
+      '自愈梯不得碰 0x90C2 —— 会杀仅持有期保值的会话写入)', () {
+    test('remoteHeld:首拍 0xA004 → 400ms 忙退避重试通,零 0x90C2', () async {
+      final transport = _ScriptTransport()
+        ..fail(const PtpResponseException(
+            opcode: NikonOperationCode.startLiveView,
+            responseCode: NikonResponseCode.invalidStatus))
+        ..ok() // 0x9201 忙重试通
+        ..ok(data: _frame(9)); // 首帧
+      final delay = _GatedDelay();
+      final engine = LiveViewEngine(
+        session: PtpSession(transport: transport),
+        delay: delay.call,
+      )..remoteHeld = true;
+
+      final starting = engine.start();
+      await pumpEventQueue(); // 首拍 0xA004 落定,挂上 400ms 退避门
+      delay.release();
+      await starting;
+      expect(engine.status.value, LiveViewStatus.running);
+      await pumpEventQueue();
+      expect(engine.frame.value![2], 9);
+      expect(
+          transport.requests
+              .where((r) => r.opcode == NikonOperationCode.changeCameraMode),
+          isEmpty,
+          reason: '接管持有中不碰 0x90C2(配对退闩会杀模式覆写等会话写入)');
+      expect(delay.durations.first, const Duration(milliseconds: 400));
+      expect(engine.session.connectLadder, contains('9201:OK(忙重试)'));
+    });
+
+    test('remoteHeld:0x2019 忙同样进退避;两轮重试仍 0xA004 → 上抛原语义',
+        () async {
+      final transport = _ScriptTransport()
+        ..fail(const PtpResponseException(
+            opcode: NikonOperationCode.startLiveView,
+            responseCode: NikonResponseCode.invalidStatus))
+        ..reject(PtpResponseCode.deviceBusy) // 重试 1:忙
+        ..fail(const PtpResponseException(
+            opcode: NikonOperationCode.startLiveView,
+            responseCode: NikonResponseCode.invalidStatus)); // 重试 2:仍拒
+      final delay = _GatedDelay();
+      final engine = LiveViewEngine(
+        session: PtpSession(transport: transport),
+        delay: delay.call,
+      )..remoteHeld = true;
+
+      final starting = engine.start();
+      await pumpEventQueue(); // 首拍 0xA004 → 挂上第 1 个退避门
+      delay.release();
+      await pumpEventQueue(); // 重试 1:0x2019 忙 → 挂上第 2 个退避门
+      delay.release();
+      await starting;
+      expect(engine.status.value, LiveViewStatus.failed);
+      expect(engine.lastError, contains('取景开启失败'));
+      expect(engine.lastError, contains('0xA004'), reason: '上抛原始语义');
+      expect(
+          transport.requests
+              .where((r) => r.opcode == NikonOperationCode.startLiveView)
+              .length,
+          3,
+          reason: '初拍 + 两轮忙退避,不无限打');
+      expect(
+          transport.requests
+              .where((r) => r.opcode == NikonOperationCode.changeCameraMode),
+          isEmpty);
+    });
+
+    test('remoteHeld:非 0xA004/0x2019 的拒绝立即上抛,不重试', () async {
+      final transport = _ScriptTransport()
+        ..fail(const PtpResponseException(
+            opcode: NikonOperationCode.startLiveView,
+            responseCode: NikonResponseCode.notLiveView));
+      final engine = LiveViewEngine(
+        session: PtpSession(transport: transport),
+        delay: _GatedDelay().call,
+      )..remoteHeld = true;
+
+      await engine.start();
+      expect(engine.status.value, LiveViewStatus.failed);
+      expect(
+          transport.requests
+              .where((r) => r.opcode == NikonOperationCode.startLiveView)
+              .length,
+          1,
+          reason: '0xA00B 不属瞬态忙,不打第二轮');
+    });
+  });
+
   group('帧签名看门狗(冻结检测,2026-10-10)', () {
     LiveViewEngine wireEngine(
       _ScriptTransport transport,

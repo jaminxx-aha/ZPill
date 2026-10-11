@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 
 import 'live_design.dart';
 import 'remote_controller.dart';
-import 'remote_mode_strip.dart';
 
 /// 竖屏控制行(2026-10-10 iPhone 相机式重排:取景/对焦/录制动作行撤
 /// 除 —— 取景默认开、对焦/设置各有浮层、录像并进快门):相机相册缩略

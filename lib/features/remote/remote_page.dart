@@ -83,6 +83,7 @@ import 'remote_controller.dart';
 import 'remote_feed_area.dart';
 import 'remote_focus_panel.dart';
 import 'remote_info_pill.dart';
+import 'remote_mode_sheet.dart';
 import 'remote_mode_strip.dart';
 import 'remote_param_sheet.dart';
 import 'remote_settings_panel.dart';
@@ -128,8 +129,9 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   /// 读出条中当前打开面板的参数(金高亮 tile)。
   int? _activeParam;
 
-  /// 拍摄模式(照片/视频):页面级 UI 态,横竖屏重建不丢(控制器无
-  /// 模式概念,Zf 实体拨杆决定)。
+  /// 拍摄模式本地态:**回落档**(相机 0xD1A6 读不到时的纯 UI 选择,
+  /// 改造前行为);相机真状态在控制器([RemoteController.cameraMode]),
+  /// 生效模式统一走 [_effMode]。
   CaptureMode _mode = CaptureMode.photo;
 
   /// 当前展开的非模态浮层(对焦/设置,单开互斥)。
@@ -169,13 +171,17 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     if (widget.active && !controller.liveViewActive) {
       unawaited(controller.autoLiveViewOnConnect());
     }
-    // 进页对表刷一次参数(路由模式每次进入都是新建页面,原 tab 模式
-    // 「回台对表」沿不存在;机身侧拨盘/菜单改动的事件不一定送达,同
-    // didUpdateWidget 的兜底口径)。门 = 取景在跑:连接即取景使真连接
-    // 必然如此,而 linkUp 是冷启乐观门闩(恒真)不能作凭;直挂/未连接
-    // 场景引擎 idle,零请求。
+    // 进页对表:先读拍摄模式再刷参数(2026-10-11 真机反馈:视频档进页
+    // 模式条慢几秒才跟过去 —— 模式读单请求先行,不等整条刷参链;路由
+    // 模式每次进入都是新建页面,原 tab 模式「回台对表」沿不存在;机身
+    // 侧拨盘/菜单改动的事件不一定送达,同 didUpdateWidget 的兜底口径)。
+    // 门 = 取景在跑:连接即取景使真连接必然如此,而 linkUp 是冷启乐观
+    // 门闩(恒真)不能作凭;直挂/未连接场景引擎 idle,零请求。
     if (widget.active && controller.liveViewActive) {
-      unawaited(controller.refreshParams());
+      unawaited(() async {
+        await controller.refreshCameraMode();
+        await controller.refreshParams();
+      }());
     }
   }
 
@@ -187,15 +193,17 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     if (widget.active != oldWidget.active) {
       controller.setViewerVisible(widget.active);
     }
-    // 回台沿:先自动起景(0x9201 + 首帧入队)再对表刷参 —— 串成一条
-    // 链而非两个并发 unawaited(引擎帧请求会穿插进刷参链,FIFO 脚本序
-    // 无法预置;顺序化后请求序恒 [0x9201, 首帧, 参数…])。
+    // 回台沿:先自动起景(0x9201 + 首帧入队)再对表(模式先行、参数
+    // 随后)—— 串成一条链而非并发 unawaited(引擎帧请求会穿插进刷参
+    // 链,FIFO 脚本序无法预置;顺序化后请求序恒 [0x9201, 首帧, 模式,
+    // 参数…])。
     if (widget.active && !oldWidget.active) {
       unawaited(() async {
         if (!controller.liveViewActive) {
           await controller.autoLiveViewOnConnect();
         }
         if (controller.linkUp) {
+          await controller.refreshCameraMode();
           await controller.refreshParams();
         }
       }());
@@ -257,6 +265,44 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     setState(() => _mode = m);
   }
 
+  /// 生效模式:相机真状态优先([RemoteController.cameraMode],0xD1A6
+  /// 镜像,拨杆翻转经事件实时跟随);读不到(null)回落本地 [_mode]
+  /// —— 与改造前行为一致(纯 UI 态)。
+  CaptureMode get _effMode => controller.cameraMode ?? _mode;
+
+  /// 模式条点按:点段即切换意图(**不弹选择列表**,2026-10-12 用户定案
+  /// —— 「照片/视频」两段不是从列表里挑,点哪段切哪档):
+  /// - 相机模式不在表(旧机身/方言)→ 本地切换(改造前行为);
+  /// - 模式写被拒过 → 直进 switchMode 弹拒答提示;
+  /// - 未接管 → 弹「启用 APP 接管控制?」接管门(同点 ISO 未接管时
+  ///   的接管区,remote_mode_sheet),启用成功自动走切换链;
+  /// - 已接管 → 直切,零面板。
+  Future<void> _onStripMode(CaptureMode m) async {
+    if (m == _effMode) return;
+    if (controller.cameraMode == null) {
+      _setMode(m);
+      return;
+    }
+    if (controller.modeWriteRejected) {
+      unawaited(controller.switchMode(m));
+      return;
+    }
+    if (!controller.takeoverActive) {
+      unawaited(showModeTakeoverSheet(context, controller, target: m));
+      return;
+    }
+    unawaited(controller.switchMode(m));
+  }
+
+  /// 模式条各段可切性(灰显口径):模式写被拒过 → 全灰(此机身远程
+  /// 切换不可用,提示已给过);其余两方向都可远程切(2026-10-11 Zf
+  /// 实证:覆写两向都被接受,拍照门跟软件态)—— 录像门跟物理拨杆
+  /// 硬互锁,照片档覆写视频后开录被拒,拨杆提示在开录时弹出不预判。
+  Set<CaptureMode> get _switchableTo =>
+      controller.cameraMode != null && controller.modeWriteRejected
+          ? const <CaptureMode>{}
+          : const {CaptureMode.photo, CaptureMode.video};
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     // 退后台/回前台:挂起/恢复帧轮询(相机侧取景保持 —— 取景生命周期
@@ -266,9 +312,13 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     }
     if (state == AppLifecycleState.resumed) {
       if (widget.active) controller.setViewerVisible(true);
-      // 回前台:参数对表刷一次(后台期间机身侧改动兜底,同切回 tab)。
+      // 回前台:对表兜底(模式先行 + 参数;后台期间机身侧改动的事件
+      // 不一定送达,同切回 tab)。
       if (controller.linkUp) {
-        unawaited(controller.refreshParams());
+        unawaited(() async {
+          await controller.refreshCameraMode();
+          await controller.refreshParams();
+        }());
       }
     }
   }
@@ -451,15 +501,17 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                     padding: const EdgeInsets.only(top: 4, bottom: 2),
                     child: Center(
                       child: CaptureModeStrip(
-                        mode: _mode,
-                        enabled: !controller.recording,
-                        onModeChanged: _setMode,
+                        mode: _effMode,
+                        enabled: !controller.recording &&
+                            !controller.switchingMode,
+                        onModeChanged: _onStripMode,
+                        switchableTo: _switchableTo,
                       ),
                     ),
                   ),
                   CaptureControlRow(
                     controller: controller,
-                    mode: _mode,
+                    mode: _effMode,
                     onOpenAlbum: _openAlbum,
                     onOpenFocus: () => _togglePanel(_OpenPanel.focus),
                     onOpenSettings: () => _togglePanel(_OpenPanel.settings),
@@ -600,7 +652,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                       child: Center(
                         child: CaptureShutterColumn(
                           controller: controller,
-                          mode: _mode,
+                          mode: _effMode,
                           onOpenAlbum: _openAlbum,
                           onOpenFocus: () => _togglePanel(_OpenPanel.focus),
                           onOpenSettings: () =>
@@ -622,9 +674,11 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                             Expanded(
                               child: Center(
                                 child: CaptureModeStrip(
-                                  mode: _mode,
-                                  enabled: !controller.recording,
-                                  onModeChanged: _setMode,
+                                  mode: _effMode,
+                                  enabled: !controller.recording &&
+                                      !controller.switchingMode,
+                                  onModeChanged: _onStripMode,
+                                  switchableTo: _switchableTo,
                                 ),
                               ),
                             ),

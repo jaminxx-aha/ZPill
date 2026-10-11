@@ -168,6 +168,9 @@ Uint8List _u32Bytes(int v) => Uint8List.fromList(
 /// ISO 都可调;[modeUnreadable] 模拟模式读不到 → 不猜锁);
 /// readonlyCodes 指定只读属性;[picCtrlEnums]/[picCtrlValue] 覆写优化校准
 /// 的 FORM 枚举与当前值(默认 [1,2,3,4] 全静态表内,不触发 0x90CC)。
+/// 0xD1A6 模式镜像应答**不在**本表 —— 连接沿串链在 refreshParams 之前
+/// 先读它(模式读打头:视频档进页即时跟随,2026-10-11 真机反馈),预置
+/// 在 [_emitConnected](队首,让过 0x90CC 等刷参中段的追加应答)。
 void _scriptParams(_ScriptTransport t,
     {Set<int> readonlyCodes = const {},
     int mode = 1,
@@ -281,15 +284,20 @@ Uint8List _deviceInfoDataset({required List<int> ops}) {
 /// 不与被测路径抢脚本应答。
 Future<void> _parkedDelay(Duration _) => Completer<void>().future;
 
-/// 发 connected 沿(预置串链自动起景的 FIFO 头两位,插队首):控制器
-/// connected 沿串链 [0x9201, 首帧, 参数…] 先消费,故必须排在
+/// 发 connected 沿(预置串链头三位于队首):控制器 connected 沿串链
+/// [0xD1A6 模式读, 0x9201, 首帧, 参数…] 按序消费,故必须排在
 /// [_scriptParams] 应答之前(2026-10-11 起景驱动移入控制器 connected
-/// 沿);引擎轮询首帧后驻停于门控/parked delay,不与后续脚本抢位。
-void _emitConnected(_ScriptTransport t, _FakeConnection c) {
+/// 沿 + 模式读打头);引擎轮询首帧后驻停于门控/parked delay,不与后续
+/// 脚本抢位。0xD1A6 模式镜像应答([d1a6]:0=照片/1=视频)在链首 ——
+/// 测试追加的 0x90CC 等刷参中段应答仍按追加序被 refreshParams 消费。
+void _emitConnected(_ScriptTransport t, _FakeConnection c, {int d1a6 = 0}) {
   t.script
     ..addFirst(PtpResult(
         responseCode: PtpResponseCode.ok, data: _fakeFrame())) // 首帧
-    ..addFirst(PtpResult(responseCode: PtpResponseCode.ok)); // 0x9201
+    ..addFirst(PtpResult(responseCode: PtpResponseCode.ok)) // 0x9201
+    ..addFirst(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: Uint8List.fromList([d1a6]))); // 0xD1A6(链首读)
   c.statesCtrl.add(CameraLinkState.connected);
 }
 
@@ -740,6 +748,279 @@ void main() {
       transport.reply(PtpResponseCode.accessDenied); // 0x1016 0xD100 被拒
       await controller.setParam(PtpDevicePropCode.exposureTime, 1 << 16 | 100);
       expect(controller.error, contains('APP 接管'));
+    });
+  });
+
+  group('拍摄模式跟随与切换(0xD1A6 镜像;2026-10-11 Zf USB 实证:两方向都'
+      '可覆写、拍照门跟镜像值;录像门跟物理拨杆硬互锁,开录时才拒)', () {
+    test('连接沿初读:0xD1A6=1 → 视频;表外方言值(2)不猜 → null 本地回落',
+        () async {
+      _scriptParams(transport);
+      _emitConnected(transport, conn, d1a6: 1);
+      await pumpEventQueue();
+      expect(controller.cameraMode, CaptureMode.video);
+      expect(controller.dialMode, CaptureMode.video);
+      expect(controller.modeOverridden, isFalse);
+
+      // 重连报表外值(未来机身第三态/方言):已知值不清,宁缺不错。
+      conn.statesCtrl.add(CameraLinkState.reconnecting);
+      await pumpEventQueue();
+      _scriptParams(transport);
+      _emitConnected(transport, conn, d1a6: 2);
+      await pumpEventQueue();
+      expect(controller.cameraMode, CaptureMode.video,
+          reason: '表外值不猜也不闪清:保持已知态');
+    });
+
+    test('0x4006(0xD1A6)事件 → 模式跟随(拨杆翻转实时上屏)', () async {
+      _scriptParams(transport);
+      _emitConnected(transport, conn); // d1a6=0 照片档
+      await pumpEventQueue();
+      expect(controller.cameraMode, CaptureMode.photo);
+
+      // 拨杆拨到视频档:事件 → 定向读跟随
+      transport.ok(data: Uint8List.fromList([1]));
+      transport.eventCtrl.add(const PtpEvent(
+          code: PtpEventCode.devicePropChanged,
+          transactionId: 0xFFFFFFFF,
+          params: [PtpDevicePropCode.liveViewSelector]));
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+      expect(controller.cameraMode, CaptureMode.video);
+      expect(controller.dialMode, CaptureMode.video);
+    });
+
+    test('switchMode(视频→照片):接管 + 停景 + 写 0xD1A6=0 + 起景 + 刷参',
+        () async {
+      _scriptParams(transport);
+      _emitConnected(transport, conn, d1a6: 1);
+      await pumpEventQueue();
+      expect(controller.cameraMode, CaptureMode.video);
+
+      transport
+        ..ok() // 0x90C2(1) 接管(顺带 engine.remoteHeld)
+        ..ok() // 0x9202 停景
+        ..ok() // 0x1016 写 0xD1A6=0
+        ..ok() // 0x9201 起景
+        ..ok(data: _fakeFrame()); // 首帧
+      _scriptParams(transport); // 刷参块(模式族属性连片变)
+      final chainStart = transport.requests.length;
+      expect(await controller.switchMode(CaptureMode.photo), isTrue);
+      expect(controller.error, isNull);
+
+      expect(controller.cameraMode, CaptureMode.photo);
+      expect(controller.modeOverridden, isTrue,
+          reason: '软件态(照片)≠ 拨杆真档(视频)');
+      expect(controller.dialMode, CaptureMode.video,
+          reason: '覆写期拨杆真档不可见,不被软件态污染');
+      expect(controller.takeoverActive, isTrue);
+      expect(controller.engine.remoteHeld, isTrue,
+          reason: '接管持有期自愈梯不得碰 0x90C2');
+      // 探针实证序:0x90C2(1) → 0x9202 → 写 D1A6 → 0x9201 → 首帧 → 参数
+      expect(
+          transport.requests
+              .skip(chainStart)
+              .map((r) => r.opcode)
+              .take(5),
+          [
+            NikonOperationCode.changeCameraMode,
+            NikonOperationCode.endLiveView,
+            PtpOperationCode.setDevicePropValue,
+            NikonOperationCode.startLiveView,
+            NikonOperationCode.getLiveViewImageEx,
+          ],
+          reason: '停景后写、原生档起景');
+      final write = transport.requests.singleWhere(
+          (r) => r.opcode == PtpOperationCode.setDevicePropValue);
+      expect(write.params, [PtpDevicePropCode.liveViewSelector]);
+      expect(write.dataOut, [0]);
+    });
+
+    test('switchMode 写被拒(0x200F)→ 回滚起景 + 会话级缓存,两方向早退提示',
+        () async {
+      _scriptParams(transport);
+      _emitConnected(transport, conn, d1a6: 1);
+      await pumpEventQueue();
+
+      transport
+        ..ok() // 0x90C2(1)
+        ..ok() // 0x9202
+        ..reply(PtpResponseCode.accessDenied) // 0x1016 写被拒
+        ..ok() // 0x9201 回滚起景
+        ..ok(data: _fakeFrame()); // 首帧
+      expect(await controller.switchMode(CaptureMode.photo), isFalse);
+      await pumpEventQueue();
+      expect(controller.modeWriteRejected, isTrue);
+      expect(controller.error, contains('切换拍摄模式失败'));
+      expect(controller.cameraMode, CaptureMode.video, reason: '写被拒模式不变');
+      expect(controller.liveViewActive, isTrue, reason: '停景已发生,回滚起回');
+
+      // 缓存生效:本会话内两方向都不再撞写(早退 + 拨杆提示)
+      final baseline = transport.requests.length;
+      expect(await controller.switchMode(CaptureMode.photo), isFalse);
+      expect(controller.error, contains('机顶拨杆'));
+      expect(transport.requests.length, baseline);
+    });
+
+    test('自然照片档 switchMode(视频)→ 双向可切(2026-10-11 R1:去方向门,'
+        '覆写两向都被接受;录像门跟物理拨杆,开录时才拒)', () async {
+      _scriptParams(transport);
+      _emitConnected(transport, conn); // d1a6=0 照片档
+      await pumpEventQueue();
+      expect(controller.cameraMode, CaptureMode.photo);
+
+      transport
+        ..ok() // 0x90C2(1) 接管
+        ..ok() // 0x9202 停景
+        ..ok() // 0x1016 写 0xD1A6=1
+        ..ok() // 0x9201 起景
+        ..ok(data: _fakeFrame()); // 首帧
+      _scriptParams(transport); // 刷参块
+      final chainStart = transport.requests.length;
+      expect(await controller.switchMode(CaptureMode.video), isTrue);
+      expect(controller.error, isNull);
+      expect(controller.cameraMode, CaptureMode.video);
+      expect(controller.modeOverridden, isTrue);
+      expect(controller.dialMode, CaptureMode.photo,
+          reason: '拨杆真档不动:覆写的是软件态');
+      expect(
+          transport.requests
+              .skip(chainStart)
+              .map((r) => r.opcode)
+              .take(5),
+          [
+            NikonOperationCode.changeCameraMode,
+            NikonOperationCode.endLiveView,
+            PtpOperationCode.setDevicePropValue,
+            NikonOperationCode.startLiveView,
+            NikonOperationCode.getLiveViewImageEx,
+          ]);
+      final write = transport.requests.singleWhere(
+          (r) => r.opcode == PtpOperationCode.setDevicePropValue);
+      expect(write.dataOut, [1], reason: '写 0xD1A6=1(视频)');
+    });
+
+    test('覆写态解除接管 → 释放后读回拨杆真档对表(覆写死亡,读值不再被'
+        '软件态遮蔽)', () async {
+      _scriptParams(transport);
+      _emitConnected(transport, conn, d1a6: 1);
+      await pumpEventQueue();
+      transport
+        ..ok() // 0x90C2(1)
+        ..ok() // 0x9202
+        ..ok() // 0x1016 D1A6=0
+        ..ok() // 0x9201
+        ..ok(data: _fakeFrame());
+      _scriptParams(transport);
+      expect(await controller.switchMode(CaptureMode.photo), isTrue);
+
+      transport
+        ..ok() // 0x90C2(0) 解除
+        ..ok(data: Uint8List.fromList([1])); // 释放后读回 D1A6:拨杆=视频
+      await controller.releaseTakeover();
+      expect(controller.cameraMode, CaptureMode.video,
+          reason: '覆写随解除死亡:读回拨杆真档(覆写期可能被拨过,不猜)');
+      expect(controller.dialMode, CaptureMode.video);
+      expect(controller.modeOverridden, isFalse);
+      expect(controller.engine.remoteHeld, isFalse);
+    });
+
+    test('覆写期拨杆被拨到照片档 → 释放读回对表照片(不可凭旧态猜)', () async {
+      _scriptParams(transport);
+      _emitConnected(transport, conn, d1a6: 1);
+      await pumpEventQueue();
+      transport
+        ..ok() // 0x90C2(1)
+        ..ok() // 0x9202
+        ..ok() // 0x1016 D1A6=0
+        ..ok() // 0x9201
+        ..ok(data: _fakeFrame());
+      _scriptParams(transport);
+      expect(await controller.switchMode(CaptureMode.photo), isTrue);
+      expect(controller.dialMode, CaptureMode.video); // 我们以为拨杆在视频
+
+      transport
+        ..ok() // 0x90C2(0) 解除
+        ..ok(data: Uint8List.fromList([0])); // 读回:拨杆其实在照片档
+      await controller.releaseTakeover();
+      expect(controller.cameraMode, CaptureMode.photo);
+      expect(controller.dialMode, CaptureMode.photo);
+      expect(controller.modeOverridden, isFalse);
+    });
+
+    test('覆写期 0x4006(D1A6)事件 → 读值是软件态回声:零动作,拨杆真档'
+        '不被回声污染', () async {
+      _scriptParams(transport);
+      _emitConnected(transport, conn, d1a6: 1);
+      await pumpEventQueue();
+      transport
+        ..ok() // 0x90C2(1)
+        ..ok() // 0x9202
+        ..ok() // 0x1016 D1A6=0
+        ..ok() // 0x9201
+        ..ok(data: _fakeFrame());
+      _scriptParams(transport);
+      expect(await controller.switchMode(CaptureMode.photo), isTrue);
+
+      // 覆写期读 0xD1A6 得软件态回声(与拨杆真档不可分):与已知软件态
+      // 相同即零动作 —— 拨杆真档的真相留给释放接管后的读回。
+      transport.ok(data: Uint8List.fromList([0]));
+      transport.eventCtrl.add(const PtpEvent(
+          code: PtpEventCode.devicePropChanged,
+          transactionId: 0xFFFFFFFF,
+          params: [PtpDevicePropCode.liveViewSelector]));
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+      expect(controller.cameraMode, CaptureMode.photo);
+      expect(controller.modeOverridden, isTrue);
+      expect(controller.dialMode, CaptureMode.video,
+          reason: '回声不碰拨杆真档');
+    });
+
+    test('模式写被拒 → 会话级缓存;重连(新会话)复位再试', () async {
+      _scriptParams(transport);
+      _emitConnected(transport, conn, d1a6: 1);
+      await pumpEventQueue();
+      transport
+        ..ok() // 0x90C2(1)
+        ..ok() // 0x9202
+        ..reply(PtpResponseCode.accessDenied) // 0x1016 写被拒
+        ..ok() // 0x9201 回滚起景
+        ..ok(data: _fakeFrame());
+      expect(await controller.switchMode(CaptureMode.photo), isFalse);
+      await pumpEventQueue();
+      expect(controller.modeWriteRejected, isTrue);
+
+      // 重连:新会话再试一次(拒答缓存随连接复位)
+      conn.statesCtrl.add(CameraLinkState.reconnecting);
+      await pumpEventQueue();
+      _scriptParams(transport);
+      _emitConnected(transport, conn, d1a6: 1);
+      await pumpEventQueue();
+      expect(controller.modeWriteRejected, isFalse);
+      expect(controller.cameraMode, CaptureMode.video);
+    });
+
+    test('断链:覆写/切换中/remoteHeld 清,cameraMode 对齐拨杆真档'
+        '(覆写随会话死亡)', () async {
+      _scriptParams(transport);
+      _emitConnected(transport, conn, d1a6: 1);
+      await pumpEventQueue();
+      transport
+        ..ok() // 0x90C2(1)
+        ..ok() // 0x9202
+        ..ok() // 0x1016 D1A6=0
+        ..ok() // 0x9201
+        ..ok(data: _fakeFrame());
+      _scriptParams(transport);
+      expect(await controller.switchMode(CaptureMode.photo), isTrue);
+
+      conn.statesCtrl.add(CameraLinkState.disconnected);
+      await pumpEventQueue();
+      expect(controller.modeOverridden, isFalse);
+      expect(controller.engine.remoteHeld, isFalse);
+      expect(controller.cameraMode, CaptureMode.video,
+          reason: '覆写随会话死亡:拨杆真档即真相(不变式:非覆写 ⇒ '
+              'cameraMode == dialMode);重连沿串链再对表');
+      expect(controller.dialMode, CaptureMode.video);
     });
   });
 

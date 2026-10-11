@@ -1392,6 +1392,9 @@ def main() -> int:
             elif text.startswith("u16:"):
                 # u16 载荷(如 0xD05D AF 区域模式):u16:0x8010
                 payload = struct.pack("<H", int(text[4:], 0) & 0xFFFF)
+            elif text.startswith("u8:"):
+                # u8 载荷(如 0xD1A6 LiveViewSelector):u8:0 / u8:1
+                payload = struct.pack("<B", int(text[3:], 0) & 0xFF)
             else:
                 payload = ptp_str(text)
             print(f"  ▶ 候选 {label}(载荷 {len(payload)}B)")

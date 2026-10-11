@@ -81,7 +81,7 @@ Future<void> showParamEditSheet(
                 child: AnimatedSwitcher(
                   duration: const Duration(milliseconds: 200),
                   child: needTakeover
-                      ? _TakeoverSection(
+                      ? TakeoverSection(
                           key: const ValueKey('takeover'),
                           busy: enabling,
                           onEnable: () {
@@ -212,9 +212,10 @@ Widget _valueSection({
 
 /// 面板头的接管区(原确认对话框文案原样搬入):启用后随控制器通知
 /// 换出值列表。按钮手绘金底,颜色随应用主题(拍摄页 chrome 已随
-/// 主题,2026-10-08)。
-class _TakeoverSection extends StatelessWidget {
-  const _TakeoverSection(
+/// 主题,2026-10-08)。模式条点按的接管门(未接管时,remote_mode_sheet)
+/// 同用本件 —— 同一文案一处维护。
+class TakeoverSection extends StatelessWidget {
+  const TakeoverSection(
       {super.key, required this.busy, required this.onEnable});
 
   final bool busy;

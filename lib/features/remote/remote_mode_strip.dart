@@ -1,24 +1,28 @@
 import 'package:flutter/material.dart';
 
 import 'live_design.dart';
-
-/// 拍摄模式(页面级 UI 态,2026-10-10 拍照/录像合并为一颗快门起):
-/// 照片 = 按下/抬起语义(B 门/连拍按住/自拍,见快门钮);视频 = 整段
-/// 点按起/停录像(红芯)。控制器**没有**模式概念 —— Zf 实体拨杆决定
-/// 机身侧档位,`toggleRecord` 遇 0xA004 自会提示「拨杆未切录像」。
-enum CaptureMode { photo, video }
+import 'remote_controller.dart';
 
 /// 模式条(iPhone 相机语言,快门上方「照片 | 视频」):38 高玻璃胶囊
-/// 双等宽段,选中段金底金字金描边;[enabled] = false(录制中)整体
-/// 置灰且不吃点按 —— 录制里锁模式,保证停录钮(同一颗快门)不被
-/// 模式切换甩在身后。状态随页面([mode] 由页面 State 持有,横竖屏
-/// 重建不丢),录制态由外层 AnimatedBuilder 驱动重绘。
+/// 双等宽段,选中段金底金字金描边;[enabled] = false(录制中/切换中)
+/// 整体置灰且不吃点按 —— 录制里锁模式,保证停录钮(同一颗快门)不被
+/// 模式切换甩在身后。
+///
+/// [mode] 是**相机真状态**([RemoteController.cameraMode],0xD1A6 镜像,
+/// null 时页面回落本地态);[switchableTo] 标各段可否远程切到 —— 不可
+/// 的非选中段按 live.faint 弱化(此机身模式写被拒过时两方向全灰,此外
+/// 两方向都可切:2026-10-11 Zf 实证覆写两向都被接受),点按仍回调(未
+/// 接管弹「启用 APP 接管控制?」接管门、已接管直切,remote_mode_sheet)。
 class CaptureModeStrip extends StatelessWidget {
   const CaptureModeStrip({
     super.key,
     required this.mode,
     required this.enabled,
     required this.onModeChanged,
+    this.switchableTo = const {
+      CaptureMode.photo,
+      CaptureMode.video,
+    },
   });
 
   final CaptureMode mode;
@@ -28,11 +32,15 @@ class CaptureModeStrip extends StatelessWidget {
 
   final ValueChanged<CaptureMode> onModeChanged;
 
+  /// 可远程切到的段集合(相机门控;表外段灰显但可点 —— 提示归控制器)。
+  final Set<CaptureMode> switchableTo;
+
   @override
   Widget build(BuildContext context) {
     final live = LiveDesign.of(context);
     Widget segment(CaptureMode m, String label) {
       final selected = mode == m;
+      final dimmed = !selected && !switchableTo.contains(m);
       return InkWell(
         onTap: enabled && !selected ? () => onModeChanged(m) : null,
         customBorder:
@@ -53,7 +61,9 @@ class CaptureModeStrip extends StatelessWidget {
               style: TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.w600,
-                color: selected ? live.accent : live.muted,
+                color: selected
+                    ? live.accent
+                    : (dimmed ? live.faint : live.muted),
               ),
             ),
           ),

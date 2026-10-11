@@ -211,6 +211,7 @@ abstract final class PtpDevicePropCode {
   static const int isoControlSensitivity = 0xD0B5; // 有效 ISO 读(含 Auto ISO),u32
   static const int stillShutterSpeed = 0xD100; // 快门读写,u32 分数打包(num<<16|den)
   static const int applicationMode = 0xD1F0; // 应用模式,u8(一代机身 op 缺席时的写回退)
+  static const int liveViewSelector = 0xD1A6; // 照片/视频模式镜像,u8(0=照片/1=视频,机顶拨杆决定;2026-10-11 Zf USB 实证:0x90C2(1) 持有下 0x1016 可写覆写、随释放还原,拍照门跟此值、录像门跟物理拨杆硬互锁;不在 Zf 自报属性表,范围扫得见)
   static const int sessionInitiatorInfo = 0xD406; // 会话发起者身份(MTP 标准;USB 人设身份门,自愈末级用,见 LiveViewEngine._startLiveViewHealing)
   static const int activePicCtrlItem = 0xD200; // 优化校准(Picture Control),u16
   // Zf 另报 MTP 标准属性 0xD303/0xD407(UseDeviceStageFlag /
