@@ -117,9 +117,15 @@ Uint8List _u32Bytes(int v) => Uint8List.fromList(
 /// 目录序全量应答(模式 M · f/2.8 · 1/100s · ISO 200 · EV+0.3 ·
 /// 白平衡自动 · 色温 5500K · 闪光关闭 · 测光 2 · 对焦 AF-C · 对焦模式
 /// AF-S · 释放单张 · 画质 RAW · RAW 无损 · 尺寸 2 · 区域 FX · 校准标准,
-/// 均可写;快门/ISO 值走厂商读码裸值,末尾自动 ISO 状态(0xD054,关),
-/// 与 remote_controller_test 同值。[mode] 参数化曝光模式(默认 M)。
-void _scriptParams(_ScriptTransport t, {int mode = 1}) {
+/// 均可写;快门/ISO 值走厂商读码裸值,末尾自动 ISO 状态(0xD054,关)
+/// 与剩余张数),与 remote_controller_test 同值。0xD1A6 模式镜像**打头**
+/// ([d1a6]:0=照片/1=视频/null=不预置 —— 连接沿串链/进页对表都是模式读
+/// 先于刷参,2026-10-11 真机反馈改制;重连流模式读应答预置在引擎重启
+/// 对之前,参数块内不再带)。[mode] 参数化曝光模式(默认 M)。
+void _scriptParams(_ScriptTransport t, {int mode = 1, int? d1a6 = 0}) {
+  if (d1a6 != null) {
+    t.ok(data: Uint8List.fromList([d1a6])); // 0xD1A6 模式镜像(链首读)
+  }
   t
     ..ok(data: _propDescDataset(PtpDevicePropCode.exposureProgramMode,
         PtpDataType.uint16, mode,
@@ -568,9 +574,13 @@ void main() {
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
     // 首挂 active:false 页面自身不自动起景,但 connected 沿串链照发
-    //(连接即监看,相机侧进取景;帧轮询由页面可见性挂起)
-    _scriptAutoStart(transport);
-    _scriptParams(transport); // 连接时全量
+    //(连接即监看,相机侧进取景;串链序 = 模式读打头 → 0x9201 + 首帧;
+    // 帧轮询由页面可见性挂起)
+    transport
+      ..ok(data: Uint8List.fromList([0])) // 0xD1A6(连接链首读)
+      ..ok() // 0x9201(connected 沿串链起景)
+      ..ok(data: _realJpeg()); // 首帧
+    _scriptParams(transport, d1a6: null); // 连接时全量(参数块)
     await tester.pumpWidget(
         MaterialApp(home: RemotePage(controller: controller, active: false)));
     conn.statesCtrl.add(CameraLinkState.connected);
@@ -1394,9 +1404,11 @@ void main() {
 
     // 照片模式:芯非红
     expect(coreColor(), isNot(LiveDesign.light.bad));
-    // 切视频模式:红芯(iPhone 语义,进入即红非仅录制中)
+    // 切视频模式:本地直切(相机模式不在表 → 无门无面板),红芯
+    //(iPhone 语义,进入即红非仅录制中)
     await tester.tap(find.text('视频'));
     await tester.pumpAndSettle();
+    expect(find.byType(BottomSheet), findsNothing, reason: '本地回落不弹面板');
     expect(coreColor(), LiveDesign.light.bad);
 
     // 整段点按起录:0x920A 恰一条,recording 真,芯内白色停止方块
@@ -1432,6 +1444,115 @@ void main() {
         transport.requests
             .where((r) => r.opcode == NikonOperationCode.endMovieRec),
         hasLength(1));
+  });
+
+  testWidgets('模式条跟相机:连接读到视频档 → 视频段选中(红芯),照片段可切'
+      '(0xD1A6 镜像,2026-10-11 Zf 实证)', (tester) async {
+    _portrait(tester);
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = _directRemoteController(transport, conn: conn);
+    addTearDown(controller.dispose);
+    _scriptAutoStart(transport); // 进页自动起景先吃 FIFO 头两位
+    _scriptParams(transport, d1a6: 1); // 连接沿读到视频档
+    await tester
+        .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
+    conn.statesCtrl.add(CameraLinkState.connected);
+    await tester.pumpAndSettle();
+
+    Color labelColor(String text) =>
+        tester.widget<Text>(find.text(text)).style!.color!;
+    expect(labelColor('视频'), LiveDesign.light.accent, reason: '视频段选中');
+    expect(labelColor('照片'), LiveDesign.light.muted,
+        reason: '视频档 → 照片可远程覆写,常灰度可切');
+
+    // 快门芯随真模式红芯(不是页面本地态 —— 本页从未点过模式条)
+    final shutter = find.byWidgetPredicate(
+        (w) => w is SizedBox && w.width == 78 && w.height == 78);
+    expect(shutter, findsOneWidget);
+    final core = (tester.widget<Container>(find
+                .descendant(
+                    of: shutter,
+                    matching: find.byWidgetPredicate((w) =>
+                        w is Container &&
+                        w.decoration is BoxDecoration &&
+                        (w.decoration as BoxDecoration).shape ==
+                            BoxShape.circle &&
+                        (w.decoration as BoxDecoration).color != null))
+                .first)
+            .decoration as BoxDecoration)
+        .color!;
+    expect(core, LiveDesign.light.bad, reason: '相机在视频档 → 红芯');
+  });
+
+  testWidgets('照片档连接:未接管点「视频」弹接管门(同点 ISO),启用后'
+      '自动走切换链;已接管再点直切零面板(2026-10-12 R2 修正)', (tester) async {
+    _portrait(tester);
+    PtpSession.kSetPropEnabled = true;
+    addTearDown(() => PtpSession.kSetPropEnabled = true);
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = _directRemoteController(transport,
+        conn: conn, setPropGate: () => true);
+    addTearDown(controller.dispose);
+    _scriptAutoStart(transport);
+    _scriptParams(transport); // d1a6=0 照片档
+    // ① 接管门「启用」→ 切换链:0x90C2(1) → 0x9202 → 写 D1A6=1 →
+    //    0x9201 → 首帧 → 刷参
+    transport
+      ..ok() // 0x90C2(1) 接管(接管门「启用」)
+      ..ok() // 0x9202 停景
+      ..ok() // 0x1016 写 0xD1A6=1
+      ..ok() // 0x9201 起景
+      ..ok(data: _realJpeg()); // 首帧
+    _scriptParams(transport, d1a6: null); // 切换链尾刷参
+    // ② 已接管直切(视频 → 照片):0x9202 → 写 D1A6=0 → 0x9201 → 首帧 →
+    //    刷参(0x90C2 不重发)
+    transport
+      ..ok() // 0x9202
+      ..ok() // 0x1016 D1A6=0
+      ..ok() // 0x9201
+      ..ok(data: _realJpeg()); // 首帧
+    _scriptParams(transport, d1a6: null); // 刷参
+    await tester
+        .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
+    conn.statesCtrl.add(CameraLinkState.connected);
+    await tester.pumpAndSettle();
+
+    Color labelColor(String text) =>
+        tester.widget<Text>(find.text(text)).style!.color!;
+    expect(labelColor('照片'), LiveDesign.light.accent, reason: '照片段选中');
+
+    // 未接管:点「视频」→ 接管门底单(启用 APP 接管控制?),不是选择列表
+    await tester.tap(find.text('视频'));
+    await tester.pumpAndSettle();
+    expect(find.text('启用 APP 接管控制?'), findsOneWidget,
+        reason: '接管门(同点 ISO 未接管时)');
+    expect(find.text('拍摄模式'), findsOneWidget, reason: '门头标');
+
+    // 「启用」:0x90C2(1) → 底单收口 → 自动切换链 → 视频档(写 1)
+    await tester.tap(find.text('启用'));
+    await tester.pumpAndSettle();
+    expect(find.byType(BottomSheet), findsNothing, reason: '底单收口');
+    expect(controller.takeoverActive, isTrue);
+    expect(controller.cameraMode, CaptureMode.video);
+    expect(controller.modeOverridden, isTrue,
+        reason: '写过即遮蔽(拨杆真档仍在照片)');
+    expect(labelColor('视频'), LiveDesign.light.accent, reason: '模式条跟到视频');
+
+    // 已接管:再点「照片」直切,零面板(不弹接管门/选择)
+    await tester.tap(find.text('照片'));
+    await tester.pumpAndSettle();
+    expect(find.byType(BottomSheet), findsNothing, reason: '已接管零面板');
+    expect(controller.cameraMode, CaptureMode.photo);
+    final writes = transport.requests
+        .where((r) => r.opcode == PtpOperationCode.setDevicePropValue)
+        .map((r) => r.dataOut)
+        .toList();
+    expect(writes, [
+      [1], // 覆写成视频
+      [0], // 切回照片
+    ]);
   });
 
   testWidgets('照片模式快门:点按走快门码(0x9207),零录像请求', (tester) async {
@@ -1674,10 +1795,15 @@ void main() {
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
     _scriptAutoStart(transport); // 进页自动起景(0x9201 + 首帧)
-    _scriptParams(transport); // connected 沿对表刷参
+    _scriptParams(transport); // connected 沿对表刷参(模式读打头)
     transport.ok(); // 0x9202(reconnecting 沿引擎 stop 尽力)
-    _scriptAutoStart(transport); // 重连成功的 connected 沿自愈重启(0x9201 + 首帧)
-    _scriptParams(transport); // 重连成功的 connected 沿再对表
+    // 重连成功的 connected 沿串链:模式读打头 → 自愈重启(0x9201 + 首帧)
+    // → 再对表刷参(参数块,模式读应答已在上)。
+    transport
+      ..ok(data: Uint8List.fromList([0])) // 0xD1A6(重连链首读)
+      ..ok() // 0x9201(重连自愈重启)
+      ..ok(data: _realJpeg()); // 首帧
+    _scriptParams(transport, d1a6: null); // 重连沿再对表(参数块)
 
     // 根页 + 推入拍摄页:popUntil(isFirst) 的弹回才可观测
     await tester.pumpWidget(MaterialApp(

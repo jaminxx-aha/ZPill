@@ -167,8 +167,10 @@ const _kVendorReadValues = <int, int>{
 
 /// 目录序全量应答(与 remote_controller_test._scriptParams 同款:
 /// PropDesc(取值域直供表参数跳过)+ 值回读(路由参数读厂商码裸值)
-/// + 末尾自动 ISO 状态与剩余张数)。
+/// + 末尾自动 ISO 状态与剩余张数;0xD1A6 模式镜像**打头** —— 连接沿
+/// 串链/进页对表都是模式读先于刷参,2026-10-11 真机反馈改制)。
 void _scriptParams(_ScriptTransport t, {int fNumber = 280}) {
+  t.ok(data: Uint8List.fromList([0])); // 0xD1A6 模式镜像(链首读)
   for (final s in _kParamSpecs) {
     final param = shootingParamByCode[s.code]!;
     final value = s.code == PtpDevicePropCode.fNumber ? fNumber : s.value;

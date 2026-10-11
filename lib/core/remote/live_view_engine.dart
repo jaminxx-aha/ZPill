@@ -68,6 +68,12 @@ final class LiveViewEngine {
   /// 看门狗喂入的时钟(测试注入合成时钟;生产墙钟)。
   final DateTime Function() _now;
 
+  /// 0x90C2 remote 模式在位(控制器接管态同步而来)。true 时
+  /// 0x9201 的 0xA004 自愈梯**不再碰 0x90C2** —— 梯的配对退闩
+  /// (90C2(0))会杀掉仅持有期保值的会话写入(0xD1A6 模式覆写等,
+  /// 2026-10-11 Zf 实证),改为瞬态忙退避重试。
+  bool remoteHeld = false;
+
   /// 最近一帧(JPEG 字节,SOI 起);null = 尚未收到/从未开启。
   final frame = ValueNotifier<Uint8List?>(null);
 
@@ -150,6 +156,28 @@ final class LiveViewEngine {
     } on PtpResponseException catch (e) {
       session.noteLadder('9201:${PtpSession.ladderRc(e.responseCode)}');
       if (e.responseCode != NikonResponseCode.invalidStatus) rethrow;
+      if (remoteHeld) {
+        // 接管持有中:下面的自愈梯每把钥匙都配对 0x90C2(0) 还机身
+        // 自由 —— 会连带杀掉仅持有期保值的会话写入(模式覆写)。而
+        // 模式切换后的 0xA004 是瞬态忙(2026-10-11 Zf 实证:写后立即
+        // 起景偶发被拒,稍候重试即过),退避重试,仍拒上抛原语义。
+        for (var attempt = 0; attempt < 2; attempt++) {
+          await _delay(const Duration(milliseconds: 400));
+          try {
+            await session.startLiveView();
+            session.noteLadder('9201:OK(忙重试)');
+            return;
+          } on PtpResponseException catch (e2) {
+            session.noteLadder('9201:${PtpSession.ladderRc(e2.responseCode)}');
+            final rc = e2.responseCode;
+            if (rc != NikonResponseCode.invalidStatus &&
+                rc != PtpResponseCode.deviceBusy) {
+              rethrow;
+            }
+          }
+        }
+        rethrow;
+      }
       var remoteEntered = false;
       final keys = <Future<bool> Function()>[
         () async {

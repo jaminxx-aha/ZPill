@@ -108,6 +108,15 @@ final class AfBox {
 /// 定案),不能放进点按循环。
 enum OrientationLock { auto, landscape, portrait }
 
+/// 拍摄模式 = 相机真状态(0xD1A6 镜像:0=照片 / 1=视频)。跟随与切换
+/// 都在控制器([cameraMode] / [switchMode]):拨杆翻转经 0x4006 事件
+/// 实时跟随;接管持有下**两方向都可远程覆写**(2026-10-11 Zf 实证:
+/// 写 0xD1A6 被接受、拍照门跟软件态),唯独录像门跟物理拨杆硬互锁
+/// (照片档覆写视频后开录仍 0xA004)—— 录像按钮的拨杆提示在开录被拒
+/// 时弹出。读不到 0xD1A6 的机身 [cameraMode] 为 null —— 页面回落本地
+/// 模式条(纯 UI 行为选择,现状)。
+enum CaptureMode { photo, video }
+
 final class RemoteController extends ChangeNotifier {
   RemoteController({
     required this.session,
@@ -131,10 +140,11 @@ final class RemoteController extends ChangeNotifier {
         _linkUp = true;
         if (!wasUp) {
           // 新连接(状态未离开的重复 connected 沿不重置):优化校准真名
-          // 缓存与旗标重建。
+          // 缓存与旗标重建;模式写拒缓存随会话死亡 —— 新会话再试一次。
           picCtrlNames.clear();
           _picCtrlNamesFetched = false;
           _picCtrlNamesBroken = false;
+          _modeWriteRejected = false;
         }
         if (session.remoteModeActive) {
           // 连接流的开闩括号(0x90C2(1)→(0),enableAppControl)正常
@@ -144,6 +154,7 @@ final class RemoteController extends ChangeNotifier {
           // 闩,2026-10-07 v9 定案:退 remote 不关已开的 0x9201 门)。
           _takeoverDangling = false;
           _takeoverActive = true;
+          this.engine.remoteHeld = true; // 取景自愈梯不得再碰 0x90C2(会杀会话写入)
         } else if (_takeoverDangling) {
           // 上次断链时还持有 remote 模式:防御性解除(机身拨盘可能仍
           // 锁定,OpenZCine 同款「photo 模式重入先复位」口径)。
@@ -206,6 +217,41 @@ final class RemoteController extends ChangeNotifier {
   /// 本会话被相机拒绝过(0x200F)的参数 → 读出条锁标(OpenZCine
   /// lockedControls 口径;写成功或断连即清)。
   final lockedProps = <int>{};
+
+  // ---- 拍摄模式(0xD1A6 镜像:跟随 + 远程切换)----
+
+  /// 相机当前拍摄模式(照片/视频);null = 未读到(旧机身无此属性/
+  /// 连接沿读失败)—— 页面回落本地模式条。连接沿初读、0x4006 事件
+  /// 跟随([_onEvent])、切换链定态([switchMode])三处更新。
+  CaptureMode? _cameraMode;
+  CaptureMode? get cameraMode => _cameraMode;
+
+  /// 拨杆真档(非覆写期 0xD1A6 读值的落点):与 [cameraMode] 同步更新;
+  /// 覆写期读值被软件态遮蔽、真档不可见,不再跟随 —— 释放接管后的读回
+  /// 对表([releaseTakeover])。不变式:[cameraMode] 非 null ⇒ 本值非 null。
+  CaptureMode? _dialMode;
+  CaptureMode? get dialMode => _dialMode;
+
+  /// 软件态可能在偏离拨杆真档(我们的 0xD1A6 覆写活着;覆写只在接管
+  /// 持有期保值)。**一旦写过即置位**:拨杆真档从此被软件态遮蔽(读值
+  /// 只见回声),连「切回 believed 拨杆档」也不清它 —— 拨杆可能已被拨
+  /// 过,真相只能靠新鲜读([releaseTakeover] 的释放后读回 /
+  /// [refreshCameraMode] 读到不同值)。覆写随接管释放/断链死亡:释放沿
+  /// 读回对表、断链沿对齐拨杆真档([_invalidate])。录像门跟物理拨杆
+  /// —— 照片档覆写视频后开录仍被拒,拨杆提示在开录时弹出(不预判拦截)。
+  bool _modeOverridden = false;
+  bool get modeOverridden => _modeOverridden;
+
+  /// 本会话模式写已被相机拒(try-and-see 能力缓存:0x1016 对 0xD1A6
+  /// 的可写性 PropDesc 报不出 —— Zf getSet=False 但接管下可写)。拒过
+  /// 一次即两方向灰显,不再反复试探。
+  bool _modeWriteRejected = false;
+  bool get modeWriteRejected => _modeWriteRejected;
+
+  /// 模式切换链在途(接管 → 写 0xD1A6 → 重启取景 → 刷参);期间模式
+  /// 条锁、快门行为不变到链尾定态。
+  bool _switchingMode = false;
+  bool get switchingMode => _switchingMode;
 
   // ---- 自拍定时 ----
 
@@ -453,17 +499,24 @@ final class RemoteController extends ChangeNotifier {
       return false;
     }
     _takeoverActive = true;
+    engine.remoteHeld = true; // 取景自愈梯不得再碰 0x90C2(会杀会话写入)
     error = null;
     notifyListeners();
     return true;
   }
 
   /// 解除接管(0x90C2 [0];尽力而为,链路将断时的拒绝不影响本地状态)。
+  /// 模式覆写随解除死亡:软件态回拨杆真档 —— 拨杆在覆写期可能被拨过
+  /// (读值被软件态遮蔽,我们看不见),不能凭旧态猜,释放后读回对表。
   Future<void> releaseTakeover() async {
     if (!_takeoverActive) return;
+    final wasOverridden = _modeOverridden;
     _takeoverActive = false;
+    _modeOverridden = false;
+    engine.remoteHeld = false;
     notifyListeners();
     await _endRemoteModeQuietly();
+    if (wasOverridden) await refreshCameraMode();
   }
 
   Future<void> _endRemoteModeQuietly() async {
@@ -1226,8 +1279,105 @@ final class RemoteController extends ChangeNotifier {
   /// 录像被 liveViewActive 门拦住,唯退出拍摄页重进才恢复。由持有
   /// _linkUp 的本控制器自驱,顺序不再寄望装配序。
   Future<void> _onConnectedChain() async {
+    // 模式读打头(2026-10-11 真机反馈:视频档进页要等整条刷参链跑完
+    // 才跟到视频档,几秒观感延迟)—— 单请求先行,再起景、刷参。
+    await refreshCameraMode();
     await autoLiveViewOnConnect();
     await refreshParams();
+  }
+
+  /// 读 0xD1A6 刷 [cameraMode](连接沿初读、进页/回台沿对表、0x4006
+  /// 事件跟随用)。读失败保持原状(null 仍 null → 页面本地回落;已知值
+  /// 不因瞬态失败清掉)。**覆写回声护栏**:覆写期读值是软件态回声(与
+  /// 拨杆真档不可分),与已知软件态相同即零动作 —— 拨杆真档的真相留给
+  /// 释放接管后的读回([releaseTakeover]);读到不同值 = 覆写已被机身
+  /// 顶掉/拨杆态盖过,按新真相全量对表。
+  Future<void> refreshCameraMode() async {
+    if (!_linkUp) return;
+    try {
+      final v = await session
+          .getDevicePropValue(PtpDevicePropCode.liveViewSelector);
+      final value = v.value;
+      if (value is! int || (value != 0 && value != 1)) return; // 表外方言:宁缺不错
+      final m = value == 1 ? CaptureMode.video : CaptureMode.photo;
+      if (_modeOverridden && m == _cameraMode) return;
+      final changed = m != _cameraMode;
+      _cameraMode = m;
+      _dialMode = m;
+      _modeOverridden = false;
+      if (changed && !_disposed) notifyListeners();
+    } on Object {
+      // 旧机身无此属性/瞬态拒绝/链路已死(transport StateError):模式
+      // 未知,页面走本地模式条
+    }
+  }
+
+  /// 远程切换拍摄模式(模式条点按):接管持有下写 0xD1A6 + 重启取景。
+  /// **两方向可切**(2026-10-11 Zf 实证:写被接受、拍照门跟软件态);
+  /// 录像门跟物理拨杆 —— 照片档覆写视频后开录被拒,拨杆提示在开录时
+  /// 弹出不预判。写被拒记 [modeWriteRejected](会话级,UI 灰显两方向)。
+  /// 取景重启后必刷参(模式族属性连片变)。
+  Future<bool> switchMode(CaptureMode target) async {
+    if (_switchingMode || recording || capturing || focusing) return false;
+    final current = _cameraMode;
+    if (current == null || target == current) return false;
+    if (_modeWriteRejected) {
+      error = '相机拒绝了远程切换拍摄模式 —— 请直接用机顶拨杆切换';
+      notifyListeners();
+      return false;
+    }
+    if (!_setPropEnabled()) {
+      error = '参数写入已关断,无法切换拍摄模式';
+      notifyListeners();
+      return false;
+    }
+    _switchingMode = true;
+    error = null;
+    notifyListeners();
+    try {
+      if (!takeoverActive && !await enableTakeover()) return false;
+      // 探针实证序:0x90C2(1) → 0x9202 → 写 0xD1A6 → 0x9201(取景
+      // 关着写,起景原生以新档起)。
+      await engine.stop();
+      try {
+        await session.setDevicePropValue(PtpDevicePropValue(
+          code: PtpDevicePropCode.liveViewSelector,
+          dataType: PtpDataType.uint8,
+          value: target == CaptureMode.photo ? 0 : 1,
+        ));
+      } on PtpResponseException catch (e) {
+        _modeWriteRejected = true;
+        error = '切换拍摄模式失败:${_nikonHint(e.responseCode) ?? e}';
+        unawaited(_recoverLiveViewAfterFailedSwitch());
+        notifyListeners();
+        return false;
+      }
+      _cameraMode = target;
+      // 写过即覆写期:拨杆真档被软件态遮蔽(哪怕切回 believed 拨杆档
+      // —— 拨杆可能已被拨过,真相只在释放后的读回里)。
+      _modeOverridden = true;
+      notifyListeners();
+      // 起景:接管已置 engine.remoteHeld,自愈梯自动转忙重试(模式
+      // 写后的 0xA004 是瞬态,2026-10-11 实证)。
+      await engine.start();
+      if (!_viewerVisible) engine.pause();
+      await refreshParams();
+      return true;
+    } finally {
+      _switchingMode = false;
+      if (!_disposed) notifyListeners();
+    }
+  }
+
+  /// 切换链写失败后的取景回滚(停景已发生,尽力起回;接管保持不动
+  /// —— 用户侧芯片仍如实显示)。
+  Future<void> _recoverLiveViewAfterFailedSwitch() async {
+    try {
+      await engine.start();
+      if (!_viewerVisible) engine.pause();
+    } on Object {
+      // 回滚失败:引擎自落 failed →「重试取景」兜底
+    }
   }
 
   /// 连接即取景(OpenZCine 口径:连接成功直接驱动进监看,相机侧由此
@@ -1612,7 +1762,14 @@ final class RemoteController extends ChangeNotifier {
         // 机身侧拨盘/菜单改动(OpenZCine 口径):定向刷新被点名的参数,
         // 短窗合并(一次拨杆转动会连发一串)。
         if (event.params.isNotEmpty) {
-          _schedulePropRefresh(event.params.first);
+          final code = event.params.first;
+          if (code == PtpDevicePropCode.liveViewSelector &&
+              !_switchingMode) {
+            // 拨杆翻转(或我们切换链之外的模式写入,如覆写被机身顶
+            // 回):重读镜像跟随。切换链在途时跳过 —— 链尾已定态。
+            unawaited(refreshCameraMode());
+          }
+          _schedulePropRefresh(code);
         }
       case NikonEventCode.movieRecordStarted:
         recording = true;
@@ -1693,6 +1850,15 @@ final class RemoteController extends ChangeNotifier {
       _takeoverDangling = true;
       _takeoverActive = false;
     }
+    engine.remoteHeld = false;
+    // 模式覆写随会话死亡(持有期保值):拨杆真档即真相,cameraMode 对
+    // 齐它(不变式:非覆写 ⇒ cameraMode == dialMode);重连沿
+    // _onConnectedChain 重读对表。
+    if (_modeOverridden) {
+      _cameraMode = _dialMode;
+      _modeOverridden = false;
+    }
+    _switchingMode = false;
     _syncAePolling(); // 引擎停转的通知可能在门闩之后才到,这里先收口
     unawaited(engine.stop());
     capturing = false;
