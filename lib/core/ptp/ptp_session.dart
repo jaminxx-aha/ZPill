@@ -574,6 +574,80 @@ final class PtpSession {
     _ensureOk(result, op);
   }
 
+  /// SetObjectProtection(0x1012,官方 §6.2.1.14):对象保护标记。
+  /// 参数 [句柄, 0x0000 不保护 / 0x0001 只读]。目录(Association)/
+  /// SDRAM 对象会被拒(Invalid_Object_Handle),卡写保护回 Store_Read_Only。
+  Future<void> setObjectProtection(int objectHandle,
+      {required bool protect}) async {
+    final result = await _serialized(() => transport.execute(PtpRequest(
+          opcode: PtpOperationCode.setObjectProtection,
+          params: [objectHandle, protect ? 0x0001 : 0x0000],
+        )));
+    _ensureOk(result, PtpOperationCode.setObjectProtection);
+  }
+
+  /// GetVendorCodes(0x9439,官方 §6.2.2.1):查询相机支持的厂商码全表
+  /// —— [deviceProps] = false 拿厂商操作码表(param 0x09),true 拿厂商
+  /// 属性码表(param 0x0D)。应答 = u32 元素数 + N×u32 码(4 字节扩展码
+  /// 全量,含 0x0001_xxxx 形态)。**这是自录厂商码表的正规通道**,免
+  /// 逐码盲试;不在表内的码不代表不应答(STA 9-op 小表同理)。
+  Future<List<int>> getVendorCodes({required bool deviceProps}) async {
+    final result = await _serialized(() => transport.execute(PtpRequest(
+          opcode: NikonOperationCode.getVendorCodes,
+          params: [deviceProps ? 0x0D : 0x09],
+        )));
+    _ensureOk(result, NikonOperationCode.getVendorCodes);
+    final data = result.data;
+    if (data == null || data.length < 4) return const [];
+    final bd = ByteData.sublistView(data);
+    final count = bd.getUint32(0, Endian.little);
+    final codes = <int>[];
+    for (var i = 0; i < count && 4 + i * 4 + 4 <= data.length; i++) {
+      codes.add(bd.getUint32(4 + i * 4, Endian.little));
+    }
+    return codes;
+  }
+
+  /// 4 字节扩展操作码包装(官方 §6.2.2.2-4):以 0x9440/0x9441/0x9442
+  /// 执行 0x0001_xxxx 形态的命令 —— P1 = 扩展码,P2-5 透传命令参数
+  /// (至多 4 个;带数据相的命令不能走 [extendedOperationNone])。
+  /// 现有 Ex 属性 ops(0x943A-C)之外的第二条官方扩展通道。
+  Future<PtpResult> extendedOperationNone(int extOp,
+      {List<int> params = const []}) async {
+    assert(params.length <= 4, '包装 op 至多透传 4 个命令参数');
+    final result = await _serialized(() => transport.execute(PtpRequest(
+          opcode: NikonOperationCode.operationDataNone,
+          params: [extOp, ...params],
+        )));
+    _ensureOk(result, NikonOperationCode.operationDataNone);
+    return result;
+  }
+
+  /// 4 字节扩展操作的读数据相版(0x9441,应答数据在 result.data)。
+  Future<PtpResult> extendedOperationReceive(int extOp,
+      {List<int> params = const []}) async {
+    assert(params.length <= 4, '包装 op 至多透传 4 个命令参数');
+    final result = await _serialized(() => transport.execute(PtpRequest(
+          opcode: NikonOperationCode.operationReceiveData,
+          params: [extOp, ...params],
+        )));
+    _ensureOk(result, NikonOperationCode.operationReceiveData);
+    return result;
+  }
+
+  /// 4 字节扩展操作的写数据相版(0x9442,dataOut 发给相机)。
+  Future<PtpResult> extendedOperationSend(int extOp,
+      {List<int> params = const [], Uint8List? data}) async {
+    assert(params.length <= 4, '包装 op 至多透传 4 个命令参数');
+    final result = await _serialized(() => transport.execute(PtpRequest(
+          opcode: NikonOperationCode.operationSendData,
+          params: [extOp, ...params],
+          dataOut: data ?? Uint8List(0),
+        )));
+    _ensureOk(result, NikonOperationCode.operationSendData);
+    return result;
+  }
+
   /// Nikon GetPictCtrlData(0x90CC):读优化校准(0xD200)槽位详情里的
   /// 注册名。params = [槽位号(即 0xD200 的值), 0];数据集布局按
   /// digiCamControl NikonBase.GetPictureControl 实证 —— [3..22] 是

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -9,6 +10,9 @@ import 'package:nikon_pill/core/browser/object_entry.dart';
 import 'package:nikon_pill/core/browser/photo_group.dart';
 import 'package:nikon_pill/core/browser/thumbnail_cache.dart';
 import 'package:nikon_pill/core/media/watermark.dart' show ExifCardData;
+import 'package:nikon_pill/core/ptp/operation_codes.dart';
+import 'package:nikon_pill/core/ptp/ptp_session.dart';
+import 'package:nikon_pill/core/ptp/ptp_transport.dart';
 import 'package:nikon_pill/core/ptpip/object_format.dart';
 import 'package:nikon_pill/core/transfer/object_downloader.dart';
 import 'package:nikon_pill/core/transfer/transfer_engine.dart';
@@ -297,6 +301,33 @@ Future<void> _revealControls(WidgetTester tester) async {
   await tester.pump(const Duration(seconds: 4)); // 3s 隐藏计时落地
   await tester.tapAt(tester.getCenter(find.byType(PageView)));
   await tester.pump(const Duration(milliseconds: 250)); // 180ms 淡入
+}
+
+/// 记录请求的假传输(保护标记用;按序回放预置结果/异常)。
+final class _FakePtpTransport implements PtpTransport {
+  final requests = <PtpRequest>[];
+  final Queue<Object> script = Queue();
+
+  void reply(PtpResult result) => script.add(result);
+  void fail(Exception e) => script.add(e);
+
+  @override
+  Future<PtpResult> execute(PtpRequest request,
+      {void Function(Uint8List chunk)? onData}) async {
+    requests.add(request);
+    if (script.isEmpty) {
+      throw StateError('脚本耗尽:未预置 ${request.opcode.toRadixString(16)}');
+    }
+    final next = script.removeFirst();
+    if (next is Exception) throw next;
+    return next as PtpResult;
+  }
+
+  @override
+  Stream<PtpEvent> get events => const Stream.empty();
+
+  @override
+  Future<void> close() async {}
 }
 
 void main() {
@@ -734,5 +765,63 @@ void main() {
     expect(children, hasLength(3));
     expect(children[0], isA<_StubVideoView>()); // 平台视图打底
     expect(children[1], isA<GestureDetector>()); // 点按层盖上
+  });
+
+  group('相机内保护(SetObjectProtection 0x1012,2026-10-12 官方 §6.2.1.14)',
+      () {
+    testWidgets('锁钮点按发 [句柄, 0x0001],再点发解除;失败走 SnackBar',
+        (tester) async {
+      final t = _FakePtpTransport();
+      final group = PhotoGroup([_file(0x1234, 'DSC_0001.JPG')]);
+      await _openViewer(
+          tester,
+          PhotoViewerPage(
+            items: [group],
+            initialIndex: 0,
+            thumbnails: _FakeThumbs(),
+            session: PtpSession(transport: t),
+          ));
+
+      // 上保护
+      t.reply(const PtpResult(responseCode: PtpResponseCode.ok));
+      await tester.tap(find.byIcon(Icons.lock_outline));
+      await tester.pumpAndSettle();
+      expect(t.requests.single.opcode, PtpOperationCode.setObjectProtection);
+      expect(t.requests.single.params, [0x1234, 0x0001]);
+      expect(find.text('已设为相机内保护(只读)'), findsOneWidget);
+      expect(find.byIcon(Icons.lock), findsOneWidget, reason: '乐观态跟本地写');
+      await _drainSnackBar(tester);
+
+      // 解除
+      t.reply(const PtpResult(responseCode: PtpResponseCode.ok));
+      await tester.tap(find.byIcon(Icons.lock));
+      await tester.pumpAndSettle();
+      expect(t.requests.last.params, [0x1234, 0x0000]);
+      expect(find.text('已解除相机内保护'), findsOneWidget);
+      await _drainSnackBar(tester);
+    });
+
+    testWidgets('写被拒(断链/卡写保护):图标不动,SnackBar 指路', (tester) async {
+      final t = _FakePtpTransport();
+      final group = PhotoGroup([_file(0x1234, 'DSC_0001.JPG')]);
+      await _openViewer(
+          tester,
+          PhotoViewerPage(
+            items: [group],
+            initialIndex: 0,
+            thumbnails: _FakeThumbs(),
+            session: PtpSession(transport: t),
+          ));
+
+      t.fail(const PtpResponseException(
+          opcode: PtpOperationCode.setObjectProtection,
+          responseCode: PtpResponseCode.storeNotAvailable));
+      await tester.tap(find.byIcon(Icons.lock_outline));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('保护标记失败'), findsOneWidget);
+      expect(find.byIcon(Icons.lock_outline), findsOneWidget,
+          reason: '失败不落乐观态');
+      await _drainSnackBar(tester);
+    });
   });
 }

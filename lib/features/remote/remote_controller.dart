@@ -1222,6 +1222,8 @@ final class RemoteController extends ChangeNotifier {
         return '当前相机状态不允许该操作';
       case NikonResponseCode.notLiveView:
         return '未开启取景';
+      case NikonResponseCode.movieFrameReleaseBusy:
+        return '录像中的静照拍摄尚在进行,请稍候(官方 0xA202)';
       default:
         return null;
     }
@@ -1298,18 +1300,27 @@ final class RemoteController extends ChangeNotifier {
   Future<void> _onConnectedChain() async {
     // 模式读打头(2026-10-11 真机反馈:视频档进页要等整条刷参链跑完
     // 才跟到视频档,几秒观感延迟)—— 单请求先行,再起景、刷参。
-    await refreshCameraMode();
+    // triggerRefresh=false:链尾 refreshParams 统一刷,这里补刷即双刷。
+    await refreshCameraMode(triggerRefresh: false);
+    // 取景画质档(用户设过非「跟随相机」才写;起景前写 → 首帧即目标
+    // 分辨率,0x9428 帧尺寸随 0xD1AC)。
+    await _applyLiveViewQuality();
     await autoLiveViewOnConnect();
     await refreshParams();
   }
 
   /// 读 0xD1A6 刷 [cameraMode](连接沿初读、进页/回台沿对表、0x4006
-  /// 事件跟随用)。读失败保持原状(null 仍 null → 页面本地回落;已知值
+  /// 事件跟随用)。读失败保持原状(null 仍 null → 页面回落;已知值
   /// 不因瞬态失败清掉)。**覆写回声护栏**:覆写期读值是软件态回声(与
   /// 拨杆真档不可分),与已知软件态相同即零动作 —— 拨杆真档的真相留给
   /// 释放接管后的读回([releaseTakeover]);读到不同值 = 覆写已被机身
   /// 顶掉/拨杆态盖过,按新真相全量对表。
-  Future<void> refreshCameraMode() async {
+  ///
+  /// [triggerRefresh]:模式翻转沿是否补刷参数(视频参数族只视频档刷,
+  /// 拨到视频档要拉整条链不然面板全「--」)。连接沿/进页沿的调用后都
+  /// 紧跟显式 refreshParams,必须传 false 防双刷(双刷翻倍脚本序);
+  /// 0x4006 事件路径用默认 true(那里没有后续刷参)。
+  Future<void> refreshCameraMode({bool triggerRefresh = true}) async {
     if (!_linkUp) return;
     try {
       final v = await session
@@ -1322,7 +1333,16 @@ final class RemoteController extends ChangeNotifier {
       _cameraMode = m;
       _dialMode = m;
       _modeOverridden = false;
-      if (changed && !_disposed) notifyListeners();
+      if (changed && !_disposed) {
+        notifyListeners();
+        // 模式翻转沿补刷参数(2026-10-12 视频参数族:拨到视频档要拉
+        // 整条视频参数链,不然面板全「--」)。连接沿初读不触发(首刷
+        // 由 _onConnectedChain 尾部统一做);切换链在途不触发(链尾
+        // refreshParams 已定态)。
+        if (_paramsRefreshedOnce && !_switchingMode && triggerRefresh) {
+          unawaited(refreshParams());
+        }
+      }
     } on Object {
       // 旧机身无此属性/瞬态拒绝/链路已死(transport StateError):模式
       // 未知,页面走本地模式条
@@ -1439,6 +1459,44 @@ final class RemoteController extends ChangeNotifier {
   /// 保持「取景默认打开」原行为。
   bool autoLiveViewEnabled = true;
 
+  /// 取景画质档(2026-10-12 官方 §6.5.11.4-5):null = 跟随相机(不写
+  /// —— 尊重机身菜单既有设置);非 null = 连接沿在起景前写入 + 改动
+  /// 即时写(0xD1AC 尺寸 1=QVGA/2=VGA/3=XGA;0xD1BC 压缩 0=Basic 尺寸
+  /// 优先…5=Fine 质量优先)。写失败静默(尽力而为,总闸关断/拒答不打扰)。
+  int? liveViewImageSize;
+  int? liveViewImageCompression;
+
+  /// 取景画质落定(设置浮层「监看」段):更新本地值;取景在跑即写相机
+  /// (会话已开),否则留给连接沿(_onConnectedChain 起景前补写 ——
+  /// 冷启乐观门闩期 _linkUp 恒真,不能拿它当会话已开的凭据)。
+  void setLiveViewQuality({int? imageSize, int? compression}) {
+    liveViewImageSize = imageSize;
+    liveViewImageCompression = compression;
+    if (_linkUp && liveViewActive) unawaited(_applyLiveViewQuality());
+    notifyListeners();
+  }
+
+  /// 把当前画质档写入相机(0x1016,u8 显式;起景前后均合法 —— 尺寸
+  /// 档决定 0x9428 帧分辨率)。尽力而为:拒答/断链/会话未开静默
+  /// (`on Object` —— 未开会话的 StateError 是 Error 不是 Exception,
+  /// 逃出去会炸 initState/连接链)。
+  Future<void> _applyLiveViewQuality() async {
+    for (final entry in <(int, int?)>[
+      (PtpDevicePropCode.liveViewImageSize, liveViewImageSize),
+      (PtpDevicePropCode.liveViewImageCompression, liveViewImageCompression),
+    ]) {
+      final code = entry.$1;
+      final value = entry.$2;
+      if (value == null) continue;
+      try {
+        await session.setDevicePropValue(PtpDevicePropValue(
+            code: code, dataType: PtpDataType.uint8, value: value));
+      } on Object {
+        if (!_linkUp) return;
+      }
+    }
+  }
+
   /// 在途的自动起景([autoLiveViewOnConnect] 单飞槽)。
   Future<void>? _autoStartInFlight;
 
@@ -1489,6 +1547,10 @@ final class RemoteController extends ChangeNotifier {
         } else if (e.responseCode == PtpResponseCode.invalidParameter) {
           error = '快门释放失败:相机不接受快门参数(0x201D,已试全部'
               '已知形态)—— 请反馈当时的「APP 接管」与「对焦后拍」状态';
+        } else if (e.responseCode == NikonResponseCode.movieFrameReleaseBusy) {
+          // 0xA202:录像中的静照释放进行中(官方 §6.3.2.17)—— 录像
+          // 期间拍静照连拍两下会撞上,等一拍再试。
+          error = '快门释放失败:录像中的静照拍摄尚在进行,请稍候再试';
         } else if (e.responseCode == PtpResponseCode.accessDenied) {
           // 0x200F:相机锁定拍照控制 —— Zf 机顶「照片/视频」切换拨杆在
           // 视频档时 0x9207 即被拒(2026-10-11 真机定案;对称于录像侧
@@ -1543,16 +1605,29 @@ final class RemoteController extends ChangeNotifier {
   /// [_refreshProp]);PropDesc 不可用退回裸值 0x1015(值有、域未知)。
   /// 单属性失败置空不上抛,断连后迟到值不上屏。目录序逐个刷(不并发):
   /// PropDesc 拒答的退回路径会二次入队,并发时与脚本应答交错易错位。
+  /// 视频档追加视频参数族 [kVideoShootingParams](照片档零流量 ——
+  /// 拨杆照片档下这些属性枚举塌 1 值,刷了也是噪声)。
   Future<void> refreshParams() async {
     for (final param in kShootingParams) {
       await _refreshProp(param.code);
     }
+    if (_cameraMode == CaptureMode.video) {
+      for (final param in kVideoShootingParams) {
+        await _refreshProp(param.code);
+      }
+    }
     await _refreshIsoAuto();
     await _refreshShotsRemaining();
     await _maybeFetchPicCtrlNames();
+    _paramsRefreshedOnce = true;
     if (!_linkUp) return;
     notifyListeners();
   }
+
+  /// 首轮刷参完成旗标:模式翻转沿的补刷只在首刷之后触发(连接沿的
+  /// 模式初读不作数 —— 那次刷新由 _onConnectedChain 尾部统一做,
+  /// 双刷会翻倍脚本序)。
+  bool _paramsRefreshedOnce = false;
 
   /// 优化校准槽位真名拉取(0x90CC,每连接一次):对 FORM 枚举里静态表
   /// 未收录的槽位(自定义 201-209/云 301-309/表外新值)逐个读注册名;

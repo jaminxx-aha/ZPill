@@ -24,6 +24,7 @@ import 'package:flutter/services.dart';
 
 import '../../app_services.dart';
 import '../../core/browser/object_entry.dart';
+import '../../core/ptp/ptp_session.dart';
 import '../../core/browser/photo_group.dart';
 import '../../core/browser/thumbnail_cache.dart';
 import '../../core/ptpip/object_format.dart' show ObjectKind;
@@ -55,6 +56,7 @@ class PhotoViewerPage extends StatefulWidget {
     this.gallery,
     this.videoPlayer,
     this.embeddedVideoView,
+    this.session,
   });
 
   final List<PhotoGroup> items;
@@ -81,6 +83,10 @@ class PhotoViewerPage extends StatefulWidget {
   /// 测试注入(视频页内嵌视图);缺省 iOS 平台视图。仅在
   /// [VideoPlayer.supportsEmbeddedView] 为真时被构建。
   final EmbeddedVideoViewBuilder? embeddedVideoView;
+
+  /// 测试注入(保护标记 0x1012);缺省 AppServices 遥控会话。
+  /// 相机侧文件保护,断连时点按失败走 SnackBar。
+  final PtpSession? session;
 
   @override
   State<PhotoViewerPage> createState() => _PhotoViewerPageState();
@@ -114,6 +120,35 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
   GallerySaver get _gallery => widget.gallery ?? PlatformServices.gallery;
   VideoPlayer get _videoPlayer =>
       widget.videoPlayer ?? PlatformServices.videoPlayer;
+  PtpSession get _session =>
+      widget.session ?? AppServices.instance.remoteController.session;
+
+  /// 保护标记会话内缓存(0x1012 无读回 —— ObjectInfo 的 ProtectionStatus
+  /// 未解析,这里以本页发出的写为准;重开页面回落未保护态如实)。
+  final _protectedHandles = <int>{};
+
+  /// 保护标记开关(2026-10-12 官方 §6.2.1.14:SetObjectProtection 0x1012,
+  /// 参数 [句柄, 0x0000 不保护/0x0001 只读];SDRAM/目录对象会被拒)。
+  /// 失败 SnackBar 指路(断链/卡写保护是常见因)。
+  Future<void> _toggleProtect(PhotoGroup group) async {
+    final handle = group.primary.handle;
+    final protect = !_protectedHandles.contains(handle);
+    try {
+      await _session.setObjectProtection(handle, protect: protect);
+      if (!mounted) return;
+      setState(() => protect
+          ? _protectedHandles.add(handle)
+          : _protectedHandles.remove(handle));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(protect ? '已设为相机内保护(只读)' : '已解除相机内保护'),
+          duration: const Duration(seconds: 2)));
+    } on Exception catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('保护标记失败:$e —— 请确认相机连接与卡写保护状态'),
+          duration: const Duration(seconds: 3)));
+    }
+  }
 
   @override
   void initState() {
@@ -365,6 +400,17 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
                       tooltip: '照片信息',
                       onPressed: () => _showInfo(group),
                       icon: const Icon(Icons.info_outline),
+                    ),
+                    IconButton(
+                      tooltip: _protectedHandles.contains(group.primary.handle)
+                          ? '解除相机内保护'
+                          : '相机内保护(锁定)',
+                      onPressed: () => _toggleProtect(group),
+                      icon: Icon(
+                        _protectedHandles.contains(group.primary.handle)
+                            ? Icons.lock
+                            : Icons.lock_outline,
+                      ),
                     ),
                     if (group.hasJpg)
                       IconButton(

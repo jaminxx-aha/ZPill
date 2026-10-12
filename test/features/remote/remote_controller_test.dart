@@ -177,7 +177,8 @@ void _scriptParams(_ScriptTransport t,
     int drive = 1,
     bool modeUnreadable = false,
     List<int>? picCtrlEnums,
-    int picCtrlValue = 1}) {
+    int picCtrlValue = 1,
+    bool tail = true}) {
   for (final s in _kParamSpecs) {
     var value = s.value;
     if (s.code == PtpDevicePropCode.exposureProgramMode) value = mode;
@@ -208,6 +209,18 @@ void _scriptParams(_ScriptTransport t,
       t.ok(data: _u32Bytes(vendor));
     }
   }
+  if (tail) {
+    t.ok(data: Uint8List.fromList([0])); // 0xD054 自动 ISO:关
+    t.ok(data: _u32Bytes(1234)); // 0xD1F1 剩余张数
+  }
+}
+
+/// 视频档全量刷参块(照片参数无尾 + 视频参数族 + 自动 ISO + 剩余张数
+/// —— 消费序 = refreshParams 的 [照片参数 → 视频参数 → 0xD054 →
+/// 0xD1F1],视频档追加视频族,尾两读永远在最后)。
+void _scriptParamsVideo(_ScriptTransport t) {
+  _scriptParams(t, tail: false);
+  _scriptVideoParams(t);
   t.ok(data: Uint8List.fromList([0])); // 0xD054 自动 ISO:关
   t.ok(data: _u32Bytes(1234)); // 0xD1F1 剩余张数
 }
@@ -221,6 +234,56 @@ Uint8List _picCtrlData(String name) {
     b[3 + i] = name.codeUnitAt(i);
   }
   return b;
+}
+
+/// 视频参数族应答块(2026-10-12 官方 §6.5.3/§6.5.12 目录落地):视频档
+/// 连接沿/事件沿的补刷都会消费它。FORM 驱动参数(无 pickValues)给
+/// PropDesc,直供参数给裸值;N-Log 只读(getSet=false),[logOutput]
+/// 参数化它的值。
+const _kVideoParamTypes = <int, PtpDataType>{
+  PtpDevicePropCode.movieFnumber: PtpDataType.uint16,
+  PtpDevicePropCode.movieShutterSpeed: PtpDataType.uint32,
+  PtpDevicePropCode.movieExposureIndex: PtpDataType.uint32,
+  PtpDevicePropCode.movieExposureBiasCompensation: PtpDataType.int16,
+  PtpDevicePropCode.movieWhiteBalance: PtpDataType.uint16,
+  PtpDevicePropCode.movieLogOutput: PtpDataType.uint8,
+  PtpDevicePropCode.movieVibrationReduction: PtpDataType.uint8,
+  PtpDevicePropCode.electronicVR: PtpDataType.uint8,
+  PtpDevicePropCode.recordTimeCodes: PtpDataType.uint8,
+  PtpDevicePropCode.timeCodeCountUpMethod: PtpDataType.uint8,
+  PtpDevicePropCode.timeCodeDropFrame: PtpDataType.uint8,
+  PtpDevicePropCode.movieCaptureAreaCrop: PtpDataType.uint8,
+  PtpDevicePropCode.movieH265ToneMode: PtpDataType.uint8,
+};
+
+const _kVideoParamValues = <int, int>{
+  PtpDevicePropCode.movieFnumber: 200, // ƒ/2.0
+  PtpDevicePropCode.movieShutterSpeed: 1 << 16 | 50, // 1/50s
+  PtpDevicePropCode.movieExposureIndex: 100,
+  PtpDevicePropCode.movieExposureBiasCompensation: 0,
+  PtpDevicePropCode.movieWhiteBalance: 0x8015, // 同照片设置
+  PtpDevicePropCode.movieLogOutput: 0,
+  PtpDevicePropCode.movieVibrationReduction: 0,
+  PtpDevicePropCode.electronicVR: 0,
+  PtpDevicePropCode.recordTimeCodes: 0,
+  PtpDevicePropCode.timeCodeCountUpMethod: 0,
+  PtpDevicePropCode.timeCodeDropFrame: 1,
+  PtpDevicePropCode.movieCaptureAreaCrop: 0,
+  PtpDevicePropCode.movieH265ToneMode: 0,
+};
+
+void _scriptVideoParams(_ScriptTransport t, {int logOutput = 0}) {
+  for (final param in kVideoShootingParams) {
+    final type = _kVideoParamTypes[param.code]!;
+    var value = _kVideoParamValues[param.code]!;
+    if (param.code == PtpDevicePropCode.movieLogOutput) value = logOutput;
+    if (param.pickValues == null) {
+      t.ok(data: _propDescDataset(param.code, type, value,
+          getSet: param.code != PtpDevicePropCode.movieLogOutput));
+    } else {
+      t.ok(data: _rawValueBytes(type, value));
+    }
+  }
 }
 
 /// PropDesc 全拒的回退应答(值走裸读;路由参数读厂商码)。
@@ -755,7 +818,7 @@ void main() {
       '可覆写、拍照门跟镜像值;录像门跟物理拨杆硬互锁,开录时才拒)', () {
     test('连接沿初读:0xD1A6=1 → 视频;表外方言值(2)不猜 → null 本地回落',
         () async {
-      _scriptParams(transport);
+      _scriptParamsVideo(transport);
       _emitConnected(transport, conn, d1a6: 1);
       await pumpEventQueue();
       expect(controller.cameraMode, CaptureMode.video);
@@ -765,7 +828,7 @@ void main() {
       // 重连报表外值(未来机身第三态/方言):已知值不清,宁缺不错。
       conn.statesCtrl.add(CameraLinkState.reconnecting);
       await pumpEventQueue();
-      _scriptParams(transport);
+      _scriptParamsVideo(transport);
       _emitConnected(transport, conn, d1a6: 2);
       await pumpEventQueue();
       expect(controller.cameraMode, CaptureMode.video,
@@ -778,8 +841,10 @@ void main() {
       await pumpEventQueue();
       expect(controller.cameraMode, CaptureMode.photo);
 
-      // 拨杆拨到视频档:事件 → 定向读跟随
+      // 拨杆拨到视频档:事件 → 定向读跟随(+ 模式翻转沿补刷参数:
+      // 照片块 + 视频块,拨到视频档要拉整条视频参数链)
       transport.ok(data: Uint8List.fromList([1]));
+      _scriptParamsVideo(transport); // 照片参数 + 视频参数族 + 尾两读
       transport.eventCtrl.add(const PtpEvent(
           code: PtpEventCode.devicePropChanged,
           transactionId: 0xFFFFFFFF,
@@ -791,7 +856,7 @@ void main() {
 
     test('switchMode(视频→照片):接管 + 停景 + 写 0xD1A6=0 + 起景 + 刷参',
         () async {
-      _scriptParams(transport);
+      _scriptParamsVideo(transport);
       _emitConnected(transport, conn, d1a6: 1);
       await pumpEventQueue();
       expect(controller.cameraMode, CaptureMode.video);
@@ -837,7 +902,7 @@ void main() {
 
     test('switchMode 写被拒(0x200F)→ 回滚起景 + 会话级缓存,两方向早退提示',
         () async {
-      _scriptParams(transport);
+      _scriptParamsVideo(transport);
       _emitConnected(transport, conn, d1a6: 1);
       await pumpEventQueue();
 
@@ -874,7 +939,7 @@ void main() {
         ..ok() // 0x1016 写 0xD1A6=1
         ..ok() // 0x9201 起景
         ..ok(data: _fakeFrame()); // 首帧
-      _scriptParams(transport); // 刷参块
+      _scriptParamsVideo(transport); // 切到视频档:刷参 = 照片 + 视频族 + 尾
       final chainStart = transport.requests.length;
       expect(await controller.switchMode(CaptureMode.video), isTrue);
       expect(controller.error, isNull);
@@ -901,7 +966,7 @@ void main() {
 
     test('覆写态解除接管 → 释放后读回拨杆真档对表(覆写死亡,读值不再被'
         '软件态遮蔽)', () async {
-      _scriptParams(transport);
+      _scriptParamsVideo(transport);
       _emitConnected(transport, conn, d1a6: 1);
       await pumpEventQueue();
       transport
@@ -916,7 +981,9 @@ void main() {
       transport
         ..ok() // 0x90C2(0) 解除
         ..ok(data: Uint8List.fromList([1])); // 释放后读回 D1A6:拨杆=视频
+      _scriptParamsVideo(transport); // 读回翻转沿补刷(photo+video+尾)
       await controller.releaseTakeover();
+      await pumpEventQueue(); // 翻转沿补刷是 unawaited:泵完再断言/teardown
       expect(controller.cameraMode, CaptureMode.video,
           reason: '覆写随解除死亡:读回拨杆真档(覆写期可能被拨过,不猜)');
       expect(controller.dialMode, CaptureMode.video);
@@ -925,7 +992,7 @@ void main() {
     });
 
     test('覆写期拨杆被拨到照片档 → 释放读回对表照片(不可凭旧态猜)', () async {
-      _scriptParams(transport);
+      _scriptParamsVideo(transport);
       _emitConnected(transport, conn, d1a6: 1);
       await pumpEventQueue();
       transport
@@ -949,7 +1016,7 @@ void main() {
 
     test('覆写期 0x4006(D1A6)事件 → 读值是软件态回声:零动作,拨杆真档'
         '不被回声污染', () async {
-      _scriptParams(transport);
+      _scriptParamsVideo(transport);
       _emitConnected(transport, conn, d1a6: 1);
       await pumpEventQueue();
       transport
@@ -976,7 +1043,7 @@ void main() {
     });
 
     test('模式写被拒 → 会话级缓存;重连(新会话)复位再试', () async {
-      _scriptParams(transport);
+      _scriptParamsVideo(transport);
       _emitConnected(transport, conn, d1a6: 1);
       await pumpEventQueue();
       transport
@@ -992,7 +1059,7 @@ void main() {
       // 重连:新会话再试一次(拒答缓存随连接复位)
       conn.statesCtrl.add(CameraLinkState.reconnecting);
       await pumpEventQueue();
-      _scriptParams(transport);
+      _scriptParamsVideo(transport);
       _emitConnected(transport, conn, d1a6: 1);
       await pumpEventQueue();
       expect(controller.modeWriteRejected, isFalse);
@@ -1001,7 +1068,7 @@ void main() {
 
     test('断链:覆写/切换中/remoteHeld 清,cameraMode 对齐拨杆真档'
         '(覆写随会话死亡)', () async {
-      _scriptParams(transport);
+      _scriptParamsVideo(transport);
       _emitConnected(transport, conn, d1a6: 1);
       await pumpEventQueue();
       transport
@@ -2318,6 +2385,75 @@ void main() {
       controller.engine.health.value = LiveViewHealth.ok;
       expect(controller.liveViewBusyHold, isFalse);
       expect(notified, 2);
+    });
+  });
+
+  group('取景画质档(2026-10-12 官方 §6.5.11.4-5)', () {
+    test('连接沿:设过档 → 模式读后、起景前写 0xD1AC/0xD1BC(u8 显式)',
+        () async {
+      controller.setLiveViewQuality(imageSize: 1, compression: 5);
+      _scriptParams(transport);
+      _emitConnected(transport, conn);
+      // 两笔画质写应答插到链首 [0xD1A6 之后、0x9201 之前]
+      final d1a6 = transport.script.removeFirst();
+      final start = transport.script.removeFirst();
+      final frame = transport.script.removeFirst();
+      transport.script
+        ..addFirst(frame)
+        ..addFirst(const PtpResult(responseCode: PtpResponseCode.ok)) // 0xD1BC
+        ..addFirst(const PtpResult(responseCode: PtpResponseCode.ok)) // 0xD1AC
+        ..addFirst(start)
+        ..addFirst(d1a6);
+      await pumpEventQueue();
+      final ops = transport.requests.map((r) => r.opcode).toList();
+      // 序 = [0xD1A6 读, 0x9201?, ...] 实际 = 模式读 → 两笔画质写 → 起景
+      final writeIdx = ops.indexOf(PtpOperationCode.setDevicePropValue);
+      final startIdx = ops.indexOf(NikonOperationCode.startLiveView);
+      expect(writeIdx, inInclusiveRange(1, 2), reason: '画质写在模式读之后');
+      expect(startIdx, 3, reason: '起景在画质写之后(首帧即目标分辨率)');
+      final writes = transport.requests
+          .where((r) => r.opcode == PtpOperationCode.setDevicePropValue)
+          .toList();
+      expect(writes[0].params, [PtpDevicePropCode.liveViewImageSize]);
+      expect(writes[0].dataOut, [1]);
+      expect(writes[1].params, [PtpDevicePropCode.liveViewImageCompression]);
+      expect(writes[1].dataOut, [5]);
+      expect(controller.liveViewImageSize, 1);
+      expect(controller.liveViewImageCompression, 5);
+    });
+
+    test('未设档(null = 跟随相机):连接沿零画质流量,序不变形', () async {
+      expect(controller.liveViewImageSize, isNull);
+      _scriptParams(transport);
+      _emitConnected(transport, conn);
+      await pumpEventQueue();
+      final ops = transport.requests.map((r) => r.opcode).toList();
+      expect(ops.take(2), [
+        PtpOperationCode.getDevicePropValue, // 0xD1A6
+        NikonOperationCode.startLiveView, // 直接起景
+      ]);
+      expect(transport.requests.where((r) => r.params.contains(
+              PtpDevicePropCode.liveViewImageSize)), isEmpty,
+          reason: '「跟随相机」不写机身菜单既有值');
+    });
+
+    test('取景运行中改档:即时写(两码独立,失败互不连坐)', () async {
+      _scriptParams(transport);
+      _emitConnected(transport, conn);
+      await pumpEventQueue();
+      final baseline = transport.requests.length;
+      transport
+        ..reply(PtpResponseCode.accessDenied) // 0xD1AC 拒
+        ..ok(); // 0xD1BC 通
+      controller.setLiveViewQuality(imageSize: 3, compression: 3);
+      await pumpEventQueue();
+      final writes = transport.requests.skip(baseline).toList();
+      expect(writes[0].params, [PtpDevicePropCode.liveViewImageSize]);
+      expect(writes[0].dataOut, [3]);
+      expect(writes[1].params, [PtpDevicePropCode.liveViewImageCompression]);
+      expect(writes[1].dataOut, [3]);
+      expect(controller.liveViewImageSize, 3,
+          reason: '写被拒本地值保持(尽力而为,重连沿再补)');
     });
   });
 }

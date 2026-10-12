@@ -32,6 +32,9 @@ abstract final class PtpOperationCode {
   static const int getDevicePropValue = 0x1015; // P3 曝光查询/设置
   static const int setDevicePropValue = 0x1016;
   static const int getPartialObject = 0x101B; // 32 位偏移分块读(断点续传根基)
+  // 对象保护标记(官方 §6.2.1.14:参数 [句柄, 0x0000 不保护/0x0001
+  // 只读];目录/SDRAM 对象拒,卡写保护回 0x2002 族)。
+  static const int setObjectProtection = 0x1012;
 }
 
 /// 尼康厂商操作码(Zf 实测在册;名称按 libgphoto2 ptp.h)。
@@ -299,6 +302,32 @@ abstract final class PtpDevicePropCode {
   // 机身警告状态位掩码(u32 只读,官方 §6.5.6.24;Bit0=序列错误 ——
   // 快门失败提示可指名,恢复口径官方 §11.7.5)。
   static const int warningStatus = 0xD102;
+  // 取景画质/带宽(官方 §6.5.11.4-5,Get/Set u8;0x9428 帧分辨率随
+  // 尺寸档 —— §9.7「The size set in the LiveViewImageSize property
+  // becomes the image size」)。尺寸档 1=QVGA(320×240)/2=VGA(640×480,
+  // 默认)/3=XGA(1024×768);压缩档 0=Basic 尺寸优先(默认)/1=Basic
+  // 质量优先/2=Normal 尺寸优先/3=Normal 质量优先/4=Fine 尺寸优先/
+  // 5=Fine 质量优先。
+  static const int liveViewImageSize = 0xD1AC;
+  static const int liveViewImageCompression = 0xD1BC;
+  // ── 视频参数族(官方 §6.5.3/§6.5.12,视频拍摄菜单;Zf 在册性见
+  // §6.5 总表页「✓」列)—— 拨杆视频档生效,枚举域相机 FORM 自报
+  // (随帧率/镜头/N-Log 浮动,静态值表只标官方逐字确认过的值)。
+  static const int movieShutterSpeed = 0xD1A8; // 视频快门,u32 打包分数 num<<16|den(§6.5.12.2:1/250=0x000100FA)
+  static const int movieFnumber = 0xD1A9; // 视频光圈,u16 ƒ×100(§6.5.12.1)
+  static const int movieExposureIndex = 0xD1AA; // 视频 ISO,u32 裸数,默认 100(§6.5.3.8;N-Log 开时范围收口)
+  static const int movieExposureBiasCompensation = 0xD1AB; // 视频 EV,INT16 千分档 1/3 步(§6.5.12.3:+3000=+3.0EV)
+  static const int movieCaptureAreaCrop = 0xD20F; // 视频图像区域,u8(0=FX/2=DX,§6.5.3.5)
+  static const int movieVibrationReduction = 0xD1F9; // 视频减震,u8(0 关/1 正常/2 运动/100 同照片设置,§6.5.3.62)
+  static const int electronicVR = 0xD314; // 电子减震,u8(0 关/1 开;120p/升格拒,§6.5.3.63)
+  static const int recordTimeCodes = 0xD1FB; // 录制时间码,u8(0 关/1 开/2 开+HDMI 外录,§6.5.3.69)
+  static const int timeCodeCountUpMethod = 0xD1FC; // 计数方法,u8(0 Rec Run/1 Free Run,§6.5.3.70)
+  static const int timeCodeDropFrame = 0xD1FE; // 丢帧,u8(0 关/1 开,§6.5.3.72)
+  static const int movieLogOutput = 0xD0BB; // N-Log 输出,u8 只读(0 关/1 开,§6.5.12.4;开时 ISO 域收口)
+  static const int movieWhiteBalance = 0xD23A; // 视频白平衡,u16(0x8015=同照片设置,其余复用静照 WB 值空间,§6.5.3.9)
+  // H.265 10-bit(MOV)色调(u8 Ex 扩展码,§6.5.3.3:0 SDR/1 N-Log/
+  // 2 HLG;走 0x943A-C Ex ops,>0xFFFF 自动路由)。
+  static const int movieH265ToneMode = 0x0001D001;
   // Zf 另报 MTP 标准属性 0xD303/0xD407(UseDeviceStageFlag /
   // PerceivedDeviceType,与拍摄无关,不入册)。
   // 色调模式 OpenZCine 记作 0x0001D01C(u32 扩展形态,超 u16 属性码宽;

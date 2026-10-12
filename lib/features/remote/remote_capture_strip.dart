@@ -30,13 +30,16 @@ const _stripOrder = <int>[
 /// 设置面板参数区的参数序:固定序(对齐 OpenZCine
 /// photographyCaptureValues:MODE/ISO/SHUTTER/IRIS/DRIVE/FOCUS/WB/
 /// METER/PROFILE,见 _stripOrder)+ 目录余量按目录序追加(新参数
-/// 默认上面板)。2026-10-12 竖屏读出行与横屏左参数栏先后删除,
-/// 设置面板成为唯一消费方。
-List<ShootingParam> orderedCaptureParams() => [
+/// 默认上面板)+ **视频档追加视频参数族 [kVideoShootingParams]**
+/// ([videoMode] = 控制器 cameraMode == video;照片档不出现,零噪声)。
+/// 2026-10-12 竖屏读出行与横屏左参数栏先后删除,设置面板成为唯一
+/// 消费方。
+List<ShootingParam> orderedCaptureParams({bool videoMode = false}) => [
       for (final code in _stripOrder)
         if (shootingParamByCode[code] != null) shootingParamByCode[code]!,
       for (final p in kShootingParams)
         if (!_stripOrder.contains(p.code)) p,
+      if (videoMode) ...kVideoShootingParams,
     ];
 
 /// 设置面板 tile 共用的取值状态打包(值经

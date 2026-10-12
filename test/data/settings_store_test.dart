@@ -58,4 +58,46 @@ void main() {
     expect(s.autoTransfer, isTrue);
     expect(s.autoTransferFormat, PhotoDownloadFormat.both);
   });
+
+  group('取景画质档持久化(2026-10-12 官方 §6.5.11.4-5)', () {
+    test('默认 null(跟随相机);哨兵 copyWith 可写回 null', () {
+      var s = const AppSettings();
+      expect(s.liveViewImageSize, isNull);
+      expect(s.liveViewImageCompression, isNull);
+      s = s.copyWith(liveViewImageSize: 1, liveViewImageCompression: 5);
+      expect(s.liveViewImageSize, 1);
+      expect(s.liveViewImageCompression, 5);
+      // 「跟随相机」= 显式写回 null(哨兵语义:传值即覆盖)
+      s = s.copyWith(liveViewImageSize: null);
+      expect(s.liveViewImageSize, isNull);
+      expect(s.liveViewImageCompression, 5, reason: '未传字段保持');
+    });
+
+    test('JSON 往返;表外值回落「跟随相机」', () {
+      final s = const AppSettings()
+          .copyWith(liveViewImageSize: 3, liveViewImageCompression: 2);
+      final back = AppSettings.fromJson(s.toJson());
+      expect(back.liveViewImageSize, 3);
+      expect(back.liveViewImageCompression, 2);
+
+      final bogus = AppSettings.fromJson({
+        'liveViewImageSize': 9, // 尺寸值域 {1,2,3} 外
+        'liveViewImageCompression': 'x',
+      });
+      expect(bogus.liveViewImageSize, isNull);
+      expect(bogus.liveViewImageCompression, isNull);
+    });
+
+    test('文件落盘往返(FileSettingsStore)', () async {
+      final dir = await Directory.systemTemp.createTemp('np_settings_lv');
+      addTearDown(() => dir.delete(recursive: true));
+      final store = FileSettingsStore(dataDir: () async => dir.path);
+      await store.update(const AppSettings().copyWith(
+          liveViewImageSize: 2, liveViewImageCompression: 3));
+      final reloaded = FileSettingsStore(dataDir: () async => dir.path);
+      final s = await reloaded.current();
+      expect(s.liveViewImageSize, 2);
+      expect(s.liveViewImageCompression, 3);
+    });
+  });
 }
