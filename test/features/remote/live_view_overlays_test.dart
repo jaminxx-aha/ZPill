@@ -9,6 +9,9 @@ LiveViewHeader _header({
   bool recording = false,
   LiveViewSound? sound,
   LiveViewTimecode? timecode,
+  int? overheatRaw,
+  int? recordingCountdownSeconds,
+  int? spotWbRaw,
 }) {
   return LiveViewHeader(
     coordinateWidth: 6048,
@@ -23,6 +26,9 @@ LiveViewHeader _header({
     level: null,
     sound: sound,
     timecode: timecode,
+    overheatRaw: overheatRaw,
+    recordingCountdownSeconds: recordingCountdownSeconds,
+    spotWbRaw: spotWbRaw,
   );
 }
 
@@ -41,7 +47,8 @@ void main() {
   group('recordingReadoutOf:录制读出可见性(纯决策)', () {
     test('头缺失 / 取景未开启 → 全不显示(末帧保留期冻结读出不驻屏)', () {
       expect(recordingReadoutOf(null, liveViewActive: true),
-          (timecode: false, meters: false));
+          (timecode: false, meters: false, overheat: null,
+              countdownSeconds: null));
       expect(
           recordingReadoutOf(
               _header(
@@ -53,7 +60,8 @@ void main() {
                   timecode: const LiveViewTimecode(
                       on: true, hour: 1, minute: 2, second: 3, frame: 4)),
               liveViewActive: false),
-          (timecode: false, meters: false),
+          (timecode: false, meters: false, overheat: null,
+              countdownSeconds: null),
           reason: '取景已停,读出随 AF 框同规退场');
     });
 
@@ -106,6 +114,84 @@ void main() {
       expect(recordingReadoutOf(_header(), liveViewActive: true).meters,
           isFalse,
           reason: 'Gen-1 短头无电平域');
+    });
+
+    test('过热:机身自报 @853 ≥1 即现(不限录制);0/越界值不告警;'
+        '倒计时只在「倒计时显示」态随 @836 现身', () {
+      expect(
+          recordingReadoutOf(_header(overheatRaw: 1), liveViewActive: true)
+              .overheat,
+          1,
+          reason: '待机升温也报(机身屏同样在取景待机就报温)');
+      expect(
+          recordingReadoutOf(
+                  _header(recording: true, overheatRaw: 4,
+                      recordingCountdownSeconds: 30),
+                  liveViewActive: true)
+              .countdownSeconds,
+          30,
+          reason: '「倒计时显示」态 → @836 倒计时随行(官方口径 30s 起)');
+      expect(
+          recordingReadoutOf(
+                  _header(overheatRaw: 2, recordingCountdownSeconds: 3000),
+                  liveViewActive: true)
+              .countdownSeconds,
+          isNull,
+          reason: '非倒计时态(2=中温高)不显倒计时 —— 机身只在 4 态显示');
+      expect(
+          recordingReadoutOf(_header(overheatRaw: 0), liveViewActive: true)
+              .overheat,
+          isNull,
+          reason: '0 = 正常,无横幅');
+      expect(
+          recordingReadoutOf(_header(overheatRaw: 9), liveViewActive: true)
+              .overheat,
+          isNull,
+          reason: '未知值(>4)宁缺不错,不告警');
+      expect(recordingReadoutOf(_header(), liveViewActive: true).overheat,
+          isNull,
+          reason: 'Gen-1 短头无过热域');
+    });
+  });
+
+  group('overheatBadgeText/overheatCountdownText:过热徽章文案(纯函数)', () {
+    test('四级文案与倒计时拼接;倒计时 m:ss 补零', () {
+      expect(overheatBadgeText(1), '机内温度升高');
+      expect(overheatBadgeText(2), '机内温度较高');
+      expect(overheatBadgeText(3), '机内高温,录制即将停止');
+      expect(overheatBadgeText(4), '即将自动停止录制',
+          reason: '无倒计时不拼尾句');
+      expect(overheatBadgeText(4, countdownSeconds: 30),
+          '即将自动停止录制 0:30');
+      expect(overheatCountdownText(3600), '60:00');
+      expect(overheatCountdownText(30), '0:30');
+      expect(overheatCountdownText(65), '1:05');
+    });
+  });
+
+  group('OverheatBadge', () {
+    testWidgets('高温级红字 + 温度图标上屏,倒计时拼进文案', (tester) async {
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: const OverheatBadge(level: 4, countdownSeconds: 30),
+        ),
+      ));
+      expect(find.byIcon(Icons.device_thermostat), findsOneWidget);
+      expect(find.text('即将自动停止录制 0:30'), findsOneWidget);
+      final hot = tester.widget<Text>(find.text('即将自动停止录制 0:30'));
+      expect(hot.style!.color, LiveDesign.dark.bad);
+    });
+
+    testWidgets('温和级金 accent(与高温级红区色不同)', (tester) async {
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: const OverheatBadge(level: 1),
+        ),
+      ));
+      final mild = tester.widget<Text>(find.text('机内温度升高'));
+      expect(mild.style!.color, LiveDesign.dark.accent,
+          reason: '1-2 级金 accent;3-4 级红 bad(与机身严重度对齐)');
+      expect(LiveDesign.dark.bad, isNot(LiveDesign.dark.accent));
     });
   });
 

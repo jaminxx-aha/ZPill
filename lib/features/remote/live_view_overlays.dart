@@ -1,7 +1,7 @@
 /// 监看辅助覆盖层(TODO §二 Live View 监看辅助):三分网格 / 斑马纹 /
 /// 直方图 / 水平仪 / 伪色 / 对焦峰值,全部画在取景画面上,随开关增减,
-/// 不改帧数据。另有录制读出(时间码 + 声音电平表)—— 屏幕坐标层,
-/// 取景画面右上角(见 [recordingReadoutOf] 的可见性口径)。
+/// 不改帧数据。另有录制读出(时间码 + 声音电平表 + 过热警告)—— 屏幕
+/// 坐标层,取景画面右上角(见 [recordingReadoutOf] 的可见性口径)。
 ///
 /// 网格与斑马纹对齐**画面实际包含矩形**(BoxFit.contain 的 letterbox
 /// 数学),不是整个取景框 —— 斑马纹错位会误导曝光判断。
@@ -433,17 +433,90 @@ final class _LevelPainter extends CustomPainter {
 /// - 电平表**录制中常驻**(@828;录没录上声一目了然,静音也显示 ——
 ///   那正是要看见的),待机时相机报了非零电平才现身(拍照取景恒零 →
 ///   不占屏;影片待机若机身报电平即成开录前的试音表);
+/// - 过热警告随机身自报状态(@853 ≥ 1 即现,不限录制 —— 机身屏同样
+///   在取景待机就报温),倒计时秒只在「倒计时显示」态(@853 = 4)随
+///   @836 现身(官方 §9.7.1:过热 30s 起 —— 机身自家屏同款语义);
 /// - 头解析不出 / 取景未开启一律不显示(末帧保留期取景已停,冻结的
 ///   读出随 AF 框同规退场)。
-({bool timecode, bool meters}) recordingReadoutOf(
-    LiveViewHeader? header, {required bool liveViewActive}) {
+({bool timecode, bool meters, int? overheat, int? countdownSeconds})
+    recordingReadoutOf(LiveViewHeader? header, {required bool liveViewActive}) {
   final h = liveViewActive ? header : null;
   final sound = h?.sound;
+  // 未知值(>4)按不告警处理(宁缺不错,域值表来自官方 §9.7.1)。
+  final raw = h?.overheatRaw;
+  final overheat = (raw != null && raw >= 1 && raw <= 4) ? raw : null;
   return (
     timecode: h?.timecode?.on == true,
     meters: sound != null &&
         (h!.recording || sound.currentLeft > 0 || sound.currentRight > 0),
+    overheat: overheat,
+    countdownSeconds: overheat == 4 ? h?.recordingCountdownSeconds : null,
   );
+}
+
+/// 过热警告等级文案(纯函数,测试直取;官方 §9.7.1 四级,与机身自家
+/// 屏的温度提示同语义):[countdownSeconds] 只在「倒计时显示」态(4)
+/// 传入,拼进尾句(官方口径过热后 30s 起 —— 倒计时到零机身自动停录)。
+String overheatBadgeText(int level, {int? countdownSeconds}) {
+  final tail = countdownSeconds != null
+      ? ' ${overheatCountdownText(countdownSeconds)}'
+      : '';
+  return switch (level) {
+    1 => '机内温度升高$tail',
+    2 => '机内温度较高$tail',
+    3 => '机内高温,录制即将停止$tail',
+    4 => '即将自动停止录制$tail',
+    _ => '机内温度升高$tail',
+  };
+}
+
+/// 倒计时秒 → m:ss(官方口径 3600s 起;30s → 0:30,3600 → 60:00)。
+String overheatCountdownText(int seconds) =>
+    '${seconds ~/ 60}:${(seconds % 60).toString().padLeft(2, '0')}';
+
+/// 过热警告徽章:暗面玻璃胶囊随录制读出挂右上,温和级(1-2)金 accent、
+/// 高温级(3-4)红 bad —— 与机身温度提示的严重度对齐。
+class OverheatBadge extends StatelessWidget {
+  const OverheatBadge({
+    super.key,
+    required this.level,
+    this.countdownSeconds,
+  });
+
+  /// 机内过热状态(@853,1-4;见 [recordingReadoutOf])。
+  final int level;
+
+  /// 停录倒计时秒(@836;仅「倒计时显示」态非 null)。
+  final int? countdownSeconds;
+
+  @override
+  Widget build(BuildContext context) {
+    final color =
+        level >= 3 ? LiveDesign.dark.bad : LiveDesign.dark.accent;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: LiveDesign.dark.glass,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: LiveDesign.dark.hairline),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.device_thermostat, size: 13, color: color),
+          const SizedBox(width: 4),
+          Text(
+            overheatBadgeText(level, countdownSeconds: countdownSeconds),
+            style: TextStyle(
+              fontSize: 12,
+              color: color,
+              fontFeatures: [FontFeature.tabularFigures()],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 /// 录制时间码读出:暗面玻璃胶囊 + 等宽数字(监看口径,双位补零)。

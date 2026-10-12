@@ -19,7 +19,15 @@
 ///   0xFFFFFFFF = 本帧不可靠;**一代头无这些域**(512B 截断,读不到即 null);
 /// - 录制态 @828(0=取景,1=录制,机身侧自启的录制也能看到);
 /// - 时间码 @831-835(显示开关 + 时/分/秒/帧各 1 字节);
-/// - 旋转 @839(0=横/1=左转竖/2=右转竖/3=倒置)。
+/// - 旋转 @839(0=横/1=左转竖/2=右转竖/3=倒置);
+/// - 录制倒计时 @836-837(BE u16 秒;官方 §9.7.1:3600s 起秒倒数,
+///   过热 30s 起 —— 机身「即将自动停止录制」倒计时的官方来源;
+///   展示只跟过热状态走,宁缺不错);
+/// - 点测 WB 状态 @838(0 关/1 待机未采/2 采集中/3 成功待机/4 失败
+///   待机;官方 §9.7.1,暂只解析不上屏 —— 点测 WB 采集流程未接);
+/// - 过热状态 @853(0 正常/1 中温低/2 中温高/3 高温/4 倒计时显示,
+///   官方 §9.7.1「Imaging temperature status」—— 监看端过热警告横幅
+///   的官方来源;>4 未知值不告警)。
 ///
 /// 守卫口径对齐 OpenZCine(其守卫曾在真机 dump 上验证):whole-size
 /// 只查 >0(不限区间)、areaCount=0 仍读 1 槽、框数组可为空(空 ≠ 头
@@ -134,6 +142,9 @@ final class LiveViewHeader {
     required this.level,
     required this.sound,
     required this.timecode,
+    required this.recordingCountdownSeconds,
+    required this.spotWbRaw,
+    required this.overheatRaw,
   });
 
   /// AF 框的坐标系宽高(whole size;框与 0x9205 参数共用)。
@@ -159,6 +170,19 @@ final class LiveViewHeader {
 
   /// 录制时间码(null = 头太短;on=false = 机身时间码显示关)。
   final LiveViewTimecode? timecode;
+
+  /// 录制自动停止倒计时秒(@836-837 BE u16,官方口径 3600 起倒数、
+  /// 过热 30s 起;null = 头太短。展示只跟 [overheatRaw] 的「倒计时
+  /// 显示」态走,字段本身恒读)。
+  final int? recordingCountdownSeconds;
+
+  /// 点测白平衡状态(@838:0 关/1 待机未采/2 采集中/3 成功待机/
+  /// 4 失败待机;null = 头太短。点测 WB 采集流程未接,暂不上屏)。
+  final int? spotWbRaw;
+
+  /// 机内过热状态(@853:0 正常/1 中温低/2 中温高/3 高温/4 倒计时
+  /// 显示;null = 头太短,>4 未知值由上层按不告警处理)。
+  final int? overheatRaw;
 
   bool get isVertical => rotationRaw == 1 || rotationRaw == 2;
 }
@@ -261,6 +285,13 @@ LiveViewHeader? parseLiveViewHeader(Uint8List object) {
     );
   }
 
+  // 倒计时(@836-837)/点测 WB(@838)/过热(@853):同为 Gen-3 域,
+  // 各自独立解析互不连坐;倒计时原样读(展示策略跟过热态走)。
+  final countdown =
+      headerLen >= 838 ? _be16(object, 836) : null;
+  final spotWb = headerLen >= 839 ? object[838] : null;
+  final overheat = headerLen >= 854 ? object[853] : null;
+
   LiveViewLevelAngles? level;
   if (headerLen >= 852) {
     double? angle(int o) {
@@ -294,6 +325,9 @@ LiveViewHeader? parseLiveViewHeader(Uint8List object) {
     level: level,
     sound: sound,
     timecode: timecode,
+    recordingCountdownSeconds: countdown,
+    spotWbRaw: spotWb,
+    overheatRaw: overheat,
   );
 }
 
