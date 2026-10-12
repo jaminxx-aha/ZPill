@@ -162,16 +162,16 @@ void main() {
           boxSize: const Size(600, 300),
           fit: FeedFit.widthFill);
       expect(w.displayRect, const Rect.fromLTWH(0, 0, 600, 300));
-      // 16:9 视频在横屏取景盒 1506×800(右缩 94 让柱,六轮破安全区):
+      // 16:9 视频在横屏取景盒 1492×800(右缩 108 让柱,快门两向同 78):
       // 本就高限 → heightFill 同 contain 满高零裁切,余量黑边只落在左右两侧。
       final h = FeedTransform(
           imageSize: const Size(16, 9),
-          boxSize: const Size(1506, 800),
+          boxSize: const Size(1492, 800),
           fit: FeedFit.heightFill);
       expect(h.fitScale, closeTo(800 / 9, 1e-9));
       expect(h.displayRect.top, 0);
       expect(h.displayRect.height, 800);
-      expect(h.displayRect.left, closeTo(41.89, 0.01));
+      expect(h.displayRect.left, closeTo(34.89, 0.01));
       expect(h.displayRect.width, closeTo(1422.22, 0.01));
     });
   });

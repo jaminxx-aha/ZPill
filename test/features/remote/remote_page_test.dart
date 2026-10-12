@@ -1142,9 +1142,9 @@ void main() {
     expect(find.text('网格'), findsOneWidget, reason: '监看开关入设置浮层');
   });
 
-  testWidgets('横屏监看:取景盒右缩 94 让柱、heightFill 满高无黑边,'
-      '快门柱五件贴右缘(旋转在顶/相册坠底),模式条独占贴底,'
-      '信息胶囊整体居中含隐藏钮,设置浮层让位快门柱', (tester) async {
+  testWidgets('横屏监看:取景盒右缩 108 让柱、heightFill 满高无黑边,'
+      '快门柱五件贴右缘且快门同竖屏 78(旋转在顶/相册坠底),模式条独占贴底,'
+      '信息胶囊居中取景盒与模式条同轴线,设置浮层让位快门柱', (tester) async {
     _landscape(tester);
     final transport = _ScriptTransport();
     final conn = _FakeConnection();
@@ -1163,20 +1163,20 @@ void main() {
     await tester.pumpAndSettle();
     expect(controller.liveViewActive, isTrue, reason: '进页自动起景');
 
-    // 取景盒右缩 94 让位快门柱(六轮柱右距物理屏缘 20,柱带宽
-    // 20+64=84 + 10 间隙):feed 盒 1506×800,Image 住在图像坐标系
-    // (32×24)经 Transform 投到屏幕 —— heightFill 恒满高
+    // 取景盒右缩 108 让位快门柱(柱右距物理屏缘 20,柱带宽
+    // 20+78=98 + 10 间隙 —— 快门两向同 78):feed 盒 1492×800,Image
+    // 住在图像坐标系(32×24)经 Transform 投到屏幕 —— heightFill 恒满高
     // (scale 800/24 = 33.33…):上下永无黑边(top 0 / height 800),
-    // 宽 32×33.33 = 1066.67 在盒内居中左右各留 219.67,右缘 1286 恒在
-    // 柱带(1506..1600)之左;录制读出/拉焦轮随盒右缩原位让柱,不进柱带。
+    // 宽 32×33.33 = 1066.67 在盒内居中左右各留 212.67,右缘 1279.33 恒在
+    // 柱带(1492..1600)之左;录制读出/拉焦轮随盒右缩原位让柱,不进柱带。
     final imageRect = tester.getRect(find.byType(Image).first);
     expect(imageRect.top, closeTo(0, 0.01),
         reason: 'heightFill 恒满高:上无黑边');
     expect(imageRect.height, closeTo(800, 0.01),
         reason: 'heightFill 恒满高:下无黑边');
-    expect(imageRect.left, closeTo((1506 - 3200 / 3) / 2, 0.01));
+    expect(imageRect.left, closeTo((1492 - 3200 / 3) / 2, 0.01));
     expect(imageRect.width, closeTo(3200 / 3, 0.01));
-    expect(imageRect.right, lessThan(1600 - 94), reason: '画面不进快门柱带');
+    expect(imageRect.right, lessThan(1600 - 108), reason: '画面不进快门柱带');
 
     // 左参数栏已删(2026-10-12 二轮「把左侧的参数调整删了」):参数唯一
     // 入口 = 设置浮层全目录;竖向滚动列表(原 ParamRail)不在树。
@@ -1189,21 +1189,22 @@ void main() {
     expect(find.text('模式'), findsNothing, reason: '参数 tile 不在树(浮层未开)');
 
     // 快门柱五件竖排贴右缘全高中置(2026-10-12 用户定案柱序自上而下
-    // 旋转/设置/快门 64/对焦/相册 —— 方向钮自贴底条迁入柱顶,相册坠底):
-    // 柱内容 312(54+8+54+8+64+8+54+8+54)在 800 高屏居中(y 244..556)。
+    // 旋转/设置/快门 78/对焦/相册 —— 方向钮自贴底条迁入柱顶,相册坠底;
+    // 快门两向同 78 = 用户定案「横屏按钮保持和竖屏大小一样」):柱内容
+    // 326(54+8+54+8+78+8+54+8+54)在 800 高屏居中(y 237..563)。
     // 六轮右移:五件右缘齐平距**物理屏缘 20**(破侧边安全区,同竖屏
-    // 底距;crossAxisAlignment.end,快门最宽凸左 10 → 54 钮心 1553、
-    // 快门心 1548)。
+    // 底距;crossAxisAlignment.end,快门最宽凸左 24 → 54 钮心 1553、
+    // 快门心 1541)。
     final rotation = find.byIcon(Icons.screen_rotation);
     final tune = find.byIcon(Icons.tune);
     final shutter = find.byWidgetPredicate(
-        (w) => w is SizedBox && w.width == 64 && w.height == 64);
+        (w) => w is SizedBox && w.width == 78 && w.height == 78);
     final focus = find.byIcon(Icons.center_focus_strong);
     final album = find.byIcon(Icons.photo_library_outlined);
     final column = [
       (rotation, 1553.0, '旋转'),
       (tune, 1553.0, '设置'),
-      (shutter, 1548.0, '快门'),
+      (shutter, 1541.0, '快门'),
       (focus, 1553.0, '对焦'),
       (album, 1553.0, '相册'),
     ];
@@ -1218,18 +1219,21 @@ void main() {
       lastDy = c.dy;
     }
     expect(tester.getCenter(shutter).dy, 400, reason: '快门在屏心(全高中置)');
-    expect(tester.getCenter(rotation).dy, closeTo(271, 1), reason: '旋转在柱顶');
-    expect(tester.getCenter(album).dy, closeTo(529, 1), reason: '相册坠柱底');
+    expect(tester.getCenter(rotation).dy, closeTo(264, 1), reason: '旋转在柱顶');
+    expect(tester.getCenter(album).dy, closeTo(536, 1), reason: '相册坠柱底');
 
-    // 信息胶囊整体居中(2026-10-12 用户定案「这一个按钮居中」):compact
-    // 收缩包内容被 Center 居中;纯净监看钮入胶囊行尾,不再另摆顶栏右端
-    // 独立钮。
-    expect(tester.getCenter(find.byType(RemoteInfoPill)).dx, closeTo(800, 1),
-        reason: '胶囊整体居中(1600 宽屏心)');
+    // 信息胶囊居中于取景盒(2026-10-12 用户定案「这一个按钮居中」;
+    // 八轮定案与贴底模式条同轴线 —— 顶栏同样右缩 108,整页心 800 →
+    // 取景盒心 746):compact 收缩包内容被 Center 居中;纯净监看钮入
+    // 胶囊行尾,不再另摆顶栏右端独立钮。
+    expect(
+        tester.getCenter(find.byType(RemoteInfoPill)).dx,
+        closeTo((1600 - 108) / 2, 1),
+        reason: '胶囊居中于取景盒(与贴底模式条同轴线)');
     final hide = find.byIcon(Icons.visibility_off);
     expect(hide, findsOneWidget, reason: '胶囊行尾纯净监看钮');
-    expect(tester.getCenter(hide).dx, greaterThan(800),
-        reason: '隐藏钮在胶囊行尾(屏心之右)');
+    expect(tester.getCenter(hide).dx, greaterThan((1600 - 108) / 2),
+        reason: '隐藏钮在胶囊行尾(取景盒心之右)');
     expect(tester.getCenter(hide).dy, lessThan(56), reason: '在顶栏带内');
 
     // 贴底条:模式条独占、居中于取景盒(旋转钮已迁柱顶;两段文字中点
@@ -1239,10 +1243,10 @@ void main() {
         (tester.getCenter(find.text('照片')).dx +
                 tester.getCenter(find.text('视频')).dx) /
             2,
-        closeTo((1600 - 94) / 2, 1),
-        reason: '模式条居中于取景盒(右缩 94)');
+        closeTo((1600 - 108) / 2, 1),
+        reason: '模式条居中于取景盒(右缩 108)');
 
-    // 设置浮层:tune 展开 → 监看开关在树;让位右缘快门柱(right: 94)
+    // 设置浮层:tune 展开 → 监看开关在树;让位右缘快门柱(right: 108)
     expect(find.byIcon(Icons.grid_on), findsNothing, reason: '默认收起');
     await tester.tap(find.byIcon(Icons.tune));
     await tester.pumpAndSettle();
