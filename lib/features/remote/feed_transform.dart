@@ -1,6 +1,11 @@
 /// 取景画面的显示变换链(OpenZCine 监看变换口径,显示层不动帧数据):
-/// contain 适配(缩放 + 居中)→ 变宽还原(水平拉伸)→ 持机旋转(帧头
-/// @839)→ 双指缩放/拖移。
+/// 适配(缩放 + 居中)→ 变宽还原(水平拉伸)→ 持机旋转(帧头 @839)
+/// → 双指缩放/拖移。
+///
+/// 适配模式 [FeedTransform.fit](2026-10-12 用户定案「不留黑边」):竖屏
+/// 取景恒满宽(widthFill)、横屏取景恒满高(heightFill)—— 越出取景盒
+/// 的内容居中裁掉(取景区 ClipRect 收口);contain 为旧行为(短板适配,
+/// 任意两侧都可能出现黑边)。
 ///
 /// 矩阵管线(图像像素 → 屏幕;调用序即作用序):
 /// ```
@@ -36,12 +41,23 @@ int feedQuarterFromRotationRaw(int rotationRaw) => switch (rotationRaw) {
       _ => 0,
     };
 
+/// 取景适配模式(2026-10-12 用户定案「不留黑边」:竖拍画面两侧不留
+/// 黑边、横屏画面上下不留黑边):
+/// - [contain]:短板适配(旧默认)—— 内容比盒「极端」的那两侧出黑边;
+/// - [widthFill]:恒按宽适配 —— 画面恒满宽(竖屏取景),比盒更高的
+///   内容上下越出被裁,**两侧永无黑边**;
+/// - [heightFill]:恒按高适配 —— 画面恒满高(横屏取景),比盒更宽的
+///   内容左右越出被裁,**上下永无黑边**。
+/// 三者的 displayRect 都居中;越出部分由取景区的 ClipRect 裁掉。
+enum FeedFit { contain, widthFill, heightFill }
+
 /// 不可变取景变换(每帧/每手势重建;[boxSize] 来自 LayoutBuilder,
 /// 其余来自帧尺寸/帧头/设置/缩放手势态)。
 final class FeedTransform {
   FeedTransform({
     required this.imageSize,
     required this.boxSize,
+    this.fit = FeedFit.contain,
     this.quarter = 0,
     this.deSqueeze = 1.0,
     this.zoom = 1.0,
@@ -54,6 +70,9 @@ final class FeedTransform {
 
   /// 取景区盒尺寸。
   final Size boxSize;
+
+  /// 适配模式(默认 contain = 旧短板适配;见 [FeedFit])。
+  final FeedFit fit;
 
   /// 显示旋转(顺时针四分之一圈数;见 [feedQuarterFromRotationRaw])。
   final int quarter;
@@ -80,14 +99,21 @@ final class FeedTransform {
         : Size(imageSize.height, deSqueeze * imageSize.width);
   }
 
-  /// contain 适配倍率(zoom=1/pan=0 时图像边长 = imageSize 边长 × 此值)。
+  /// 适配倍率(zoom=1/pan=0 时图像边长 = imageSize 边长 × 此值)。fill
+  /// 模式恒取指定轴的比例,displayRect 可越出取景盒(居中,越出被裁)。
   double get fitScale {
     final c = contentSize;
     if (c.isEmpty || boxSize.isEmpty) return 1.0;
-    return math.min(boxSize.width / c.width, boxSize.height / c.height);
+    return switch (fit) {
+      FeedFit.contain =>
+        math.min(boxSize.width / c.width, boxSize.height / c.height),
+      FeedFit.widthFill => boxSize.width / c.width,
+      FeedFit.heightFill => boxSize.height / c.height,
+    };
   }
 
-  /// zoom=1/pan=0 时的 contain 矩形(旋转/变宽已计入 aspect)。
+  /// zoom=1/pan=0 时的适配矩形(旋转/变宽已计入 aspect;fill 模式下
+  /// 可越出取景盒 —— 居中,越出部分由取景区 ClipRect 裁掉)。
   Rect get displayRect {
     final c = contentSize;
     if (c.isEmpty || boxSize.isEmpty) return Offset.zero & boxSize;

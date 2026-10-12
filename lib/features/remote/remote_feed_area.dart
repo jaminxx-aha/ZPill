@@ -9,8 +9,10 @@
 /// 即览/横幅/倍率角标/拉焦轮/录制读出(时间码+电平表)是屏幕坐标层,
 /// 不随画面变换。
 ///
-/// [topInset]/[bottomInset]/[leftInset] 供横屏侧栏布局把贴边元素
-/// (即拍即览卡/直方图/横幅)让位给顶栏/底浮层/左参数栏。
+/// [topInset]/[bottomInset] 供布局把贴边元素(即拍即览卡/直方图/横幅)
+/// 让位给顶栏/底条(横屏顶底条/竖屏底部两行浮层);[rightInset] 供横屏
+/// 快门柱贴右缘时把贴右叠层(录制读出/拉焦轮)左移让位。[fit] 为适配
+/// 模式(竖屏满宽/横屏满高,2026-10-12「不留黑边」定案,见 [FeedFit])。
 /// [phoneAttitudes] 为手机姿态流取值(页面缓存的单实例 —— MovtionHost
 /// 的 getter 每次返回**新**流,取景期每帧重建会让 StreamBuilder 反复
 /// 拆装 EventChannel);相机帧头带虚拟水平仪时优先用它,本流只作兜底。
@@ -20,7 +22,8 @@
 /// [onTapFocus] 点按取景画面 = 触控对焦:第二参为该点的**归一化图像
 /// 坐标**(已含缩放/旋转/变宽逆映射;null = 无画面)。
 /// [settingsListenable] 提供画面自动旋转/变宽还原设置(null = AppServices
-/// 单例);[dialAlignment] 为拉焦轮锚位(横屏快门柱占右缘中带,页面上移)。
+/// 单例);[dialAlignment] 为拉焦轮锚位(横屏右上角让给录制读出、右缘
+/// 被快门柱占用 → 页面传 bottomRight)。
 library;
 
 import 'dart:typed_data';
@@ -51,7 +54,8 @@ class RemoteFeedArea extends StatefulWidget {
     required this.onTapFocus,
     this.topInset = 0,
     this.bottomInset = 0,
-    this.leftInset = 0,
+    this.rightInset = 0,
+    this.fit = FeedFit.contain,
     this.settingsListenable,
     this.hideChrome = false,
     this.dialAlignment = Alignment.centerRight,
@@ -63,7 +67,15 @@ class RemoteFeedArea extends StatefulWidget {
   final void Function(TapUpDetails details, Offset? norm) onTapFocus;
   final double topInset;
   final double bottomInset;
-  final double leftInset;
+
+  /// 贴右屏幕坐标叠层(录制读出/拉焦轮)的右让位(横屏快门柱 78)。
+  final double rightInset;
+
+  /// 适配模式(2026-10-12 用户定案「不留黑边」):竖屏传
+  /// [FeedFit.widthFill](画面恒满宽,两侧无黑边)、横屏传
+  /// [FeedFit.heightFill](恒满高,上下无黑边)—— 越出取景盒的内容居中
+  /// 裁掉(本件 ClipRect 收口);默认 contain 为旧短板适配。
+  final FeedFit fit;
 
   /// 取景设置(画面自动旋转/变宽还原);null = AppServices 单例。
   final ValueListenable<AppSettings>? settingsListenable;
@@ -188,6 +200,7 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea> {
       final t = FeedTransform(
         imageSize: imageSize,
         boxSize: boxSize,
+        fit: widget.fit,
         quarter: settings.autoRotateFeed
             ? feedQuarterFromRotationRaw(
                 controller.engine.header.value?.rotationRaw ?? 0)
@@ -373,7 +386,7 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea> {
                 alignment: Alignment.topLeft,
                 child: Container(
                   margin: EdgeInsets.fromLTRB(
-                      10 + widget.leftInset, 10 + widget.topInset, 10, 10),
+                      10, 10 + widget.topInset, 10, 10),
                   padding: const EdgeInsets.all(3),
                   decoration: BoxDecoration(
                     color: LiveDesign.dark.glass,
@@ -392,7 +405,7 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea> {
                 alignment: Alignment.bottomLeft,
                 child: Padding(
                   padding: EdgeInsets.fromLTRB(
-                      8 + widget.leftInset, 8, 8, 8 + widget.bottomInset),
+                      8, 8, 8, 8 + widget.bottomInset),
                   child: ValueListenableBuilder(
                     valueListenable: controller.analyzer.analysis,
                     builder: (context, FrameAnalysis? analysis, _) =>
@@ -411,7 +424,7 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea> {
                 if (!v.timecode && !v.meters) return const SizedBox.shrink();
                 return Positioned(
                   top: widget.topInset + 8,
-                  right: 12,
+                  right: 12 + widget.rightInset,
                   child: IgnorePointer(
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
@@ -513,7 +526,8 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea> {
                   alignment: widget.dialAlignment,
                   child: Padding(
                     padding: EdgeInsets.only(
-                        right: 12, top: 8 + widget.topInset),
+                        right: 12 + widget.rightInset,
+                        top: 8 + widget.topInset),
                     child: _FocusDialRail(
                         key: const ValueKey('focus-dial-rail'),
                         // 机身对焦模式为 MF 时远程拉焦失效:轮子压暗
@@ -538,6 +552,9 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea> {
 
   /// 触控对焦框:图像系回投;尺寸是视觉占位(相机侧实际对焦区域
   /// 大小无从得知)。随外层 Transform 上屏(变宽时横向同比拉伸)。
+  /// 颜色跟机身屏对齐,只有红绿两色(2026-10-12 用户定案):合焦
+  /// ([AfBox.focused] == true,0x90C1 应答 OK)绿,其余(未合焦
+  /// 0xA002/对焦中/未知)红。
   Widget _afBoxOverlay(Size imageSize, AfBox box) {
     final side = imageSize.width * 0.18;
     return Positioned(
@@ -545,12 +562,15 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea> {
       top: box.ny * imageSize.height - side / 2,
       width: side,
       height: side,
-      child: const IgnorePointer(
+      child: IgnorePointer(
         child: DecoratedBox(
           decoration: BoxDecoration(
-            border: Border.fromBorderSide(
-                BorderSide(color: Color(0xFFFFC107), width: 2)),
-            borderRadius: BorderRadius.all(Radius.circular(6)),
+            border: Border.fromBorderSide(BorderSide(
+                color: box.focused == true
+                    ? const Color(0xFF2EC76B)
+                    : LiveDesign.dark.bad,
+                width: 2)),
+            borderRadius: const BorderRadius.all(Radius.circular(6)),
           ),
         ),
       ),

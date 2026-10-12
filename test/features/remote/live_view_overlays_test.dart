@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:nikon_pill/core/remote/live_view_header.dart';
+import 'package:nikon_pill/features/remote/live_design.dart';
 import 'package:nikon_pill/features/remote/live_view_overlays.dart';
 
 LiveViewHeader _header({
@@ -26,6 +27,17 @@ LiveViewHeader _header({
 }
 
 void main() {
+  group('afPointBoxColor:AF 框只有红绿两色(纯函数,2026-10-12 用户定案)', () {
+    test('合焦绿;未合焦/对焦中/未知一律红,无琥珀', () {
+      expect(afPointBoxColor(LiveViewFocusResult.focused),
+          const Color(0xFF2EC76B));
+      expect(afPointBoxColor(LiveViewFocusResult.notFocused),
+          LiveDesign.dark.bad);
+      expect(afPointBoxColor(LiveViewFocusResult.unknown), LiveDesign.dark.bad,
+          reason: '对焦中/未知也红(两色制,不再琥珀)');
+    });
+  });
+
   group('recordingReadoutOf:录制读出可见性(纯决策)', () {
     test('头缺失 / 取景未开启 → 全不显示(末帧保留期冻结读出不驻屏)', () {
       expect(recordingReadoutOf(null, liveViewActive: true),

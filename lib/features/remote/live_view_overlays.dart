@@ -291,11 +291,17 @@ final class _HistogramPainter extends CustomPainter {
 }
 
 /// 相机自报的 AF 框组(帧头 display-info):框 0 = 当前 AF 区域
-/// (**真实尺寸** —— 单点小框/动态 L 大框随相机设置),合焦变绿;主体
-/// 检测开着时后续框 = 人脸/眼睛(琥珀)。框在 whole-size 坐标系,按
-/// 归一化坐标投到画面实际包含矩形(与触控对焦同一份映射)。
+/// (**真实尺寸** —— 单点小框/动态 L 大框随相机设置),主体检测开着时
+/// 后续框 = 人脸/眼睛。**框色跟机身屏对齐,只有红绿两色**(2026-10-12
+/// 用户定案「应该只有红的和绿色两种颜色」):合焦绿、其余(未合焦/
+/// 对焦中/未知)一律红。框在 whole-size 坐标系,按归一化坐标投到画面
+/// 实际包含矩形(与触控对焦同一份映射)。
 class AfAreasOverlay extends StatelessWidget {
-  const AfAreasOverlay({super.key, required this.header, required this.imageRect});
+  const AfAreasOverlay({
+    super.key,
+    required this.header,
+    required this.imageRect,
+  });
 
   final LiveViewHeader header;
   final Rect imageRect;
@@ -325,12 +331,7 @@ final class _AfAreasPainter extends CustomPainter {
     for (var i = 0; i < header.boxes.length; i++) {
       final b = header.boxes[i];
       final isAfPoint = i == 0;
-      // 框 0 = AF 区域:合焦绿、未合焦金;主体检测框(人脸/眼)= 琥珀。
-      final color = isAfPoint
-          ? (header.focusResult == LiveViewFocusResult.focused
-              ? const Color(0xFF2EC76B)
-              : const Color(0xFFE9AC35))
-          : const Color(0xFFFFC107);
+      final color = afPointBoxColor(header.focusResult);
       final paint = Paint()
         ..color = color.withValues(alpha: 0.9)
         ..style = PaintingStyle.stroke
@@ -352,6 +353,13 @@ final class _AfAreasPainter extends CustomPainter {
   bool shouldRepaint(_AfAreasPainter old) =>
       old.header != header || old.imageRect != imageRect;
 }
+
+/// AF 框颜色,跟机身屏对齐(2026-10-12 用户定案「只有红绿两色」):
+/// 合焦绿、其余(未合焦/对焦中/未知)一律红。纯函数,测试直取。
+Color afPointBoxColor(LiveViewFocusResult result) =>
+    result == LiveViewFocusResult.focused
+        ? const Color(0xFF2EC76B)
+        : LiveDesign.dark.bad;
 
 /// 水平仪:固定参考线 + 随姿态转动的地平线(pitch 平移,roll 旋转)。
 class LevelOverlay extends StatelessWidget {

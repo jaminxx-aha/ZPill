@@ -21,6 +21,8 @@ import 'package:nikon_pill/features/remote/live_design.dart';
 import 'package:nikon_pill/features/remote/live_view_overlays.dart';
 import 'package:nikon_pill/features/remote/remote_banner.dart';
 import 'package:nikon_pill/features/remote/remote_controller.dart';
+import 'package:nikon_pill/features/remote/remote_feed_area.dart';
+import 'package:nikon_pill/features/remote/remote_info_pill.dart';
 import 'package:nikon_pill/features/remote/remote_page.dart';
 import 'package:nikon_pill/features/remote/remote_settings_panel.dart';
 
@@ -33,6 +35,10 @@ final class _ScriptTransport implements PtpTransport {
 
   void ok({Uint8List? data}) =>
       script.add(PtpResult(responseCode: PtpResponseCode.ok, data: data));
+
+  /// 非应答码回放(PtpSession 层转 PtpResponseException 抛给调用方)。
+  void reply(int responseCode) =>
+      script.add(PtpResult(responseCode: responseCode));
 
   @override
   Future<PtpResult> execute(PtpRequest request,
@@ -237,7 +243,8 @@ Uint8List _headerObject() {
   return b;
 }
 
-/// 横滚参数行(页面里唯一的水平 Scrollable)。
+/// 横滚参数行 finder(2026-10-12 竖屏读出行删除后,仅用于断言「横滚行
+/// 不复存在」)。
 final _chipsRow = find.byWidgetPredicate(
     (w) => w is Scrollable && w.axisDirection == AxisDirection.right);
 
@@ -265,7 +272,7 @@ List<MethodCall> _orientationCalls(List<MethodCall> calls) => [
     ];
 
 void main() {
-  testWidgets('参数 chips:目录值中文上屏(三要素大芯片 + 其余小芯片)',
+  testWidgets('参数区(设置浮层):目录值中文上屏,全目录 tile 一屏尽览',
       (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
@@ -279,7 +286,12 @@ void main() {
     conn.statesCtrl.add(CameraLinkState.connected);
     await tester.pumpAndSettle();
 
-    // 读出条首屏(OpenZCine 顺序:模式/ISO/快门/光圈/释放/对焦模式…)
+    // 竖屏读出行已删(2026-10-12):全目录参数住设置浮层,tune 展开即出
+    expect(_chipsRow, findsNothing, reason: '横滚读出行退场');
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
+
+    // 固定序打头(OpenZCine 顺序:模式/ISO/快门/光圈/释放/对焦模式…)
     expect(find.text('模式'), findsOneWidget);
     expect(find.text('手动 M'), findsOneWidget);
     expect(find.text('ISO'), findsOneWidget, reason: 'ISO 小标签');
@@ -288,32 +300,22 @@ void main() {
     expect(find.text('f/2.8'), findsOneWidget);
     expect(find.text('单张'), findsOneWidget, reason: '释放');
     expect(find.text('AF-S'), findsOneWidget, reason: '对焦模式(单一对焦芯片)');
-
-    // 读出条懒构建:按条内顺序单向滚到底逐个断言
-    // (模式/ISO/快门/光圈/释放/对焦模式/白平衡/色温/测光/EV/闪光/
-    // 画质/RAW压缩/图像区域/优化校准 + 目录余量 AF 区域/主体检测/色调)
-    Future<void> scroll(String text) =>
-        tester.scrollUntilVisible(find.text(text), 120, scrollable: _chipsRow);
-    await scroll('自动'); // 白平衡
-    await scroll('5500K'); // 色温
-    await scroll('中央重点'); // 测光值表(尼康方言 2=中央重点)
-    await scroll('EV');
-    expect(find.text('+0.3'), findsOneWidget);
-    await scroll('闪光'); // (值「关闭」与主体检测的「关闭」重字,滚标签)
-    await scroll('RAW'); // 画质
-    await scroll('无损压缩'); // RAW 压缩值
-    await scroll('FX'); // 图像区域值
-    await scroll('标准'); // 优化校准值
-    // 目录余量上条(2026-10-07:曾因 _stripOrder 不追加余量而整组不渲染)
-    await scroll('AF 区域');
+    // 其余目录值随 tile 平铺(设置浮层 SingleChildScrollView 全量构建,
+    // 不复横滚懒构建)
+    expect(find.text('自动'), findsOneWidget, reason: '白平衡');
+    expect(find.text('5500K'), findsOneWidget, reason: '色温');
+    expect(find.text('中央重点'), findsOneWidget, reason: '测光值表(尼康方言 2=中央重点)');
+    expect(find.text('+0.3'), findsOneWidget, reason: 'EV');
+    expect(find.text('关闭'), findsNWidgets(2),
+        reason: '闪光与主体检测的值同字「关闭」');
+    expect(find.text('RAW'), findsOneWidget, reason: '画质');
+    expect(find.text('无损压缩'), findsOneWidget, reason: 'RAW 压缩值');
+    expect(find.text('FX'), findsOneWidget, reason: '图像区域值');
+    expect(find.text('标准'), findsOneWidget, reason: '优化校准值');
+    // 目录余量照常上栏(2026-10-07:曾因 _stripOrder 不追加余量而整组不渲染)
     expect(find.text('单点'), findsOneWidget, reason: 'AF 区域 FORM 值');
-    await scroll('主体检测');
-    await scroll('色调');
     expect(find.text('SDR'), findsOneWidget, reason: '色调值');
-    // 辅助开关收进胶囊 tune 钮的非模态浮层(手机相机式排版):
-    // 开面板后断言对焦后拍 + APP 接管
-    await tester.tap(find.byIcon(Icons.tune));
-    await tester.pumpAndSettle();
+    // 辅助开关同住设置浮层:对焦后拍 + APP 接管
     expect(find.text('对焦后拍'), findsOneWidget);
     expect(find.text('APP 接管'), findsOneWidget);
   });
@@ -333,14 +335,17 @@ void main() {
     conn.statesCtrl.add(CameraLinkState.connected);
     await tester.pumpAndSettle();
 
+    // 参数 tile 在设置浮层(读出行已删):先展开
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
     final bigChip = tester.widget<InkWell>(find
         .ancestor(of: find.text('光圈'), matching: find.byType(InkWell))
         .first);
-    expect(bigChip.onTap, isNull, reason: '三要素芯片不可点');
+    expect(bigChip.onTap, isNull, reason: '光圈 tile 不可点');
     final smallChip = tester.widget<InkWell>(find
         .ancestor(of: find.text('模式'), matching: find.byType(InkWell))
         .first);
-    expect(smallChip.onTap, isNull, reason: '参数小芯片不可点');
+    expect(smallChip.onTap, isNull, reason: '参数 tile 不可点');
   });
 
   testWidgets('门禁开 + 可写:点小芯片 → 枚举单选 → 0x1016 写 + 回读上屏',
@@ -366,7 +371,10 @@ void main() {
     conn.statesCtrl.add(CameraLinkState.connected);
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('白平衡')); // 横滚行首屏内的芯片
+    // 白平衡 tile 在设置浮层:先展开再点
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('白平衡'));
     await tester.pumpAndSettle();
     expect(find.text('直射阳光'), findsOneWidget); // 面板枚举项
 
@@ -402,7 +410,10 @@ void main() {
     conn.statesCtrl.add(CameraLinkState.connected);
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('快门').first); // 芯片标签(另一处为快门钮)
+    // 快门 tile 在设置浮层:先展开再点
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('快门').first); // tile 标签
     await tester.pumpAndSettle();
     // 双层跳合一:面板直接打开,拨盘拥有参数的面板头是接管区(原
     // 「启用 APP 接管控制?」确认对话框的文案 + 启用钮搬进面板)。
@@ -484,6 +495,9 @@ void main() {
     conn.statesCtrl.add(CameraLinkState.connected);
     await tester.pumpAndSettle();
 
+    // 参数 tile 在设置浮层:先展开
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
     expect(find.text('1/100s(自动)'), findsOneWidget, reason: '标注自动');
     expect(find.text('f/2.8'), findsOneWidget, reason: '光圈无标注');
     final shutterChip = tester.widget<InkWell>(find
@@ -513,7 +527,10 @@ void main() {
     expect(controller.isoAuto, isFalse);
 
     transport.ok(); // 0x90C2 [1] ISO 为拨盘级参数 → 面板接管区
-    await tester.tap(find.text('ISO')); // 读出条芯片(面板接管区在面板头)
+    // ISO tile 在设置浮层:先展开再点(面板头即接管区)
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('ISO'));
     await tester.pumpAndSettle();
     expect(find.text('启用 APP 接管控制?'), findsOneWidget);
     await tester.tap(find.text('启用'));
@@ -556,7 +573,9 @@ void main() {
     conn.statesCtrl.add(CameraLinkState.connected);
     await tester.pumpAndSettle();
 
-    await tester.scrollUntilVisible(find.text('EV'), 120, scrollable: _chipsRow);
+    // EV tile 在设置浮层(全量构建,无横滚定位):展开直点
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('EV'));
     await tester.pumpAndSettle();
     expect(find.text('该属性的取值域未知,暂不可调(待真机核对)'),
@@ -645,17 +664,51 @@ void main() {
     expect(controller.afBox!.nx, closeTo(0.5, 1e-6));
     expect(controller.afBox!.ny, closeTo(0.5, 1e-6));
     expect(controller.error, isNull);
-    // 对焦框回投:琥珀色(0xFFFFC107)描边方块画上屏(芯片描边是灰/主题色)
-    const amber = Color(0xFFFFC107);
+    // 对焦框回投:合焦绿框(0xFF2EC76B,机身屏同款;2026-10-12 用户需求
+    // 「跟相机对齐」—— 合焦绿/未合焦红)描边方块画上屏
+    const focusGreen = Color(0xFF2EC76B);
     expect(
         find.byWidgetPredicate((w) {
           if (w is! DecoratedBox || w.decoration is! BoxDecoration) return false;
           final border = (w.decoration as BoxDecoration).border;
           return border is Border &&
               border.top.width == 2 &&
-              border.top.color == amber;
+              border.top.color == focusGreen;
         }),
         findsOneWidget);
+  });
+
+  testWidgets('触控对焦未合焦(0xA002)→ 对焦框转红(2026-10-12 用户需求)',
+      (tester) async {
+    _portrait(tester);
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = _directRemoteController(transport, conn: conn);
+    addTearDown(controller.dispose);
+
+    _scriptAutoStart(transport); // 进页自动起景(0x9201 + 首帧)
+    transport
+      ..ok() // changeAfArea
+      ..reply(NikonResponseCode.outOfFocus); // afDrive 未合焦
+    await tester
+        .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byType(Image).first, warnIfMissed: false);
+    await tester.pumpAndSettle();
+    expect(controller.afBox!.focused, isFalse, reason: '0xA002 → 未合焦');
+    expect(controller.error, contains('未合焦'));
+    // 对焦框回投:未合焦红框(画面内容层恒暗面 → LiveDesign.dark.bad)
+    expect(
+        find.byWidgetPredicate((w) {
+          if (w is! DecoratedBox || w.decoration is! BoxDecoration) return false;
+          final border = (w.decoration as BoxDecoration).border;
+          return border is Border &&
+              border.top.width == 2 &&
+              border.top.color == LiveDesign.dark.bad;
+        }),
+        findsOneWidget,
+        reason: '未合焦红框');
   });
 
   testWidgets('双指缩放:外扩即放大出角标,角标/双击复位,内收不小于适配',
@@ -773,13 +826,18 @@ void main() {
     expect(find.byKey(const ValueKey('focus-dial-rail')), findsNothing,
         reason: '默认不占取景画面');
 
-    // 对焦钮(控制行)开对焦浮层 → 开「拉焦轮」
-    await tester.tap(find.byIcon(Icons.center_focus_strong));
+    // 设置钮开设置浮层 → 开「拉焦轮」(2026-10-12 拉焦轮迁入设置浮层)
+    await tester.tap(find.byIcon(Icons.tune));
     await tester.pumpAndSettle();
     await tester.tap(find.text('拉焦轮'));
     await tester.pumpAndSettle();
     final rail = find.byKey(const ValueKey('focus-dial-rail'));
     expect(rail, findsOneWidget, reason: '开关即出竖条');
+
+    // 浮层开着时点空白收浮层的满铺手势层会挡住画面手势(拉焦轮拖动也
+    // 在其下)—— 收掉浮层再拖
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
 
     // 竖拖(分两段:首段 20px 越过触摸 slop 起手势 —— 该段不入拖距;
     // 第二段干净 30px > 一步 24px)→ 0x9204 向近 60 脉冲
@@ -914,16 +972,13 @@ void main() {
     // 头在册(相机自报框)时,点按占位框不叠加 —— 同屏只此一框
     controller.afBox = AfBox(nx: 0.5, ny: 0.5);
     await tester.pump();
-    const amber = Color(0xFFFFC107);
     expect(
         find.byWidgetPredicate((w) {
           if (w is! DecoratedBox || w.decoration is! BoxDecoration) {
             return false;
           }
           final border = (w.decoration as BoxDecoration).border;
-          return border is Border &&
-              border.top.width == 2 &&
-              border.top.color == amber;
+          return border is Border && border.top.width == 2;
         }),
         findsNothing,
         reason: '头在册 = 相机真实框已在屏,占位框再画即双框');
@@ -969,8 +1024,8 @@ void main() {
     expect(find.byType(AudioMetersView), findsNothing);
   });
 
-  testWidgets('竖屏 iPhone 相机式排版:模式条 + 底行五键(相册|对焦|'
-      '快门|设置|旋转),辅助收 tune 浮层,隐藏/恢复同位两段淡出',
+  testWidgets('竖屏 iPhone 相机式排版:控制行三键(对焦|快门|设置)+ 底行'
+      '(相册|模式条|旋转),参数收设置浮层,隐藏/恢复同位两段淡出',
       (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
@@ -982,28 +1037,70 @@ void main() {
         .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
     await tester.pumpAndSettle();
 
-    // 模式条在快门上方:照片|视频
-    expect(find.text('照片'), findsOneWidget);
-    expect(find.text('视频'), findsOneWidget);
+    // 参数读出行已删(2026-10-12 用户需求):横滚行退场,参数在设置浮层
+    expect(_chipsRow, findsNothing);
+    expect(find.text('模式'), findsNothing, reason: '参数 tile 不在树(浮层未开)');
 
-    // 底行五键自左向右:相册 | 对焦 | 快门(78)| 设置 | 旋转
-    final ordered = [
-      find.byIcon(Icons.photo_library_outlined),
-      find.byIcon(Icons.center_focus_strong),
-      find.byWidgetPredicate(
-          (w) => w is SizedBox && w.width == 78 && w.height == 78),
-      find.byIcon(Icons.tune),
-      find.byIcon(Icons.screen_rotation),
-    ];
+    // 画面全幅铺底恒满宽(2026-10-12「竖拍不留侧黑边」):feed 盒整屏
+    // 800×2400(底区两行是压画面下沿的浮层,不再分高),32×24 内容
+    // widthFill(scale 800/32 = 25)→ 800×600 恒满宽(left 0 / width 800)
+    // 垂直居中 y 900..1500 —— 两侧永无黑边。
+    expect(tester.getSize(find.byType(RemoteFeedArea)),
+        const Size(800, 2400),
+        reason: '取景盒全幅铺底(整屏,不与底区分高)');
+    final imageRect = tester.getRect(find.byType(Image).first);
+    expect(imageRect.left, closeTo(0, 0.01),
+        reason: 'widthFill 恒满宽:左无黑边');
+    expect(imageRect.width, closeTo(800, 0.01),
+        reason: 'widthFill 恒满宽:右无黑边');
+    expect(imageRect.height, closeTo(600, 0.01));
+    expect(imageRect.top, closeTo(900, 0.01), reason: '32×24 内容垂直居中');
+
+    // 控制行三键自左向右:对焦 | 快门(78)| 设置
+    final focus = find.byIcon(Icons.center_focus_strong);
+    final shutter = find.byWidgetPredicate(
+        (w) => w is SizedBox && w.width == 78 && w.height == 78);
+    final tune = find.byIcon(Icons.tune);
     var lastDx = -1.0;
-    for (final f in ordered) {
+    for (final f in [focus, shutter, tune]) {
       expect(f, findsOneWidget);
       final dx = tester.getCenter(f).dx;
-      expect(dx, greaterThan(lastDx), reason: '底行按键自左向右居排');
+      expect(dx, greaterThan(lastDx), reason: '控制行按键自左向右居排');
       lastDx = dx;
     }
 
-    // 旧动作行文案退场:取景默认开、录像并快门、MF 步进在对焦浮层
+    // 底行三键自左向右:相册 | 模式条(照片|视频)| 旋转;模式条在快门
+    // 下方(2026-10-12 用户需求),且整条水平居中
+    final album = find.byIcon(Icons.photo_library_outlined);
+    final rotation = find.byIcon(Icons.screen_rotation);
+    expect(album, findsOneWidget);
+    expect(rotation, findsOneWidget);
+    expect(find.text('照片'), findsOneWidget);
+    expect(find.text('视频'), findsOneWidget);
+    expect(tester.getCenter(album).dx,
+        lessThan(tester.getCenter(find.text('照片')).dx));
+    expect(tester.getCenter(find.text('视频')).dx,
+        lessThan(tester.getCenter(rotation).dx));
+    expect(
+        (tester.getCenter(find.text('照片')).dx +
+                tester.getCenter(find.text('视频')).dx) /
+            2,
+        closeTo(400, 1),
+        reason: '模式条居中(两侧 54px 钮对称,两段文字中点即条心)');
+    expect(tester.getCenter(find.text('照片')).dy,
+        greaterThan(tester.getCenter(shutter).dy),
+        reason: '模式条在快门下方');
+
+    // 六轮边距(2026-10-12 破安全区,参照 iOS 相机底部按钮距离):
+    // 左右 24→12、底距改**物理屏缘 20**(层锚 bottom: 20,行内不垫底)。
+    // 54 钮心 = 边距+27;底行钮心 = 2400-20-2-27。
+    expect(tester.getCenter(focus).dx, 39, reason: '对焦钮距左缘 12(12+27)');
+    expect(tester.getCenter(rotation).dx, 761, reason: '旋转钮距右缘 12');
+    expect(tester.getCenter(album).dx, 39, reason: '相册钮距左缘 12');
+    expect(tester.getCenter(rotation).dy, 2353,
+        reason: '旋转钮物理屏缘 20(2400-20-2-27)');
+
+    // 旧动作行文案退场:取景默认开、录像并快门、MF 步进在设置浮层
     expect(find.text('取景'), findsNothing);
     expect(find.text('录制'), findsNothing);
     expect(find.text('MF'), findsNothing);
@@ -1045,8 +1142,9 @@ void main() {
     expect(find.text('网格'), findsOneWidget, reason: '监看开关入设置浮层');
   });
 
-  testWidgets('横屏监看:画面全幅打底,参数竖列贴左、快门柱四件居右、'
-      '模式条+旋转贴底,设置浮层让位快门柱', (tester) async {
+  testWidgets('横屏监看:取景盒右缩 94 让柱、heightFill 满高无黑边,'
+      '快门柱五件贴右缘(旋转在顶/相册坠底),模式条独占贴底,'
+      '信息胶囊整体居中含隐藏钮,设置浮层让位快门柱', (tester) async {
     _landscape(tester);
     final transport = _ScriptTransport();
     final conn = _FakeConnection();
@@ -1057,7 +1155,7 @@ void main() {
     _scriptAutoStart(transport);
     _scriptParams(transport);
     transport
-      ..ok() // changeAfArea(点画面收浮层时)
+      ..ok() // changeAfArea(浮层收起后再点画面)
       ..ok(); // afDrive
     await tester
         .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
@@ -1065,62 +1163,106 @@ void main() {
     await tester.pumpAndSettle();
     expect(controller.liveViewActive, isTrue, reason: '进页自动起景');
 
-    // 画面打底占满整屏:Image 住在图像坐标系(32×24),经 Transform
-    // 投到屏幕 contain 矩形 —— 断言画出来的矩形(getRect 含 paint 变换):
-    // 32×24 在 1600×800 → fitScale 800/24 = 33.33…,
-    // 宽 32×33.33 = 1066.67、居中左右各留 266.67 letterbox、高 800。
+    // 取景盒右缩 94 让位快门柱(六轮柱右距物理屏缘 20,柱带宽
+    // 20+64=84 + 10 间隙):feed 盒 1506×800,Image 住在图像坐标系
+    // (32×24)经 Transform 投到屏幕 —— heightFill 恒满高
+    // (scale 800/24 = 33.33…):上下永无黑边(top 0 / height 800),
+    // 宽 32×33.33 = 1066.67 在盒内居中左右各留 219.67,右缘 1286 恒在
+    // 柱带(1506..1600)之左;录制读出/拉焦轮随盒右缩原位让柱,不进柱带。
     final imageRect = tester.getRect(find.byType(Image).first);
-    expect(imageRect.left, closeTo(1600 / 2 - 1600 / 3, 0.01));
-    expect(imageRect.top, closeTo(0, 0.01));
-    expect(imageRect.width, closeTo(3200 / 3, 0.01));
+    expect(imageRect.top, closeTo(0, 0.01),
+        reason: 'heightFill 恒满高:上无黑边');
     expect(imageRect.height, closeTo(800, 0.01),
-        reason: '画面打底,控制件浮在其上');
+        reason: 'heightFill 恒满高:下无黑边');
+    expect(imageRect.left, closeTo((1506 - 3200 / 3) / 2, 0.01));
+    expect(imageRect.width, closeTo(3200 / 3, 0.01));
+    expect(imageRect.right, lessThan(1600 - 94), reason: '画面不进快门柱带');
 
-    // 参数读出 = 左栏竖向滚动(竖屏的横滚条在横屏不复存在)
+    // 左参数栏已删(2026-10-12 二轮「把左侧的参数调整删了」):参数唯一
+    // 入口 = 设置浮层全目录;竖向滚动列表(原 ParamRail)不在树。
     expect(
         find.byWidgetPredicate(
             (w) => w is Scrollable && w.axisDirection == AxisDirection.down),
-        findsOneWidget);
+        findsNothing,
+        reason: '左参数竖列已删');
     expect(_chipsRow, findsNothing);
-    expect(find.text('模式'), findsOneWidget, reason: '左栏参数 tile');
+    expect(find.text('模式'), findsNothing, reason: '参数 tile 不在树(浮层未开)');
 
-    // 快门柱四件竖排居右(2026-10-10):相册/对焦/快门(64)/设置,
-    // 锚右缘(10 边距),纵向居中于顶栏下沿(64)与贴底条上沿(800-64)
-    // 之间 —— 柱内容 250(54+8+54+8+64+8+54)在 672 高区居中,
-    // 快门中点 dy = 64+(672-250)/2+124+32 = 431。
+    // 快门柱五件竖排贴右缘全高中置(2026-10-12 用户定案柱序自上而下
+    // 旋转/设置/快门 64/对焦/相册 —— 方向钮自贴底条迁入柱顶,相册坠底):
+    // 柱内容 312(54+8+54+8+64+8+54+8+54)在 800 高屏居中(y 244..556)。
+    // 六轮右移:五件右缘齐平距**物理屏缘 20**(破侧边安全区,同竖屏
+    // 底距;crossAxisAlignment.end,快门最宽凸左 10 → 54 钮心 1553、
+    // 快门心 1548)。
+    final rotation = find.byIcon(Icons.screen_rotation);
+    final tune = find.byIcon(Icons.tune);
     final shutter = find.byWidgetPredicate(
         (w) => w is SizedBox && w.width == 64 && w.height == 64);
-    expect(shutter, findsOneWidget);
-    expect(tester.getCenter(shutter).dx, 1551,
-        reason: '快门贴右缘(10 边距 + 78 柱宽,柱内居中)');
-    expect(tester.getCenter(shutter).dy, 431, reason: '快门纵向居中');
-    expect(find.byIcon(Icons.photo_library_outlined), findsOneWidget,
-        reason: '快门柱相册钮(无即拍图时图标占位)');
-    expect(find.byIcon(Icons.center_focus_strong), findsOneWidget,
-        reason: '快门柱对焦钮');
-    expect(find.byIcon(Icons.tune), findsOneWidget, reason: '快门柱设置钮');
-    expect(find.byIcon(Icons.visibility_off), findsOneWidget,
-        reason: '顶栏纯净监看钮');
+    final focus = find.byIcon(Icons.center_focus_strong);
+    final album = find.byIcon(Icons.photo_library_outlined);
+    final column = [
+      (rotation, 1553.0, '旋转'),
+      (tune, 1553.0, '设置'),
+      (shutter, 1548.0, '快门'),
+      (focus, 1553.0, '对焦'),
+      (album, 1553.0, '相册'),
+    ];
+    var lastDy = -1.0;
+    for (final (f, dx, label) in column) {
+      expect(f, findsOneWidget);
+      final c = tester.getCenter(f);
+      expect(c.dx, dx,
+          reason: '$label 柱位(右缘齐平距物理屏缘 20,同竖屏底距)');
+      expect(c.dy, greaterThan(lastDy),
+          reason: '柱序自上而下 旋转/设置/快门/对焦/相册');
+      lastDy = c.dy;
+    }
+    expect(tester.getCenter(shutter).dy, 400, reason: '快门在屏心(全高中置)');
+    expect(tester.getCenter(rotation).dy, closeTo(271, 1), reason: '旋转在柱顶');
+    expect(tester.getCenter(album).dy, closeTo(529, 1), reason: '相册坠柱底');
 
-    // 贴底条:模式条居中 + 旋转钮右端
+    // 信息胶囊整体居中(2026-10-12 用户定案「这一个按钮居中」):compact
+    // 收缩包内容被 Center 居中;纯净监看钮入胶囊行尾,不再另摆顶栏右端
+    // 独立钮。
+    expect(tester.getCenter(find.byType(RemoteInfoPill)).dx, closeTo(800, 1),
+        reason: '胶囊整体居中(1600 宽屏心)');
+    final hide = find.byIcon(Icons.visibility_off);
+    expect(hide, findsOneWidget, reason: '胶囊行尾纯净监看钮');
+    expect(tester.getCenter(hide).dx, greaterThan(800),
+        reason: '隐藏钮在胶囊行尾(屏心之右)');
+    expect(tester.getCenter(hide).dy, lessThan(56), reason: '在顶栏带内');
+
+    // 贴底条:模式条独占、居中于取景盒(旋转钮已迁柱顶;两段文字中点
+    // 即条心)
     expect(find.text('照片'), findsOneWidget, reason: '贴底模式条');
-    expect(find.byIcon(Icons.screen_rotation), findsOneWidget,
-        reason: '贴底条右端旋转钮');
+    expect(
+        (tester.getCenter(find.text('照片')).dx +
+                tester.getCenter(find.text('视频')).dx) /
+            2,
+        closeTo((1600 - 94) / 2, 1),
+        reason: '模式条居中于取景盒(右缩 94)');
 
-    // 设置浮层:tune 展开 → 监看开关在树;让位右缘快门柱(right: 98)
+    // 设置浮层:tune 展开 → 监看开关在树;让位右缘快门柱(right: 94)
     expect(find.byIcon(Icons.grid_on), findsNothing, reason: '默认收起');
     await tester.tap(find.byIcon(Icons.tune));
     await tester.pumpAndSettle();
     expect(find.byIcon(Icons.grid_on), findsOneWidget, reason: '面板开');
 
-    // 点取景画面即收浮层 + 照常触控对焦(点左栏右沿与画幅左沿之间的
-    // 空白;AF 两应答已在队首)。
+    // 点空白即收浮层(满铺手势层贪吃这一拍,不触发触控对焦);再点画面
+    // 照常触控对焦(点画幅左沿外的 letterbox 空白;AF 两应答在队)。
     await tester.tapAt(const Offset(200, 400));
     await tester.pumpAndSettle();
     expect(find.byIcon(Icons.grid_on), findsNothing, reason: '点画面收起面板');
+    expect(
+        transport.requests
+            .where((r) => r.opcode == NikonOperationCode.changeAfArea),
+        isEmpty,
+        reason: '收浮层这一拍被垫层贪吃');
+    await tester.tapAt(const Offset(200, 400));
+    await tester.pumpAndSettle();
     final af = transport.requests.singleWhere(
         (r) => r.opcode == NikonOperationCode.changeAfArea);
-    // contain 映射照常:画面左缘外钳到 0,纵向居中
+    // heightFill 映射照常:画面左缘外钳到 0,纵向满高线性
     expect(af.params, [0, 12]);
   });
 
@@ -1633,8 +1775,8 @@ void main() {
         reason: '底单收口,浮层仍在');
   });
 
-  testWidgets('对焦浮层:AF 驱动 0x90C1、MF 步进 0x9204、拉焦轮开关',
-      (tester) async {
+  testWidgets('对焦钮点按即 AF(0x90C1)零面板;MF 步进/拉焦轮迁设置浮层'
+      '(2026-10-12:对焦钮只负责对焦)', (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
     final conn = _FakeConnection();
@@ -1643,31 +1785,34 @@ void main() {
     transport
       ..ok() // 0x9201(进页自动起景)
       ..ok(data: _realJpeg()) // 首帧
-      ..ok() // afDrive 0x90C1
+      ..ok() // afDrive 0x90C1(对焦钮直触发)
       ..ok() // mfDrive 0x9204 向近
       ..ok(); // mfDrive 0x9204 向远
     await tester
         .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
     await tester.pumpAndSettle();
 
-    // 控制行对焦钮开对焦浮层
+    // 控制行对焦钮:点按即驱动一次 AF,不弹任何面板
     await tester.tap(find.byIcon(Icons.center_focus_strong));
-    await tester.pumpAndSettle();
-    expect(find.text('AF 对焦'), findsOneWidget, reason: '对焦浮层开');
-
-    // AF:一条 0x90C1
-    await tester.tap(find.text('AF 对焦'));
     await tester.pumpAndSettle();
     expect(
         transport.requests
             .where((r) => r.opcode == NikonOperationCode.afDrive),
         hasLength(1));
     expect(controller.focusing, isFalse, reason: '脚本应答即回,不转圈');
+    expect(find.byType(CaptureSettingsPanel), findsNothing,
+        reason: '对焦钮不开设置浮层');
+    expect(find.text('拉焦轮'), findsNothing, reason: '拉焦轮不在面板外');
+
+    // MF 步进/拉焦轮住设置浮层「对焦」段
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
+    expect(find.text('对焦'), findsOneWidget, reason: '对焦段在场');
 
     // MF 步进:向近 [1,300] / 向远 [2,300](0x9204 相对量)
-    await tester.tap(find.byIcon(Icons.remove));
+    await tester.tap(find.text('MF 近'));
     await tester.pumpAndSettle();
-    await tester.tap(find.byIcon(Icons.add));
+    await tester.tap(find.text('MF 远'));
     await tester.pumpAndSettle();
     final mf = transport.requests
         .where((r) => r.opcode == NikonOperationCode.mfDrive)
@@ -1683,8 +1828,8 @@ void main() {
     expect(find.byKey(const ValueKey('focus-dial-rail')), findsOneWidget);
   });
 
-  testWidgets('对焦浮层:机身对焦模式 MF → 常驻提示 + 控制灰化 + 盲按零流量,'
-      '拉焦轮压暗保留姿态', (tester) async {
+  testWidgets('机身对焦模式 MF → 对焦钮灰化盲按零流量;设置浮层常驻提示 + '
+      'MF 步进盲按零流量,拉焦轮压暗保留姿态', (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
     final conn = _FakeConnection();
@@ -1704,22 +1849,22 @@ void main() {
     controller.notifyListeners();
     await tester.pumpAndSettle();
 
-    // 开对焦浮层:MF 常驻提示行在场
+    // 对焦钮盲按:零 AF 流量(灰化是第二道,控制器拦截是第一道)
     await tester.tap(find.byIcon(Icons.center_focus_strong));
-    await tester.pumpAndSettle();
-    expect(find.text('机身对焦模式为 MF,远程对焦已停用'), findsOneWidget,
-        reason: 'MF 常驻提示');
-
-    // 盲按 AF / MF 步进:零对焦流量(灰化是第二道,控制器拦截是第一道)
-    await tester.tap(find.text('AF 对焦'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byIcon(Icons.remove));
     await tester.pumpAndSettle();
     expect(
         transport.requests
             .where((r) => r.opcode == NikonOperationCode.afDrive),
         isEmpty,
         reason: 'AF 盲按零流量');
+
+    // 设置浮层「对焦」段:MF 常驻提示行在场 + 步进盲按零流量
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
+    expect(find.text('机身对焦模式为 MF,远程对焦已停用'), findsOneWidget,
+        reason: 'MF 常驻提示');
+    await tester.tap(find.text('MF 近'));
+    await tester.pumpAndSettle();
     expect(
         transport.requests
             .where((r) => r.opcode == NikonOperationCode.mfDrive),
@@ -1736,7 +1881,8 @@ void main() {
     expect(opacity.opacity, 0.35, reason: 'MF 时拉焦轮压暗');
   });
 
-  testWidgets('对焦/设置浮层互斥单开,再点锚钮即收,点取景画面即收',
+  testWidgets('设置浮层:再点锚钮即收,点空白即收且这一拍不触发触控对焦'
+      '(2026-10-12 满铺手势层;收起后点画面照常对焦)',
       (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
@@ -1746,45 +1892,88 @@ void main() {
     transport
       ..ok() // 0x9201(进页自动起景)
       ..ok(data: _realJpeg()) // 首帧
-      ..ok() // changeAfArea(点画面收浮层时顺带触控对焦)
+      ..ok() // changeAfArea(浮层收起后再点画面)
       ..ok(); // afDrive
     await tester
         .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
     await tester.pumpAndSettle();
 
-    // 控制行对焦钮(底行;浮层开前的唯一 center_focus_strong)
-    final controlFocus = find.descendant(
-        of: find.byKey(const ValueKey('portrait-chrome-bottom')),
-        matching: find.byIcon(Icons.center_focus_strong));
-
-    // 设置开 → 点对焦钮:互斥换开
+    // 设置开 → 再点设置钮:收
     await tester.tap(find.byIcon(Icons.tune));
     await tester.pumpAndSettle();
     expect(find.byType(CaptureSettingsPanel), findsOneWidget);
-    await tester.tap(controlFocus);
+    await tester.tap(find.byIcon(Icons.tune));
     await tester.pumpAndSettle();
     expect(find.byType(CaptureSettingsPanel), findsNothing,
-        reason: '互斥:开对焦收设置');
-    expect(find.text('AF 对焦'), findsOneWidget, reason: '对焦浮层在场');
+        reason: '再点锚钮即收');
 
-    // 再点对焦钮:收
-    await tester.tap(controlFocus);
-    await tester.pumpAndSettle();
-    expect(find.text('AF 对焦'), findsNothing, reason: '再点锚钮即收');
-
-    // 设置再开 → 点画面即收(顺带触控对焦照常)
+    // 再开 → 点空白即收:满铺手势层贪吃这一拍,只收浮层不触控对焦
     await tester.tap(find.byIcon(Icons.tune));
     await tester.pumpAndSettle();
     expect(find.byType(CaptureSettingsPanel), findsOneWidget);
     await tester.tap(find.byType(Image).first, warnIfMissed: false);
     await tester.pumpAndSettle();
     expect(find.byType(CaptureSettingsPanel), findsNothing,
-        reason: '点画面收浮层');
+        reason: '点空白收浮层');
+    expect(
+        transport.requests
+            .where((r) => r.opcode == NikonOperationCode.changeAfArea),
+        isEmpty,
+        reason: '收浮层这一拍被垫层贪吃,零触控对焦');
+
+    // 浮层收起后点画面:触控对焦照常
+    await tester.tap(find.byType(Image).first, warnIfMissed: false);
+    await tester.pumpAndSettle();
     expect(
         transport.requests
             .where((r) => r.opcode == NikonOperationCode.changeAfArea),
         hasLength(1),
-        reason: '点画面顺带触控对焦');
+        reason: '收起后点画面照常触控对焦');
+  });
+
+  testWidgets('设置浮层:点底区按钮间空白也收(2026-10-12 夜续垫层垫到'
+      '底区两行之后),按钮照常不被挡', (tester) async {
+    _portrait(tester);
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = _directRemoteController(transport, conn: conn);
+    addTearDown(controller.dispose);
+    transport
+      ..ok() // 0x9201(进页自动起景)
+      ..ok(data: _realJpeg()) // 首帧
+      ..ok(); // afDrive(对焦钮)
+    await tester
+        .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
+    expect(find.byType(CaptureSettingsPanel), findsOneWidget);
+
+    // 底区两行(六轮后:层锚物理屏缘 20,控制行 2238..2324 / 底行
+    // 2324..2380,总高 142)的空白:取景栈的垫层够不到,由垫在两行之后
+    // 的第二垫层收 —— 点控制行对焦钮与快门之间的空档(x 200,y 2291)。
+    await tester.tapAt(const Offset(200, 2291));
+    await tester.pumpAndSettle();
+    expect(find.byType(CaptureSettingsPanel), findsNothing,
+        reason: '底区空白也收浮层');
+    expect(
+        transport.requests
+            .where((r) => r.opcode == NikonOperationCode.changeAfArea),
+        isEmpty,
+        reason: '收浮层这一拍不触发触控对焦');
+
+    // 按钮在垫层之上照常:再开浮层,对焦钮点按直接驱动一次 AF
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
+    expect(find.byType(CaptureSettingsPanel), findsOneWidget);
+    await tester.tap(find.byIcon(Icons.center_focus_strong));
+    await tester.pumpAndSettle();
+    expect(
+        transport.requests
+            .where((r) => r.opcode == NikonOperationCode.afDrive),
+        hasLength(1),
+        reason: '浮层开着,底区按钮照常可用');
   });
 
   testWidgets('断链三态沿(2026-10-10):connected→reconnecting 不弹页出横幅压暗,'

@@ -2086,17 +2086,31 @@ void main() {
       expect(transport.count(NikonOperationCode.changeAfArea), 0);
     });
 
-    test('对焦按钮:0x90C1 成功;0xA002 未合焦转友好提示', () async {
+    test('对焦按钮:0x90C1 成功;0xA002 未合焦转友好提示;框色随判'
+        '(2026-10-12 两色制:未合焦红/合焦绿)', () async {
       await startLiveView();
       transport.ok(); // afDrive 成功
       await controller.afDriveNow();
       expect(controller.error, isNull);
       expect(controller.focusing, isFalse);
+      expect(controller.afBox, isNull, reason: '按钮路径无点位,不造框');
 
       transport.reply(NikonResponseCode.outOfFocus);
       await controller.afDriveNow();
       expect(controller.error, contains('未合焦'));
       expect(controller.focusing, isFalse);
+
+      // 框色随判:触控对焦框 0xA002 后 focused=false(红),合焦后 true
+      transport
+        ..ok() // changeAfArea
+        ..reply(NikonResponseCode.outOfFocus); // afDrive 未合焦
+      await controller.touchFocus(0.5, 0.25);
+      expect(controller.afBox!.focused, isFalse, reason: '未合焦红框');
+      transport
+        ..ok() // changeAfArea
+        ..ok(); // afDrive 合焦
+      await controller.touchFocus(0.5, 0.25);
+      expect(controller.afBox!.focused, isTrue, reason: '合焦绿框');
     });
 
     test('对焦按钮:未开取景 → 提示不发(0xA00B notLiveView 应答形态)',
