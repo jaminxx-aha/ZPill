@@ -820,8 +820,13 @@ void main() {
     addTearDown(controller.dispose);
 
     _scriptAutoStart(transport); // 进页自动起景(0x9201 + 首帧)
-    await tester
-        .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
+    // 十二轮起开关组持久化:注入裸 ValueNotifier 隔离 AppServices 共享
+    // 单例(开关写回不再泄漏给同文件后续用例)。
+    final settings = ValueNotifier(const AppSettings());
+    addTearDown(settings.dispose);
+    await tester.pumpWidget(MaterialApp(
+        home: RemotePage(
+            controller: controller, settingsListenable: settings)));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('focus-dial-rail')), findsNothing,
         reason: '默认不占取景画面');
@@ -1091,14 +1096,15 @@ void main() {
         greaterThan(tester.getCenter(shutter).dy),
         reason: '模式条在快门下方');
 
-    // 六轮边距(2026-10-12 破安全区,参照 iOS 相机底部按钮距离):
-    // 左右 24→12、底距改**物理屏缘 20**(层锚 bottom: 20,行内不垫底)。
-    // 54 钮心 = 边距+27;底行钮心 = 2400-20-2-27。
-    expect(tester.getCenter(focus).dx, 39, reason: '对焦钮距左缘 12(12+27)');
-    expect(tester.getCenter(rotation).dx, 761, reason: '旋转钮距右缘 12');
-    expect(tester.getCenter(album).dx, 39, reason: '相册钮距左缘 12');
-    expect(tester.getCenter(rotation).dy, 2353,
-        reason: '旋转钮物理屏缘 20(2400-20-2-27)');
+    // 九轮边距统一 + 手调(2026-10-12 破安全区 + 「左右两侧按钮离边的
+    // 距离和离下方的距离保持一致」):左右与屏底统一 [kScreenEdgePadding]
+    // (九轮定 20,用户手调 30;层锚 bottom:,行内不垫底)。
+    // 54 钮心 = 边距+27;底行钮心 = 2400-30-27(底行 padding bottom 0)。
+    expect(tester.getCenter(focus).dx, 57, reason: '对焦钮距左缘 30(30+27)');
+    expect(tester.getCenter(rotation).dx, 743, reason: '旋转钮距右缘 30');
+    expect(tester.getCenter(album).dx, 57, reason: '相册钮距左缘 30');
+    expect(tester.getCenter(rotation).dy, 2343,
+        reason: '旋转钮物理屏缘 30(2400-30-27)');
 
     // 旧动作行文案退场:取景默认开、录像并快门、MF 步进在设置浮层
     expect(find.text('取景'), findsNothing);
@@ -1142,9 +1148,10 @@ void main() {
     expect(find.text('网格'), findsOneWidget, reason: '监看开关入设置浮层');
   });
 
-  testWidgets('横屏监看:取景盒右缩 108 让柱、heightFill 满高无黑边,'
-      '快门柱五件贴右缘且快门同竖屏 78(旋转在顶/相册坠底),模式条独占贴底,'
-      '信息胶囊居中取景盒与模式条同轴线,设置浮层让位快门柱', (tester) async {
+  testWidgets('横屏监看:取景盒左缩 60(画面右移 30)/右缩 118 让柱、'
+      'heightFill 满高无黑边,快门柱五件贴右缘共轴于快门心且快门同竖屏 78'
+      '(旋转在顶/相册坠底),模式条独占贴底,信息胶囊定宽居中取景盒与'
+      '模式条同轴线、顶底同高 38 同距 6,设置浮层让位快门柱', (tester) async {
     _landscape(tester);
     final transport = _ScriptTransport();
     final conn = _FakeConnection();
@@ -1163,20 +1170,24 @@ void main() {
     await tester.pumpAndSettle();
     expect(controller.liveViewActive, isTrue, reason: '进页自动起景');
 
-    // 取景盒右缩 108 让位快门柱(柱右距物理屏缘 20,柱带宽
-    // 20+78=98 + 10 间隙 —— 快门两向同 78):feed 盒 1492×800,Image
-    // 住在图像坐标系(32×24)经 Transform 投到屏幕 —— heightFill 恒满高
-    // (scale 800/24 = 33.33…):上下永无黑边(top 0 / height 800),
-    // 宽 32×33.33 = 1066.67 在盒内居中左右各留 212.67,右缘 1279.33 恒在
-    // 柱带(1492..1600)之左;录制读出/拉焦轮随盒右缩原位让柱,不进柱带。
+    // 取景盒**左缩 60 + 右缩 118**(右 = 快门柱让位:柱右距物理屏缘 30
+    // ([kScreenEdgePadding] 手调值),柱带宽 30+78=108 + 10 间隙;
+    // 左 = 九轮「取景往右侧移动一点」):feed 盒 60..1482(宽 1422),
+    // Image 住在图像坐标系(32×24)经 Transform 投到屏幕 —— heightFill
+    // 恒满高(scale 800/24 = 33.33…):上下永无黑边(top 0 / height 800),
+    // 宽 32×33.33 = 1066.67 在盒内居中左右各留 177.67 → 画面左缘
+    // 237.67(较左缩前右移 30)、右缘 1304.33 恒在柱带(1482..1600)
+    // 之左;16:9 视频满高宽 1422.22 仅越盒 0.22(双侧各裁 0.11,
+    // 不可见)。
     final imageRect = tester.getRect(find.byType(Image).first);
     expect(imageRect.top, closeTo(0, 0.01),
         reason: 'heightFill 恒满高:上无黑边');
     expect(imageRect.height, closeTo(800, 0.01),
         reason: 'heightFill 恒满高:下无黑边');
-    expect(imageRect.left, closeTo((1492 - 3200 / 3) / 2, 0.01));
+    expect(imageRect.left, closeTo(60 + (1422 - 3200 / 3) / 2, 0.01),
+        reason: '画面右移 30(盒左缩 60,内容盒内居中)');
     expect(imageRect.width, closeTo(3200 / 3, 0.01));
-    expect(imageRect.right, lessThan(1600 - 108), reason: '画面不进快门柱带');
+    expect(imageRect.right, lessThan(1600 - 118), reason: '画面不进快门柱带');
 
     // 左参数栏已删(2026-10-12 二轮「把左侧的参数调整删了」):参数唯一
     // 入口 = 设置浮层全目录;竖向滚动列表(原 ParamRail)不在树。
@@ -1192,9 +1203,10 @@ void main() {
     // 旋转/设置/快门 78/对焦/相册 —— 方向钮自贴底条迁入柱顶,相册坠底;
     // 快门两向同 78 = 用户定案「横屏按钮保持和竖屏大小一样」):柱内容
     // 326(54+8+54+8+78+8+54+8+54)在 800 高屏居中(y 237..563)。
-    // 六轮右移:五件右缘齐平距**物理屏缘 20**(破侧边安全区,同竖屏
-    // 底距;crossAxisAlignment.end,快门最宽凸左 24 → 54 钮心 1553、
-    // 快门心 1541)。
+    // 十轮:五件**共轴于快门心**(crossAxisAlignment.center,用户
+    // 「以拍照按钮居中对齐,而不是右边对齐」,废除右缘齐平/凸左);
+    // 柱右距物理屏缘 30(kScreenEdgePadding 手调值)→ 共轴
+    // 1600-30-39 = 1531。
     final rotation = find.byIcon(Icons.screen_rotation);
     final tune = find.byIcon(Icons.tune);
     final shutter = find.byWidgetPredicate(
@@ -1202,11 +1214,11 @@ void main() {
     final focus = find.byIcon(Icons.center_focus_strong);
     final album = find.byIcon(Icons.photo_library_outlined);
     final column = [
-      (rotation, 1553.0, '旋转'),
-      (tune, 1553.0, '设置'),
-      (shutter, 1541.0, '快门'),
-      (focus, 1553.0, '对焦'),
-      (album, 1553.0, '相册'),
+      (rotation, 1531.0, '旋转'),
+      (tune, 1531.0, '设置'),
+      (shutter, 1531.0, '快门'),
+      (focus, 1531.0, '对焦'),
+      (album, 1531.0, '相册'),
     ];
     var lastDy = -1.0;
     for (final (f, dx, label) in column) {
@@ -1222,19 +1234,29 @@ void main() {
     expect(tester.getCenter(rotation).dy, closeTo(264, 1), reason: '旋转在柱顶');
     expect(tester.getCenter(album).dy, closeTo(536, 1), reason: '相册坠柱底');
 
-    // 信息胶囊居中于取景盒(2026-10-12 用户定案「这一个按钮居中」;
-    // 八轮定案与贴底模式条同轴线 —— 顶栏同样右缩 108,整页心 800 →
-    // 取景盒心 746):compact 收缩包内容被 Center 居中;纯净监看钮入
-    // 胶囊行尾,不再另摆顶栏右端独立钮。
+    // 信息胶囊定宽居中于取景盒(2026-10-12 用户定案「这一个按钮居中」;
+    // 八轮定案与贴底模式条同轴线 —— 顶栏与盒同缩(左 60/右 118),
+    // 盒心 = (60+1482)/2 = 771;九轮定宽 [kLandscapePillWidth](手调 460):
+    // 胶囊内部 Spacer 拉开,隐藏钮贴行尾;十轮胶囊高 38、顶距 6,
+    // 与贴底模式条 6+38 上下镜像「和底部一致」)。
+    expect(tester.getSize(find.byType(RemoteInfoPill)).width,
+        kLandscapePillWidth,
+        reason: '胶囊定宽(九轮「长一点约为现在的两倍」,值手调)');
+    expect(tester.getSize(find.byType(RemoteInfoPill)).height, 38,
+        reason: '胶囊高 38,与贴底模式条同高(十轮「和底部一致」)');
     expect(
         tester.getCenter(find.byType(RemoteInfoPill)).dx,
-        closeTo((1600 - 108) / 2, 1),
+        closeTo((60 + 1600 - 118) / 2, 1),
         reason: '胶囊居中于取景盒(与贴底模式条同轴线)');
     final hide = find.byIcon(Icons.visibility_off);
     expect(hide, findsOneWidget, reason: '胶囊行尾纯净监看钮');
-    expect(tester.getCenter(hide).dx, greaterThan((1600 - 108) / 2),
+    expect(tester.getCenter(hide).dx, greaterThan((60 + 1600 - 118) / 2),
         reason: '隐藏钮在胶囊行尾(取景盒心之右)');
-    expect(tester.getCenter(hide).dy, lessThan(56), reason: '在顶栏带内');
+    expect(tester.getCenter(hide).dx,
+        lessThan((60 + 1600 - 118) / 2 + kLandscapePillWidth / 2),
+        reason: '隐藏钮不越定宽胶囊右缘');
+    expect(tester.getCenter(hide).dy, lessThan(44),
+        reason: '在顶栏带内(6..44,与贴底镜像)');
 
     // 贴底条:模式条独占、居中于取景盒(旋转钮已迁柱顶;两段文字中点
     // 即条心)
@@ -1243,10 +1265,10 @@ void main() {
         (tester.getCenter(find.text('照片')).dx +
                 tester.getCenter(find.text('视频')).dx) /
             2,
-        closeTo((1600 - 108) / 2, 1),
-        reason: '模式条居中于取景盒(右缩 108)');
+        closeTo((60 + 1600 - 118) / 2, 1),
+        reason: '模式条居中于取景盒(与顶栏胶囊同轴线)');
 
-    // 设置浮层:tune 展开 → 监看开关在树;让位右缘快门柱(right: 108)
+    // 设置浮层:tune 展开 → 监看开关在树;让位右缘快门柱(right: 118)
     expect(find.byIcon(Icons.grid_on), findsNothing, reason: '默认收起');
     await tester.tap(find.byIcon(Icons.tune));
     await tester.pumpAndSettle();
@@ -1792,8 +1814,12 @@ void main() {
       ..ok() // afDrive 0x90C1(对焦钮直触发)
       ..ok() // mfDrive 0x9204 向近
       ..ok(); // mfDrive 0x9204 向远
-    await tester
-        .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
+    // 十二轮持久化:注入裸 ValueNotifier(拉焦轮开关会写回设置)。
+    final settings = ValueNotifier(const AppSettings());
+    addTearDown(settings.dispose);
+    await tester.pumpWidget(MaterialApp(
+        home: RemotePage(
+            controller: controller, settingsListenable: settings)));
     await tester.pumpAndSettle();
 
     // 控制行对焦钮:点按即驱动一次 AF,不弹任何面板
@@ -1842,8 +1868,12 @@ void main() {
     transport
       ..ok() // 0x9201(进页自动起景)
       ..ok(data: _realJpeg()); // 首帧
-    await tester
-        .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
+    // 十二轮持久化:注入裸 ValueNotifier(拉焦轮开关会写回设置)。
+    final settings = ValueNotifier(const AppSettings());
+    addTearDown(settings.dispose);
+    await tester.pumpWidget(MaterialApp(
+        home: RemotePage(
+            controller: controller, settingsListenable: settings)));
     await tester.pumpAndSettle();
 
     // 0xD061 = 4(MF 选择,Zf 域内值):直置 paramProps(0x4006 事件 →
@@ -1883,6 +1913,94 @@ void main() {
     final opacity = tester.widget<Opacity>(
         find.descendant(of: rail, matching: find.byType(Opacity)));
     expect(opacity.opacity, 0.35, reason: 'MF 时拉焦轮压暗');
+  });
+
+  testWidgets('监看开关持久化(十二轮):浮层开关写回设置,重挂页面恢复无需再点',
+      (tester) async {
+    _portrait(tester);
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = _directRemoteController(transport, conn: conn);
+    addTearDown(controller.dispose);
+    _scriptAutoStart(transport);
+    final settings = ValueNotifier(const AppSettings());
+    addTearDown(settings.dispose);
+    await tester.pumpWidget(MaterialApp(
+        home: RemotePage(
+            controller: controller, settingsListenable: settings)));
+    await tester.pumpAndSettle();
+
+    // 浮层开「网格」:设置值即时改写 + 当前页即出叠层
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
+    expect(find.byType(GridOverlay), findsNothing, reason: '默认无网格');
+    await tester.tap(find.text('网格'));
+    await tester.pumpAndSettle();
+    expect(settings.value.monitorGrid, isTrue, reason: '开关落进设置值');
+    expect(find.byType(GridOverlay), findsOneWidget, reason: '当前页即出网格');
+
+    // 真重挂(SizedBox 卸载 → 同设置源、同控制器再挂;引擎在跑 → 新
+    // initState 走进页对表沿,预置参数脚本):桥接恢复,无需再点
+    _scriptParams(transport);
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump();
+    await tester.pumpWidget(MaterialApp(
+        home: RemotePage(
+            controller: controller, settingsListenable: settings)));
+    await tester.pumpAndSettle();
+    expect(find.byType(GridOverlay), findsOneWidget, reason: '重进拍摄页保持');
+  });
+
+  testWidgets('取景开关(十二轮「取景器关闭的开关」):关 = 0x9202 + 持久关,'
+      '重挂不自动起景;再开 = 0x9201 起景 + 持久开', (tester) async {
+    _portrait(tester);
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = _directRemoteController(transport, conn: conn);
+    addTearDown(controller.dispose);
+    _scriptAutoStart(transport);
+    final settings = ValueNotifier(const AppSettings());
+    addTearDown(settings.dispose);
+    await tester.pumpWidget(MaterialApp(
+        home: RemotePage(
+            controller: controller, settingsListenable: settings)));
+    await tester.pumpAndSettle();
+    expect(controller.liveViewActive, isTrue, reason: '默认开:进页自动起景');
+
+    // 浮层「取景」关:0x9202 停景 + liveViewOn 落 false + 控制器总闸关
+    transport.ok(); // 0x9202(引擎 stop 尽力)
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('取景'));
+    await tester.pumpAndSettle();
+    expect(settings.value.liveViewOn, isFalse, reason: '持久位落 false');
+    expect(controller.autoLiveViewEnabled, isFalse, reason: '控制器总闸关');
+    expect(controller.liveViewActive, isFalse, reason: '引擎已停');
+    expect(
+        transport.requests
+            .where((r) => r.opcode == NikonOperationCode.endLiveView),
+        hasLength(1),
+        reason: '恰一条 0x9202');
+
+    // 真重挂(SizedBox 卸载再挂,initState 才会走自动起景沿):总闸挡住
+    // —— 脚本不再预置应答,误发即耗尽脚本抛错(_ScriptTransport 兜底);
+    // 引擎保持停
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump();
+    await tester.pumpWidget(MaterialApp(
+        home: RemotePage(
+            controller: controller, settingsListenable: settings)));
+    await tester.pumpAndSettle();
+    expect(controller.liveViewActive, isFalse, reason: '重进不自动起景');
+
+    // 再开:0x9201 + 首帧(显式开不受闸),持久位回 true
+    _scriptAutoStart(transport);
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('取景'));
+    await tester.pumpAndSettle();
+    expect(settings.value.liveViewOn, isTrue, reason: '持久位回 true');
+    expect(controller.liveViewActive, isTrue, reason: '显式开照常起景');
   });
 
   testWidgets('设置浮层:再点锚钮即收,点空白即收且这一拍不触发触控对焦'

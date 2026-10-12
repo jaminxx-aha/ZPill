@@ -13,7 +13,12 @@ import 'remote_controller.dart';
 /// [compact]:横屏顶栏态(2026-10-12 胶囊整体居中)—— 收缩包内容
 /// (mainAxisSize.min,名字 Flexible 而非 Expanded)可被 Center 居中,
 /// 徽标前用小间距代替 Spacer 撑开;非 compact 照旧占满宽、行尾恒贴
-/// 右缘(2026-10-10 修 Flexible→Expanded 的同款口径)。
+/// 右缘(2026-10-10 修 Flexible→Expanded 的同款口径)。[fixedWidth]:
+/// 九轮「上方的按钮长一点约为两倍」—— 横屏定宽
+/// ([kLandscapePillWidth]);**内部与非 compact 同构**(十一轮用户定案
+/// 「横屏时上方的 button 里面的参数位置和竖屏保持一致」:名字
+/// Expanded + Spacer 各分一半余量 → 张数/REC 落名后中带、隐藏钮恒贴
+/// 行尾,同竖屏观感)。
 class RemoteInfoPill extends StatelessWidget {
   const RemoteInfoPill({
     super.key,
@@ -21,6 +26,7 @@ class RemoteInfoPill extends StatelessWidget {
     this.onHideChrome,
     this.margin,
     this.compact = false,
+    this.fixedWidth,
   });
 
   final RemoteController controller;
@@ -32,6 +38,10 @@ class RemoteInfoPill extends StatelessWidget {
   final EdgeInsetsGeometry? margin;
   final bool compact;
 
+  /// 定宽(横屏顶栏,九轮):null = 照旧(compact 收缩包 / 非 compact
+  /// 占满宽);非 null 时胶囊取此宽,内部 Spacer 拉开行尾贴右。
+  final double? fixedWidth;
+
   @override
   Widget build(BuildContext context) {
     final live = LiveDesign.of(context);
@@ -41,10 +51,14 @@ class RemoteInfoPill extends StatelessWidget {
     // (2026-10-08),页内无 AppBar,这里补返回入口;直挂首页/单测里
     // canPop 为假则不占位(系统返回手势照常可用,这里只是显式入口)。
     final canPop = Navigator.of(context).canPop();
+    final wide = fixedWidth != null;
     return Container(
-      width: compact ? null : double.infinity,
+      width: fixedWidth ?? (compact ? null : double.infinity),
       margin: margin ?? const EdgeInsets.fromLTRB(12, 8, 12, 4),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+      // 十轮:横屏(compact)竖直 padding 7→4 → 胶囊高 38,与贴底
+      // 模式条同高(用户「改成一致,和底部一致」);竖屏照旧 44。
+      padding: EdgeInsets.symmetric(
+          horizontal: 12, vertical: compact ? 4 : 7),
       decoration: BoxDecoration(
         color: live.glass,
         borderRadius: BorderRadius.circular(999),
@@ -53,8 +67,10 @@ class RemoteInfoPill extends StatelessWidget {
       child: Row(
         // compact 收缩包内容(横屏胶囊居中的前提);非 compact 占满宽
         // (Container width infinity 的紧约束下 min/max 同果,行尾贴右)。
-        mainAxisSize:
-            compact ? MainAxisSize.min : MainAxisSize.max,
+        // 定宽时取 max:余量交给 Spacer,隐藏钮贴行尾(九轮)。
+        mainAxisSize: compact && !wide
+            ? MainAxisSize.min
+            : MainAxisSize.max,
         children: [
           if (canPop) ...[
             _backButton(context, live),
@@ -66,9 +82,12 @@ class RemoteInfoPill extends StatelessWidget {
           // 横屏顶栏与浮层分宽,名字可能被挤 —— 省略号收尾。非 compact
           // 用 Expanded 吃满余量:行尾徽标/隐藏钮恒贴右缘(旧 Flexible+
           // Spacer 各分一半自由空间,短设备名时行尾钮悬在半行 ——
-          // 2026-10-10 隐藏/恢复同位需求暴露);compact 用 Flexible 收缩
-          // 包内容(名字取内在宽,超限省略)。
-          compact
+          // 2026-10-10 隐藏/恢复同位需求暴露);compact 收缩包用
+          // Flexible(名字取内在宽,超限省略);**定宽时与非 compact
+          // 同构也用 Expanded**(十一轮用户定案「横屏上方的 button
+          // 里面的参数位置和竖屏保持一致」—— Expanded+Spacer 各分一半
+          // 余量,张数/REC 落名后中带、行尾钮恒贴右,同竖屏观感)。
+          compact && !wide
               ? Flexible(
                   child: Text(
                     linked ? (name ?? '已连接') : '未连接相机',
@@ -101,7 +120,10 @@ class RemoteInfoPill extends StatelessWidget {
                     color: live.bad,
                     fontFeatures: const [FontFeature.tabularFigures()])),
           ],
-          compact ? const SizedBox(width: 12) : const Spacer(),
+          // 定宽时余量全归 Spacer(隐藏钮贴行尾,九轮);收缩包时小间距。
+          compact && !wide
+              ? const SizedBox(width: 12)
+              : const Spacer(),
           if (controller.takeoverActive) ...[
             Icon(Icons.lock, size: 13, color: live.accent),
             const SizedBox(width: 4),
