@@ -4,12 +4,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/core/browser/album.dart';
-import 'package:nikon_pill/core/browser/object_entry.dart';
-import 'package:nikon_pill/core/browser/object_repository.dart';
-import 'package:nikon_pill/core/browser/photo_group.dart';
 import 'package:nikon_pill/core/camera/camera_connection.dart';
-import 'package:nikon_pill/core/ptpip/object_format.dart' show ObjectKind;
 import 'package:nikon_pill/core/ptp/operation_codes.dart';
 import 'package:nikon_pill/core/ptp/ptp_session.dart';
 import 'package:nikon_pill/core/ptp/ptp_transport.dart';
@@ -20,6 +15,7 @@ import 'package:nikon_pill/features/connection/camera_overview_controller.dart';
 final class FakePtpTransport implements PtpTransport {
   final requests = <PtpRequest>[];
   final Queue<Object> script = Queue();
+  final eventsCtrl = StreamController<PtpEvent>.broadcast();
 
   void reply(PtpResult result) => script.add(result);
   void fail(Exception e) => script.add(e);
@@ -37,7 +33,7 @@ final class FakePtpTransport implements PtpTransport {
   }
 
   @override
-  Stream<PtpEvent> get events => const Stream.empty();
+  Stream<PtpEvent> get events => eventsCtrl.stream;
 
   @override
   Future<void> close() async {}
@@ -83,56 +79,6 @@ Uint8List buildDataset(
   return w.takeBytes();
 }
 
-/// 带 LensModel(0xA434)的 EXIF APP1 载荷(手算偏移,布局独立于被测
-/// 代码;watermark_test 的 _exifPayload 无镜头字段,此处为 5 条目变体)。
-Uint8List exifPayloadWithLens() {
-  const ascii = 2, short = 3, long = 4, rational = 5;
-  const makeOff = 128, modelOff = 146, dateOff = 156;
-  const fNumOff = 176, expOff = 184, focalOff = 192, lensOff = 200;
-  const exifIfdOff = 62; // IFD0(4 条目)后紧随
-  final w = ByteWriter()
-    ..u16(0x4949) // 'II'
-    ..u16(42)
-    ..u32(8)
-    // IFD0:Make / Model / DateTime / ExifIFD 指针
-    ..u16(4)
-    ..u16(0x010F)..u16(ascii)..u32(18)..u32(makeOff)
-    ..u16(0x0110)..u16(ascii)..u32(10)..u32(modelOff)
-    ..u16(0x0132)..u16(ascii)..u32(20)..u32(dateOff)
-    ..u16(0x8769)..u16(long)..u32(1)..u32(exifIfdOff)
-    ..u32(0)
-    // Exif 子表:光圈 / 快门 / ISO / 焦距 / 镜头型号
-    ..u16(5)
-    ..u16(0x829D)..u16(rational)..u32(1)..u32(fNumOff)
-    ..u16(0x829A)..u16(rational)..u32(1)..u32(expOff)
-    ..u16(0x8827)..u16(short)..u32(1)..u16(100)..u16(0)
-    ..u16(0x920A)..u16(rational)..u32(1)..u32(focalOff)
-    ..u16(0xA434)..u16(ascii)..u32(18)..u32(lensOff)
-    ..u32(0)
-    // 数据区(18 + 10 + 20 + 8×3 + 18 = 90B)
-    ..raw('NIKON CORPORATION'.codeUnits)..u8(0)
-    ..raw('NIKON Z f'.codeUnits)..u8(0)
-    ..raw('2026:10:02 09:05:33'.codeUnits)..u8(0)
-    ..u32(18)..u32(10) // ƒ/1.8
-    ..u32(1)..u32(250) // 1/250s
-    ..u32(85)..u32(1) // 85mm
-    ..raw('NIKKOR Z 40mm f/2'.codeUnits)..u8(0);
-  return w.takeBytes();
-}
-
-/// 「JPEG」= SOI + Exif APP1 + EOI(readJpegExif 只扫 APP1,无需真解码)。
-Uint8List lensJpeg() {
-  final payload = exifPayloadWithLens();
-  final segLen = 2 + 6 + payload.length;
-  return Uint8List.fromList([
-    0xFF, 0xD8, //
-    0xFF, 0xE1, (segLen >> 8) & 0xFF, segLen & 0xFF,
-    ...'Exif'.codeUnits, 0, 0,
-    ...payload,
-    0xFF, 0xD9,
-  ]);
-}
-
 final class _FakeConnection implements CameraConnection {
   final statesCtrl = StreamController<CameraLinkState>.broadcast();
 
@@ -167,45 +113,34 @@ final class _FakeConnection implements CameraConnection {
   Future<void> disconnect() async {}
 }
 
-/// 只会发块事件的伪仓库。
-final class _FakeRepo implements ObjectRepository {
-  final updatesCtrl = StreamController<AlbumsUpdate>.broadcast(sync: true);
-
-  @override
-  Stream<AlbumsUpdate> get updates => updatesCtrl.stream;
-
-  @override
-  Future<List<CameraAlbum>> loadAlbums() async => const [];
-
-  @override
-  Future<ObjectEntry> entryFor(int handle) async => throw UnimplementedError();
-
-  @override
-  void reset() {}
-
-  @override
-  void removeHandles(Iterable<int> handles) {}
+/// 镜头规格五连读(0xD0E0 + 0xD0E3-E6,连接沿/换镜沿各一轮;Zf 实证
+/// 不在声明表但应答,40 SE 回 25/4000/4000/200/200)。默认 ID 99 不在
+/// [kLensIdNames] 映射表 —— 不影响走规格描述路的既有用例。
+void _scriptLensSpec(FakePtpTransport transport,
+    {int lensId = 99,
+    int focalMin = 4000,
+    int focalMax = 4000,
+    int apWide = 200,
+    int apTele = 200}) {
+  void u32(int v) => transport.reply(PtpResult(
+      responseCode: PtpResponseCode.ok,
+      data: Uint8List.fromList(
+          [v & 0xFF, (v >> 8) & 0xFF, (v >> 16) & 0xFF, (v >> 24) & 0xFF])));
+  void u16(int v) => transport.reply(PtpResult(
+      responseCode: PtpResponseCode.ok,
+      data: Uint8List.fromList([v & 0xFF, (v >> 8) & 0xFF])));
+  u16(lensId);
+  u32(focalMin);
+  u32(focalMax);
+  u16(apWide);
+  u16(apTele);
 }
 
-/// 单 JPG 组(仓库渐进块的最小载荷)。
-PhotoGroup _jpgGroup(int handle) => PhotoGroup([
-      ObjectEntry(
-        handle: handle,
-        name: 'DSC_0001.JPG',
-        sizeInBytes: 8,
-        kind: ObjectKind.image,
-        parentHandle: 0x11,
-        capturedAt: DateTime.utc(2026, 10, 2, 9, 5, 33),
-        formatCode: 0x3801,
-      ),
-    ]);
-
-void _emitJpgChunk(_FakeRepo repo, int handle, {bool complete = true}) {
-  repo.updatesCtrl.add(AlbumsUpdate(
-      albums: [CameraAlbum.allPhotos([_jpgGroup(handle)])],
-      loaded: 1,
-      total: 1,
-      complete: complete));
+void _emitPropChanged(FakePtpTransport transport, int code) {
+  transport.eventsCtrl.add(PtpEvent(
+      code: PtpEventCode.devicePropChanged,
+      transactionId: 0,
+      params: [code]));
 }
 
 void main() {
@@ -229,6 +164,7 @@ void main() {
     transport.reply(PtpResult(
         responseCode: PtpResponseCode.ok,
         data: Uint8List.fromList([0x18, 0x01]))); // 光圈 u16 LE = 280(ƒ/2.8)
+    _scriptLensSpec(transport); // 规格五连读(0xD0E0 + 0xD0E3-E6)
 
     conn.statesCtrl.add(CameraLinkState.connected);
     await pumpEventQueue();
@@ -237,16 +173,27 @@ void main() {
     expect(controller.batteryPercent, 80);
     expect(controller.focalLengthMm, 40); // 4000(0.01mm)÷100
     expect(controller.fNumber, 280);
-    expect(controller.focalLengthFromExif, isFalse, reason: '属性路径');
-    expect(controller.fNumberFromExif, isFalse);
-    // 请求序:GetDeviceInfo + 三次属性(声明表外的码不发)
-    expect(transport.requests.map((r) => r.opcode),
-        [0x1001, 0x1015, 0x1015, 0x1015]);
-    expect(transport.requests.skip(1).map((r) => r.params.single),
-        [0x5001, 0x5008, 0x5007]);
+    // 请求序:GetDeviceInfo + 三次属性(声明表外的码不发)+ 规格五连读
+    // (0xD0E0/0xD0E3-E6 声明表外但应答,2026-10-12 探针)
+    expect(
+        transport.requests.map((r) => r.opcode),
+        [
+          0x1001,
+          ...List.filled(8, 0x1015),
+        ]);
+    expect(transport.requests.skip(1).map((r) => r.params.single), [
+      0x5001,
+      0x5008,
+      0x5007,
+      PtpDevicePropCode.lensId,
+      PtpDevicePropCode.lensFocalLengthMin,
+      PtpDevicePropCode.lensFocalLengthMax,
+      PtpDevicePropCode.lensMaxApertureWide,
+      PtpDevicePropCode.lensMaxApertureTele,
+    ]);
   });
 
-  test('属性全不在册:只发 GetDeviceInfo,字段保持缺省', () async {
+  test('标准属性全不在册:只发 GetDeviceInfo,规格五连读绕声明表照发', () async {
     final transport = FakePtpTransport();
     final session = PtpSession(transport: transport);
     final conn = _FakeConnection();
@@ -256,6 +203,7 @@ void main() {
     transport.reply(PtpResult(
         responseCode: PtpResponseCode.ok,
         data: buildDataset(deviceProps: const [])));
+    _scriptLensSpec(transport); // 0xD0E0/0xD0E3-E6 不在声明表但应答(探针定案)
 
     conn.statesCtrl.add(CameraLinkState.connected);
     await pumpEventQueue();
@@ -264,131 +212,414 @@ void main() {
     expect(controller.batteryPercent, isNull);
     expect(controller.focalLengthMm, isNull);
     expect(controller.fNumber, isNull);
-    expect(transport.requests, hasLength(1));
+    // GetDeviceInfo + 规格五连读(0xD0E0 + 0xD0E3-E6)
+    expect(transport.requests, hasLength(6));
+    expect(controller.lensSpec?.description, '40mm ƒ/2');
   });
 
-  test('镜头型号:枚举完成事件 → GetPartialObject 头 64KB → EXIF LensModel;'
-      ' 属性缺读时焦距/光圈 EXIF 兜底,一次连接只读一次', () async {
+  test('断连清态;门闩挡住迟到的属性事件(不再发请求)', () async {
     final transport = FakePtpTransport();
     final session = PtpSession(transport: transport);
     final conn = _FakeConnection();
-    final repo = _FakeRepo();
     final controller = CameraOverviewController(
-        session: session, connection: conn, repository: repo);
+        session: session, connection: conn);
 
-    // 0x101B 在册(能力门禁放行);电池在册(混合验证:属性优先,
-    // EXIF 只兜焦距/光圈)。
     transport.reply(PtpResult(
         responseCode: PtpResponseCode.ok,
-        data: buildDataset(
-            operations: const [0x1001, 0x1007, 0x1009, 0x101B],
-            deviceProps: const [0x5001])));
+        data: buildDataset(deviceProps: const [0x5001, 0x5007])));
     transport.reply(PtpResult(
         responseCode: PtpResponseCode.ok,
         data: Uint8List.fromList([80]))); // 电池 80%
     transport.reply(PtpResult(
-        responseCode: PtpResponseCode.ok, data: lensJpeg())); // 部分读回 EXIF
-
-    conn.statesCtrl.add(CameraLinkState.connected);
-    await pumpEventQueue(); // refresh 完成(deviceInfo 就位)
-
-    _emitJpgChunk(repo, 0x9001);
-    await pumpEventQueue();
-
-    expect(controller.lens, 'NIKKOR Z 40mm f/2');
-    expect(controller.batteryPercent, 80); // 属性路径
-    expect(controller.focalLengthMm, 85); // EXIF 兜底
-    expect(controller.fNumber, 180); // ƒ/1.8 ×100(与 0x5007 定点一致)
-    expect(controller.focalLengthFromExif, isTrue);
-    expect(controller.fNumberFromExif, isTrue);
-    // 部分读只取头部 64KB,从 0 起
-    final partial = transport.requests.last;
-    expect(partial.opcode, PtpOperationCode.getPartialObject);
-    expect(partial.params, [0x9001, 0, 64 * 1024]);
-
-    // 二次块不重读(一次连接一次)
-    _emitJpgChunk(repo, 0x9002);
-    await pumpEventQueue();
-    expect(transport.requests, hasLength(3));
-  });
-
-  test('渐进块不触发镜头读(双槽首块可能是旧照),枚举完成事件才读', () async {
-    final transport = FakePtpTransport();
-    final session = PtpSession(transport: transport);
-    final conn = _FakeConnection();
-    final repo = _FakeRepo();
-    final controller = CameraOverviewController(
-        session: session, connection: conn, repository: repo);
-
-    transport.reply(PtpResult(
         responseCode: PtpResponseCode.ok,
-        data: buildDataset(
-            operations: const [0x1001, 0x1007, 0x1009, 0x101B],
-            deviceProps: const [])));
-    conn.statesCtrl.add(CameraLinkState.connected);
-    await pumpEventQueue();
-
-    // 渐进块(未完成):全局句柄倒序,双卡槽首块全是 2 号槽 —— 可能是
-    // 旧照,不能当「最近一张」读
-    _emitJpgChunk(repo, 0x9001, complete: false);
-    await pumpEventQueue();
-    expect(transport.requests, hasLength(1)); // 只有 GetDeviceInfo
-    expect(controller.lens, isNull);
-
-    // 完成事件:全量合并快照(拍摄时间倒序),才读最新一张
-    transport.reply(PtpResult(
-        responseCode: PtpResponseCode.ok, data: lensJpeg()));
-    _emitJpgChunk(repo, 0x9001, complete: true);
-    await pumpEventQueue();
-    expect(controller.lens, 'NIKKOR Z 40mm f/2');
-  });
-
-  test('0x101B 不在册:块到达也不发部分读,镜头行留空', () async {
-    final transport = FakePtpTransport();
-    final session = PtpSession(transport: transport);
-    final conn = _FakeConnection();
-    final repo = _FakeRepo();
-    final controller = CameraOverviewController(
-        session: session, connection: conn, repository: repo);
-
-    transport.reply(PtpResult(
-        responseCode: PtpResponseCode.ok,
-        data: buildDataset(deviceProps: const [])));
-
-    conn.statesCtrl.add(CameraLinkState.connected);
-    await pumpEventQueue();
-
-    _emitJpgChunk(repo, 0x9001);
-    await pumpEventQueue();
-
-    expect(controller.lens, isNull);
-    expect(transport.requests, hasLength(1)); // 只有 GetDeviceInfo
-  });
-
-  test('断连清态;门闩挡住迟到的块(不再发请求)', () async {
-    final transport = FakePtpTransport();
-    final session = PtpSession(transport: transport);
-    final conn = _FakeConnection();
-    final repo = _FakeRepo();
-    final controller = CameraOverviewController(
-        session: session, connection: conn, repository: repo);
-
-    transport.reply(PtpResult(
-        responseCode: PtpResponseCode.ok,
-        data: buildDataset(deviceProps: const [])));
+        data: Uint8List.fromList([0x18, 0x01]))); // ƒ/2.8
+    _scriptLensSpec(transport);
     conn.statesCtrl.add(CameraLinkState.connected);
     await pumpEventQueue();
     expect(controller.deviceInfo, isNotNull);
+    expect(controller.lensSpec, isNotNull);
 
     conn.statesCtrl.add(CameraLinkState.disconnected);
     await pumpEventQueue();
     expect(controller.deviceInfo, isNull);
     expect(controller.batteryPercent, isNull);
-    expect(controller.lens, isNull);
+    expect(controller.fNumber, isNull);
+    expect(controller.lensSpec, isNull); // 规格随断连清态
+    expect(controller.lensId, isNull);
+    expect(controller.lensDisplay, isNull);
 
-    // 迟到的仓库块:_linkUp 门闩,静默丢弃
-    _emitJpgChunk(repo, 0x9001);
+    // 迟到的属性事件:_linkUp 门闩,静默丢弃
+    _emitPropChanged(transport, PtpDevicePropCode.fNumber);
+    await Future.delayed(const Duration(milliseconds: 50));
     await pumpEventQueue();
-    expect(transport.requests, hasLength(1));
+    expect(controller.fNumber, isNull);
+    // GetDeviceInfo + 电池 + 光圈 + 规格五连读,断连后零新增
+    expect(transport.requests, hasLength(8));
+  });
+
+  test('镜头规格直读:0xD0E0 + 0xD0E3-E6 拼装,无 EXIF 时镜头行回规格描述',
+      () async {
+    final transport = FakePtpTransport();
+    final session = PtpSession(transport: transport);
+    final conn = _FakeConnection();
+    final controller = CameraOverviewController(
+        session: session, connection: conn);
+
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: buildDataset(deviceProps: const [])));
+    _scriptLensSpec(transport,
+        focalMin: 2400, focalMax: 12000, apWide: 400, apTele: 630);
+
+    conn.statesCtrl.add(CameraLinkState.connected);
+    await pumpEventQueue();
+
+    final spec = controller.lensSpec;
+    expect(spec, isNotNull);
+    expect(spec!.focalMinMm, 24);
+    expect(spec.focalMaxMm, 120);
+    expect(spec.maxApertureWide, 400);
+    expect(spec.maxApertureTele, 630);
+    expect(spec.containsFocal(85), isTrue);
+    expect(spec.containsFocal(200), isFalse);
+    expect(spec.description, '24-120mm ƒ/4-6.3');
+    // 不拍照即知:ID 未收录映射表,lensDisplay 退规格描述
+    expect(controller.lensId, 99);
+    expect(controller.lensDisplay, '24-120mm ƒ/4-6.3');
+    // 五码次序 D0E0 打头 → D0E6,直读不走声明表门禁
+    expect(transport.requests.skip(1).map((r) => r.params.single), const [
+      PtpDevicePropCode.lensId,
+      PtpDevicePropCode.lensFocalLengthMin,
+      PtpDevicePropCode.lensFocalLengthMax,
+      PtpDevicePropCode.lensMaxApertureWide,
+      PtpDevicePropCode.lensMaxApertureTele,
+    ]);
+  });
+
+  test('规格拒答降级:lensSpec 保持 null,镜头行回 --', () async {
+    final transport = FakePtpTransport();
+    final session = PtpSession(transport: transport);
+    final conn = _FakeConnection();
+    final controller = CameraOverviewController(
+        session: session, connection: conn);
+
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: buildDataset(deviceProps: const [])));
+    // ID 打头拒答(降级容忍)+ 首个规格码拒答(规格循环短路)
+    transport.fail(const PtpResponseException(
+        opcode: 0x1015, responseCode: PtpResponseCode.generalError));
+    transport.fail(const PtpResponseException(
+        opcode: 0x1015, responseCode: PtpResponseCode.generalError));
+
+    conn.statesCtrl.add(CameraLinkState.connected);
+    await pumpEventQueue();
+
+    expect(controller.lensId, isNull);
+    expect(controller.lensSpec, isNull);
+    expect(controller.lensDisplay, isNull);
+  });
+
+  test('0x4006 实时追平:拨轮改光圈行即变(不拍照),同窗事件去抖收敛', () async {
+    final transport = FakePtpTransport();
+    final session = PtpSession(transport: transport);
+    final conn = _FakeConnection();
+    final controller = CameraOverviewController(
+        session: session, connection: conn,
+        propResyncDebounce: const Duration(milliseconds: 20));
+
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: buildDataset(deviceProps: const [0x5007])));
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: Uint8List.fromList([0x18, 0x01]))); // 连接沿:0x5007 在册先读
+    _scriptLensSpec(transport);
+    conn.statesCtrl.add(CameraLinkState.connected);
+    await pumpEventQueue();
+
+    // 拨轮连转两下:同窗去抖,一轮读值
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: Uint8List.fromList([0x18, 0x01]))); // ƒ/2.8
+    _emitPropChanged(transport, PtpDevicePropCode.fNumber);
+    _emitPropChanged(transport, PtpDevicePropCode.fNumber);
+    await Future.delayed(const Duration(milliseconds: 50));
+    await pumpEventQueue();
+
+    expect(controller.fNumber, 280);
+    expect(controller.focalLengthMm, isNull);
+    // GetDeviceInfo + 连接沿 0x5007 + 规格五连读 + 事件一轮 0x5007
+    expect(transport.requests, hasLength(8));
+    expect(transport.requests.last.params.single, PtpDevicePropCode.fNumber);
+  });
+
+  test('0x4006 焦距在规格区间内(变焦):行即变,规格不重读', () async {
+    final transport = FakePtpTransport();
+    final session = PtpSession(transport: transport);
+    final conn = _FakeConnection();
+    final controller = CameraOverviewController(
+        session: session, connection: conn,
+        propResyncDebounce: const Duration(milliseconds: 20));
+
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: buildDataset(deviceProps: const [0x5008])));
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: Uint8List.fromList([0x60, 0x09, 0x00, 0x00]))); // 连接沿:24mm
+    _scriptLensSpec(transport,
+        focalMin: 2400, focalMax: 12000, apWide: 400, apTele: 630);
+    conn.statesCtrl.add(CameraLinkState.connected);
+    await pumpEventQueue();
+    expect(controller.focalLengthMm, 24);
+    expect(controller.lensSpec?.description, '24-120mm ƒ/4-6.3');
+
+    // 变焦到 85mm(区间内)
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: Uint8List.fromList([0x34, 0x21, 0x00, 0x00]))); // 8500 → 85mm
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: Uint8List.fromList([99, 0]))); // 换镜哨:ID 同值(99),非换镜
+    _emitPropChanged(transport, PtpDevicePropCode.focalLength);
+    await Future.delayed(const Duration(milliseconds: 50));
+    await pumpEventQueue();
+
+    expect(controller.focalLengthMm, 85);
+    expect(controller.lensSpec?.description, '24-120mm ƒ/4-6.3',
+        reason: '区间内变焦 + ID 同值:规格原样,零重读');
+    // GetDeviceInfo + 连接沿 0x5008 + 规格五连读 + 事件一轮 0x5008+哨
+    expect(transport.requests, hasLength(9));
+  });
+
+  test('0x4006 焦距挪出规格区间 = 换镜信号:ID 对比实锤,规格五连读 + 光圈对表',
+      () async {
+    final transport = FakePtpTransport();
+    final session = PtpSession(transport: transport);
+    final conn = _FakeConnection();
+    final controller = CameraOverviewController(
+        session: session, connection: conn,
+        propResyncDebounce: const Duration(milliseconds: 20));
+
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: buildDataset(deviceProps: const [0x5007, 0x5008])));
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: Uint8List.fromList([0xA0, 0x0F, 0x00, 0x00]))); // 连接沿:40mm
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: Uint8List.fromList([0xC8, 0x00]))); // 连接沿:ƒ/2
+    _scriptLensSpec(transport); // 挂 40 SE:40-40mm ƒ/2
+    conn.statesCtrl.add(CameraLinkState.connected);
+    await pumpEventQueue();
+    expect(controller.focalLengthMm, 40);
+    expect(controller.lensSpec?.description, '40mm ƒ/2');
+
+    // 热换 24-120:焦距 40 → 24(出 40-40 区间),ID 99 → 31 实锤
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: Uint8List.fromList([0x60, 0x09, 0x00, 0x00]))); // 2400 → 24mm
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: Uint8List.fromList([31, 0]))); // 换镜哨:ID 变了
+    _scriptLensSpec(transport,
+        lensId: 31, focalMin: 2400, focalMax: 12000, apWide: 400, apTele: 400);
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: Uint8List.fromList([0x90, 0x01]))); // 新镜头 ƒ/4
+    _emitPropChanged(transport, PtpDevicePropCode.focalLength);
+    await Future.delayed(const Duration(milliseconds: 50));
+    await pumpEventQueue();
+
+    expect(controller.focalLengthMm, 24);
+    expect(controller.lensSpec?.description, '24-120mm ƒ/4');
+    expect(controller.fNumber, 400);
+    expect(controller.lensId, 31);
+    // GetDeviceInfo + 连接沿两读 + 规格五连读 + 0x5008+哨 + 新规格五连读
+    // + 0x5007
+    expect(transport.requests, hasLength(16));
+  });
+
+  test('0x4006 能力门禁:焦距/光圈不在声明表,事件零动作', () async {
+    final transport = FakePtpTransport();
+    final session = PtpSession(transport: transport);
+    final conn = _FakeConnection();
+    final controller = CameraOverviewController(
+        session: session, connection: conn,
+        propResyncDebounce: const Duration(milliseconds: 20));
+
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: buildDataset(deviceProps: const [])));
+    _scriptLensSpec(transport);
+    conn.statesCtrl.add(CameraLinkState.connected);
+    await pumpEventQueue();
+
+    _emitPropChanged(transport, PtpDevicePropCode.fNumber);
+    _emitPropChanged(transport, PtpDevicePropCode.focalLength);
+    await Future.delayed(const Duration(milliseconds: 50));
+    await pumpEventQueue();
+
+    expect(controller.fNumber, isNull);
+    expect(controller.focalLengthMm, isNull);
+    expect(transport.requests, hasLength(6), reason: 'GetDeviceInfo + 规格五连读');
+  });
+
+  test('LensID 映射命中:不拍照出营销名全称,换镜即跟新名', () async {
+    final transport = FakePtpTransport();
+    final session = PtpSession(transport: transport);
+    final conn = _FakeConnection();
+    final controller = CameraOverviewController(
+        session: session, connection: conn,
+        propResyncDebounce: const Duration(milliseconds: 20));
+
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: buildDataset(deviceProps: const [0x5008])));
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: Uint8List.fromList([0xA0, 0x0F, 0x00, 0x00]))); // 连接沿:40mm
+    _scriptLensSpec(transport, lensId: 25); // 挂 40 SE(ID 25)
+
+    conn.statesCtrl.add(CameraLinkState.connected);
+    await pumpEventQueue();
+    expect(controller.lensDisplay, 'NIKKOR Z 40mm f/2 SE',
+        reason: 'ID 表命中 = 挂机镜头权威名(规格描述给不出 SE 后缀)');
+
+    // 热换 24-120(焦距 40 → 24 出区间,ID 25 → 31 实锤,双信号都触发)
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: Uint8List.fromList([0x60, 0x09, 0x00, 0x00]))); // 24mm
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: Uint8List.fromList([31, 0]))); // 换镜哨
+    _scriptLensSpec(transport,
+        lensId: 31,
+        focalMin: 2400,
+        focalMax: 12000,
+        apWide: 400,
+        apTele: 400);
+    _emitPropChanged(transport, PtpDevicePropCode.focalLength);
+    await Future.delayed(const Duration(milliseconds: 50));
+    await pumpEventQueue();
+    expect(controller.lensId, 31);
+    expect(controller.lensDisplay, 'NIKKOR Z 24-120mm f/4 S',
+        reason: '换镜后映射名即跟');
+    // GetDeviceInfo + 连接沿 0x5008 + 规格五连读 + 0x5008+哨 + 新规格五连读
+    expect(transport.requests, hasLength(14));
+  });
+
+  test('同区间换镜盲区修复:焦距停在 24 不挪,ID 31→25 变化照样触发规格重读',
+      () async {
+    final transport = FakePtpTransport();
+    final session = PtpSession(transport: transport);
+    final conn = _FakeConnection();
+    final controller = CameraOverviewController(
+        session: session, connection: conn,
+        propResyncDebounce: const Duration(milliseconds: 20));
+
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: buildDataset(deviceProps: const [0x5007, 0x5008])));
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: Uint8List.fromList([0x60, 0x09, 0x00, 0x00]))); // 连接沿:24mm
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: Uint8List.fromList([0x90, 0x01]))); // 连接沿:ƒ/4
+    _scriptLensSpec(transport,
+        lensId: 31,
+        focalMin: 2400,
+        focalMax: 12000,
+        apWide: 400,
+        apTele: 400); // 挂 24-120 ƒ/4 S
+    conn.statesCtrl.add(CameraLinkState.connected);
+    await pumpEventQueue();
+    expect(controller.lensSpec?.description, '24-120mm ƒ/4');
+
+    // 热换 40 SE 并把变焦停在 24mm:焦距不动(区间内),出区间启发式哑火
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: Uint8List.fromList([0x60, 0x09, 0x00, 0x00]))); // 仍 24mm
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: Uint8List.fromList([25, 0]))); // 换镜哨:ID 31 → 25
+    _scriptLensSpec(transport, lensId: 25); // 新规格 40-40mm ƒ/2
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: Uint8List.fromList([0xC8, 0x00]))); // 顺带对表:ƒ/2
+    _emitPropChanged(transport, PtpDevicePropCode.focalLength);
+    await Future.delayed(const Duration(milliseconds: 50));
+    await pumpEventQueue();
+
+    expect(controller.focalLengthMm, 24);
+    expect(controller.lensId, 25);
+    expect(controller.lensSpec?.description, '40mm ƒ/2');
+    expect(controller.lensDisplay, 'NIKKOR Z 40mm f/2 SE');
+    expect(controller.fNumber, 200);
+    // GetDeviceInfo + 连接沿两读 + 规格五连读 + 0x5008+哨 + 新规格五连读
+    // + 0x5007
+    expect(transport.requests, hasLength(16));
+  });
+
+  test('未挂镜:lensId 回 0,规格值官方明说不固定,一个都不读', () async {
+    final transport = FakePtpTransport();
+    final session = PtpSession(transport: transport);
+    final conn = _FakeConnection();
+    final controller = CameraOverviewController(
+        session: session, connection: conn);
+
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: buildDataset(deviceProps: const [])));
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: Uint8List.fromList([0, 0]))); // 0xD0E0 = 0(未挂)
+
+    conn.statesCtrl.add(CameraLinkState.connected);
+    await pumpEventQueue();
+
+    expect(controller.lensId, isNull);
+    expect(controller.lensSpec, isNull);
+    expect(controller.lensDisplay, isNull);
+    // GetDeviceInfo + 0xD0E0(规格四码因未挂被门禁,脚本耗尽即失败)
+    expect(transport.requests, hasLength(2));
+  });
+
+  test('0xD0E0 拒答降级:ID 路放弃,规格四码照读(兼容只有规格码的机身)',
+      () async {
+    final transport = FakePtpTransport();
+    final session = PtpSession(transport: transport);
+    final conn = _FakeConnection();
+    final controller = CameraOverviewController(
+        session: session, connection: conn);
+
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: buildDataset(deviceProps: const [])));
+    transport.fail(const PtpResponseException(
+        opcode: 0x1015, responseCode: PtpResponseCode.generalError));
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: Uint8List.fromList([0xA0, 0x0F, 0x00, 0x00]))); // 40mm
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: Uint8List.fromList([0xA0, 0x0F, 0x00, 0x00]))); // 40mm
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: Uint8List.fromList([0xC8, 0x00]))); // ƒ/2
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: Uint8List.fromList([0xC8, 0x00]))); // ƒ/2
+
+    conn.statesCtrl.add(CameraLinkState.connected);
+    await pumpEventQueue();
+
+    expect(controller.lensId, isNull);
+    expect(controller.lensSpec?.description, '40mm ƒ/2',
+        reason: 'ID 拒答不拖累规格路');
+    expect(controller.lensDisplay, '40mm ƒ/2');
   });
 }

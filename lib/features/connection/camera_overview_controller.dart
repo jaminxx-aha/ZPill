@@ -1,36 +1,88 @@
 /// 相机信息总览控制器(相机页已连接视图的数据源)。
 ///
-/// 三路信息,全部能力门禁(相机声明表说了不支持的码不发,响应零浪费):
+/// 全部来自相机实时属性,不拍照(能力门禁:相机声明表说了不支持的码
+/// 不发,响应零浪费):
 /// - 机身:GetDeviceInfo(型号/固件/序列号,会话内缓存);
 /// - 电池/焦距/光圈:标准属性码 0x5001/0x5008/0x5007,
 ///   仅当 [PtpDeviceInfo.devicePropsSupported] 在册才读(裸值 0x1015);
-/// - 镜头型号:最近一张 JPG 的 EXIF LensModel —— GetPartialObject
-///   (0x101B,标准码)只取头部 64KB(EXIF APP1 紧跟 SOI,足够),
-///   解析复用水印管线的 [readJpegExif];属性路径缺读时 EXIF 的
-///   焦距/光圈顺带兜底。触发时机 = 仓库枚举**完成**事件 —— 渐进块
-///   是全局句柄倒序,双卡槽时首块全是 2 号槽(可能是旧照),
-///   等全量合并后的快照才取得到真正的最新一张。
+/// - 镜头规格:0xD0E3-E6 焦距上下限/两端最大光圈 + 0xD0E0 镜头 ID
+///   (只读实时属性,连接沿直读;Zf 实证不在声明表但应答,2026-10-12
+///   USB 探针)—— 不拍照即知挂机镜头,ID 命中 [kLensIdNames] 直接出
+///   营销名全称,未收录退规格描述(如「40mm ƒ/2」)。
+/// - 实时追平(0x4006 事件,不拍照):焦距/光圈随拨轮、变焦、换镜
+///   即时刷新(声明表门禁);规格/ID 码不推事件(2026-10-12 探针),
+///   0x5008 沿补读 ID 对比 = 换镜精确判(同区间换镜焦距不挪也抓到)
+///   → 规格五连读 + 光圈对表;出区间启发式兜底。
 ///
-/// 真机核对注:0x5001/0x5008/0x101B 在 Zf 的实际应答未验,拒绝/失败
-/// 均静默降级为该行不显示,不报错 —— 信息卡是锦上添花,不拦使用。
+/// 拒绝/失败均静默降级为该行不显示,不报错 —— 信息卡是锦上添花,
+/// 不拦使用。
 library;
 
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
-import '../../core/browser/object_repository.dart';
-import '../../core/browser/photo_group.dart';
 import '../../core/camera/camera_connection.dart';
-import '../../core/media/watermark.dart' show exifCardDataOf, readJpegExif;
 import '../../core/ptp/operation_codes.dart';
 import '../../core/ptp/ptp_session.dart';
+import '../../core/ptp/ptp_transport.dart';
+
+/// 挂机镜头规格(0xD0E3-E6 拼装;连接沿实时读,不拍照即知)。
+final class LensSpec {
+  const LensSpec({
+    required this.focalMinMm,
+    required this.focalMaxMm,
+    required this.maxApertureWide,
+    required this.maxApertureTele,
+  });
+
+  /// 焦距下限/上限 mm(0xD0E3/0xD0E4 ÷100,0.01mm 定点族)。
+  final double focalMinMm;
+  final double focalMaxMm;
+
+  /// 广角端/远摄端最大光圈(0xD0E5/0xD0E6,ƒ×100 与 0x5007 同标度)。
+  final int maxApertureWide;
+  final int maxApertureTele;
+
+  /// 实测焦距落点检验:换镜哨里焦距挪出规格区间 = 启发式换镜信号
+  /// (ID 读不到时的兜底判)。
+  bool containsFocal(double mm) => mm >= focalMinMm && mm <= focalMaxMm;
+
+  /// 规格描述(LensID 未收录进 [kLensIdNames] 时的镜头行退路):
+  /// 定焦「40mm ƒ/2」,变焦「24-200mm ƒ/2.8-6.3」。
+  String get description {
+    String trim(num v) {
+      final r = (v * 100).round() / 100;
+      return r == r.roundToDouble() ? r.round().toString() : '$r';
+    }
+
+    // 光圈字段是 ƒ×100 定点(200 = ƒ/2),先回 ƒ 值再截尾零。
+    String trimAperture(int v) => trim(v / 100);
+
+    final focal = focalMinMm == focalMaxMm
+        ? '${trim(focalMinMm)}mm'
+        : '${trim(focalMinMm)}-${trim(focalMaxMm)}mm';
+    final aperture = maxApertureWide == maxApertureTele
+        ? 'ƒ/${trimAperture(maxApertureWide)}'
+        : 'ƒ/${trimAperture(maxApertureWide)}-${trimAperture(maxApertureTele)}';
+    return '$focal $aperture';
+  }
+}
+
+/// Z 头 LensID(0xD0E0)→ 营销名。官方 Zf USB MTP 指令书定案:协议
+/// 无镜头名属性,LensID 每镜唯一(未挂固定 0)—— 映射命中即可不拍照
+/// 出全名(含 SE 等后缀,规格描述做不到)。表值 2026-10-12 USB 探针
+/// 实测锚点,新镜头换挂探一把即扩表;未收录的 ID 走规格描述路。
+const Map<int, String> kLensIdNames = {
+  25: 'NIKKOR Z 40mm f/2 SE',
+  31: 'NIKKOR Z 24-120mm f/4 S',
+};
 
 final class CameraOverviewController extends ChangeNotifier {
   CameraOverviewController({
     required this.session,
     required this.connection,
-    this.repository,
+    this.propResyncDebounce = const Duration(milliseconds: 500),
   }) {
     _statesSub = connection.states.listen((s) {
       if (s == CameraLinkState.connected) {
@@ -45,14 +97,16 @@ final class CameraOverviewController extends ChangeNotifier {
         _invalidate();
       }
     });
-    // 仓库发布流:只认枚举完成事件才读镜头(渐进块是全局句柄倒序,
-    // 双卡槽首块可能是 2 号槽旧照,首块就读会拿错照片)。
-    _updatesSub = repository?.updates.listen(_onRepoUpdate);
+    // 属性事件(0x4006):焦距/光圈随拨轮、变焦、换镜即时追平。
+    _eventsSub = session.events.listen(_onSessionEvent);
   }
 
   final PtpSession session;
   final CameraConnection connection;
-  final ObjectRepository? repository;
+
+  /// 属性事件(0x4006)追平的去抖窗:拨轮串/变焦步进收敛为一次读值。
+  /// 可注入(测试零等待)。
+  final Duration propResyncDebounce;
 
   /// 机身信息(GetDeviceInfo);null = 未连接/未读到。
   PtpDeviceInfo? deviceInfo;
@@ -60,28 +114,35 @@ final class CameraOverviewController extends ChangeNotifier {
   /// 电池余量(%);null = 相机不报或读取失败(该行不显示)。
   int? batteryPercent;
 
-  /// 当前焦距(mm);null 同上。EXIF 兜底时是「最近一张」的焦距。
+  /// 当前焦距(mm);null 同上。
   double? focalLengthMm;
 
-  /// 当前光圈 ×100(280 = ƒ/2.8;ISO 15740 定点,Zf 实际布局待真机
-  /// 核对);null 同上。EXIF 兜底时是「最近一张」的光圈
-  ///([fNumberFromExif] 为 true)。
+  /// 当前光圈 ×100(280 = ƒ/2.8;ISO 15740 定点);null 同上。
   int? fNumber;
 
-  /// 焦距/光圈是否来自 EXIF 兜底(true = 展示语义是「最近一张」,
-  /// 属性路径缺读时的降级;UI 据此换行标)。
-  bool focalLengthFromExif = false;
-  bool fNumberFromExif = false;
+  /// 挂机镜头规格(0xD0E3-E6);null = 拒答/异构机身无此路/未挂镜。
+  LensSpec? lensSpec;
 
-  /// 镜头型号(最近一张 JPG 的 EXIF LensModel);null = 未知。
-  String? lens;
+  /// 挂机镜头 ID(0xD0E0,官方指令书 6.5.10.4);null = 拒答/未挂。
+  /// [kLensIdNames] 命中即镜头行出全名。
+  int? lensId;
+
+  /// 最近一次确认的镜头 ID(0 = 未知):换镜精确判的基准 —— 新读 ID
+  /// 与已知不同即换镜(同区间换镜焦距不挪,出区间启发式抓不到)。
+  int _knownLensId = 0;
+
+  /// 镜头行展示值:ID 映射命中即挂机镜头营销名全称(不拍照);未收录
+  /// ID 退规格描述(焦距 + 两端最大光圈,如「40mm ƒ/2」)。
+  String? get lensDisplay => kLensIdNames[lensId] ?? lensSpec?.description;
 
   bool _linkUp = false;
   bool _refreshing = false;
-  bool _lensReadDone = false;
+  bool _propReading = false;
+  final Set<int> _pendingPropReads = <int>{};
+  Timer? _propTimer;
 
   StreamSubscription<CameraLinkState>? _statesSub;
-  StreamSubscription<AlbumsUpdate>? _updatesSub;
+  StreamSubscription<PtpEvent>? _eventsSub;
 
   /// 连接成功 / 手动刷新:机身 + 属性(能力门禁)。
   Future<void> refresh() async {
@@ -116,6 +177,7 @@ final class CameraOverviewController extends ChangeNotifier {
           // 单属性拒答/失败:该行保持缺省,不拖垮整卡
         }
       }
+      await _readLensSpec();
       notifyListeners();
     } on Exception {
       // GetDeviceInfo 失败 = 链路问题,状态机会收口;信息卡保持已有点
@@ -124,93 +186,176 @@ final class CameraOverviewController extends ChangeNotifier {
     }
   }
 
-  void _onRepoUpdate(AlbumsUpdate update) {
-    if (!_linkUp || _lensReadDone) return;
-    // 只认枚举完成事件:渐进块按句柄倒序,双卡槽下首块全是 2 号槽
-    // 的照片(可能很旧),那不是「最近一张」;等全量合并后的快照
-    //(汇总相册按拍摄时间倒序)再取首个带 JPG 的组。
-    if (!update.complete) return;
-    final albums = update.albums;
-    if (albums.isEmpty) return;
-    // 汇总相册恒在首位(items 新的在前):跳过视频/纯 RAW 组取首个
-    // 带 JPG 的;本块没有就等下一块(块内句柄倒序,新照片先到)。
-    for (final group in albums.first.items) {
-      if (group.jpg != null) {
-        unawaited(_readLens(group));
-        return;
-      }
+  /// 事件沿:属性码走实时追平(不拍照)。
+  void _onSessionEvent(PtpEvent event) {
+    if (!_linkUp) return; // 断连后迟到事件一律丢弃
+    // 属性事件(0x4006):焦距/光圈随拨轮、变焦、换镜即时追平。
+    if (event.code == PtpEventCode.devicePropChanged) {
+      if (event.params.isNotEmpty) _onPropChanged(event.params.first);
     }
   }
 
-  /// 镜头型号:最近一张 JPG 头部 64KB → EXIF LensModel。
-  /// 无论成败,一次连接只试一次(换镜头不追新,断连重连才重读)。
-  Future<void> _readLens(PhotoGroup newest) async {
-    _lensReadDone = true;
-    final info = deviceInfo;
-    // 能力门禁:0x101B 不在册不发(Zf 应答待真机核对,拒答也不报错)。
-    if (info == null ||
-        !info.supportsOperation(PtpOperationCode.getPartialObject)) {
+  /// 属性追平(0x4006):只理焦距/光圈两码(信息卡两行的实时源;
+  /// 2026-10-12 探针:拨轮推 0x5007/0x500D、变焦与换镜推 0x5008,
+  /// 规格码 0xD0E3-E6 不推事件)。其余码零动作。
+  void _onPropChanged(int code) {
+    if (code != PtpDevicePropCode.fNumber &&
+        code != PtpDevicePropCode.focalLength) {
       return;
     }
-    final jpg = newest.jpg;
-    if (jpg == null) return;
+    final info = deviceInfo;
+    if (info == null || !info.devicePropsSupported.contains(code)) {
+      return; // 能力门禁:声明表外的码不发(refresh 就绪前同此)
+    }
+    _pendingPropReads.add(code);
+    _propTimer?.cancel();
+    _propTimer = Timer(propResyncDebounce, _readLiveProps);
+  }
+
+  Future<void> _readLiveProps() async {
+    if (_propReading || !_linkUp) return;
+    _propReading = true;
     try {
-      // 头读降级:64KB → 16KB。Zf 实测(2026-10-09 USB 直连)64KB 足额
-      // 返回;镜头行曾空是 readJpegExif 对截断段过严(EXIF APP1 段声明
-      // 65534B,64KB 差 2B),已在解析侧修。阶梯保留为 IC 链异常时的
-      // 兜底(真实失败模式从未观测到,宁窄勿宽)。
-      Uint8List? head;
-      for (final size in const [64 * 1024, 16 * 1024]) {
-        try {
-          final chunk = await session.getPartialObject(jpg.handle, 0, size);
+      while (_linkUp && _pendingPropReads.isNotEmpty) {
+        final codes = _pendingPropReads.toList();
+        _pendingPropReads.clear();
+        var focalMoved = false;
+        for (final code in codes) {
           if (!_linkUp) return;
-          if (chunk.isNotEmpty) {
-            head = chunk;
-            break;
+          try {
+            final v = await session.getDevicePropValue(code);
+            if (!_linkUp) return;
+            final value = v.value as int?;
+            if (value == null) continue;
+            if (code == PtpDevicePropCode.fNumber) {
+              fNumber = value;
+            } else {
+              focalLengthMm = value / 100;
+              focalMoved = true;
+            }
+          } on Exception {
+            // 单次读失败:静默,下个事件再来
           }
-        } on Exception {
-          // 该档失败:试下一档
         }
+        // 换镜信号(0xD0E0 不推事件,借 0x5008 沿补读一次 ID):新 ID
+        // 与已知不同 = 换镜实锤 —— 同区间换镜(如 24-120→24-70 停在
+        // 24mm)焦距不挪,出区间启发式抓不到,ID 对比杀掉这个盲区;
+        // ID 拒答/首读(已知 0)退回出区间启发式。规格码不推事件,规格
+        // 刷新只能由这条信号驱动;区间内变焦零重读(只多一发 ID 读)。
+        if (focalMoved) {
+          var idChanged = false;
+          try {
+            final v =
+                await session.getDevicePropValue(PtpDevicePropCode.lensId);
+            if (!_linkUp) return;
+            final raw = v.value as int?;
+            if (raw != null && raw != 0) {
+              idChanged = _knownLensId != 0 && raw != _knownLensId;
+            }
+          } on Exception {
+            // ID 读失败:退回出区间启发式
+          }
+          final spec = lensSpec;
+          final focal = focalLengthMm;
+          final outOfRange =
+              spec == null || focal == null || !spec.containsFocal(focal);
+          if (idChanged || outOfRange) {
+            await _readLensSpec();
+            if (!_linkUp) return;
+            if (deviceInfo?.devicePropsSupported
+                    .contains(PtpDevicePropCode.fNumber) ??
+                false) {
+              try {
+                final v = await session
+                    .getDevicePropValue(PtpDevicePropCode.fNumber);
+                if (!_linkUp) return;
+                final value = v.value as int?;
+                if (value != null) {
+                  fNumber = value;
+                }
+              } on Exception {
+                // 顺带读失败:下个 0x5007 事件再对
+              }
+            }
+          }
+        }
+        notifyListeners();
       }
-      if (head == null) return;
-      final exif = readJpegExif(head);
-      if (exif == null) return;
-      final card = exifCardDataOf(exif);
-      lens = card.lens;
-      // 属性路径缺读时 EXIF 兜底(标注语义变为「最近一张」;
-      // 光圈换算 ×100,与 0x5007 定点标度一致;EXIF 焦距本就是 mm)。
-      if (focalLengthMm == null && card.focalLengthMm != null) {
-        focalLengthMm = card.focalLengthMm;
-        focalLengthFromExif = true;
-      }
-      if (fNumber == null && card.fNumber != null) {
-        fNumber = (card.fNumber! * 100).round();
-        fNumberFromExif = true;
-      }
-      notifyListeners();
-    } on Exception {
-      // 部分读被拒/链路异常:镜头行留空
+    } finally {
+      _propReading = false;
     }
   }
 
-  /// 断连/失败:清态(迟到的仓库块/属性值被门闩挡住)。
+  /// 挂机镜头规格(0xD0E3-E6)+ 镜头 ID(0xD0E0 打头):Zf 实证**不在
+  /// devicePropsSupported 声明表但 0x1015 应答**(2026-10-12 USB 探针;
+  /// 40 SE 回 25/4000/4000/200/200 = ID 25,40-40mm ƒ/2-ƒ/2)—— 声明表
+  /// 门禁在此不适用,直读。ID = 0 即未挂镜,规格值官方明说 "not fixed"
+  /// 不采(ID 拒答则规格照走,兼容只有规格码的机身);四码任一拒答即
+  /// 放弃(旧机型/异构机身静默无规格)。
+  Future<void> _readLensSpec() async {
+    var idAnswered = false;
+    try {
+      final v = await session.getDevicePropValue(PtpDevicePropCode.lensId);
+      if (!_linkUp) return;
+      final raw = v.value as int?;
+      if (raw != null) {
+        idAnswered = true;
+        lensId = raw == 0 ? null : raw;
+      }
+    } on Exception {
+      // ID 拒答/链路异常:ID 路放弃,规格路照走(宁缺勿错只针对规格)
+    }
+    if (idAnswered && lensId == null) {
+      lensSpec = null;
+      _knownLensId = 0;
+      return; // 未挂镜:规格值不固定,不读
+    }
+    final values = <int, int>{};
+    for (final code in const [
+      PtpDevicePropCode.lensFocalLengthMin,
+      PtpDevicePropCode.lensFocalLengthMax,
+      PtpDevicePropCode.lensMaxApertureWide,
+      PtpDevicePropCode.lensMaxApertureTele,
+    ]) {
+      try {
+        final v = await session.getDevicePropValue(code);
+        if (!_linkUp) return;
+        final raw = v.value as int?;
+        if (raw == null) return;
+        values[code] = raw;
+      } on Exception {
+        return; // 拒答/链路异常:规格路放弃,宁缺勿错
+      }
+    }
+    lensSpec = LensSpec(
+      focalMinMm: values[PtpDevicePropCode.lensFocalLengthMin]! / 100,
+      focalMaxMm: values[PtpDevicePropCode.lensFocalLengthMax]! / 100,
+      maxApertureWide: values[PtpDevicePropCode.lensMaxApertureWide]!,
+      maxApertureTele: values[PtpDevicePropCode.lensMaxApertureTele]!,
+    );
+    if (lensId != null) _knownLensId = lensId!;
+  }
+
+  /// 断连/失败:清态(迟到的属性值被门闩挡住)。
   void _invalidate() {
     _linkUp = false;
     deviceInfo = null;
     batteryPercent = null;
     focalLengthMm = null;
     fNumber = null;
-    focalLengthFromExif = false;
-    fNumberFromExif = false;
-    lens = null;
-    _lensReadDone = false;
+    lensSpec = null;
+    lensId = null;
+    _knownLensId = 0;
+    _propTimer?.cancel();
+    _pendingPropReads.clear();
     notifyListeners();
   }
 
   @override
   void dispose() {
     unawaited(_statesSub?.cancel() ?? Future.value());
-    unawaited(_updatesSub?.cancel() ?? Future.value());
+    unawaited(_eventsSub?.cancel() ?? Future.value());
+    _propTimer?.cancel();
     super.dispose();
   }
 }

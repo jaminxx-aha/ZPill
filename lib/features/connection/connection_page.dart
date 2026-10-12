@@ -836,33 +836,33 @@ class _ConnectionPageState extends State<ConnectionPage>
     );
   }
 
-  /// 镜头信息卡:型号(最近一张 JPG 的 EXIF)+ 焦距/光圈
-  /// (属性门禁;缺读时 EXIF 兜底)。光圈 0x5007 是 f 值 ×100、焦距
-  /// 0x5008 是 0.01mm(ISO 15740 定点族)。EXIF 来源的值附「最近照片」
-  /// 小标注 —— 镜头型号没有实时属性,唯一来源是最近一张照片。
+  /// 镜头信息卡:型号([CameraOverviewController.lensDisplay] ——
+  /// LensID 映射营销名全称,未收录退规格描述,不拍照)+ 焦距/光圈
+  /// (属性门禁)。光圈 0x5007 是 f 值 ×100、焦距 0x5008 是 0.01mm
+  /// (ISO 15740 定点族)。
   Widget _lensCard(BuildContext context) {
     final overview = _overview;
     final f = overview.fNumber;
     return Card(
       child: Column(
         children: [
-          _infoRow(context, Icons.camera, '镜头型号', overview.lens ?? '--',
-              provenance: overview.lens != null ? '最近照片' : null),
+          _infoRow(context, Icons.camera, '镜头型号',
+              overview.lensDisplay ?? '--'),
           _infoRow(
-              context,
-              Icons.straighten_outlined,
-              '焦距',
-              overview.focalLengthMm == null
-                  ? '--'
-                  : _formatFocalMm(overview.focalLengthMm!),
-              provenance: overview.focalLengthFromExif ? '最近照片' : null),
+            context,
+            Icons.straighten_outlined,
+            '焦距',
+            overview.focalLengthMm == null
+                ? '--'
+                : _formatFocalMm(overview.focalLengthMm!),
+          ),
           _infoRow(
-              context,
-              Icons.camera_outlined,
-              '光圈',
-              f == null ? '--' : 'ƒ/${(f / 100).toStringAsFixed(1)}',
-              provenance: overview.fNumberFromExif ? '最近照片' : null,
-              last: true),
+            context,
+            Icons.camera_outlined,
+            '光圈',
+            f == null ? '--' : 'ƒ/${(f / 100).toStringAsFixed(1)}',
+            last: true,
+          ),
         ],
       ),
     );
@@ -879,7 +879,6 @@ class _ConnectionPageState extends State<ConnectionPage>
     String label,
     String value, {
     bool last = false,
-    String? provenance,
   }) {
     final theme = Theme.of(context);
     return Padding(
@@ -890,23 +889,15 @@ class _ConnectionPageState extends State<ConnectionPage>
           const SizedBox(width: 12),
           // 定宽标签列 + 左对齐值列:各卡所有行同 x 起点成表格状
           //(2026-10-09 真机反馈「数据歪歪扭扭」修 —— 原右对齐值列
-          // 左缘参差)。EXIF 来源等出处以 11px 小标注缀在值后。
+          // 左缘参差)。
           SizedBox(
             width: 68,
             child: Text(label, style: theme.textTheme.bodyMedium),
           ),
           const SizedBox(width: 12),
           Expanded(
-            child: Text.rich(
-              TextSpan(children: [
-                TextSpan(text: value),
-                if (provenance != null)
-                  TextSpan(
-                    text: ' · $provenance',
-                    style: TextStyle(
-                        fontSize: 11, color: theme.colorScheme.onSurfaceVariant),
-                  ),
-              ]),
+            child: Text(
+              value,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: theme.textTheme.bodyMedium

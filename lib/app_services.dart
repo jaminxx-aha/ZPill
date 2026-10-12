@@ -194,11 +194,11 @@ final class AppServices {
       connection: connection,
       thumbnails: thumbnails,
     );
-    // 相机页信息总览:机身/镜头/电池,连接成功即拉(能力门禁见类注)。
+    // 相机页信息总览:机身/镜头/电池,连接成功即拉(能力门禁见类注;
+    // 纯实时属性路,不读照片)。
     cameraOverview = CameraOverviewController(
       session: session,
       connection: connection,
-      repository: repository,
     );
     // 双卡槽余量:连接成功即拉,相册页顶展示。
     storageOverview = StorageOverviewController(

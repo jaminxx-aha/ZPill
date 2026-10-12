@@ -214,6 +214,18 @@ abstract final class PtpDevicePropCode {
   static const int liveViewSelector = 0xD1A6; // 照片/视频模式镜像,u8(0=照片/1=视频,机顶拨杆决定;2026-10-11 Zf USB 实证:0x90C2(1) 持有下 0x1016 可写覆写、随释放还原,拍照门跟此值、录像门跟物理拨杆硬互锁;不在 Zf 自报属性表,范围扫得见)
   static const int sessionInitiatorInfo = 0xD406; // 会话发起者身份(MTP 标准;USB 人设身份门,自愈末级用,见 LiveViewEngine._startLiveViewHealing)
   static const int activePicCtrlItem = 0xD200; // 优化校准(Picture Control),u16
+  // 镜头规格实时属性(只读;2026-10-12 Zf USB 探针定案:**不在
+  // devicePropsSupported 声明表但 0x1015 应答** —— 读取绕声明表门禁;
+  // 挂 40 SE 实测 4000/4000/200/200 = 40-40mm ƒ/2-ƒ/2,与 0x5008 的
+  // 0.01mm、0x5007 的 ƒ×100 同族定点。gphoto nikon 表同族码)。
+  static const int lensFocalLengthMin = 0xD0E3; // 焦距下限,u32(0.01mm)
+  static const int lensFocalLengthMax = 0xD0E4; // 焦距上限,u32(0.01mm)
+  static const int lensMaxApertureWide = 0xD0E5; // 广角端最大光圈,u16(ƒ×100)
+  static const int lensMaxApertureTele = 0xD0E6; // 远摄端最大光圈,u16(ƒ×100)
+  // 挂机镜头 ID(u16,官方 Zf USB MTP 指令书 6.5.10.4:每镜唯一,未挂
+  // 固定 0;协议无镜头名属性,营销名靠 ID→名映射表,2026-10-12 Zf USB
+  // 探针实证不在声明表但应答:40 SE=25、24-120 ƒ/4 S=31)。
+  static const int lensId = 0xD0E0;
   // Zf 另报 MTP 标准属性 0xD303/0xD407(UseDeviceStageFlag /
   // PerceivedDeviceType,与拍摄无关,不入册)。
   // 色调模式 OpenZCine 记作 0x0001D01C(u32 扩展形态,超 u16 属性码宽;

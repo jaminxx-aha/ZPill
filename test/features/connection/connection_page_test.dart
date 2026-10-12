@@ -711,6 +711,23 @@ void main() {
       transport.reply(PtpResult(
           responseCode: PtpResponseCode.ok,
           data: Uint8List.fromList([0x18, 0x01]))); // 光圈 ƒ/2.8(280)
+      // 镜头规格五连读(0xD0E0 + 0xD0E3-E6,不在声明表但应答):
+      // ID 99(不在映射表)+ 40-40mm ƒ/2-ƒ/2。
+      transport.reply(PtpResult(
+          responseCode: PtpResponseCode.ok,
+          data: Uint8List.fromList([99, 0]))); // 镜头 ID u16
+      transport.reply(PtpResult(
+          responseCode: PtpResponseCode.ok,
+          data: Uint8List.fromList([0xA0, 0x0F, 0x00, 0x00]))); // 焦距下限 u32
+      transport.reply(PtpResult(
+          responseCode: PtpResponseCode.ok,
+          data: Uint8List.fromList([0xA0, 0x0F, 0x00, 0x00]))); // 焦距上限 u32
+      transport.reply(PtpResult(
+          responseCode: PtpResponseCode.ok,
+          data: Uint8List.fromList([0xC8, 0x00]))); // 广角端最大光圈 u16
+      transport.reply(PtpResult(
+          responseCode: PtpResponseCode.ok,
+          data: Uint8List.fromList([0xC8, 0x00]))); // 远摄端最大光圈 u16
       final overview =
           CameraOverviewController(session: session, connection: conn);
       final controller = ConnectionController(connection: conn);
@@ -746,9 +763,13 @@ void main() {
       // 序列号:Zf 定宽 32 左补零方言在解析层剥前导零
       expect(find.text('12345678901'), findsOneWidget);
       expect(find.text('80%'), findsOneWidget);
-      // 镜头卡:无照片/无 EXIF → 型号缺读,属性在册读到
+      // 镜头卡:ID 未收录映射表 → 型号回规格描述,属性在册读到
       expect(find.text('40mm'), findsOneWidget);
       expect(find.text('ƒ/2.8'), findsOneWidget);
+      expect(find.textContaining('40mm ƒ/2'), findsOneWidget,
+          reason: '不拍照即知挂机镜头(规格路)');
+      expect(find.textContaining('· '), findsNothing,
+          reason: '出处小标注(· 规格 等)已整删');
       // 动作:进入拍摄(主操作,状态卡正下方)+ 相册 + 断开
       expect(find.text('进入拍摄'), findsOneWidget);
       expect(find.text('相册'), findsOneWidget);
