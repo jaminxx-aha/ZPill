@@ -3,6 +3,8 @@ import common from '@ohos.app.ability.common';
 import { FlutterPage } from '@ohos/flutter_ohos'
 import { SaveSession } from '../gallery/SaveSession'
 import { SaveSheet } from '../gallery/SaveSheet'
+import { VideoSession } from '../video/VideoSession'
+import { VideoSheet } from '../video/VideoSheet'
 
 let storage = LocalStorage.getShared()
 const EVENT_BACK_PRESS = 'EVENT_BACK_PRESS'
@@ -14,15 +16,21 @@ struct Index {
   @LocalStorageLink('viewId') viewId: string = "";
   // 「保存到图库」面板(SaveButton 安全控件)可见性,由 SaveSession 驱动
   @State saveVisible: boolean = false;
+  // 全屏视频播放覆盖层可见性,由 VideoSession 驱动(播放页在层内自管)
+  @State videoVisible: boolean = false;
 
   aboutToAppear() {
     SaveSession.setVisibilityListener((visible: boolean) => {
       this.saveVisible = visible;
     });
+    VideoSession.setVisibilityListener((visible: boolean) => {
+      this.videoVisible = visible;
+    });
   }
 
   aboutToDisappear() {
     SaveSession.setVisibilityListener(null);
+    VideoSession.setVisibilityListener(null);
   }
 
   build() {
@@ -33,6 +41,9 @@ struct Index {
       if (this.saveVisible) {
         SaveSheet()
       }
+      if (this.videoVisible) {
+        VideoSheet()
+      }
     }
   }
 
@@ -40,6 +51,11 @@ struct Index {
     // 保存面板模态期间:返回键先关面板(保存进行中忽略),不透传 Flutter
     if (this.saveVisible) {
       SaveSession.cancel();
+      return true;
+    }
+    // 播放中:返回键 = 关闭播放页(与关闭钮同义)
+    if (this.videoVisible) {
+      VideoSession.close();
       return true;
     }
     this.context.eventHub.emit(EVENT_BACK_PRESS)

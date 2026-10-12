@@ -29,6 +29,7 @@ import {
   MethodResult,
   Log,
 } from '@ohos/flutter_ohos';
+import { VideoSession } from './VideoSession';
 
 const TAG = 'VideoPlugin';
 const CHANNEL = 'nikonpill/video';
@@ -73,6 +74,25 @@ export class VideoPlugin implements FlutterPlugin {
       }).catch((err: Object) => {
         result.error('thumbnail_failed', `抽帧失败:${JSON.stringify(err)}`, null);
       });
+      return;
+    }
+    if (call.method === 'play') {
+      const path = call.argument('path') as string | null;
+      const rate = (call.argument('rate') as number) ?? 1.0;
+      if (path === null || path === undefined || path.length === 0) {
+        result.error('bad_args', 'play 需要 path', null);
+        return;
+      }
+      const started = VideoSession.play({ path: path, rate: rate }, () => {
+        try {
+          result.success(null);
+        } catch (_) {
+          // 回调已交付过(双关闭护栏在 VideoSession)
+        }
+      });
+      if (!started) {
+        result.error('busy', '已有全屏播放在进行', null);
+      }
       return;
     }
     if (call.method === 'frameRate') {
