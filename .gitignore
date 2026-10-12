@@ -25,8 +25,9 @@ ohos/.appanalyzer/
 __pycache__/
 .venv/
 
-# BLE 配对 CLI 本地构建产物
+# BLE 配对/发现 CLI 本地构建产物
 tools/ble_pair/nikon_ble_pair
+tools/ble_pair/ble_discover
 
 # IDE / 系统
 .idea/

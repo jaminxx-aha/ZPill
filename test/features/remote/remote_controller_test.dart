@@ -2456,4 +2456,35 @@ void main() {
           reason: '写被拒本地值保持(尽力而为,重连沿再补)');
     });
   });
+
+  group('视频参数写后复读守卫(2026-10-13 探针:Zf 视频曝光写收下但弹回)', () {
+    test('写 0xD1A9 成功但读回拨盘值 → notice 明说;读回一致 → 无提示',
+        () async {
+      // 视频档连接(0xD1A6=1):当前光圈 200(拨盘值)
+      _scriptParamsVideo(transport);
+      _emitConnected(transport, conn, d1a6: 1);
+      await pumpEventQueue();
+      expect(controller.cameraMode, CaptureMode.video);
+
+      // 写 280 → 0x1016 OK,复读回 200(弹回)→ notice
+      transport
+        ..ok() // 0x1016 写 280
+        ..ok(data: _propDescDataset(PtpDevicePropCode.movieFnumber,
+            PtpDataType.uint16, 200,
+            getSet: true, enums: [200, 280])); // 复读回弹值
+      await controller.setParam(PtpDevicePropCode.movieFnumber, 280);
+      expect(controller.error, isNull);
+      expect(controller.notice, contains('回弹'));
+      expect(controller.notice, contains('机身拨盘拥有'));
+
+      // 写 200(= 拨盘值)→ 复读一致 → 无守卫提示
+      transport
+        ..ok() // 0x1016 写 200
+        ..ok(data: _propDescDataset(PtpDevicePropCode.movieFnumber,
+            PtpDataType.uint16, 200,
+            getSet: true, enums: [200, 280]));
+      await controller.setParam(PtpDevicePropCode.movieFnumber, 200);
+      expect(controller.notice, isNull);
+    });
+  });
 }

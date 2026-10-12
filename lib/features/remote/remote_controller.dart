@@ -1804,6 +1804,7 @@ final class RemoteController extends ChangeNotifier {
         PtpDataType.uint16;
     writing = true;
     error = null;
+    notice = null; // 新写动作清旧提示(上一写的横幅已属过去时)
     notifyListeners();
     try {
       // 色温只在 WB=色温档(0x8012)生效:写入前自动切档(真机
@@ -1819,6 +1820,18 @@ final class RemoteController extends ChangeNotifier {
           code: writeCode, dataType: dataType, value: writeValue));
       lockedProps.remove(propCode); // 写通:解除该参数的锁标
       await _refreshProp(propCode);
+      // 视频参数写后复读守卫(2026-10-13 USB 探针定案:Zf 视频曝光
+      // 写 = 五态全试「0x2001 收下但弹回拨盘值」—— 协议成功 ≠ 生效,
+      // 复读不一致就明说,不让用户以为改上了)。照片参数不设此守卫:
+      // 回读差异有合法形态(如 Auto ISO 下 0xD0B5 回工作值)。
+      if (param?.videoOnly == true) {
+        final readBack = paramProps[propCode]?.value;
+        if (readBack != null && readBack != value && !_disposed) {
+          notice = '${param!.label}已发送,但相机回弹为机身值'
+              '(${displayParamValue(propCode, readBack)})—— 该参数由机身'
+              '拨盘拥有,视频曝光写路径待解(详见 TODO 二·b)';
+        }
+      }
       // AF 区域切到宽C1/C2:饱和轴触屏移框不动属相机行为,切换沿
       // 浮一条提示(文案与 AF 面板常驻行同源)。
       if (propCode == PtpDevicePropCode.stillFocusMeteringMode) {
