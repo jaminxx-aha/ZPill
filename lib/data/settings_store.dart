@@ -55,6 +55,8 @@ final class AppSettings {
     this.monitorPeaking = false,
     this.monitorFocusDial = false,
     this.liveViewOn = true,
+    this.liveViewImageSize,
+    this.liveViewImageCompression,
   });
 
   final bool autoTransfer;
@@ -117,6 +119,16 @@ final class AppSettings {
   /// 浮层「取景」钮再开。
   final bool liveViewOn;
 
+  /// 取景画质档(2026-10-12 官方 §6.5.11.4-5):null = 跟随相机(默认,
+  /// 不写机身);非 null = 连接沿/改动沿写 0xD1AC/0xD1BC(尺寸 1=QVGA/
+  /// 2=VGA/3=XGA;压缩 0=Basic 尺寸优先…5=Fine 质量优先)。
+  final int? liveViewImageSize;
+  final int? liveViewImageCompression;
+
+  /// copyWith 的「未传」哨兵:画质两字段要能把 null(跟随相机)写回,
+  /// `??` 模式做不到 —— 传值(含显式 null)即覆盖,不传保持原值。
+  static const Object _unset = Object();
+
   AppSettings copyWith({
     bool? autoTransfer,
     PhotoDownloadFormat? autoTransferFormat,
@@ -142,6 +154,8 @@ final class AppSettings {
     bool? monitorPeaking,
     bool? monitorFocusDial,
     bool? liveViewOn,
+    Object? liveViewImageSize = _unset,
+    Object? liveViewImageCompression = _unset,
   }) =>
       AppSettings(
         autoTransfer: autoTransfer ?? this.autoTransfer,
@@ -168,6 +182,12 @@ final class AppSettings {
         monitorPeaking: monitorPeaking ?? this.monitorPeaking,
         monitorFocusDial: monitorFocusDial ?? this.monitorFocusDial,
         liveViewOn: liveViewOn ?? this.liveViewOn,
+        liveViewImageSize: liveViewImageSize == _unset
+            ? this.liveViewImageSize
+            : liveViewImageSize as int?,
+        liveViewImageCompression: liveViewImageCompression == _unset
+            ? this.liveViewImageCompression
+            : liveViewImageCompression as int?,
       );
 
   @override
@@ -196,7 +216,9 @@ final class AppSettings {
       other.monitorFalseColor == monitorFalseColor &&
       other.monitorPeaking == monitorPeaking &&
       other.monitorFocusDial == monitorFocusDial &&
-      other.liveViewOn == liveViewOn;
+      other.liveViewOn == liveViewOn &&
+      other.liveViewImageSize == liveViewImageSize &&
+      other.liveViewImageCompression == liveViewImageCompression;
 
   @override
   // Object.hash 位置参上限 20,字段 24 个 → hashAll(列表序即上面 == 序)。
@@ -206,7 +228,8 @@ final class AppSettings {
         watermarkStyle, watermarkText, feedUpscaler, temporalDenoise,
         autoRotateFeed, deSqueeze,
         monitorGrid, monitorZebra, monitorHistogram, monitorLevel,
-        monitorFalseColor, monitorPeaking, monitorFocusDial, liveViewOn
+        monitorFalseColor, monitorPeaking, monitorFocusDial, liveViewOn,
+        liveViewImageSize, liveViewImageCompression,
       ]);
 
   Map<String, Object?> toJson() => {
@@ -234,6 +257,10 @@ final class AppSettings {
         'monitorPeaking': monitorPeaking,
         'monitorFocusDial': monitorFocusDial,
         'liveViewOn': liveViewOn,
+        if (liveViewImageSize != null)
+          'liveViewImageSize': liveViewImageSize,
+        if (liveViewImageCompression != null)
+          'liveViewImageCompression': liveViewImageCompression,
       };
 
   static AppSettings fromJson(Map<String, Object?> json) => AppSettings(
@@ -273,7 +300,17 @@ final class AppSettings {
         monitorFocusDial: json['monitorFocusDial'] == true,
         // 旧档缺省 = 开(保持「取景默认打开」原定案)。
         liveViewOn: json['liveViewOn'] == null || json['liveViewOn'] == true,
+        liveViewImageSize: _pickLiveViewValue(json['liveViewImageSize'],
+            const [1, 2, 3]),
+        liveViewImageCompression: _pickLiveViewValue(
+            json['liveViewImageCompression'], const [0, 1, 2, 3, 4, 5]),
       );
+
+  /// 取景画质档反序列化:表外值(旧版本/手改文件)回落「跟随相机」。
+  static int? _pickLiveViewValue(Object? raw, List<int> allowed) {
+    if (raw is! int || !allowed.contains(raw)) return null;
+    return raw;
+  }
 
   static double _clampDeSqueeze(Object? raw) {
     if (raw is! num || raw.isNaN || raw.isNegative) return 1.0;

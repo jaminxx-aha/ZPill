@@ -28,6 +28,9 @@ class CaptureSettingsPanel extends StatelessWidget {
     required this.onTogglesChanged,
     required this.onLiveViewToggle,
     required this.onTakeoverRequest,
+    required this.onLiveViewQualityChanged,
+    this.liveViewImageSize,
+    this.liveViewImageCompression,
     this.maxHeight,
   });
 
@@ -44,6 +47,15 @@ class CaptureSettingsPanel extends StatelessWidget {
   /// 停景(0x9202),连同持久化由页面侧 [_setLiveView] 收口 —— 这里
   /// 只透传点按;录制中本浮层已禁点(快门停录走取景门)。
   final void Function(bool start) onLiveViewToggle;
+
+  /// 取景画质档落定(2026-10-12 官方 §6.5.11.4-5):尺寸/压缩两档独立
+  /// 选,null = 跟随相机;持久化与相机写入由页面侧收口。
+  final void Function(int? imageSize, int? compression)
+      onLiveViewQualityChanged;
+
+  /// 当前画质档(持久化设置镜像;null = 跟随相机)。
+  final int? liveViewImageSize;
+  final int? liveViewImageCompression;
 
   final void Function(BuildContext context) onTakeoverRequest;
 
@@ -65,7 +77,8 @@ class CaptureSettingsPanel extends StatelessWidget {
               spacing: 4,
               runSpacing: 4,
               children: [
-                for (final p in orderedCaptureParams())
+                for (final p in orderedCaptureParams(
+                    videoMode: controller.cameraMode == CaptureMode.video))
                   captureParamTileOf(
                       context, controller, activeParam, onEditParam, p),
               ],
@@ -74,6 +87,7 @@ class CaptureSettingsPanel extends StatelessWidget {
             _focusControls(context),
             _sectionHeader(live, '监看'),
             _monitorToggles(context),
+            _liveViewQualityRows(context),
             _sectionHeader(live, '辅助'),
             _assistChips(context),
           ],
@@ -304,6 +318,59 @@ class CaptureSettingsPanel extends StatelessWidget {
             (v) => onTogglesChanged(toggles.copyWith(falseColor: v))),
         toggle(Icons.blur_on, '峰值', toggles.peaking,
             (v) => onTogglesChanged(toggles.copyWith(peaking: v))),
+      ],
+    );
+  }
+
+  /// 取景画质行(2026-10-12 官方 §6.5.11.4-5):尺寸档决定 0x9428 帧
+  /// 分辨率(QVGA 省流量 / XGA 提清晰度),压缩档决定 JPEG 质量;选值
+  /// 即写相机(链路在)+ 持久化,「跟随」= 不写机身菜单既有值。
+  Widget _liveViewQualityRows(BuildContext context) {
+    final live = LiveDesign.of(context);
+    Widget row(String label, List<(String, int?)> options, int? current,
+        void Function(int?) pick) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 2),
+        child: Wrap(
+          spacing: 2,
+          runSpacing: 2,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: Text(label,
+                  style: TextStyle(fontSize: 11, color: live.faint)),
+            ),
+            for (final option in options)
+              _smallChip(
+                live: live,
+                label: option.$1,
+                selected: current == option.$2,
+                onTap: () => pick(option.$2),
+              ),
+          ],
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        row('取景尺寸', const [
+          ('跟随', null),
+          ('QVGA', 1),
+          ('VGA', 2),
+          ('XGA', 3),
+        ], liveViewImageSize, (v) => onLiveViewQualityChanged(v, liveViewImageCompression)),
+        row('取景画质', const [
+          ('跟随', null),
+          ('Basic 尺寸', 0),
+          ('Basic 质量', 1),
+          ('Normal 尺寸', 2),
+          ('Normal 质量', 3),
+          ('Fine 尺寸', 4),
+          ('Fine 质量', 5),
+        ], liveViewImageCompression, (v) => onLiveViewQualityChanged(liveViewImageSize, v)),
       ],
     );
   }

@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:nikon_pill/core/ptp/device_prop.dart';
 import 'package:nikon_pill/core/ptp/operation_codes.dart';
+import 'package:nikon_pill/features/remote/remote_capture_strip.dart';
 import 'package:nikon_pill/features/remote/shooting_param_catalog.dart';
 
 ShootingParam _param(int code) =>
@@ -196,5 +197,71 @@ void main() {
         .where((p) => p.prominent)
         .map((p) => p.label), ['光圈', '快门', 'ISO']);
     expect(kShootingParams.where((p) => p.prominent), hasLength(3));
+  });
+
+  group('视频参数族(2026-10-12 官方指令书 §6.5.3/§6.5.12)', () {
+    test('全部 videoOnly 且并入合并查找表;照片目录不含它们', () {
+      expect(kVideoShootingParams, isNotEmpty);
+      for (final p in kVideoShootingParams) {
+        expect(p.videoOnly, isTrue, reason: '${p.label} 必须 videoOnly');
+        expect(shootingParamByCode[p.code], same(p),
+            reason: '${p.label} 要能被写路由/事件过滤找到');
+      }
+      for (final p in kShootingParams) {
+        expect(p.videoOnly, isFalse, reason: '静照目录不设 videoOnly');
+      }
+      // 码空间不相交(合并表无覆盖)
+      final codes = [
+        ...kShootingParams.map((p) => p.code),
+        ...kVideoShootingParams.map((p) => p.code)
+      ];
+      expect(codes.toSet().length, codes.length, reason: '静照/视频码不重叠');
+    });
+
+    test('官方逐字标签:视频WB 0x8015 同照片设置 / N-Log 只读 / TC HDMI 档', () {
+      final wb = shootingParamByCode[PtpDevicePropCode.movieWhiteBalance]!;
+      expect(wb.display(0x8015), '同照片设置');
+      expect(wb.display(2), '自动', reason: '复用静照 WB 值空间');
+
+      final log = shootingParamByCode[PtpDevicePropCode.movieLogOutput]!;
+      expect(log.readOnly, isTrue, reason: '§6.5.12.4 Get-only');
+      expect(log.display(1), '开');
+
+      final tc = shootingParamByCode[PtpDevicePropCode.recordTimeCodes]!;
+      expect(tc.display(2), '开(HDMI 外录)');
+
+      final countUp = shootingParamByCode[PtpDevicePropCode.timeCodeCountUpMethod]!;
+      expect(countUp.display(0), 'Rec Run');
+      expect(countUp.display(1), 'Free Run');
+
+      final vr = shootingParamByCode[PtpDevicePropCode.movieVibrationReduction]!;
+      expect(vr.display(100), '同照片设置');
+
+      final tone = shootingParamByCode[PtpDevicePropCode.movieH265ToneMode]!;
+      expect(tone.display(1), 'N-Log');
+      expect(tone.writeType, PtpDataType.uint8, reason: 'Ex 扩展码显式 u8');
+    });
+
+    test('曝光四件套格式化:光圈 ×100 / 快门打包分数 / EV 千分档', () {
+      final f = shootingParamByCode[PtpDevicePropCode.movieFnumber]!;
+      expect(f.display(200), 'f/2.0');
+      final shut = shootingParamByCode[PtpDevicePropCode.movieShutterSpeed]!;
+      expect(shut.display(1 << 16 | 250), '1/250s');
+      final ev =
+          shootingParamByCode[PtpDevicePropCode.movieExposureBiasCompensation]!;
+      expect(ev.display(333), '+0.3');
+      final iso = shootingParamByCode[PtpDevicePropCode.movieExposureIndex]!;
+      expect(iso.display(100), '100');
+    });
+
+    test('orderedCaptureParams:照片档不含视频族,视频档追加在目录尾', () {
+      final photo = orderedCaptureParams();
+      expect(photo.any((p) => p.videoOnly), isFalse);
+      final video = orderedCaptureParams(videoMode: true);
+      expect(video.any((p) => p.videoOnly), isTrue);
+      expect(video.length, photo.length + kVideoShootingParams.length);
+      expect(video.last.code, PtpDevicePropCode.movieH265ToneMode,
+          reason: '视频族按目录序追加在尾部');
+    });
   });
 }

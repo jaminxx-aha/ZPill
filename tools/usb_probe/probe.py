@@ -918,6 +918,8 @@ def main() -> int:
                     default=INITIATE_CAPTURE,
                     help="拍照操作码:0x100E(标准,默认)/ 0x9207 / 0x90C0"
                          "(尼康候选,配合 --capture)")
+    ap.add_argument("--vendorcodes", action="store_true",
+                    help="0x9439 GetVendorCodes:厂商操作码(0x09)/属性码(0x0D)全表")
     ap.add_argument("--picctrl", action="store_true",
                     help="优化校准 0xD200 摸底:FORM 枚举全量(不截 12)"
                          "+ 每槽位 0x90CC GetPictCtrlData 读注册名"
@@ -1544,6 +1546,30 @@ def main() -> int:
                 print("      " + d[:48].hex(" "))
             else:
                 print(f"  0x90CC({slot}) <- 0x{rc:04X}")
+
+    # 步骤 4x(可选,--vendorcodes):0x9439 GetVendorCodes —— 厂商码
+    # 全表的正规通道(2026-10-12 官方指令书 §6.2.2.1):param 0x09 = 厂商
+    # 操作码表 / 0x0D = 厂商属性码表,应答 = u32 计数 + N×u32 码(4 字节
+    # 扩展形态 0x0001_xxxx 全量在列)。自录厂商码表,免逐码盲试。
+    if args.vendorcodes:
+        for kind, label in ((0x09, "操作码"), (0x0D, "属性码")):
+            txid += 1
+            txid, blob, rc = xact(dev, ep_out, ep_in, txid, 0x9439, [kind])
+            if rc == OK and blob is not None and len(blob) >= HDR + 4:
+                d = blob[HDR:]
+                import struct as _struct
+                count = _struct.unpack_from("<I", d, 0)[0]
+                codes = list(_struct.unpack_from(
+                    f"<{min(count, (len(d) - 4) // 4)}I", d, 4)) if count else []
+                print(f"[4x] GetVendorCodes({label}, param 0x{kind:02X}) "
+                      f"<- OK  count={count}")
+                for c in codes:
+                    print(f"    0x{c:08X}"
+                          + (f"  (2 字节形态 0x{c & 0xFFFF:04X})"
+                             if c > 0xFFFF else ""))
+            else:
+                print(f"[4x] GetVendorCodes({label}) <- 0x{rc:04X}"
+                      f"(拒答不阻断 —— 不在表 ≠ 不应答,STA 9-op 同理)")
 
     # 步骤 4v(可选,--liveview N):Live View 轮询摸底 —— 0x9435 切应用
     # 模式 → 0x9201 开取景 → 取帧轮询直到 N 帧成功(间隔 200ms 对齐 app;

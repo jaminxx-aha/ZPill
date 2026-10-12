@@ -1236,4 +1236,76 @@ void main() {
       expect(pipe.outWrites[1][8], 1); // txid=1
     });
   });
+
+  group('官方指令书扩展通道(2026-10-12):保护标记 / 厂商码表 / 4 字节包装 op', () {
+    late FakePtpTransport t;
+    late PtpSession session;
+    setUp(() {
+      t = FakePtpTransport();
+      session = PtpSession(transport: t);
+    });
+
+    test('setObjectProtection:params=[句柄, 0x0000/0x0001](§6.2.1.14)', () async {
+      t
+        ..reply(PtpResult(responseCode: PtpResponseCode.ok))
+        ..reply(PtpResult(responseCode: PtpResponseCode.ok));
+      await session.setObjectProtection(0x1234, protect: true);
+      await session.setObjectProtection(0x1234, protect: false);
+      expect(t.requests.map((r) => r.opcode),
+          [PtpOperationCode.setObjectProtection, PtpOperationCode.setObjectProtection]);
+      expect(t.requests.first.params, [0x1234, 0x0001]);
+      expect(t.requests.last.params, [0x1234, 0x0000]);
+    });
+
+    test('getVendorCodes:u32 计数 + N×u32 码;0x09=操作码表 / 0x0D=属性码表',
+        () async {
+      final table = Uint8List.fromList([
+        0x03, 0x00, 0x00, 0x00, //
+        0x39, 0x94, 0x00, 0x00, //
+        0x01, 0xD0, 0x01, 0x00, // 0x0001D001(4 字节扩展形态)
+        0x28, 0x94, 0x00, 0x00,
+      ]);
+      t
+        ..reply(PtpResult(responseCode: PtpResponseCode.ok, data: table))
+        ..reply(PtpResult(responseCode: PtpResponseCode.ok, data: table));
+      final ops = await session.getVendorCodes(deviceProps: false);
+      final props = await session.getVendorCodes(deviceProps: true);
+      expect(t.requests.first.params, [0x09]);
+      expect(t.requests.last.params, [0x0D]);
+      expect(ops, [0x9439, 0x0001D001, 0x9428]);
+      expect(props, ops);
+    });
+
+    test('getVendorCodes:空表 / 数据不足 4B → 空列表不炸', () async {
+      t
+        ..reply(PtpResult(responseCode: PtpResponseCode.ok,
+            data: Uint8List.fromList([0, 0, 0, 0])))
+        ..reply(PtpResult(responseCode: PtpResponseCode.ok, data: Uint8List(2)));
+      expect(await session.getVendorCodes(deviceProps: false), isEmpty);
+      expect(await session.getVendorCodes(deviceProps: true), isEmpty);
+    });
+
+    test('extendedOperationNone/Receive/Send:P1=扩展码,参数透传', () async {
+      t
+        ..reply(PtpResult(responseCode: PtpResponseCode.ok))
+        ..reply(PtpResult(
+            responseCode: PtpResponseCode.ok,
+            data: Uint8List.fromList([7])))
+        ..reply(PtpResult(responseCode: PtpResponseCode.ok));
+      await session.extendedOperationNone(0x0001D006, params: [1, 2]);
+      final got = await session.extendedOperationReceive(0x0001D001);
+      await session.extendedOperationSend(0x0001D048,
+          params: [3], data: Uint8List.fromList([9]));
+      expect(t.requests.map((r) => r.opcode).toList(), [
+        NikonOperationCode.operationDataNone,
+        NikonOperationCode.operationReceiveData,
+        NikonOperationCode.operationSendData,
+      ]);
+      expect(t.requests[0].params, [0x0001D006, 1, 2]);
+      expect(t.requests[1].params, [0x0001D001]);
+      expect(t.requests[2].params, [0x0001D048, 3]);
+      expect(t.requests[2].dataOut, [9]);
+      expect(got.data, [7]);
+    });
+  });
 }

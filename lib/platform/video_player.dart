@@ -9,8 +9,10 @@
 ///   传 24/fps(如 60fps 素材按 24fps 看 = 0.4);非 1 速率静音 —— 变速
 ///   下音轨无意义(OpenZCine conform 同款)。
 /// - `thumbnail({path, maxPixelSize})`:抽取一帧编码为 JPEG 返回
-///   (iOS AVAssetImageGenerator;取 0.1s 处避开纯黑首帧,按拍摄方向
-///   正立)。图库网格/查看器用它出 MOV 海报帧。
+///   (iOS AVAssetImageGenerator / Android MediaMetadataRetriever +
+///   ROTATION 正立 / ohos AVImageGenerator;取 0.1s 处避开纯黑首帧,
+///   iOS 按拍摄方向正立)。图库网格/查看器用它出 MOV 海报帧。
+///   2026-10-12 起 Android/ohos 抽帧通道已补(播放/内嵌仍 iOS 专属)。
 /// - `frameRate({path})`:探测视频标称帧率(iOS
 ///   AVAssetTrack.nominalFrameRate)。顺帧预览的门禁:>30fps 的高帧率
 ///   素材才提供「24fps 顺帧」选项;拿不到/无视频轨返回 null。

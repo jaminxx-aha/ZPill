@@ -6,6 +6,7 @@ import com.aha.nikonpill.location.LocationPlugin
 import com.aha.nikonpill.motion.MotionPlugin
 import com.aha.nikonpill.nsd.NsdPlugin
 import com.aha.nikonpill.usb.UsbHostPlugin
+import com.aha.nikonpill.video.VideoPlugin
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 
@@ -20,5 +21,6 @@ class MainActivity : FlutterActivity() {
         flutterEngine.plugins.add(MotionPlugin())
         flutterEngine.plugins.add(LocationPlugin())
         flutterEngine.plugins.add(BgPlugin())
+        flutterEngine.plugins.add(VideoPlugin())
     }
 }

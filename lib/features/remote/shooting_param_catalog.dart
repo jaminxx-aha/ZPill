@@ -53,6 +53,7 @@ final class ShootingParam {
     this.pickValues,
     this.dialOwned = false,
     this.readOnly = false,
+    this.videoOnly = false,
   });
 
   /// PTP DevicePropCode(0x5004/0x5005/…)—— 展示键与 PropDesc 来源。
@@ -97,6 +98,10 @@ final class ShootingParam {
   /// 机身物理件拥有、接管也不开放的参数(模式转盘):遥控只读。
   final bool readOnly;
 
+  /// 视频档专属参数(拨杆视频档生效;只在 [CaptureMode.video] 刷/显,
+  /// 照片档不占面板)。官方 §6.5.3/§6.5.12 视频拍摄菜单族。
+  final bool videoOnly;
+
   /// 当前值展示:null = 未读;枚举表外 → 格式化 → 原始数字。
   String display(int? value) {
     if (value == null) {
@@ -106,9 +111,11 @@ final class ShootingParam {
   }
 }
 
-/// 目录码 → 参数(写路由/只读判定用)。
+/// 目录码 → 参数(写路由/只读判定/事件刷新过滤用):静照 + 视频两表
+/// 合并(码空间不相交)。
 final shootingParamByCode = <int, ShootingParam>{
   for (final p in kShootingParams) p.code: p,
+  for (final p in kVideoShootingParams) p.code: p,
 };
 
 /// 光圈:f 值 ×100(ISO 15740 定点,Zf 实际布局待真机核对)。
@@ -180,6 +187,21 @@ String _formatPicCtrl(int v) {
   if (v >= 301 && v <= 309) return '云 ${v - 300}';
   return '值 $v';
 }
+
+/// 白平衡值空间标签(静照 0x5005 与视频 0xD23A 共用 —— 官方 §6.5.3.9:
+/// 视频表复用静照表并加 0x8015「同照片设置」;尼康方言,verify-on-HW)。
+const kWhiteBalanceLabels = <int, String>{
+  2: '自动',
+  4: '直射阳光',
+  5: '荧光灯',
+  6: '白炽灯',
+  7: '闪光',
+  0x8010: '阴天',
+  0x8011: '背阴',
+  0x8012: '色温',
+  0x8013: '手动预设',
+  0x8016: '自然自动',
+};
 
 /// 目录顺序 = 刷新顺序 = 展示顺序(三要素居首,其余按拍摄调整频率;
 /// 对焦/对焦模式相邻,画质三件套 RAW压缩/尺寸/区域相邻)。
@@ -263,18 +285,7 @@ final kShootingParams = <ShootingParam>[
   ShootingParam(
     code: PtpDevicePropCode.whiteBalance,
     label: '白平衡',
-    enumLabels: {
-      2: '自动',
-      4: '直射阳光',
-      5: '荧光灯',
-      6: '白炽灯',
-      7: '闪光',
-      0x8010: '阴天',
-      0x8011: '背阴',
-      0x8012: '色温',
-      0x8013: '手动预设',
-      0x8016: '自然自动',
-    },
+    enumLabels: kWhiteBalanceLabels,
   ),
   // 色温 0xD01E(u16,2500-10000K 连续值;OpenZCine WhiteBalanceKelvin
   // Policy)。**只在 WB=色温档(0x8012)时生效** —— 控制器写入前自动
@@ -491,6 +502,123 @@ final kShootingParams = <ShootingParam>[
       120: 'Carbon',
     },
     format: _formatPicCtrl,
+  ),
+];
+
+/// 视频参数族(2026-10-12 官方指令书 §6.5.3/§6.5.12 落地,「movie 参数族
+/// 须真机探测」的差集收账):拨杆视频档生效,**只在 [CaptureMode.video]
+/// 刷/显**(照片档零流量)。取值域一律相机 FORM 驱动 —— 枚举随帧率/
+/// 镜头/N-Log 浮动(§6.5.12.2:快门枚举随帧率收口,120fps 最慢 1/125;
+/// §6.5.3.8:N-Log 开时 ISO 范围收口),静态值表只标官方逐字确认过的值。
+/// 0xD1FD TimeCodeOrigin 是 AUINT8 数组型(int 面板体系外,不入);
+/// 0xD0A0 MovieRecordScreenSize u64(尺寸/帧率复合编码,待布局定案后入)。
+/// 0x0001D006 主体检测静照/视频同码共用(§6.5.3.59 = §6.5.2.67),不重复。
+final kVideoShootingParams = <ShootingParam>[
+  // 视频曝光四件套(§6.5.12.1-3/§6.5.3.8):写入门 = 视频档 A/M(相机拒,
+  // 0x200F → tile 锁标机制接)。
+  ShootingParam(
+    code: PtpDevicePropCode.movieFnumber,
+    label: '视频光圈',
+    format: _formatFNumber,
+    videoOnly: true,
+  ),
+  ShootingParam(
+    code: PtpDevicePropCode.movieShutterSpeed,
+    label: '视频快门',
+    format: _formatShutterRaw,
+    videoOnly: true,
+  ),
+  ShootingParam(
+    code: PtpDevicePropCode.movieExposureIndex,
+    label: '视频 ISO',
+    format: _formatIso,
+    videoOnly: true,
+  ),
+  ShootingParam(
+    code: PtpDevicePropCode.movieExposureBiasCompensation,
+    label: '视频 EV',
+    format: _formatEv,
+    videoOnly: true,
+  ),
+  // 视频白平衡(u16):0x8015 = 同照片设置(官方默认值档,§6.5.3.9),
+  // 其余复用静照 WB 值空间。
+  ShootingParam(
+    code: PtpDevicePropCode.movieWhiteBalance,
+    label: '视频白平衡',
+    enumLabels: {0x8015: '同照片设置', ...kWhiteBalanceLabels},
+    videoOnly: true,
+  ),
+  // N-Log 输出(u8 只读,§6.5.12.4 Get-only):LUT/log 路的读侧入口;
+  // 值域收口(ISO 上限等)随它联动,FORM 驱动。
+  ShootingParam(
+    code: PtpDevicePropCode.movieLogOutput,
+    label: 'N-Log',
+    readOnly: true,
+    enumLabels: {0: '关', 1: '开'},
+    videoOnly: true,
+  ),
+  // 视频减震(u8,§6.5.3.62:双形态 —— 镜头防抖仅 Normal 档时 {0,1,100},
+  // 全档时 {0,1,2,100};值域以 FORM 为准)。
+  ShootingParam(
+    code: PtpDevicePropCode.movieVibrationReduction,
+    label: '视频减震',
+    writeType: PtpDataType.uint8,
+    enumLabels: {0: '关', 1: '正常', 2: '运动', 100: '同照片设置'},
+    videoOnly: true,
+  ),
+  // 电子减震(u8 Range 0/1,§6.5.3.63;120p/升格/Hi-Res Zoom 时拒)。
+  ShootingParam(
+    code: PtpDevicePropCode.electronicVR,
+    label: '电子减震',
+    writeType: PtpDataType.uint8,
+    pickValues: [0, 1],
+    enumLabels: {0: '关', 1: '开'},
+    videoOnly: true,
+  ),
+  // 时间码三件(u8,§6.5.3.69-72;0xD1FD 起源时间是数组型不入)。
+  ShootingParam(
+    code: PtpDevicePropCode.recordTimeCodes,
+    label: '录制时间码',
+    writeType: PtpDataType.uint8,
+    pickValues: [0, 1, 2],
+    enumLabels: {0: '关', 1: '开', 2: '开(HDMI 外录)'},
+    videoOnly: true,
+  ),
+  ShootingParam(
+    code: PtpDevicePropCode.timeCodeCountUpMethod,
+    label: '计数方法',
+    writeType: PtpDataType.uint8,
+    pickValues: [0, 1],
+    enumLabels: {0: 'Rec Run', 1: 'Free Run'},
+    videoOnly: true,
+  ),
+  ShootingParam(
+    code: PtpDevicePropCode.timeCodeDropFrame,
+    label: '丢帧',
+    writeType: PtpDataType.uint8,
+    pickValues: [0, 1],
+    enumLabels: {0: '关', 1: '开'},
+    videoOnly: true,
+  ),
+  // 视频图像区域(u8:0=FX/2=DX,§6.5.3.5;静照 0xD030 同名异码,
+  // 四值空间不通用)。
+  ShootingParam(
+    code: PtpDevicePropCode.movieCaptureAreaCrop,
+    label: '视频区域',
+    writeType: PtpDataType.uint8,
+    pickValues: [0, 2],
+    enumLabels: {0: 'FX', 2: 'DX'},
+    videoOnly: true,
+  ),
+  // H.265 10-bit(MOV)色调(u8 Ex 扩展码 0x0001D001,§6.5.3.3;
+  // >0xFFFF 自动走 Ex ops)。
+  ShootingParam(
+    code: PtpDevicePropCode.movieH265ToneMode,
+    label: 'H.265 色调',
+    writeType: PtpDataType.uint8,
+    pickValues: [0, 1, 2],
+    enumLabels: {0: 'SDR', 1: 'N-Log', 2: 'HLG'},
+    videoOnly: true,
   ),
 ];
 

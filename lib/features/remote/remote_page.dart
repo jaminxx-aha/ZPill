@@ -182,6 +182,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     _toggles = monitorTogglesFromSettings(_settings.value);
     _syncAnalyzerEnabled();
     controller.autoLiveViewEnabled = _settings.value.liveViewOn;
+    _syncLiveViewQualityFromSettings();
     _settings.addListener(_onSettingsChanged);
     // 取景默认打开(2026-10-10 用户需求,取景开关钮撤除):未跑则自动
     // 起景 —— 幂等(HomeShell 连接沿的 autoLiveViewOnConnect 同款),
@@ -199,7 +200,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     // 门闩(恒真)不能作凭;直挂/未连接场景引擎 idle,零请求。
     if (widget.active && controller.liveViewActive) {
       unawaited(() async {
-        await controller.refreshCameraMode();
+        await controller.refreshCameraMode(triggerRefresh: false);
         await controller.refreshParams();
       }());
     }
@@ -223,7 +224,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
           await controller.autoLiveViewOnConnect();
         }
         if (controller.linkUp) {
-          await controller.refreshCameraMode();
+          await controller.refreshCameraMode(triggerRefresh: false);
           await controller.refreshParams();
         }
       }());
@@ -280,10 +281,23 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   void _onSettingsChanged() {
     if (!mounted) return;
     controller.autoLiveViewEnabled = _settings.value.liveViewOn;
+    _syncLiveViewQualityFromSettings();
     final toggles = monitorTogglesFromSettings(_settings.value);
     if (toggles != _toggles) {
       setState(() => _toggles = toggles);
       _syncAnalyzerEnabled();
+    }
+  }
+
+  /// 取景画质档跟随持久化设置(进页恢复 + 外部改动沿;自己写回的回声
+  /// 在差分上零动作)。控制器侧改动即时写相机,这里只对齐字段。
+  void _syncLiveViewQualityFromSettings() {
+    final s = _settings.value;
+    if (controller.liveViewImageSize != s.liveViewImageSize ||
+        controller.liveViewImageCompression != s.liveViewImageCompression) {
+      controller.setLiveViewQuality(
+          imageSize: s.liveViewImageSize,
+          compression: s.liveViewImageCompression);
     }
   }
 
@@ -310,6 +324,17 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     if (start != controller.liveViewActive) {
       await controller.toggleLiveView();
     }
+  }
+
+  /// 取景画质档落定(2026-10-12 官方 §6.5.11.4-5):控制器即时写相机
+  /// (链路在)+ 持久化(下次连接沿起景前自动补写)。
+  void _updateLiveViewQuality(int? imageSize, int? compression) {
+    controller.setLiveViewQuality(
+        imageSize: imageSize, compression: compression);
+    _persistSettings(_settings.value.copyWith(
+      liveViewImageSize: imageSize,
+      liveViewImageCompression: compression,
+    ));
   }
 
   /// 设置浮层开/关(再点同钮即收)。
@@ -384,7 +409,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       // 不一定送达,同切回 tab)。
       if (controller.linkUp) {
         unawaited(() async {
-          await controller.refreshCameraMode();
+          await controller.refreshCameraMode(triggerRefresh: false);
           await controller.refreshParams();
         }());
       }
@@ -542,6 +567,11 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                               onTogglesChanged: _updateToggles,
                               onLiveViewToggle: _setLiveView,
                               onTakeoverRequest: _confirmTakeover,
+                              onLiveViewQualityChanged: _updateLiveViewQuality,
+                              liveViewImageSize:
+                                  _settings.value.liveViewImageSize,
+                              liveViewImageCompression:
+                                  _settings.value.liveViewImageCompression,
                               maxHeight: panelMaxHeight,
                             ),
                           ),
@@ -846,6 +876,10 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                           onTogglesChanged: _updateToggles,
                           onLiveViewToggle: _setLiveView,
                           onTakeoverRequest: _confirmTakeover,
+                          onLiveViewQualityChanged: _updateLiveViewQuality,
+                          liveViewImageSize: _settings.value.liveViewImageSize,
+                          liveViewImageCompression:
+                              _settings.value.liveViewImageCompression,
                           maxHeight: panelMaxHeight,
                         ),
                       ),

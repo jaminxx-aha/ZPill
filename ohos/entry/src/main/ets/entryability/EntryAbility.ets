@@ -7,6 +7,7 @@ import { NsdPlugin } from '../nsd/NsdPlugin';
 import { MotionPlugin } from '../motion/MotionPlugin';
 import { LocationPlugin } from '../location/LocationPlugin';
 import { BgPlugin } from '../bg/BgPlugin';
+import { VideoPlugin } from '../video/VideoPlugin';
 
 export default class EntryAbility extends FlutterAbility {
   configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -19,5 +20,6 @@ export default class EntryAbility extends FlutterAbility {
     flutterEngine.getPlugins()?.add(new MotionPlugin())
     flutterEngine.getPlugins()?.add(new LocationPlugin())
     flutterEngine.getPlugins()?.add(new BgPlugin())
+    flutterEngine.getPlugins()?.add(new VideoPlugin())
   }
 }

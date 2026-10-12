@@ -10,6 +10,7 @@ import 'package:nikon_pill/core/camera/camera_connection.dart';
 import 'package:nikon_pill/core/ptp/device_prop.dart';
 import 'package:nikon_pill/core/ptp/operation_codes.dart';
 import 'package:nikon_pill/core/ptp/ptp_session.dart';
+import 'package:nikon_pill/features/remote/shooting_param_catalog.dart';
 import 'package:nikon_pill/core/ptp/ptp_transport.dart';
 import 'package:nikon_pill/core/remote/live_view_engine.dart';
 import 'package:nikon_pill/core/remote/live_view_header.dart';
@@ -128,7 +129,8 @@ Uint8List _u32Bytes(int v) => Uint8List.fromList(
 /// ([d1a6]:0=照片/1=视频/null=不预置 —— 连接沿串链/进页对表都是模式读
 /// 先于刷参,2026-10-11 真机反馈改制;重连流模式读应答预置在引擎重启
 /// 对之前,参数块内不再带)。[mode] 参数化曝光模式(默认 M)。
-void _scriptParams(_ScriptTransport t, {int mode = 1, int? d1a6 = 0}) {
+void _scriptParams(_ScriptTransport t,
+    {int mode = 1, int? d1a6 = 0, bool tail = true}) {
   if (d1a6 != null) {
     t.ok(data: Uint8List.fromList([d1a6])); // 0xD1A6 模式镜像(链首读)
   }
@@ -177,7 +179,68 @@ void _scriptParams(_ScriptTransport t, {int mode = 1, int? d1a6 = 0}) {
     // 优化校准:FORM 驱动(pickValues 已撤,2026-10-07)→ desc 应答;
     // 枚举全静态表内 → 不触发 0x90CC 名字拉取
     ..ok(data: _propDescDataset(PtpDevicePropCode.activePicCtrlItem,
-        PtpDataType.uint16, 1, enums: [1, 2, 3, 4]))
+        PtpDataType.uint16, 1, enums: [1, 2, 3, 4]));
+  if (tail) {
+    t
+      ..ok(data: Uint8List.fromList([0])) // 0xD054 自动 ISO:关
+      ..ok(data: _u32Bytes(1234)); // 0xD1F1 剩余张数
+  }
+}
+
+/// 视频参数族应答块(页面版,2026-10-12 官方 §6.5.3/§6.5.12 目录落地):
+/// 视频档连接沿/切换链尾补刷消费。FORM 驱动参数给 desc,直供参数裸值;
+/// N-Log 只读。
+void _scriptVideoParams(_ScriptTransport t) {
+  const types = <int, PtpDataType>{
+    PtpDevicePropCode.movieFnumber: PtpDataType.uint16,
+    PtpDevicePropCode.movieShutterSpeed: PtpDataType.uint32,
+    PtpDevicePropCode.movieExposureIndex: PtpDataType.uint32,
+    PtpDevicePropCode.movieExposureBiasCompensation: PtpDataType.int16,
+    PtpDevicePropCode.movieWhiteBalance: PtpDataType.uint16,
+    PtpDevicePropCode.movieLogOutput: PtpDataType.uint8,
+    PtpDevicePropCode.movieVibrationReduction: PtpDataType.uint8,
+    PtpDevicePropCode.electronicVR: PtpDataType.uint8,
+    PtpDevicePropCode.recordTimeCodes: PtpDataType.uint8,
+    PtpDevicePropCode.timeCodeCountUpMethod: PtpDataType.uint8,
+    PtpDevicePropCode.timeCodeDropFrame: PtpDataType.uint8,
+    PtpDevicePropCode.movieCaptureAreaCrop: PtpDataType.uint8,
+    PtpDevicePropCode.movieH265ToneMode: PtpDataType.uint8,
+  };
+  const values = <int, int>{
+    PtpDevicePropCode.movieFnumber: 200,
+    PtpDevicePropCode.movieShutterSpeed: 1 << 16 | 50,
+    PtpDevicePropCode.movieExposureIndex: 100,
+    PtpDevicePropCode.movieExposureBiasCompensation: 0,
+    PtpDevicePropCode.movieWhiteBalance: 0x8015,
+    PtpDevicePropCode.movieLogOutput: 0,
+    PtpDevicePropCode.movieVibrationReduction: 0,
+    PtpDevicePropCode.electronicVR: 0,
+    PtpDevicePropCode.recordTimeCodes: 0,
+    PtpDevicePropCode.timeCodeCountUpMethod: 0,
+    PtpDevicePropCode.timeCodeDropFrame: 1,
+    PtpDevicePropCode.movieCaptureAreaCrop: 0,
+    PtpDevicePropCode.movieH265ToneMode: 0,
+  };
+  for (final param in kVideoShootingParams) {
+    final type = types[param.code]!;
+    final value = values[param.code]!;
+    if (param.pickValues == null) {
+      t.ok(data: _propDescDataset(param.code, type, value,
+          getSet: param.code != PtpDevicePropCode.movieLogOutput));
+    } else {
+      final width = type.width!;
+      t.ok(data: Uint8List.fromList(
+          [for (var i = 0; i < width; i++) (value >> (8 * i)) & 0xFF]));
+    }
+  }
+}
+
+/// 视频档全量刷参块(消费序 = refreshParams 的
+/// [d1a6? → 照片参数 → 视频参数族 → 0xD054 → 0xD1F1])。
+void _scriptParamsVideo(_ScriptTransport t, {int mode = 1, int? d1a6 = 0}) {
+  _scriptParams(t, mode: mode, d1a6: d1a6, tail: false);
+  _scriptVideoParams(t);
+  t
     ..ok(data: Uint8List.fromList([0])) // 0xD054 自动 ISO:关
     ..ok(data: _u32Bytes(1234)); // 0xD1F1 剩余张数
 }
@@ -1640,7 +1703,7 @@ void main() {
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
     _scriptAutoStart(transport); // 进页自动起景先吃 FIFO 头两位
-    _scriptParams(transport, d1a6: 1); // 连接沿读到视频档
+    _scriptParamsVideo(transport, d1a6: 1); // 连接沿读到视频档(全量含视频族)
     await tester
         .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
     conn.statesCtrl.add(CameraLinkState.connected);
@@ -1691,7 +1754,7 @@ void main() {
       ..ok() // 0x1016 写 0xD1A6=1
       ..ok() // 0x9201 起景
       ..ok(data: _realJpeg()); // 首帧
-    _scriptParams(transport, d1a6: null); // 切换链尾刷参
+    _scriptParamsVideo(transport, d1a6: null); // 切到视频:刷参含视频族
     // ② 已接管直切(视频 → 照片):0x9202 → 写 D1A6=0 → 0x9201 → 首帧 →
     //    刷参(0x90C2 不重发)
     transport
@@ -2267,5 +2330,88 @@ void main() {
     await tester.pump();
     expect(find.text('相机忙(写卡/下载中),取景画面保持'), findsNothing,
         reason: '新帧到达自我恢复,横幅撤下');
+  });
+
+  testWidgets('取景画质档(2026-10-12 官方 §6.5.11.4-5):浮层选档写回设置'
+      '与控制器,「跟随」回 null', (tester) async {
+    _portrait(tester);
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = _directRemoteController(transport, conn: conn);
+    addTearDown(controller.dispose);
+    _scriptAutoStart(transport);
+    final settings = ValueNotifier(const AppSettings());
+    addTearDown(settings.dispose);
+    await tester.pumpWidget(MaterialApp(
+        home: RemotePage(
+            controller: controller, settingsListenable: settings)));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
+    expect(find.text('取景尺寸'), findsOneWidget);
+    expect(find.text('取景画质'), findsOneWidget);
+    expect(controller.liveViewImageSize, isNull, reason: '默认跟随相机');
+
+    await tester.tap(find.text('XGA'));
+    await tester.pumpAndSettle();
+    expect(settings.value.liveViewImageSize, 3);
+    expect(controller.liveViewImageSize, 3);
+
+    await tester.tap(find.text('Fine 质量'));
+    await tester.pumpAndSettle();
+    expect(settings.value.liveViewImageCompression, 5);
+    expect(controller.liveViewImageCompression, 5);
+
+    // 回「跟随」:尺寸行第一个「跟随」(行序 = 尺寸在上)→ 写回 null
+    await tester.tap(find.text('跟随').first);
+    await tester.pumpAndSettle();
+    expect(settings.value.liveViewImageSize, isNull);
+    expect(controller.liveViewImageSize, isNull);
+    expect(controller.liveViewImageCompression, 5, reason: '另一档互不连坐');
+  });
+
+  testWidgets('视频参数族面板(2026-10-12 官方 §6.5.3/§6.5.12):视频档追加'
+      '视频 tile', (tester) async {
+    _portrait(tester);
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = _directRemoteController(transport, conn: conn);
+    addTearDown(controller.dispose);
+    _scriptAutoStart(transport);
+    _scriptParamsVideo(transport, d1a6: 1); // 视频档连接(全量刷参)
+    await tester.pumpWidget(MaterialApp(home: RemotePage(
+        controller: controller,
+        settingsListenable: ValueNotifier(const AppSettings()))));
+    conn.statesCtrl.add(CameraLinkState.connected);
+    await tester.pumpAndSettle();
+    expect(controller.cameraMode, CaptureMode.video);
+
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
+    expect(find.text('视频光圈'), findsOneWidget,
+        reason: '视频档面板追加视频参数族');
+    expect(find.text('视频 ISO'), findsOneWidget);
+    expect(find.text('N-Log'), findsOneWidget);
+  });
+
+  testWidgets('视频参数族面板:照片档不出现视频 tile(零噪声)', (tester) async {
+    _portrait(tester);
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = _directRemoteController(transport, conn: conn);
+    addTearDown(controller.dispose);
+    _scriptAutoStart(transport);
+    _scriptParams(transport); // 照片档连接
+    await tester.pumpWidget(MaterialApp(home: RemotePage(
+        controller: controller,
+        settingsListenable: ValueNotifier(const AppSettings()))));
+    conn.statesCtrl.add(CameraLinkState.connected);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
+    expect(find.text('视频光圈'), findsNothing, reason: '照片档零视频噪声');
+    expect(find.text('视频 ISO'), findsNothing);
   });
 }
