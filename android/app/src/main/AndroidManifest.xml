@@ -39,6 +39,13 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- 全屏视频播放(nikonpill/video play):黑底全屏,旋转不重建;
+             关闭钮/播完 finish → VideoPlugin 交付通道结果 -->
+        <activity
+            android:name=".video.VideoActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode|screenLayout"/>
         <!-- 传输前台保活:队列非空期间挂 dataSync 常驻通知,退后台续传 -->
         <service
             android:name=".bg.TransferForegroundService"
