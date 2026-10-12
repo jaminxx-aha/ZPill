@@ -1027,6 +1027,24 @@ void main() {
     await tester.pump();
     expect(find.byType(TimecodeView), findsNothing);
     expect(find.byType(AudioMetersView), findsNothing);
+
+    // ③ 机身自报过热(@853=4)+ 倒计时(@836=30):过热徽章单独上屏
+    // (时间码关、零电平也不连坐 —— 温度警告是独立的信息)。
+    final hot = _headerObject();
+    hot[853] = 4; // 过热「倒计时显示」态
+    hot[836] = 0;
+    hot[837] = 30; // BE u16 = 30s
+    controller.engine.header.value = parseLiveViewHeader(hot);
+    await tester.pump();
+    expect(find.byType(OverheatBadge), findsOneWidget);
+    expect(find.text('即将自动停止录制 0:30'), findsOneWidget);
+    expect(find.byType(TimecodeView), findsNothing,
+        reason: '时间码显示关不连坐过热徽章');
+
+    // ④ 过热解除(@853=0):徽章退场。
+    controller.engine.header.value = parseLiveViewHeader(_headerObject());
+    await tester.pump();
+    expect(find.byType(OverheatBadge), findsNothing);
   });
 
   testWidgets('竖屏 iPhone 相机式排版:控制行三键(对焦|快门|设置)+ 底行'

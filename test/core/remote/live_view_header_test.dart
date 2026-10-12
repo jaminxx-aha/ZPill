@@ -28,6 +28,9 @@ Uint8List _frame({
   bool unreliableLevel = false,
   ({int peakL, int peakR, int curL, int curR})? sound,
   ({bool on, int h, int m, int s, int f})? tc,
+  int? countdown, // @836-837 BE u16 秒(null = 不写)
+  int? spotWb, // @838(null = 不写)
+  int? overheat, // @853(null = 不写)
   int tailLen = 8,
   bool poisonPastHeader = false, // 在头长之后、828+ 域写垃圾,验不越界读
 }) {
@@ -74,6 +77,9 @@ Uint8List _frame({
     b[834] = tc.s;
     b[835] = tc.f;
   }
+  if (countdown != null && b.length >= 838) be16(836, countdown);
+  if (spotWb != null && b.length > 838) b[838] = spotWb;
+  if (overheat != null && b.length > 853) b[853] = overheat;
   if (b.length >= 852) {
     if (unreliableLevel) {
       be32(840, 0xFFFFFFFF);
@@ -238,6 +244,30 @@ void main() {
     expect(h.boxes.length, 1);
     expect(h.sound, isNull, reason: '声音电平同为 Gen-3 域');
     expect(h.timecode, isNull, reason: '时间码同为 Gen-3 域');
+    expect(h.recordingCountdownSeconds, isNull, reason: '倒计时 @836 同为 Gen-3 域');
+    expect(h.spotWbRaw, isNull, reason: '点测 WB @838 同为 Gen-3 域');
+    expect(h.overheatRaw, isNull, reason: '过热 @853 同为 Gen-3 域');
+  });
+
+  test('倒计时/点测 WB/过热:836/838/853 解析,三域互不连坐', () {
+    // 官方 §9.7.1:倒计时 3600 起秒倒数(过热 30s 起);点测 WB
+    // 0 关/1-4 采集态;过热 0 正常/1-4 升温级。
+    final h = parseLiveViewHeader(_frame(
+      countdown: 30,
+      spotWb: 2,
+      overheat: 4,
+    ));
+    expect(h, isNotNull);
+    expect(h!.recordingCountdownSeconds, 30);
+    expect(h.spotWbRaw, 2);
+    expect(h.overheatRaw, 4);
+
+    // 域互不连坐:只写过热,倒计时/点测 WB 字节未写 = 0(0 是合法值:
+    // 倒计时未起/点测关),头长足够即照读,不因邻域缺席而置 null。
+    final onlyOverheat = parseLiveViewHeader(_frame(overheat: 1));
+    expect(onlyOverheat!.recordingCountdownSeconds, 0);
+    expect(onlyOverheat.spotWbRaw, 0);
+    expect(onlyOverheat.overheatRaw, 1);
   });
 
   test('未知头长(SOI 位置定头长):域读取以头长为界,不读 JPEG 载荷', () {
@@ -258,6 +288,10 @@ void main() {
         '不该亮成电平)');
     expect(h.timecode, isNull, reason: '@831-835 在头外 → 不读(陷阱 on '
         '+ 9 时不该亮成时间码)');
+    expect(h.recordingCountdownSeconds, isNull,
+        reason: '@836-837 在头外 → 不读');
+    expect(h.spotWbRaw, isNull, reason: '@838 在头外 → 不读');
+    expect(h.overheatRaw, isNull, reason: '@853 在头外 → 不读');
   });
 
   test('小坐标系合法(whole-size 只查 >0,不限区间)', () {

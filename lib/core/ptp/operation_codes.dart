@@ -7,8 +7,11 @@
 ///
 /// 名目基准:libgphoto2 ptp.h;在册性:Zf 真机 GetDeviceInfo
 /// (2026-09-27,V3.00:119 操作 / 26 事件 / 21 属性 / 9 格式)逐个核对。
-/// 语义未核对的码(0xC125-C128、0xC700 等)不入册;
-/// tools/usb_probe 与 tools/ptpip_probe 都会 dump 该响应。
+/// 2026-10-12 起名目/语义第二权威 = 官方 Zf USB MTP 指令书
+/// (sdk/S-SDKZ-200BF-ALLIN,Rev 2.00;响应码 §6.3 / 事件码 §6.4 /
+/// 属性码 §6.5 每码一节)—— 官方无条目的码(0xC120-C124、0xC128、
+/// 0xC700 等)仍不入册;tools/usb_probe 与 tools/ptpip_probe 都会
+/// dump 该响应。
 library;
 
 /// PTP 标准操作码(opcode 均为 uint16;以下均为 Zf 实测在册)。
@@ -62,7 +65,9 @@ abstract final class NikonOperationCode {
   // 移动取景对焦区域:两 u32 参数 = 帧头 whole-size 坐标系 x/y
   // (OpenZCine recentre = coordinateWidth/2 实证;非 JPEG 像素)。
   static const int changeAfArea = 0x9205;
-  static const int afDriveCancel = 0x9206; // 取消自动对焦(候选,待真机核对)
+  // 取消进行中的 AF 驱动(2026-10-12 官方指令书 §6.2.5.2 定名
+  // AfDriveCancel,无参无数据;未接线,候选保留)。
+  static const int afDriveCancel = 0x9206;
   static const int mfDrive = 0x9204; // 手动对焦步进:params [方向(1=近/2=远), 脉冲数 1..32767](OpenZCine 同款;相对量,无绝对位置读出)
   static const int initiateCaptureRecInMedia = 0x9207;
   static const int startMovieRecInCard = 0x920A // 开始卡上录制(无参无数据;OpenZCine 同款)
@@ -87,8 +92,47 @@ abstract final class NikonOperationCode {
   // NiConn_DEMO 对 SnapBridge 的抓包分析,真机流程待核对):
   static const int completePairing = 0x935A; // 配对确认(param 0x2001),相机记录本客户端
   static const int getPtpIpPairingCode = 0x952B; // 取配对验证码,data-in
+  // ── 官方指令书候选区(2026-10-12 §6.2 定名入册,项目未接线;真机
+  // 在册性以接线时行为为准)。主体追踪启停(参数同 0x9205):
+  static const int startTracking = 0x9424;
+  static const int endTracking = 0x9425;
+  // AE/AWB 锁:P1 0 释放/1 锁,P2 锁类型(pdf 表列错位,编码前重对
+  // §6.2.4.5;应答 OK 仍须读 AELockStatus/AWBLockStatus §6.5.6.5/8 确认)。
+  static const int changeAELock = 0x9426;
+  static const int clearEvent = 0x9461; // 清相机事件队列(重连沿清残留可试)
+  static const int changeMonitorOff = 0x9422; // 机内屏关/开(监看省电)
+  // 电动变焦(PZ 镜头):P1 启/停、P2 方向 1 广角/2 望远/3 定位置、
+  // P3 速度 0-10(菜单 -5~+5)、P4 目标位置;§2.12 位置存储/召回。
+  static const int powerZoomDrive = 0x9464;
+  // 相机设置备份/恢复(拍摄配置快照的官方替代路)。
+  static const int saveCameraSetting = 0x9420;
+  static const int getCameraSettingData = 0x946D;
+  static const int sendCameraSettingData = 0x946E;
+  static const int getLiveViewCompressedSize = 0x9423; // 当前帧压缩长度
+  static const int getFhdPicture = 0x920F; // SDRAM 对象的 FHD JPEG(无则 0xA00F)
+  static const int afAndCaptureRecInSdram = 0x90CB; // AF+SDRAM 拍一体
+  // 开放捕获族(长时连拍/B 门高速取数的候选,语义接线时对 §6.2.4.7-9)。
+  static const int initiateOpenCaptureV = 0x9445;
+  static const int terminateOpenCaptureV = 0x9446;
+  static const int getOpenCaptureInfo = 0x9447;
+  // 4 字节扩展码正规通道:0x9439 查厂商码全表(param 0x09=厂商 op /
+  // 0x0D=厂商属性,u32 数组),0x9440-42 包装执行 4 字节 op(P1=扩展码、
+  // P2-5=透传参数;带数据相的命令不能走 0x9440)。现有 Ex 属性 ops
+  // (0x943A-C)之外的第 2 条官方路,解 0x0001_xxxx 载体截断。
+  static const int getVendorCodes = 0x9439;
+  static const int operationDataNone = 0x9440;
+  static const int operationReceiveData = 0x9441;
+  static const int operationSendData = 0x9442;
+  // MTP 对象属性组(§6.2.11,initiator 写非 MTP 身份后 op 表 124 时的
+  // 对象级元数据批量通道;0x9804 不应答与身份的因果待厘清)。
+  static const int getObjectPropsSupported = 0x9801;
+  static const int getObjectPropDesc = 0x9802;
+  static const int getObjectPropValue = 0x9803;
+  static const int setObjectPropValue = 0x9804;
+  static const int getObjectPropList = 0x9805;
   // Zf 另有大量 0x94xx/0x95xx 码在册但 libgphoto2 未全收录,
-  // 需要时以真机行为为准逐个核对补录,禁止臆造名称。
+  // 需要时以真机行为为准逐个核对补录,禁止臆造名称(官方指令书 §6.2
+  // 已给全名目,补录以它为准)。
 }
 
 /// GetObjectHandles 参数约定(TODO.md §一)。
@@ -123,21 +167,37 @@ abstract final class PtpResponseCode {
   // TODO(P1): 按需补充(对象不存在等),以 ISO 15740 §13.4 响应码表为准,禁止臆造。
 }
 
-/// 尼康厂商响应码(0xA0xx;名称镜像 libgphoto2 PTP_RC_NIKON_* 符号,
-/// 值表来自 OpenZCine PTPOperation.swift,Zf 待真机核对)。
+/// 尼康厂商响应码(0xA0xx;名称镜像 libgphoto2 PTP_RC_NIKON_* 符号;
+/// 2026-10-12 起在册性与语义以官方指令书 §6.3.2 为准 —— 全表 23 码,
+/// 值表此前按 OpenZCine 预填的 9 码已逐码对上,余码为官方名直译)。
 ///
 /// 对焦/快门路径的常见答语:0xA002 未合焦、0xA004 状态不允许、
-/// 0xA00B 未开取景 —— 上层据此转友好提示而非裸十六进制。
+/// 0xA00B 未开取景 —— 上层据此转友好提示而非裸十六进制;
+/// 忙族 0xA200/0xA201/0xA202 见 nico 差集(B 门/静音快门/录像中静照)。
 abstract final class NikonResponseCode {
   static const int hardwareError = 0xA001;
   static const int outOfFocus = 0xA002;
   static const int changeCameraModeFailed = 0xA003;
-  static const int mfDriveStepEnd = 0xA00C; // MF 步进行程尽头(OpenZCine:结果而非错误)
-  static const int mfDriveStepInsufficiency = 0xA00E; // MF 步进量过小未动
   static const int invalidStatus = 0xA004;
+  static const int wbPresetError = 0xA006; // 预设白平衡测量释放失败
+  static const int dustReferenceError = 0xA007; // 除尘参照图拍摄失败
   static const int shutterSpeedBulb = 0xA008;
-  static const int cameraModeNotAdjustFnumber = 0xA00A;
+  static const int cameraModeNotAdjustFnumber = 0xA00A; // 光圈 F- 档
   static const int notLiveView = 0xA00B;
+  static const int mfDriveStepEnd = 0xA00C; // MF 步进行程尽头(结果而非错误)
+  static const int mfDriveStepInsufficiency = 0xA00E; // MF 步进量过小未动
+  static const int noFullHdPresent = 0xA00F; // 0x920F GetFhdPicture 无 FHD 数据
+  static const int storeError = 0xA021; // 含损坏卡
+  static const int storeUnformatted = 0xA022; // 含未格式化卡
+  static const int bulbReleaseBusy = 0xA200; // B 门拍摄进行中
+  static const int silentReleaseBusy = 0xA201; // 静音快门拍摄进行中
+  static const int movieFrameReleaseBusy = 0xA202; // 录像中静照释放进行中
+  static const int shutterSpeedTime = 0xA204; // 快门 Time 档
+  static const int invalidData = 0xA210; // 数据相内容不当
+  static const int invalidObjectPropCode = 0xA801; // MTP 对象属性组(0x98xx 族)
+  static const int invalidObjectPropFormat = 0xA802;
+  static const int invalidObjectPropValue = 0xA803;
+  static const int objectPropNotSupported = 0xA80A; // 码合法但相机不支持
 }
 
 /// PTP 标准事件码(USB interrupt IN / PTP-IP 事件通道上报;
@@ -160,16 +220,26 @@ abstract final class PtpEventCode {
   static const int captureComplete = 0x400D;
 }
 
-/// 尼康厂商事件码(Zf 实测在册;名称按 libgphoto2 ptp.h)。
+/// 尼康厂商事件码(名称按 libgphoto2 ptp.h;2026-10-12 起在册性以
+/// 官方指令书 §6.4 为准 —— 下列全部在 Zf 事件表内。0xC10B/0xC10F/
+/// 0xC126 三码**只走 GetEventEx 轮询通道**,中断/0x90C7 不送)。
 abstract final class NikonEventCode {
   static const int objectAddedInSdram = 0xC101; // e1: objecthandle
   static const int captureCompleteRecInSdram = 0xC102;
+  static const int captureSkip = 0xC103; // 连拍跳帧
   static const int movieRecordInterrupted = 0xC105;
   static const int movieRecordComplete = 0xC108;
   static const int movieRecordStarted = 0xC10A;
+  static const int pictureControlAdjustChanged = 0xC10B; // 仅 GetEventEx
   static const int liveViewStateChanged = 0xC10C;
-  // 0xC125-0xC128、0xC700 也在 Zf 码表内但 libgphoto2 未收录,
-  // 待 --events 真机抓包核对语义后再入册。
+  static const int pixelMappingComplete = 0xC10D; // 像素映射(除尘)完成
+  static const int manualSettingLensDataChanged = 0xC10E; // 非 CPU 镜头数据
+  static const int openCaptureComplete = 0xC10F; // 仅 GetEventEx
+  static const int hlgQualityAdjustChanged = 0xC125;
+  static const int portraitImpressionBalanceAdjustChanged = 0xC126; // 仅 GetEventEx
+  static const int pictureControlHlgAdjustChanged = 0xC127;
+  // 0xC120-0xC124、0xC128、0xC700 在 Zf DeviceInfo 事件表内但官方文档
+  // 无条目,语义仍欠 —— 待 --events 真机抓包核对后再入册。
 }
 
 /// 设备属性码。0x50xx 标准区:Zf 真机 GetDeviceInfo 在册(现代尼康走
@@ -226,6 +296,9 @@ abstract final class PtpDevicePropCode {
   // 固定 0;协议无镜头名属性,营销名靠 ID→名映射表,2026-10-12 Zf USB
   // 探针实证不在声明表但应答:40 SE=25、24-120 ƒ/4 S=31)。
   static const int lensId = 0xD0E0;
+  // 机身警告状态位掩码(u32 只读,官方 §6.5.6.24;Bit0=序列错误 ——
+  // 快门失败提示可指名,恢复口径官方 §11.7.5)。
+  static const int warningStatus = 0xD102;
   // Zf 另报 MTP 标准属性 0xD303/0xD407(UseDeviceStageFlag /
   // PerceivedDeviceType,与拍摄无关,不入册)。
   // 色调模式 OpenZCine 记作 0x0001D01C(u32 扩展形态,超 u16 属性码宽;

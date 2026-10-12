@@ -413,15 +413,18 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea> {
                   ),
                 ),
               ),
-            // ── 录制读出:时间码 + 声音电平表(贴右上;可见性见
-            // recordingReadoutOf —— 时间码随机身显示开关,电平表录制
-            // 常驻)。监看信息非交互浮层:纯净监看保留、点按透传。
+            // ── 录制读出:时间码 + 声音电平表 + 过热警告(贴右上;可见
+            // 性见 recordingReadoutOf —— 时间码随机身显示开关,电平表录制
+            // 常驻,过热随机身自报温度)。监看信息非交互浮层:纯净监看
+            // 保留、点按透传。
             ValueListenableBuilder<LiveViewHeader?>(
               valueListenable: controller.engine.header,
               builder: (context, LiveViewHeader? h, _) {
                 final v =
                     recordingReadoutOf(h, liveViewActive: controller.liveViewActive);
-                if (!v.timecode && !v.meters) return const SizedBox.shrink();
+                if (!v.timecode && !v.meters && v.overheat == null) {
+                  return const SizedBox.shrink();
+                }
                 return Positioned(
                   top: widget.topInset + 8,
                   right: 12 + widget.rightInset,
@@ -430,6 +433,12 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea> {
                       mainAxisSize: MainAxisSize.min,
                       crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
+                        if (v.overheat != null) ...[
+                          OverheatBadge(
+                              level: v.overheat!,
+                              countdownSeconds: v.countdownSeconds),
+                          const SizedBox(height: 6),
+                        ],
                         if (v.timecode) TimecodeView(timecode: h!.timecode!),
                         if (v.meters) ...[
                           if (v.timecode) const SizedBox(height: 6),
