@@ -37,15 +37,17 @@
 ///   辅助芯片(对焦后拍/自拍/APP 接管;吸收原 tune 辅助浮层)。
 ///
 /// 横屏**满高画面 + 移出画面的右缘快门柱**(2026-10-08 用户定案
-/// 「拍照按钮在右侧中间」;2026-10-12 三轮修正:取景盒右缩 94 让柱
+/// 「拍照按钮在右侧中间」;2026-10-12 三轮修正:取景盒右缩 108 让柱
 /// **移出拍摄框**、[FeedFit.heightFill] **恒满高上下无黑边** ——
 /// 16:9 视频满高零黑边、3:2 照片满高余侧边):顶栏一条(信息胶囊
-/// 收缩包**整体居中**,纯净监看隐藏钮入胶囊行尾 —— 2026-10-12 用户
-/// 定案);快门柱**距物理屏右缘 20**(六轮破安全区,与竖屏底距同距;
+/// 收缩包**居中于取景盒**,与贴底模式条同轴线 —— 八轮用户定案「上方
+/// 按钮和下方拍照/视频按钮基于取景居中对齐」;纯净监看隐藏钮入胶囊
+/// 行尾);快门柱**距物理屏右缘 20**(六轮破安全区,与竖屏底距同距;
 /// 灵动岛在侧缘中点,岛侧快门右段入岛)全高居中,自上而下
-/// **旋转 / 设置 / 大圆环快门(64)/ 对焦 / 相册**(2026-10-12 用户
-/// 定案柱序,方向钮自贴底条迁入柱顶);贴底条 = 模式条独占(居中于
-/// 画面子盒);设置浮层让位快门柱(right: 94);拉焦轮 bottomRight
+/// **旋转 / 设置 / 大圆环快门(78,同竖屏)/ 对焦 / 相册**(2026-10-12
+/// 用户定案柱序,方向钮自贴底条迁入柱顶;快门两向同大 = 用户定案
+/// 「横屏按钮保持和竖屏大小一样」);贴底条 = 模式条独占(居中于
+/// 画面子盒);设置浮层让位快门柱(right: 108);拉焦轮 bottomRight
 /// (右上角留给录制读出)。纯净监看隐去全部控制浮层,只留画面与监看
 /// 叠层,恢复钮在右上角。方向按钮(恒显转屏图标,点按横↔竖直切,
 /// 初始态跟随系统)经 SystemChrome 强制,系统转屏锁开着也能切,不
@@ -613,16 +615,17 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     });
   }
 
-  /// 横屏监看(2026-10-12 三轮定案;六轮破安全区):取景盒**右缩 94
-  /// 让位快门柱**(画面移出按钮、heightFill 恒满高 —— 上下永无黑边;
-  /// 3:2 照片满高后左右黑边留在取景盒内);顶栏一条 = **信息胶囊整体
-  /// 居中**(收缩包内容,纯净监看钮入胶囊行尾);快门柱**距物理屏右缘
-  /// 20**(kScreenEdgePadding,与竖屏底距同距 —— 破侧边安全区;灵动岛
-  /// 在侧缘中点,岛侧快门右段入岛)全高中置五件竖排(**旋转 / 设置 /
-  /// 快门 64 / 对焦 / 相册** —— 方向钮自贴底条迁入柱顶,相册坠底);
-  /// 贴底条 = 模式条独占(居中于取景盒)。设置浮层让位快门柱
-  /// (right: 94)。chrome 整体(顶栏 + 快门柱 + 贴底条 + 浮层)经
-  /// IgnorePointer + AnimatedOpacity 支持纯净监看淡出。
+  /// 横屏监看(2026-10-12 三轮定案;六轮破安全区;八轮轴线对齐):取景盒
+  /// **右缩 108 让位快门柱**(画面移出按钮、heightFill 恒满高 —— 上下永无
+  /// 黑边;3:2 照片满高后左右黑边留在取景盒内);顶栏一条 = **信息胶囊
+  /// 居中于取景盒**(八轮与贴底模式条同轴线;收缩包内容,纯净监看钮入
+  /// 胶囊行尾);快门柱**距物理屏右缘 20**(kScreenEdgePadding,与竖屏
+  /// 底距同距 —— 破侧边安全区;灵动岛在侧缘中点,岛侧快门右段入岛)
+  /// 全高中置五件竖排(**旋转 / 设置 / 快门 78 / 对焦 / 相册** —— 方向钮
+  /// 自贴底条迁入柱顶,相册坠底;快门两向同 78 = 用户定案「横屏按钮保持
+  /// 和竖屏大小一样」);贴底条 = 模式条独占(居中于取景盒)。设置浮层
+  /// 让位快门柱(right: 108)。chrome 整体(顶栏 + 快门柱 + 贴底条 +
+  /// 浮层)经 IgnorePointer + AnimatedOpacity 支持纯净监看淡出。
   ///
   /// 监听拆两层:feed 区照旧 merge(controller+frame+status)逐帧刷;
   /// chrome 层只听 controller —— 帧到达只写 ValueNotifier 不
@@ -638,12 +641,12 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       children: [
         // feed 区不能裸放:帧到达只写 ValueNotifier 不 notifyListeners,
         // 没有这层 merge 监听,首屏永远停在「等待首帧」。取景盒右缩
-        // 94 = 快门柱让位(六轮柱右距物理屏缘 20、柱带宽 84 + 10 间隙):
-        // 视频 heightFill 恒满高,上下永无黑边;16:9 视频在 94 右缩盒内
-        // 满高近似满格。盒已右缩,盒内贴右叠层(录制读出/拉焦轮)的
+        // 108 = 快门柱让位(柱右距物理屏缘 20、柱带宽 20+78=98 + 10
+        // 间隙 —— 快门两向同 78):视频 heightFill 恒满高,上下永无
+        // 黑边。盒已右缩,盒内贴右叠层(录制读出/拉焦轮)的
         // rightInset 归零 —— 屏幕位置与旧全宽盒 + rightInset 全同。
         Padding(
-          padding: const EdgeInsets.only(right: 94),
+          padding: const EdgeInsets.only(right: 108),
           child: AnimatedBuilder(
             animation: Listenable.merge([
               controller,
@@ -690,32 +693,37 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                           onTap: _dismissSettings,
                         ),
                       ),
-                    // 顶栏:信息胶囊**整体居中**(2026-10-12 用户定案
-                    // 「这一个按钮居中」—— compact 收缩包内容才可被
-                    // Center 居中);纯净监看钮入胶囊行尾(与竖屏同款
-                    // 单入口,不再另摆顶栏右端)。
+                    // 顶栏:信息胶囊**居中于取景盒**(2026-10-12 用户定案
+                    // 「这一个按钮居中」;八轮定案与贴底模式条同轴线 ——
+                    // 顶栏同样右缩 108 让位快门柱,胶囊 compact 收缩包内容
+                    // 才可被 Center 居中);纯净监看钮入胶囊行尾(与竖屏
+                    // 同款单入口,不再另摆顶栏右端)。
                     Positioned(
                       top: 8,
-                      left: 10,
-                      right: 10,
+                      left: 0,
+                      right: 108,
                       height: kLandscapeTopBarHeight,
-                      child: Center(
-                        child: RemoteInfoPill(
-                          controller: controller,
-                          margin: EdgeInsets.zero,
-                          compact: true,
-                          onHideChrome: _hideChrome,
+                      child: Padding(
+                        padding: const EdgeInsets.only(left: 10, right: 10),
+                        child: Center(
+                          child: RemoteInfoPill(
+                            controller: controller,
+                            margin: EdgeInsets.zero,
+                            compact: true,
+                            onHideChrome: _hideChrome,
+                          ),
                         ),
                       ),
                     ),
                     // 快门柱贴右缘全高中置(2026-10-12 用户定案柱序
-                    // 自上而下:旋转 / 设置 / 快门 64 / 对焦 / 相册 ——
-                    // 方向钮自贴底条迁入柱顶,相册坠底;高度账
-                    // 54+8+54+8+64+8+54+8+54=312,402pt 级横屏可容,
+                    // 自上而下:旋转 / 设置 / 快门 78 / 对焦 / 相册 ——
+                    // 方向钮自贴底条迁入柱顶,相册坠底;快门两向同 78
+                    // = 用户定案「横屏按钮保持和竖屏大小一样」,高度账
+                    // 54+8+54+8+78+8+54+8+54=326,402pt 级横屏可容,
                     // 柱在取景盒外的右缩带内 —— 不压画面)。六轮右移:
                     // 右距**物理屏缘 20**(破侧边安全区,与竖屏底距
                     // 同距,参照 iOS 相机;柱件 crossAxisAlignment.end
-                    // 右缘齐平,快门最宽凸左 10)。灵动岛在侧缘中点,
+                    // 右缘齐平,快门最宽凸左 24)。灵动岛在侧缘中点,
                     // 岛侧方向快门右段藏进岛里 —— 已知代价,翻面即避。
                     Positioned(
                       top: 0,
@@ -733,10 +741,10 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                       ),
                     ),
                     // 贴底条:模式条独占、居中于取景盒(旋转钮已迁快门
-                    // 柱顶;right: 94 让位柱带,贴底叠层让位 bottomInset)。
+                    // 柱顶;right: 108 让位柱带,贴底叠层让位 bottomInset)。
                     Positioned(
                       left: 0,
-                      right: 94,
+                      right: 108,
                       bottom: 0,
                       child: Padding(
                         padding: const EdgeInsets.only(
@@ -752,11 +760,11 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                         ),
                       ),
                     ),
-                    // 设置浮层:让位右缘快门柱(柱带宽 20+64=84 + 10 间隙)。
+                    // 设置浮层:让位右缘快门柱(柱带宽 20+78=98 + 10 间隙)。
                     if (_settingsOpen)
                       Positioned(
                         top: kLandscapeTopInset + 8,
-                        right: 94,
+                        right: 108,
                         width: kCapturePanelWidth,
                         child: CaptureSettingsPanel(
                           controller: controller,
@@ -775,19 +783,22 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
           ),
         ),
         // 纯净监看恢复钮:chrome 全隐后唯一入口(监看叠层/横幅仍在),
-        // 摆在顶栏胶囊同位(居中 —— 胶囊整体居中后恢复钮随行,同竖屏
+        // 摆在顶栏胶囊同位(居中于取景盒 —— 同款右缩 108 轴线,同竖屏
         // 「恢复钮同位」口径)。
         if (_chromeHidden)
           Positioned(
             top: 8,
-            left: 10,
-            right: 10,
+            left: 0,
+            right: 108,
             height: kLandscapeTopBarHeight,
-            child: Center(
-              child: ChromeIconButton(
-                icon: Icons.visibility,
-                tooltip: '显示控制界面',
-                onTap: () => setState(() => _chromeHidden = false),
+            child: Padding(
+              padding: const EdgeInsets.only(left: 10, right: 10),
+              child: Center(
+                child: ChromeIconButton(
+                  icon: Icons.visibility,
+                  tooltip: '显示控制界面',
+                  onTap: () => setState(() => _chromeHidden = false),
+                ),
               ),
             ),
           ),

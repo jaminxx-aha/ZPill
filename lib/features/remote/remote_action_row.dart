@@ -38,7 +38,7 @@ class CaptureControlRow extends StatelessWidget {
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           _focusButton(live, controller),
-          _shutterButton(live, controller, mode: mode, size: 78),
+          _shutterButton(live, controller, mode: mode),
           CaptureCircleButton(
             icon: Icons.tune,
             tooltip: '拍摄设置(参数 / 网格斑马纹 / 辅助)',
@@ -51,11 +51,12 @@ class CaptureControlRow extends StatelessWidget {
 }
 
 /// 横屏快门柱(2026-10-12 用户定案柱序自上而下:**旋转 / 设置 / 快门
-/// (64)/ 对焦 / 相册**—— 方向钮自贴底条迁入柱顶,相册坠底):五件
-/// 竖排高度账 54+8+54+8+64+8+54+8+54=312,402pt 级横屏可容,锚右缘
+/// (78,同竖屏)/ 对焦 / 相册**—— 方向钮自贴底条迁入柱顶,相册坠底;
+/// 快门两向同大 = 用户定案「横屏按钮保持和竖屏大小一样」):五件
+/// 竖排高度账 54+8+54+8+78+8+54+8+54=326,402pt 级横屏可容,锚右缘
 /// 纵向居中。**crossAxisAlignment: end 五件右缘齐平**(2026-10-12
 /// 六轮:柱右距**物理屏缘 20** 破安全区,与竖屏底距同距 —— 快门最宽
-/// 凸左 10)。状态随控制器,监听由外层 AnimatedBuilder 驱动;颜色随
+/// 凸左 24)。状态随控制器,监听由外层 AnimatedBuilder 驱动;颜色随
 /// 应用主题(LiveDesign.of)。旋转钮不包 Tooltip(长按抬起须等同点按,
 /// 见 [CaptureCircleButton] 类注)。
 class CaptureShutterColumn extends StatelessWidget {
@@ -101,7 +102,7 @@ class CaptureShutterColumn extends StatelessWidget {
           onTap: onOpenSettings,
         ),
         const SizedBox(height: 8),
-        _shutterButton(live, controller, mode: mode, size: 64),
+        _shutterButton(live, controller, mode: mode),
         const SizedBox(height: 8),
         _focusButton(live, controller),
         const SizedBox(height: 8),
@@ -258,9 +259,11 @@ Widget _focusButton(LivePalette live, RemoteController controller) {
 /// 全不变。**视频模式**(iPhone 语义):红芯(进入即红,非仅录制中),
 /// 整段点按起/停录像(onTap,不挂按下/抬起);录制中芯上叠白色停止
 /// 方块且保持全不透明(停录要醒目)。取景开启是录像前置(toggleRecord
-/// 的门,提前到视觉层降透明)。[size] 竖屏控制行 78 / 横屏右列 64。
+/// 的门,提前到视觉层降透明)。尺寸两向同 78(2026-10-12 用户定案
+/// 「横屏按钮保持和竖屏大小一样」,原横屏 64 废除)。
 Widget _shutterButton(LivePalette live, RemoteController controller,
-    {required CaptureMode mode, double size = 78}) {
+    {required CaptureMode mode}) {
+  const size = 78.0;
   final photo = mode == CaptureMode.photo;
   final usable = photo
       ? controller.linkUp
