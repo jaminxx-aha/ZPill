@@ -135,7 +135,12 @@ Widget _valueSection({
   required ScrollController listCtrl,
 }) {
   if (enums != null && enums.isNotEmpty) {
-    return ListView(
+    // AF 区域(0xD05D)的宽C1/C2 是横带/竖条饱和区:触屏移框饱和轴
+    // 不动属相机行为 —— 面板常驻一行说明(切换沿另有 notice)。
+    final afAreaHint = p.code == PtpDevicePropCode.stillFocusMeteringMode
+        ? '宽C1/C2 为横带/竖条区域:触屏移框仅上下/左右单轴生效'
+        : null;
+    final list = ListView(
       key: key,
       shrinkWrap: true,
       controller: listCtrl,
@@ -172,6 +177,20 @@ Widget _valueSection({
                     controller.setParam(p.code, v);
                   },
           ),
+      ],
+    );
+    if (afAreaHint == null) return list;
+    return Column(
+      key: key,
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(24, 0, 24, 4),
+          child: Text(afAreaHint,
+              style: TextStyle(fontSize: 11, color: live.muted)),
+        ),
+        Flexible(child: list),
       ],
     );
   }

@@ -1801,6 +1801,54 @@ void main() {
         reason: '底单收口,浮层仍在');
   });
 
+  testWidgets('AF 区域面板宽C1/C2 常驻提示行 + 切换沿 notice(饱和轴'
+      '触屏移框不动属相机行为,2026-10-12)', (tester) async {
+    _portrait(tester);
+    PtpSession.kSetPropEnabled = true;
+    addTearDown(() => PtpSession.kSetPropEnabled = true);
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = _directRemoteController(transport,
+        conn: conn, setPropGate: () => true);
+    addTearDown(controller.dispose);
+    _scriptAutoStart(transport); // 进页自动起景先吃 FIFO 头两位
+    _scriptParams(transport); // 连接沿对表(AF 区域 FORM 七值在册)
+    transport
+      ..ok() // 0x1016 写 AF 区域 = 宽C1
+      ..ok(data: _propDescDataset(PtpDevicePropCode.stillFocusMeteringMode,
+          PtpDataType.uint16, 0x801E,
+          enums: [0x8010, 0x8011, 0x8017, 0x8018, 0x8019, 0x801E, 0x801F]));
+    await tester
+        .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
+    conn.statesCtrl.add(CameraLinkState.connected);
+    await tester.pumpAndSettle();
+
+    // tune 开设置浮层 → 点 AF 区域 tile → 编辑底单(常驻提示行)
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
+    await tester.tap(find.descendant(
+        of: find.byType(CaptureSettingsPanel),
+        matching: find.text('AF 区域')));
+    await tester.pumpAndSettle();
+    expect(
+        find.text('宽C1/C2 为横带/竖条区域:触屏移框仅上下/左右单轴生效'),
+        findsOneWidget,
+        reason: 'AF 面板常驻提示行');
+
+    // 选宽C1:写 + 回读落值,切换沿 notice 浮出(4s 淡出前断言)
+    await tester.tap(find.text('宽C1'));
+    await tester.pumpAndSettle();
+    expect(
+        controller
+            .paramProps[PtpDevicePropCode.stillFocusMeteringMode]?.value,
+        0x801E,
+        reason: '0x1016 写 + 回读落值');
+    expect(controller.notice, '宽C1 是横向条形区域,触屏移框仅上下生效');
+    expect(find.text('宽C1 是横向条形区域,触屏移框仅上下生效'),
+        findsOneWidget,
+        reason: '切换沿 notice 横幅在屏');
+  });
+
   testWidgets('对焦钮点按即 AF(0x90C1)零面板;MF 步进/拉焦轮迁设置浮层'
       '(2026-10-12:对焦钮只负责对焦)', (tester) async {
     _portrait(tester);

@@ -173,6 +173,13 @@ void main() {
     expect(p.display(0x801F), '宽C2');
   });
 
+  test('AF 区域宽C1/C2 触屏定位提示:饱和轴单轴生效,其余值无提示', () {
+    expect(afAreaAxisHint(0x801E), contains('上下'));
+    expect(afAreaAxisHint(0x801F), contains('左右'));
+    expect(afAreaAxisHint(0x8010), isNull, reason: '单点/自动/精确/宽S/L 双轴可移');
+    expect(afAreaAxisHint(null), isNull);
+  });
+
   test('快门取值域直供表:标准档打包值 + Bulb 哨兵(无 Time/X 同步)', () {
     final pick = _param(PtpDevicePropCode.exposureTime).pickValues!;
     expect(pick.first, 1 << 16 | 8000, reason: '1/8000s 打包');

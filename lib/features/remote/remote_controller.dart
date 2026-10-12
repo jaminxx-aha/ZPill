@@ -1744,6 +1744,12 @@ final class RemoteController extends ChangeNotifier {
           code: writeCode, dataType: dataType, value: writeValue));
       lockedProps.remove(propCode); // 写通:解除该参数的锁标
       await _refreshProp(propCode);
+      // AF 区域切到宽C1/C2:饱和轴触屏移框不动属相机行为,切换沿
+      // 浮一条提示(文案与 AF 面板常驻行同源)。
+      if (propCode == PtpDevicePropCode.stillFocusMeteringMode) {
+        final hint = afAreaAxisHint(value);
+        if (hint != null) notice = hint;
+      }
     } on Exception catch (e) {
       if (e is PtpResponseException &&
           e.responseCode == PtpResponseCode.accessDenied) {
