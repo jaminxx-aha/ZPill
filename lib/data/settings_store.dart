@@ -47,6 +47,14 @@ final class AppSettings {
     this.temporalDenoise = false,
     this.autoRotateFeed = true,
     this.deSqueeze = 1.0,
+    this.monitorGrid = false,
+    this.monitorZebra = false,
+    this.monitorHistogram = false,
+    this.monitorLevel = false,
+    this.monitorFalseColor = false,
+    this.monitorPeaking = false,
+    this.monitorFocusDial = false,
+    this.liveViewOn = true,
   });
 
   final bool autoTransfer;
@@ -93,6 +101,22 @@ final class AppSettings {
   /// 变宽还原倍率(1.0 = 关;显示层水平拉伸,拍照/视频/查看器同源)。
   final double deSqueeze;
 
+  /// 监看开关组(2026-10-12 十二轮持久化:网格/斑马纹/直方图/水平仪/
+  /// 伪色/峰值/拉焦轮):页面侧 [MonitorToggles] 经桥接函数拆装
+  /// (features/remote/monitor_toggles.dart)。
+  final bool monitorGrid;
+  final bool monitorZebra;
+  final bool monitorHistogram;
+  final bool monitorLevel;
+  final bool monitorFalseColor;
+  final bool monitorPeaking;
+  final bool monitorFocusDial;
+
+  /// 取景总开关(十二轮「取景器关闭的开关」):默认开 = 「取景默认
+  /// 打开」原定案;持久关 = 进页/回台/连接沿都不自动起景,拍摄设置
+  /// 浮层「取景」钮再开。
+  final bool liveViewOn;
+
   AppSettings copyWith({
     bool? autoTransfer,
     PhotoDownloadFormat? autoTransferFormat,
@@ -110,6 +134,14 @@ final class AppSettings {
     bool? temporalDenoise,
     bool? autoRotateFeed,
     double? deSqueeze,
+    bool? monitorGrid,
+    bool? monitorZebra,
+    bool? monitorHistogram,
+    bool? monitorLevel,
+    bool? monitorFalseColor,
+    bool? monitorPeaking,
+    bool? monitorFocusDial,
+    bool? liveViewOn,
   }) =>
       AppSettings(
         autoTransfer: autoTransfer ?? this.autoTransfer,
@@ -128,6 +160,14 @@ final class AppSettings {
         temporalDenoise: temporalDenoise ?? this.temporalDenoise,
         autoRotateFeed: autoRotateFeed ?? this.autoRotateFeed,
         deSqueeze: deSqueeze ?? this.deSqueeze,
+        monitorGrid: monitorGrid ?? this.monitorGrid,
+        monitorZebra: monitorZebra ?? this.monitorZebra,
+        monitorHistogram: monitorHistogram ?? this.monitorHistogram,
+        monitorLevel: monitorLevel ?? this.monitorLevel,
+        monitorFalseColor: monitorFalseColor ?? this.monitorFalseColor,
+        monitorPeaking: monitorPeaking ?? this.monitorPeaking,
+        monitorFocusDial: monitorFocusDial ?? this.monitorFocusDial,
+        liveViewOn: liveViewOn ?? this.liveViewOn,
       );
 
   @override
@@ -148,14 +188,26 @@ final class AppSettings {
       other.feedUpscaler == feedUpscaler &&
       other.temporalDenoise == temporalDenoise &&
       other.autoRotateFeed == autoRotateFeed &&
-      other.deSqueeze == deSqueeze;
+      other.deSqueeze == deSqueeze &&
+      other.monitorGrid == monitorGrid &&
+      other.monitorZebra == monitorZebra &&
+      other.monitorHistogram == monitorHistogram &&
+      other.monitorLevel == monitorLevel &&
+      other.monitorFalseColor == monitorFalseColor &&
+      other.monitorPeaking == monitorPeaking &&
+      other.monitorFocusDial == monitorFocusDial &&
+      other.liveViewOn == liveViewOn;
 
   @override
-  int get hashCode => Object.hash(
-      autoTransfer, autoTransferFormat, quality, batterySaver, customSavePath,
-      themeMode, xmpCreator, xmpRights, xmpInjectRating, xmpInjectGps,
-      watermarkStyle, watermarkText, feedUpscaler, temporalDenoise,
-      autoRotateFeed, deSqueeze);
+  // Object.hash 位置参上限 20,字段 24 个 → hashAll(列表序即上面 == 序)。
+  int get hashCode => Object.hashAll([
+        autoTransfer, autoTransferFormat, quality, batterySaver, customSavePath,
+        themeMode, xmpCreator, xmpRights, xmpInjectRating, xmpInjectGps,
+        watermarkStyle, watermarkText, feedUpscaler, temporalDenoise,
+        autoRotateFeed, deSqueeze,
+        monitorGrid, monitorZebra, monitorHistogram, monitorLevel,
+        monitorFalseColor, monitorPeaking, monitorFocusDial, liveViewOn
+      ]);
 
   Map<String, Object?> toJson() => {
         'autoTransfer': autoTransfer,
@@ -174,6 +226,14 @@ final class AppSettings {
         'temporalDenoise': temporalDenoise,
         'autoRotateFeed': autoRotateFeed,
         'deSqueeze': deSqueeze,
+        'monitorGrid': monitorGrid,
+        'monitorZebra': monitorZebra,
+        'monitorHistogram': monitorHistogram,
+        'monitorLevel': monitorLevel,
+        'monitorFalseColor': monitorFalseColor,
+        'monitorPeaking': monitorPeaking,
+        'monitorFocusDial': monitorFocusDial,
+        'liveViewOn': liveViewOn,
       };
 
   static AppSettings fromJson(Map<String, Object?> json) => AppSettings(
@@ -204,6 +264,15 @@ final class AppSettings {
         autoRotateFeed: json['autoRotateFeed'] == null ||
             json['autoRotateFeed'] == true,
         deSqueeze: _clampDeSqueeze(json['deSqueeze']),
+        monitorGrid: json['monitorGrid'] == true,
+        monitorZebra: json['monitorZebra'] == true,
+        monitorHistogram: json['monitorHistogram'] == true,
+        monitorLevel: json['monitorLevel'] == true,
+        monitorFalseColor: json['monitorFalseColor'] == true,
+        monitorPeaking: json['monitorPeaking'] == true,
+        monitorFocusDial: json['monitorFocusDial'] == true,
+        // 旧档缺省 = 开(保持「取景默认打开」原定案)。
+        liveViewOn: json['liveViewOn'] == null || json['liveViewOn'] == true,
       );
 
   static double _clampDeSqueeze(Object? raw) {

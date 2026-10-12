@@ -31,9 +31,10 @@ class CaptureControlRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final live = LiveDesign.of(context);
     return Padding(
-      // 左右边距 12(2026-10-12 六轮回落:五轮加倍后用户仍嫌远,参照
-      // iOS 相机底部按钮)。
-      padding: const EdgeInsets.fromLTRB(12, 6, 12, 2),
+      // 左右边距 20(2026-10-12 九轮:与距物理屏底 20 统一,用户「左右
+      // 两侧按钮离边的距离和离下方的距离保持一致」)。
+      padding: const EdgeInsets.fromLTRB(
+          kScreenEdgePadding, 6, kScreenEdgePadding, 2),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
@@ -54,9 +55,11 @@ class CaptureControlRow extends StatelessWidget {
 /// (78,同竖屏)/ 对焦 / 相册**—— 方向钮自贴底条迁入柱顶,相册坠底;
 /// 快门两向同大 = 用户定案「横屏按钮保持和竖屏大小一样」):五件
 /// 竖排高度账 54+8+54+8+78+8+54+8+54=326,402pt 级横屏可容,锚右缘
-/// 纵向居中。**crossAxisAlignment: end 五件右缘齐平**(2026-10-12
-/// 六轮:柱右距**物理屏缘 20** 破安全区,与竖屏底距同距 —— 快门最宽
-/// 凸左 24)。状态随控制器,监听由外层 AnimatedBuilder 驱动;颜色随
+/// 纵向居中。**crossAxisAlignment: center 五件共轴**(2026-10-12 十轮
+/// 用户定案「以拍照按钮居中对齐,而不是右边对齐」—— 柱宽即快门 78,
+/// 四枚 54 钮以快门心对中;废除六轮的右缘齐平/快门凸左)。柱右距
+/// **物理屏缘 [kScreenEdgePadding]**(六轮破安全区;值经手调)。
+/// 状态随控制器,监听由外层 AnimatedBuilder 驱动;颜色随
 /// 应用主题(LiveDesign.of)。旋转钮不包 Tooltip(长按抬起须等同点按,
 /// 见 [CaptureCircleButton] 类注)。
 class CaptureShutterColumn extends StatelessWidget {
@@ -88,7 +91,9 @@ class CaptureShutterColumn extends StatelessWidget {
     final live = LiveDesign.of(context);
     return Column(
       mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.end,
+      // 十轮用户定案「以拍照按钮居中对齐,而不是右边对齐」:五件共轴
+      // 于快门心(柱宽 78),废除右缘齐平。
+      crossAxisAlignment: CrossAxisAlignment.center,
       children: [
         // 方向钮不包 Tooltip(长按抬起须等同点按,见类注)
         CaptureCircleButton(

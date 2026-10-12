@@ -80,6 +80,10 @@ class SettingsController extends ChangeNotifier
   Future<void> setDeSqueeze(double value) =>
       _update(settings.copyWith(deSqueeze: value.clamp(1.0, 2.0)));
 
+  /// 整对象落库(十二轮:拍摄页监看开关组/取景开关经 copyWith 拼好
+  /// 后从这里走 —— 与散装 setter 同一条 _update 路,存储失败仅吞)。
+  Future<void> apply(AppSettings next) => _update(next);
+
   Future<void> _update(AppSettings next) async {
     settings = next;
     notifyListeners();

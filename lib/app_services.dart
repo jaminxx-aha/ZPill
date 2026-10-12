@@ -219,6 +219,14 @@ final class AppServices {
       connection: connection,
       engine: lvEngine,
     );
+    // 取景总开关(十二轮持久化):连接沿自动起景闸 —— 设置里关了
+    // 取景,重连/冷启都不再自动 0x9201;拍摄页浮层「取景」钮改动
+    // 即时同步到这里(页面自己也同步一份,双向不冲突,同值幂等)。
+    remoteController.autoLiveViewEnabled = settingsController.value.liveViewOn;
+    settingsController.addListener(() {
+      remoteController.autoLiveViewEnabled =
+          settingsController.value.liveViewOn;
+    });
     transfersController = TransfersController(
       engine: transferEngine,
       gallery: PlatformServices.gallery,

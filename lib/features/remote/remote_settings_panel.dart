@@ -12,11 +12,12 @@ import 'shooting_param_catalog.dart';
 /// 目录 tile,点按走 [onEditParam] → 参数编辑底单;2026-10-12 竖屏
 /// 读出行与横屏左参数栏先后删除后成为唯一参数入口)②对焦
 /// (2026-10-12 自对焦浮层迁入:MF 步进/拉焦轮 —— 快门旁对焦钮已瘦身
-/// 为一键 AF)③监看开关(网格/斑马纹/直方图/水平仪/伪色/峰值)④辅
-/// 助芯片(对焦后拍/自拍/APP 接管)。[maxHeight] 限高内滚(竖屏约
-/// 0.55 屏高,横屏顶栏与底条之间);点取景画面或再点设置钮即收(见
-/// RemotePage);状态随控制器 + [toggles](页面级视图偏好),监听由
-/// 外层 AnimatedBuilder 驱动。
+/// 为一键 AF)③监看开关(取景/网格/斑马纹/直方图/水平仪/伪色/峰值;
+/// 2026-10-12 十二轮起全部持久化 —— 关掉重进拍摄页保持,取景开关
+/// 同款)④辅助芯片(对焦后拍/自拍/APP 接管)。[maxHeight] 限高内滚
+/// (竖屏约 0.55 屏高,横屏顶栏与底条之间);点取景画面或再点设置钮
+/// 即收(见 RemotePage);状态随控制器 + [toggles](持久化设置桥接),
+/// 监听由外层 AnimatedBuilder 驱动。
 class CaptureSettingsPanel extends StatelessWidget {
   const CaptureSettingsPanel({
     super.key,
@@ -25,6 +26,7 @@ class CaptureSettingsPanel extends StatelessWidget {
     required this.activeParam,
     required this.onEditParam,
     required this.onTogglesChanged,
+    required this.onLiveViewToggle,
     required this.onTakeoverRequest,
     this.maxHeight,
   });
@@ -37,6 +39,12 @@ class CaptureSettingsPanel extends StatelessWidget {
 
   final void Function(BuildContext context, ShootingParam param) onEditParam;
   final void Function(MonitorToggles toggles) onTogglesChanged;
+
+  /// 取景开关落定(十二轮「取景器关闭的开关」):true = 起景,false =
+  /// 停景(0x9202),连同持久化由页面侧 [_setLiveView] 收口 —— 这里
+  /// 只透传点按;录制中本浮层已禁点(快门停录走取景门)。
+  final void Function(bool start) onLiveViewToggle;
+
   final void Function(BuildContext context) onTakeoverRequest;
 
   /// 内容限高(null = 不限);超出内部滚动。
@@ -210,17 +218,20 @@ class CaptureSettingsPanel extends StatelessWidget {
     );
   }
 
-  /// 监看开关组(原辅助浮层迁移,拉焦轮除外 —— 在上方对焦段):斑马纹/
-  /// 直方图/伪色/峰值四项共享一份帧分析 —— 开关落定后由页面同步
+  /// 监看开关组(原辅助浮层迁移,拉焦轮除外 —— 在上方对焦段):取景
+  /// 打头(十二轮总开关,当前态跟 liveViewActive,录制中禁点 —— 视频
+  /// 模式停录门依赖取景在跑);网格等六项走 [toggles]。斑马纹/直方图/
+  /// 伪色/峰值四项共享一份帧分析 —— 开关落定后由页面同步
   /// RemoteController.analyzer 启停(见 RemotePage._syncAnalyzerEnabled)。
   Widget _monitorToggles(BuildContext context) {
     final live = LiveDesign.of(context);
     Widget toggle(IconData icon, String label, bool current,
-        void Function(bool) set) {
+        void Function(bool) set,
+        {bool enabled = true}) {
       // 命中区 ≥44×44(视觉盒 40×34 不变,标签纳入点击):InkWell 包住
       // 整列再垫透明 padding;外层不画水波/高亮 —— 视觉零变化。
       return InkWell(
-        onTap: () => set(!current),
+        onTap: enabled ? () => set(!current) : null,
         splashFactory: NoSplash.splashFactory,
         highlightColor: Colors.transparent,
         hoverColor: Colors.transparent,
@@ -243,12 +254,16 @@ class CaptureSettingsPanel extends StatelessWidget {
                     ),
                   ),
                   child: InkWell(
-                    onTap: () => set(!current),
+                    onTap: enabled ? () => set(!current) : null,
                     customBorder: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(10)),
                     child: Icon(icon,
                         size: 18,
-                        color: current ? live.accent : live.muted),
+                        color: !enabled
+                            ? live.faint
+                            : current
+                                ? live.accent
+                                : live.muted),
                   ),
                 ),
               ),
@@ -256,7 +271,11 @@ class CaptureSettingsPanel extends StatelessWidget {
               Text(label,
                   style: TextStyle(
                       fontSize: 10,
-                      color: current ? live.accent : live.faint)),
+                      color: !enabled
+                          ? live.faint
+                          : current
+                              ? live.accent
+                              : live.faint)),
             ],
           ),
         ),
@@ -267,6 +286,12 @@ class CaptureSettingsPanel extends StatelessWidget {
       spacing: 2,
       runSpacing: 4,
       children: [
+        // 取景总开关(十二轮「取景器关闭的开关」):当前态跟
+        // liveViewActive(起景失败/引擎态即时可见,不跟持久位);录制中
+        // 禁点 —— 视频模式停录门依赖取景在跑。
+        toggle(Icons.videocam_outlined, '取景', controller.liveViewActive,
+            onLiveViewToggle,
+            enabled: !controller.recording),
         toggle(Icons.grid_on, '网格', toggles.grid,
             (v) => onTogglesChanged(toggles.copyWith(grid: v))),
         toggle(Icons.warning_amber, '斑马纹', toggles.zebra,

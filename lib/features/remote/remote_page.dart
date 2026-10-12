@@ -22,8 +22,9 @@
 ///   设备名 + 接管徽标 + REC + 纯净监看隐藏钮)浮在画面顶部;隐藏后
 ///   恢复钮在**同一处**(右上角,与胶囊行尾隐藏钮同位 —— 旧版隐藏在
 ///   快门行右/恢复在顶部两处不一,用户点名);
-/// - **取景默认打开**:进页/回页沿未跑则自动起景(取景开关钮撤除;
-///   失败态占位里「重试取景」兜底);
+/// - **取景默认打开**(十二轮起可持久关:设置浮层「取景」钮,关 =
+///   进页/回台/连接沿都不自动起景):进页/回页沿未跑则自动起景(失败
+///   态占位里「重试取景」兜底);
 /// - 底部两行**浮层压画面下沿**(2026-10-12 用户需求,参数读出行
 ///   删除 —— 参数入口 = 设置浮层全目录 tile):控制行(对焦 | 大圆环
 ///   快门 | 设置)→ 底行(相册缩略图 | 模式条「照片|视频」| 方向旋转,
@@ -33,21 +34,25 @@
 ///   手势触发对焦);
 /// - 设置为**非模态玻璃浮层**(点画面即收):拍摄参数(全目录,点
 ///   tile 走读出条同款编辑底单)+ 对焦控制(MF 步进/拉焦轮,自对焦
-///   浮层迁入)+ 监看开关(网格/斑马纹/直方图/水平仪/伪色/峰值)+
-///   辅助芯片(对焦后拍/自拍/APP 接管;吸收原 tune 辅助浮层)。
+///   浮层迁入)+ 监看开关(取景/网格/斑马纹/直方图/水平仪/伪色/峰值,
+///   十二轮起全部持久化 —— 关掉重进保持)+ 辅助芯片(对焦后拍/自拍/
+///   APP 接管;吸收原 tune 辅助浮层)。
 ///
 /// 横屏**满高画面 + 移出画面的右缘快门柱**(2026-10-08 用户定案
-/// 「拍照按钮在右侧中间」;2026-10-12 三轮修正:取景盒右缩 108 让柱
+/// 「拍照按钮在右侧中间」;2026-10-12 三轮修正:取景盒右缩让柱
 /// **移出拍摄框**、[FeedFit.heightFill] **恒满高上下无黑边** ——
-/// 16:9 视频满高零黑边、3:2 照片满高余侧边):顶栏一条(信息胶囊
-/// 收缩包**居中于取景盒**,与贴底模式条同轴线 —— 八轮用户定案「上方
-/// 按钮和下方拍照/视频按钮基于取景居中对齐」;纯净监看隐藏钮入胶囊
-/// 行尾);快门柱**距物理屏右缘 20**(六轮破安全区,与竖屏底距同距;
+/// 16:9 视频满高零黑边、3:2 照片满高余侧边;九轮:盒再左缩 60,画面
+/// 右移 30):顶栏一条(信息胶囊定宽 [kLandscapePillWidth]
+/// **居中于取景盒**,与贴底模式条同轴线 —— 八轮用户定案「上方按钮和
+/// 下方拍照/视频按钮基于取景居中对齐」;十轮顶距 6 + 胶囊高 38,
+/// 与贴底条 6+38 上下镜像;纯净监看隐藏钮入胶囊行尾);
+/// 快门柱**距物理屏右缘 [kScreenEdgePadding]**(六轮破安全区;
 /// 灵动岛在侧缘中点,岛侧快门右段入岛)全高居中,自上而下
 /// **旋转 / 设置 / 大圆环快门(78,同竖屏)/ 对焦 / 相册**(2026-10-12
 /// 用户定案柱序,方向钮自贴底条迁入柱顶;快门两向同大 = 用户定案
-/// 「横屏按钮保持和竖屏大小一样」);贴底条 = 模式条独占(居中于
-/// 画面子盒);设置浮层让位快门柱(right: 108);拉焦轮 bottomRight
+/// 「横屏按钮保持和竖屏大小一样」;**十轮五件共轴于快门心**,
+/// 用户「以拍照按钮居中对齐,而不是右边对齐」);贴底条 = 模式条
+/// 独占(居中于画面子盒);设置浮层让位快门柱;拉焦轮 bottomRight
 /// (右上角留给录制读出)。纯净监看隐去全部控制浮层,只留画面与监看
 /// 叠层,恢复钮在右上角。方向按钮(恒显转屏图标,点按横↔竖直切,
 /// 初始态跟随系统)经 SystemChrome 强制,系统转屏锁开着也能切,不
@@ -83,6 +88,7 @@ import '../../data/settings_store.dart';
 import '../../platform/motion_host.dart';
 import '../../platform/services.dart';
 import '../browser/photo_grid_page.dart';
+import '../settings/settings_page.dart' show SettingsController;
 import 'feed_transform.dart';
 import 'live_design.dart';
 import 'monitor_toggles.dart';
@@ -126,7 +132,8 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   late final ValueListenable<AppSettings> _settings =
       widget.settingsListenable ?? AppServices.instance.settingsController;
 
-  /// 监看辅助开关(页面级视图偏好,不入持久化设置)。
+  /// 监看辅助开关(十二轮起持久化:进页从 [_settings] 桥接恢复,改动
+  /// 经 [_persistSettings] 写回;单测注入裸 ValueNotifier 时只在内存里)。
   MonitorToggles _toggles = const MonitorToggles();
 
   /// 读出条中当前打开面板的参数(金高亮 tile)。
@@ -169,10 +176,18 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     _wasLinkUp = controller.linkUp;
     _wasRecovering = controller.reconnecting;
     controller.addListener(_onControllerChanged);
+    // 监看开关/取景开关持久化(十二轮):进页恢复 + 外部改动(设置页/
+    // 其他会话)跟随;取景总闸同步给控制器(注入裸 ValueNotifier 的
+    // 单测没有 AppServices 装配线,这里兜一道;生产路径同值幂等)。
+    _toggles = monitorTogglesFromSettings(_settings.value);
+    _syncAnalyzerEnabled();
+    controller.autoLiveViewEnabled = _settings.value.liveViewOn;
+    _settings.addListener(_onSettingsChanged);
     // 取景默认打开(2026-10-10 用户需求,取景开关钮撤除):未跑则自动
     // 起景 —— 幂等(HomeShell 连接沿的 autoLiveViewOnConnect 同款),
     // 引擎 failed 态进页也由此重试。直挂/未连接场景 linkUp 是冷启乐观
     // 门闩(恒真)照样发,失败落占位「重试取景」,与真连接同形。
+    // 十二轮:设置里持久关过取景 → 控制器闸门挡住(上面刚同步)。
     if (widget.active && !controller.liveViewActive) {
       unawaited(controller.autoLiveViewOnConnect());
     }
@@ -219,6 +234,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     controller.removeListener(_onControllerChanged);
+    _settings.removeListener(_onSettingsChanged);
     // 离页只挂起轮询(取景生命周期跟连接走,不因拆页发 0x9202)。
     // 方向收口走 PopScope(pop 起点即发,不等 dispose);此处不动锁。
     controller.setViewerVisible(false);
@@ -252,10 +268,48 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     }
   }
 
-  /// 开关组落定(监看开关 + 帧分析器启停同步)。
+  /// 开关组落定(监看开关 + 帧分析器启停同步 + 持久化写回)。
   void _updateToggles(MonitorToggles toggles) {
     setState(() => _toggles = toggles);
     _syncAnalyzerEnabled();
+    _persistSettings(applyMonitorToggles(_settings.value, toggles));
+  }
+
+  /// 设置外部改动沿(十二轮持久化):监看开关组差分跟随(同值零动作,
+  /// 自己写回触发的回声在此吸收);取景总闸同步控制器。
+  void _onSettingsChanged() {
+    if (!mounted) return;
+    controller.autoLiveViewEnabled = _settings.value.liveViewOn;
+    final toggles = monitorTogglesFromSettings(_settings.value);
+    if (toggles != _toggles) {
+      setState(() => _toggles = toggles);
+      _syncAnalyzerEnabled();
+    }
+  }
+
+  /// 拍摄页侧设置写回:注入 SettingsController 走 apply(落盘,失败仅
+  /// 吞 —— 会话内仍生效);单测注入裸 ValueNotifier 只改内存值。
+  void _persistSettings(AppSettings next) {
+    final src = _settings;
+    if (src is SettingsController) {
+      unawaited(src.apply(next));
+    } else if (src is ValueNotifier<AppSettings>) {
+      src.value = next;
+    }
+  }
+
+  /// 取景开关落定(浮层「取景」钮,十二轮「取景器关闭的开关」):持久
+  /// 位与控制器总闸同拍更新,再按需起/停景 —— 关 = 引擎停(0x9202,
+  /// 相机侧退及时取景),开 = 未跑则起(走 toggleLiveView 而非自动起景
+  /// 单飞槽:显式操作不受闸门,起景失败落「重试取景」占位)。录制中
+  /// 禁点(浮层侧已禁,这里再守一道 —— 停录走快门,取景门不能被拆)。
+  Future<void> _setLiveView(bool start) async {
+    if (controller.recording) return;
+    controller.autoLiveViewEnabled = start;
+    _persistSettings(_settings.value.copyWith(liveViewOn: start));
+    if (start != controller.liveViewActive) {
+      await controller.toggleLiveView();
+    }
   }
 
   /// 设置浮层开/关(再点同钮即收)。
@@ -359,7 +413,8 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         // 20([kScreenEdgePadding])。顶部 notch(竖屏胶囊/恢复钮/取景
         // 盒 topInset)经 MediaQuery.padding 手动补偿;横屏上下安全
         // 插入本为 0 无需补偿。灵动岛在横屏侧缘中点 —— 岛侧快门右段
-        // 会藏进岛里,是本定案的已知代价。
+        // 会藏进岛里,是本定案的已知代价。九轮:竖屏左右边距亦统一 20
+        // (四缘一致)。
         body: body,
       ),
     );
@@ -384,11 +439,13 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   }
 
   /// 竖屏 iPhone 相机式排版(2026-10-10 重排;2026-10-12 三轮:画面
-  /// 全幅铺底恒满宽,底部两行改浮层压画面下沿):取景画面占整页
-  /// ([FeedFit.widthFill] —— 竖拍内容两侧不留黑边,比屏更高裁上下),
-  /// 信息胶囊(含纯净监看隐藏钮)浮在画面顶部(顶距补 notch,六轮
-  /// 破安全区后手动补偿);底部两行浮层压画面下沿、距**物理屏缘 20**
-  /// ([kScreenEdgePadding] 破手势条安全区,参照 iOS 相机底部按钮距离)
+  /// 全幅铺底恒满宽,底部两行改浮层压画面下沿;九轮:四缘统一 20):
+  /// 取景画面占整页([FeedFit.widthFill] —— 竖拍内容两侧不留黑边,
+  /// 比屏更高裁上下),信息胶囊(含纯净监看隐藏钮)浮在画面顶部(顶距
+  /// 补 notch,六轮破安全区后手动补偿;左右 20);底部两行浮层压画面
+  /// 下沿、距**物理屏缘 20**([kScreenEdgePadding] 破手势条安全区,
+  /// 参照 iOS 相机底部按钮距离;左右同为 20 —— 九轮用户「左右两侧按钮
+  /// 离边的距离和离下方的距离保持一致」)
   /// —— 控制行(对焦 | 快门 | 设置)→ 底行(相册 | 模式条 |
   /// 旋转,参数读出行已删,参数入口 = 设置浮层);行内空白自吃
   /// (opaque 吸收层垫在按钮下,不落到画面手势)。设置为非模态浮层,
@@ -458,8 +515,8 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                       ),
                     Positioned(
                       top: pad.top + 8,
-                      left: 12,
-                      right: 12,
+                      left: kScreenEdgePadding,
+                      right: kScreenEdgePadding,
                       child: RemoteInfoPill(
                         controller: controller,
                         onHideChrome: _hideChrome,
@@ -471,8 +528,8 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                         bottom: kScreenEdgePadding +
                             kPortraitBottomChromeHeight +
                             8,
-                        left: 12,
-                        right: 12,
+                        left: kScreenEdgePadding,
+                        right: kScreenEdgePadding,
                         child: Center(
                           child: ConstrainedBox(
                             constraints: const BoxConstraints(
@@ -483,6 +540,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                               activeParam: _activeParam,
                               onEditParam: _editParam,
                               onTogglesChanged: _updateToggles,
+                              onLiveViewToggle: _setLiveView,
                               onTakeoverRequest: _confirmTakeover,
                               maxHeight: panelMaxHeight,
                             ),
@@ -537,10 +595,11 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                           onOpenSettings: _toggleSettings,
                         ),
                         Padding(
-                          // 六轮:左右边距回 12(用户「还是太远」,参照
-                          // iOS 相机);底距已由层锚的物理屏缘 20 承担,
-                          // 行内不再垫底。
-                          padding: const EdgeInsets.fromLTRB(12, 2, 12, 0),
+                          // 九轮:左右边距与屏底统一 20(kScreenEdgePadding,
+                          // 用户「左右两侧按钮离边的距离和离下方的距离
+                          // 保持一致」);底距由层锚的物理屏缘 20 承担。
+                          padding: const EdgeInsets.fromLTRB(
+                              kScreenEdgePadding, 2, kScreenEdgePadding, 0),
                           child: Row(
                             children: [
                               AlbumThumbButton(
@@ -576,11 +635,11 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
           ),
         ),
         // 纯净监看恢复钮:chrome 全隐后唯一入口(监看叠层/横幅仍在),
-        // 与胶囊行尾隐藏钮同位(右上角,顶距补 notch)。
+        // 与胶囊行尾隐藏钮同位(右上角,顶距补 notch;右距九轮统一 20)。
         if (_chromeHidden)
           Positioned(
             top: pad.top + 8,
-            right: 12,
+            right: kScreenEdgePadding,
             child: ChromeIconButton(
               icon: Icons.visibility,
               tooltip: '显示控制界面',
@@ -615,17 +674,22 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     });
   }
 
-  /// 横屏监看(2026-10-12 三轮定案;六轮破安全区;八轮轴线对齐):取景盒
-  /// **右缩 108 让位快门柱**(画面移出按钮、heightFill 恒满高 —— 上下永无
-  /// 黑边;3:2 照片满高后左右黑边留在取景盒内);顶栏一条 = **信息胶囊
-  /// 居中于取景盒**(八轮与贴底模式条同轴线;收缩包内容,纯净监看钮入
-  /// 胶囊行尾);快门柱**距物理屏右缘 20**(kScreenEdgePadding,与竖屏
-  /// 底距同距 —— 破侧边安全区;灵动岛在侧缘中点,岛侧快门右段入岛)
-  /// 全高中置五件竖排(**旋转 / 设置 / 快门 78 / 对焦 / 相册** —— 方向钮
-  /// 自贴底条迁入柱顶,相册坠底;快门两向同 78 = 用户定案「横屏按钮保持
-  /// 和竖屏大小一样」);贴底条 = 模式条独占(居中于取景盒)。设置浮层
-  /// 让位快门柱(right: 108)。chrome 整体(顶栏 + 快门柱 + 贴底条 +
-  /// 浮层)经 IgnorePointer + AnimatedOpacity 支持纯净监看淡出。
+  /// 横屏监看(2026-10-12 三轮定案;六轮破安全区;八轮轴线对齐;九轮
+  /// 画面右移 + 胶囊定宽;十轮顶底镜像 + 柱共轴):取景盒**左缩 60 +
+  /// 右缩 118**(右让位快门柱,画面移出按钮;heightFill 恒满高 ——
+  /// 上下永无黑边,3:2 照片满高后左右黑边留在盒内;左缩 60 = 九轮
+  /// 「取景往右移一点」:画面右移 30);顶栏一条 = **信息胶囊定宽
+  /// [kLandscapePillWidth] 居中于取景盒**(八轮与贴底模式条同轴线;
+  /// 十轮顶距 6 + 栏高 38 + 胶囊高 38,与贴底条 6+38 上下镜像
+  /// 「和底部一致」;纯净监看钮入胶囊行尾);快门柱**距物理屏右缘
+  /// [kScreenEdgePadding]**(破侧边安全区;灵动岛在侧缘中点,岛侧
+  /// 快门右段入岛)全高中置五件竖排(**旋转 / 设置 / 快门 78 / 对焦 /
+  /// 相册** —— 方向钮自贴底条迁入柱顶,相册坠底;快门两向同 78 =
+  /// 用户定案「横屏按钮保持和竖屏大小一样」;十轮五件**共轴于快门心**
+  /// 「以拍照按钮居中对齐,而不是右边对齐」);贴底条 = 模式条独占
+  /// (居中于取景盒)。设置浮层让位快门柱(right: 118)。chrome 整体
+  /// (顶栏 + 快门柱 + 贴底条 + 浮层)经 IgnorePointer + AnimatedOpacity
+  /// 支持纯净监看淡出。
   ///
   /// 监听拆两层:feed 区照旧 merge(controller+frame+status)逐帧刷;
   /// chrome 层只听 controller —— 帧到达只写 ValueNotifier 不
@@ -640,13 +704,15 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       fit: StackFit.expand,
       children: [
         // feed 区不能裸放:帧到达只写 ValueNotifier 不 notifyListeners,
-        // 没有这层 merge 监听,首屏永远停在「等待首帧」。取景盒右缩
-        // 108 = 快门柱让位(柱右距物理屏缘 20、柱带宽 20+78=98 + 10
-        // 间隙 —— 快门两向同 78):视频 heightFill 恒满高,上下永无
-        // 黑边。盒已右缩,盒内贴右叠层(录制读出/拉焦轮)的
-        // rightInset 归零 —— 屏幕位置与旧全宽盒 + rightInset 全同。
+        // 没有这层 merge 监听,首屏永远停在「等待首帧」。取景盒**左缩 60
+        // + 右缩 118**(右 = 快门柱让位:柱右距物理屏缘 30
+        // ([kScreenEdgePadding] 手调值)、柱带宽 30+78=108 + 10 间隙;
+        // 左 = 九轮「把取景往右侧移动一点」:盒左缩 60 → heightFill 画面
+        // 右移 30):视频 heightFill 恒满高,上下永无黑边。盒内贴右叠层
+        // (录制读出/拉焦轮)的 rightInset 归零 —— 屏幕位置与旧全宽盒 +
+        // rightInset 全同。
         Padding(
-          padding: const EdgeInsets.only(right: 108),
+          padding: const EdgeInsets.only(left: 60, right: 118),
           child: AnimatedBuilder(
             animation: Listenable.merge([
               controller,
@@ -695,13 +761,15 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                       ),
                     // 顶栏:信息胶囊**居中于取景盒**(2026-10-12 用户定案
                     // 「这一个按钮居中」;八轮定案与贴底模式条同轴线 ——
-                    // 顶栏同样右缩 108 让位快门柱,胶囊 compact 收缩包内容
-                    // 才可被 Center 居中);纯净监看钮入胶囊行尾(与竖屏
-                    // 同款单入口,不再另摆顶栏右端)。
+                    // 顶栏与取景盒同缩(左 60/右 118),胶囊心随盒走;
+                    // 九轮定宽 [kLandscapePillWidth],内容不变、内部
+                    // Spacer 拉开、隐藏钮贴行尾;十轮顶距 6 + 栏高 38 +
+                    // 胶囊高 38,与贴底条 6+38 上下镜像「和底部一致」);
+                    // 纯净监看钮入胶囊行尾(与竖屏同款单入口)。
                     Positioned(
-                      top: 8,
-                      left: 0,
-                      right: 108,
+                      top: 6,
+                      left: 60,
+                      right: 118,
                       height: kLandscapeTopBarHeight,
                       child: Padding(
                         padding: const EdgeInsets.only(left: 10, right: 10),
@@ -710,6 +778,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                             controller: controller,
                             margin: EdgeInsets.zero,
                             compact: true,
+                            fixedWidth: kLandscapePillWidth,
                             onHideChrome: _hideChrome,
                           ),
                         ),
@@ -720,11 +789,13 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                     // 方向钮自贴底条迁入柱顶,相册坠底;快门两向同 78
                     // = 用户定案「横屏按钮保持和竖屏大小一样」,高度账
                     // 54+8+54+8+78+8+54+8+54=326,402pt 级横屏可容,
-                    // 柱在取景盒外的右缩带内 —— 不压画面)。六轮右移:
-                    // 右距**物理屏缘 20**(破侧边安全区,与竖屏底距
-                    // 同距,参照 iOS 相机;柱件 crossAxisAlignment.end
-                    // 右缘齐平,快门最宽凸左 24)。灵动岛在侧缘中点,
-                    // 岛侧方向快门右段藏进岛里 —— 已知代价,翻面即避。
+                    // 柱在取景盒外的右缩带内 —— 不压画面)。**十轮:五件
+                    // 共轴居中**(用户「以拍照按钮居中对齐,而不是右边
+                    // 对齐」—— 柱宽即快门 78,四枚 54 钮以快门心对中,
+                    // 废除六轮的右缘齐平/凸左)。柱右距**物理屏缘 30**
+                    // ([kScreenEdgePadding] 手调值,破侧边安全区)。
+                    // 灵动岛在侧缘中点,岛侧方向快门右段藏进岛里 ——
+                    // 已知代价,翻面即避。
                     Positioned(
                       top: 0,
                       bottom: 0,
@@ -741,10 +812,11 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                       ),
                     ),
                     // 贴底条:模式条独占、居中于取景盒(旋转钮已迁快门
-                    // 柱顶;right: 108 让位柱带,贴底叠层让位 bottomInset)。
+                    // 柱顶;左右与盒同缩(60/118)让位柱带,贴底叠层让位
+                    // bottomInset)。
                     Positioned(
-                      left: 0,
-                      right: 108,
+                      left: 60,
+                      right: 118,
                       bottom: 0,
                       child: Padding(
                         padding: const EdgeInsets.only(
@@ -760,11 +832,11 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                         ),
                       ),
                     ),
-                    // 设置浮层:让位右缘快门柱(柱带宽 20+78=98 + 10 间隙)。
+                    // 设置浮层:让位右缘快门柱(柱带宽 30+78=108 + 10 间隙)。
                     if (_settingsOpen)
                       Positioned(
                         top: kLandscapeTopInset + 8,
-                        right: 108,
+                        right: 118,
                         width: kCapturePanelWidth,
                         child: CaptureSettingsPanel(
                           controller: controller,
@@ -772,6 +844,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                           activeParam: _activeParam,
                           onEditParam: _editParam,
                           onTogglesChanged: _updateToggles,
+                          onLiveViewToggle: _setLiveView,
                           onTakeoverRequest: _confirmTakeover,
                           maxHeight: panelMaxHeight,
                         ),
@@ -783,13 +856,13 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
           ),
         ),
         // 纯净监看恢复钮:chrome 全隐后唯一入口(监看叠层/横幅仍在),
-        // 摆在顶栏胶囊同位(居中于取景盒 —— 同款右缩 108 轴线,同竖屏
-        // 「恢复钮同位」口径)。
+        // 摆在顶栏胶囊同位(居中于取景盒 —— 与盒同缩 60/118 轴线、
+        // 顶距 6 同款,十轮与贴底镜像)。
         if (_chromeHidden)
           Positioned(
-            top: 8,
-            left: 0,
-            right: 108,
+            top: 6,
+            left: 60,
+            right: 118,
             height: kLandscapeTopBarHeight,
             child: Padding(
               padding: const EdgeInsets.only(left: 10, right: 10),

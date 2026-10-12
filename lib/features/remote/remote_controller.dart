@@ -1401,8 +1401,10 @@ final class RemoteController extends ChangeNotifier {
   /// 进及时取景 —— 退出上传优先的收尾一步)。由本控制器的 connected
   /// 沿串链驱动([_onConnectedChain]),进页/回台沿(RemotePage)同款
   /// 幂等调用。拍摄页不在前台也无妨:0x9201 照发(相机进取景),帧轮询
-  /// 挂起等页面可见([setViewerVisible])。用户显式关过取景(session
-  /// 内)也照样重开 —— 每次新连接都是「连接即监看」(OpenZCine 同款)。
+  /// 挂起等页面可见([setViewerVisible])。闸门 [autoLiveViewEnabled]
+  /// (十二轮持久化的取景总开关,AppServices 同步自设置):关 = 连接/
+  /// 进页/回台沿都不自动起景;用户在浮层里显式开([toggleLiveView])
+  /// 不经此闸,照常生效。
   ///
   /// 单飞:连接沿/进页沿/回台沿可能同拍到达(连接成功恰逢进页),
   /// 共享在途 Future —— 否则两个 start() 都过 status==running 门
@@ -1414,6 +1416,7 @@ final class RemoteController extends ChangeNotifier {
     _autoStartInFlight = completer.future;
     () async {
       try {
+        if (!autoLiveViewEnabled) return;
         if (!_linkUp) return;
         if (engine.status.value == LiveViewStatus.running) return;
         await engine.start();
@@ -1428,6 +1431,13 @@ final class RemoteController extends ChangeNotifier {
     }();
     return completer.future;
   }
+
+  /// 取景总开关(十二轮):闸 [autoLiveViewOnConnect] 的连接沿/进页/
+  /// 回台自动起景;显式 [toggleLiveView] 不受闸。AppServices 装配后
+  /// 同步自 settingsController.value.liveViewOn(含监听),拍摄页
+  /// 浮层「取景」钮改动也同步到这里 —— 单测直挂控制器时默认 true
+  /// 保持「取景默认打开」原行为。
+  bool autoLiveViewEnabled = true;
 
   /// 在途的自动起景([autoLiveViewOnConnect] 单飞槽)。
   Future<void>? _autoStartInFlight;
