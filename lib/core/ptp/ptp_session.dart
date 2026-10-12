@@ -545,14 +545,22 @@ final class PtpSession {
   }
 
   /// GetDevicePropDesc(0x1014):属性全描述(类型/可写性/枚举域/默认值),
-  /// 数据集自描述类型,是裸值解码的对照组。
+  /// 数据集自描述类型,是裸值解码的对照组。扩展属性码(> 0xFFFF)自动
+  /// 改走 Gen-3 Ex desc(0x943A,同 [getDevicePropValue] 路由口径;
+  /// 2026-10-12 USB 探针实证:0x0001D001 色调/0x0001D005-06 主体检测
+  /// 全应答,FORM 布局与标准 desc 同构 —— 色调/主体检测从此吃相机
+  /// FORM 而非 pickValues 直供)。
   Future<PtpDevicePropDesc> getDevicePropDesc(int propCode) async {
+    final op = propCode > 0xFFFF
+        ? NikonOperationCode.getDevicePropDescEx
+        : PtpOperationCode.getDevicePropDesc;
     final result = await _serialized(() => transport.execute(PtpRequest(
-          opcode: PtpOperationCode.getDevicePropDesc,
+          opcode: op,
           params: [propCode],
         )));
-    _ensureOk(result, PtpOperationCode.getDevicePropDesc);
-    return PtpDevicePropDesc.parse(result.data ?? Uint8List(0));
+    _ensureOk(result, op);
+    return PtpDevicePropDesc.parse(result.data ?? Uint8List(0),
+        expectedCode: propCode);
   }
 
   /// SetDevicePropValue(0x1016,数据入相)。门禁 [kSetPropEnabled]。
@@ -995,11 +1003,16 @@ final class PtpSession {
     }
   }
 
-  /// Nikon InitiateCaptureRecInSdram(0x90C0,候选码,待真机核对):
-  /// 无卡拍进机身缓存(速传场景的对象随后经 ObjectAddedInSdram 事件流出)。
-  Future<void> initiateCaptureRecInSdram() async {
-    final result = await _serialized(() => transport.execute(const PtpRequest(
-        opcode: NikonOperationCode.initiateCaptureRecInSdram)));
+  /// Nikon InitiateCaptureRecInSdram(0x90C0):SDRAM 拍摄(无卡拍进
+  /// 机身缓存,速传场景的对象随后经 ObjectAddedInSdram 事件流出)。
+  /// **必须有 CaptureSort 参数**(2026-10-13 USB 探针:无参 0x2006、
+  /// [0,0] 0x201D、0xFFFFFFFF 直释放 0x2001 —— 官方 §6.2.4.2
+  /// P1=CaptureSort 同 0x9207;[0,0] 是两码共用的坑)。
+  /// [captureSort] 缺省 0xFFFFFFFF。
+  Future<void> initiateCaptureRecInSdram({int captureSort = 0xFFFFFFFF}) async {
+    final result = await _serialized(() => transport.execute(PtpRequest(
+        opcode: NikonOperationCode.initiateCaptureRecInSdram,
+        params: [captureSort])));
     _ensureOk(result, NikonOperationCode.initiateCaptureRecInSdram);
   }
 

@@ -1307,5 +1307,27 @@ void main() {
       expect(t.requests[2].dataOut, [9]);
       expect(got.data, [7]);
     });
+
+    test('getDevicePropDesc:Ex 码(>0xFFFF)路由 0x943A,u32 码定宽解析'
+        '(2026-10-13 USB 探针实证 0x0001D001 色调)', () async {
+      // 探针实录数据集:code u32 + u8 型 + getSet + 出厂 + 当前 + 枚举{0,1,2}
+      final exDesc = Uint8List.fromList([
+        0x01, 0xD0, 0x01, 0x00, // 0x0001D001(u32 LE)
+        0x02, 0x00, // UINT8
+        0x01, // getSet = 可写
+        0x00, // 出厂 = 0(SDR,官方默认)
+        0x02, // 当前 = 2(HLG,相机实际值)
+        0x02, 0x03, 0x00, 0x00, 0x01, 0x02, // 枚举 3 值 {0,1,2}
+      ]);
+      t.reply(PtpResult(responseCode: PtpResponseCode.ok, data: exDesc));
+      final d = await session.getDevicePropDesc(0x0001D001);
+      expect(t.requests.single.opcode, NikonOperationCode.getDevicePropDescEx);
+      expect(t.requests.single.params, [0x0001D001]);
+      expect(d.dataType, PtpDataType.uint8);
+      expect(d.getSet, isTrue);
+      expect(d.factoryValue, 0);
+      expect(d.currentValue, 2);
+      expect(d.enumValues, [0, 1, 2]);
+    });
   });
 }
