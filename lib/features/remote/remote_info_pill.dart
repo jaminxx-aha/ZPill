@@ -10,8 +10,10 @@ import 'remote_controller.dart';
 /// 自带 ChromeIconButton 同职,[onHideChrome] 传 null 即不渲染);
 /// 隐藏后恢复钮出现在**同一处**(页面在右上角同位摆恢复钮)。
 ///
-/// [compact]:横屏顶栏态 —— 不占满宽(收缩包内容,顶栏中部透出
-/// 画面),徽标前用小间距代替 Spacer 撑开。
+/// [compact]:横屏顶栏态(2026-10-12 胶囊整体居中)—— 收缩包内容
+/// (mainAxisSize.min,名字 Flexible 而非 Expanded)可被 Center 居中,
+/// 徽标前用小间距代替 Spacer 撑开;非 compact 照旧占满宽、行尾恒贴
+/// 右缘(2026-10-10 修 Flexible→Expanded 的同款口径)。
 class RemoteInfoPill extends StatelessWidget {
   const RemoteInfoPill({
     super.key,
@@ -49,6 +51,10 @@ class RemoteInfoPill extends StatelessWidget {
         border: Border.all(color: live.hairline),
       ),
       child: Row(
+        // compact 收缩包内容(横屏胶囊居中的前提);非 compact 占满宽
+        // (Container width infinity 的紧约束下 min/max 同果,行尾贴右)。
+        mainAxisSize:
+            compact ? MainAxisSize.min : MainAxisSize.max,
         children: [
           if (canPop) ...[
             _backButton(context, live),
@@ -57,17 +63,26 @@ class RemoteInfoPill extends StatelessWidget {
           Icon(Icons.circle,
               size: 8, color: linked ? live.good : live.bad),
           const SizedBox(width: 8),
-          // 横屏顶栏与浮层分宽,名字可能被挤 —— 省略号收尾。Expanded
-          // 吃满余量:行尾徽标/隐藏钮恒贴右缘(旧 Flexible+Spacer 各分
-          // 一半自由空间,短设备名时行尾钮悬在半行 —— 2026-10-10 隐藏/
-          // 恢复同位需求暴露)。
-          Expanded(
-            child: Text(
-              linked ? (name ?? '已连接') : '未连接相机',
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(fontSize: 12, color: live.text),
-            ),
-          ),
+          // 横屏顶栏与浮层分宽,名字可能被挤 —— 省略号收尾。非 compact
+          // 用 Expanded 吃满余量:行尾徽标/隐藏钮恒贴右缘(旧 Flexible+
+          // Spacer 各分一半自由空间,短设备名时行尾钮悬在半行 ——
+          // 2026-10-10 隐藏/恢复同位需求暴露);compact 用 Flexible 收缩
+          // 包内容(名字取内在宽,超限省略)。
+          compact
+              ? Flexible(
+                  child: Text(
+                    linked ? (name ?? '已连接') : '未连接相机',
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 12, color: live.text),
+                  ),
+                )
+              : Expanded(
+                  child: Text(
+                    linked ? (name ?? '已连接') : '未连接相机',
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 12, color: live.text),
+                  ),
+                ),
           if (linked && controller.shotsRemaining != null) ...[
             const SizedBox(width: 10),
             Text('${controller.shotsRemaining} 张',

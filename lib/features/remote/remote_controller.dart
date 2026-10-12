@@ -89,12 +89,15 @@ final class PropState {
 }
 
 /// 触控对焦框:归一化坐标(0..1,取景图像坐标系;页面按 BoxFit.contain
-/// 映射回屏幕)。相机侧合焦与否无事件可依 —— 纯位置指示,下次点按
-/// 替换、停取景/断连清除。
+/// 映射回屏幕)。[focused] 由 0x90C1 应答推得:null = 对焦中/未知,
+/// true = 合焦,false = 未合焦(0xA002)—— 框色跟机身屏对齐只有红绿
+/// 两色(2026-10-12 用户定案:合焦绿、其余红);纯位置仍由点按替换、
+/// 停取景/断连清除。
 final class AfBox {
-  const AfBox({required this.nx, required this.ny});
+  const AfBox({required this.nx, required this.ny, this.focused});
   final double nx;
   final double ny;
+  final bool? focused;
 }
 
 /// 应用内方向锁(拍摄页方向按钮):auto 跟随系统(仅初始态);landscape/
@@ -1171,18 +1174,32 @@ final class RemoteController extends ChangeNotifier {
   }
 
   /// 驱动自动对焦(0x90C1):挂起取景轮询防事务挤占串行锁;厂商响应码
-  /// (0xA002 未合焦 / 0xA004 状态不允许等)转友好提示。
+  /// (0xA002 未合焦 / 0xA004 状态不允许等)转友好提示。应答同时驱动
+  /// [AfBox.focused](两色制:合焦绿 / 其余红,见类注;既有框在起步时
+  /// 先回未定红 = 对焦中),对焦钮与触控对焦两条路都经此。
   Future<void> _driveAf() async {
     focusing = true;
+    final box = afBox;
+    if (box != null) {
+      afBox = AfBox(nx: box.nx, ny: box.ny); // 回未定红 = 对焦中
+    }
     notifyListeners();
     engine.pause();
+    bool? focused;
     try {
       await session.afDrive();
+      focused = true;
     } on PtpResponseException catch (e) {
+      focused = e.responseCode == NikonResponseCode.outOfFocus ? false : null;
       error = '对焦失败:${_nikonHint(e.responseCode) ?? e}';
     } on Exception catch (e) {
+      focused = null; // 链路/超时类失败:合焦与否未知,不冒充结论
       error = '对焦失败:$e';
     } finally {
+      final b = afBox;
+      if (b != null && focused != null) {
+        afBox = AfBox(nx: b.nx, ny: b.ny, focused: focused);
+      }
       if (_viewerVisible) engine.resume();
       focusing = false;
       if (_linkUp) notifyListeners();

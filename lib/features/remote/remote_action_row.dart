@@ -5,22 +5,18 @@ import 'package:flutter/material.dart';
 import 'live_design.dart';
 import 'remote_controller.dart';
 
-/// 竖屏控制行(2026-10-10 iPhone 相机式重排:取景/对焦/录制动作行撤
-/// 除 —— 取景默认开、对焦/设置各有浮层、录像并进快门):相机相册缩略
-/// 图 | 对焦 | 大圆环快门(模式感知:视频模式红芯)| 设置 | 方向旋转。
-/// 缩略图钮显示最近一拍([RemoteController.reviewThumb],即拍即览同
-/// 源),无图时相册图标占位,点按进相机相册;对焦/设置钮开各自非模态
-/// 浮层(页面态单开,见 RemotePage);旋转钮横竖直切。横屏右缘竖排的
-/// 同组四件(无旋转)见 [CaptureShutterColumn]。
+/// 竖屏控制行(2026-10-12 底区重排:模式条/相册/旋转迁底行,控制行
+/// 只留快门双翼):对焦 | 大圆环快门(模式感知:视频模式红芯)| 设置。
+/// 对焦钮**点按即驱动一次 AF**(用户定案:只负责对焦,MF 步进/拉焦轮
+/// 在拍摄设置浮层);设置钮开非模态浮层。横屏右缘竖排的五件(含旋转,
+/// 2026-10-12 用户定案自上而下 旋转/设置/快门/对焦/相册)见
+/// [CaptureShutterColumn];模式条的贴底条在页面装配(RemotePage)。
 class CaptureControlRow extends StatelessWidget {
   const CaptureControlRow({
     super.key,
     required this.controller,
     required this.mode,
-    required this.onOpenAlbum,
-    required this.onOpenFocus,
     required this.onOpenSettings,
-    required this.onToggleOrientation,
   });
 
   final RemoteController controller;
@@ -28,43 +24,25 @@ class CaptureControlRow extends StatelessWidget {
   /// 拍摄模式(照片/视频)—— 快门钮据此分支。
   final CaptureMode mode;
 
-  /// 点按缩略图钮 → 打开相机相册(页面侧路由)。
-  final VoidCallback onOpenAlbum;
-
-  /// 点按对焦钮 → 开/关对焦浮层(AF / MF 步进 / 拉焦轮)。
-  final VoidCallback onOpenFocus;
-
-  /// 点按设置钮 → 开/关拍摄设置浮层(参数 / 监看 / 辅助)。
+  /// 点按设置钮 → 开/关拍摄设置浮层(参数 / 对焦 / 监看 / 辅助)。
   final VoidCallback onOpenSettings;
-
-  /// 方向旋转:横↔竖直切(页面侧 SystemChrome)。
-  final VoidCallback onToggleOrientation;
 
   @override
   Widget build(BuildContext context) {
     final live = LiveDesign.of(context);
     return Padding(
-      // 12 边距:五键一行在 360pt 窄屏也要有余隙(54×4+78=294)。
-      padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
+      // 左右边距 12(2026-10-12 六轮回落:五轮加倍后用户仍嫌远,参照
+      // iOS 相机底部按钮)。
+      padding: const EdgeInsets.fromLTRB(12, 6, 12, 2),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          _albumThumbButton(live, controller, onOpenAlbum),
-          CaptureCircleButton(
-            icon: Icons.center_focus_strong,
-            tooltip: '对焦辅助(AF / MF 步进 / 拉焦轮)',
-            onTap: onOpenFocus,
-          ),
+          _focusButton(live, controller),
           _shutterButton(live, controller, mode: mode, size: 78),
           CaptureCircleButton(
             icon: Icons.tune,
             tooltip: '拍摄设置(参数 / 网格斑马纹 / 辅助)',
             onTap: onOpenSettings,
-          ),
-          CaptureCircleButton(
-            // 方向钮不包 Tooltip(见类注:长按抬起须等同点按)
-            icon: Icons.screen_rotation,
-            onTap: onToggleOrientation,
           ),
         ],
       ),
@@ -72,19 +50,22 @@ class CaptureControlRow extends StatelessWidget {
   }
 }
 
-/// 横屏快门柱(2026-10-10 随竖屏 iPhone 相机式重排:动作行撤除后竖排
-/// 四件):相机相册缩略图 / 对焦 / 大圆环快门(64,四件竖排的高度账
-/// 54+8+54+8+64+8+54=250,390pt 屏右列区 390-64-64=262 可容)/ 设置,
-/// 锚在右缘纵向中点。状态随控制器,监听由外层 AnimatedBuilder 驱动;
-/// 颜色随应用主题(LiveDesign.of)。方向旋转在贴底条右端(页面装配)。
+/// 横屏快门柱(2026-10-12 用户定案柱序自上而下:**旋转 / 设置 / 快门
+/// (64)/ 对焦 / 相册**—— 方向钮自贴底条迁入柱顶,相册坠底):五件
+/// 竖排高度账 54+8+54+8+64+8+54+8+54=312,402pt 级横屏可容,锚右缘
+/// 纵向居中。**crossAxisAlignment: end 五件右缘齐平**(2026-10-12
+/// 六轮:柱右距**物理屏缘 20** 破安全区,与竖屏底距同距 —— 快门最宽
+/// 凸左 10)。状态随控制器,监听由外层 AnimatedBuilder 驱动;颜色随
+/// 应用主题(LiveDesign.of)。旋转钮不包 Tooltip(长按抬起须等同点按,
+/// 见 [CaptureCircleButton] 类注)。
 class CaptureShutterColumn extends StatelessWidget {
   const CaptureShutterColumn({
     super.key,
     required this.controller,
     required this.mode,
     required this.onOpenAlbum,
-    required this.onOpenFocus,
     required this.onOpenSettings,
+    required this.onRotate,
   });
 
   final RemoteController controller;
@@ -95,33 +76,36 @@ class CaptureShutterColumn extends StatelessWidget {
   /// 点按缩略图钮 → 打开相机相册(页面侧路由)。
   final VoidCallback onOpenAlbum;
 
-  /// 点按对焦钮 → 开/关对焦浮层(AF / MF 步进 / 拉焦轮)。
-  final VoidCallback onOpenFocus;
-
   /// 点按设置钮 → 开/关拍摄设置浮层(参数 / 监看 / 辅助)。
   final VoidCallback onOpenSettings;
+
+  /// 点按方向钮 → 横↔竖直切(页面侧方向锁循环)。
+  final VoidCallback onRotate;
 
   @override
   Widget build(BuildContext context) {
     final live = LiveDesign.of(context);
     return Column(
       mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.end,
       children: [
-        _albumThumbButton(live, controller, onOpenAlbum),
-        const SizedBox(height: 8),
+        // 方向钮不包 Tooltip(长按抬起须等同点按,见类注)
         CaptureCircleButton(
-          icon: Icons.center_focus_strong,
-          tooltip: '对焦辅助(AF / MF 步进 / 拉焦轮)',
-          onTap: onOpenFocus,
+          icon: Icons.screen_rotation,
+          onTap: onRotate,
         ),
-        const SizedBox(height: 8),
-        _shutterButton(live, controller, mode: mode, size: 64),
         const SizedBox(height: 8),
         CaptureCircleButton(
           icon: Icons.tune,
           tooltip: '拍摄设置(参数 / 网格斑马纹 / 辅助)',
           onTap: onOpenSettings,
         ),
+        const SizedBox(height: 8),
+        _shutterButton(live, controller, mode: mode, size: 64),
+        const SizedBox(height: 8),
+        _focusButton(live, controller),
+        const SizedBox(height: 8),
+        AlbumThumbButton(controller: controller, onTap: onOpenAlbum),
       ],
     );
   }
@@ -228,6 +212,44 @@ class CaptureCircleButton extends StatelessWidget {
   }
 }
 
+/// 对焦钮(快门左侧):**只负责对焦,点按即驱动一次 AF**(0x90C1,
+/// [RemoteController.afDriveNow];2026-10-12 用户定案 —— 原对焦浮层的
+/// MF 步进/拉焦轮移拍摄设置浮层)。对焦中转圈禁点(防重入);未连接/
+/// 未开取景/机身 MF 档灰化(控制器拦截是第二道,这里先不给出可点姿态)。
+Widget _focusButton(LivePalette live, RemoteController controller) {
+  final usable = controller.linkUp &&
+      controller.liveViewActive &&
+      !controller.focusModeIsMf;
+  return Tooltip(
+    message: '自动对焦',
+    child: SizedBox(
+      width: 54,
+      height: 54,
+      child: Material(
+        color: live.glass,
+        shape: CircleBorder(side: BorderSide(color: live.hairline)),
+        child: InkWell(
+          onTap: usable && !controller.focusing
+              ? controller.afDriveNow
+              : null,
+          customBorder: const CircleBorder(),
+          child: Center(
+            child: controller.focusing
+                ? SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2.2, color: live.accent),
+                  )
+                : Icon(Icons.center_focus_strong,
+                    size: 22, color: usable ? live.text : live.faint),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
 /// 快门钮(OpenZCine PhotographyShutterButton 同款,2026-10-10
 /// 拍照/录像合并):亮圈 + 亮芯,按下变半透明(拍照中)。深色 = 白圈
 /// 白芯(现状);浅色 = 墨圈 + 统一黄芯。**照片模式**:按下即拍 +
@@ -327,30 +349,42 @@ Widget _shutterButton(LivePalette live, RemoteController controller,
   );
 }
 
-/// 相册缩略图钮(控制行左/右列顶):最近一拍的即拍图,无图时相册图标
-/// 占位;点按进相机相册(手机相机语言 —— 拍完即看)。
-Widget _albumThumbButton(
-    LivePalette live, RemoteController controller, VoidCallback onOpenAlbum) {
-  final thumb = controller.reviewThumb;
-  return Tooltip(
-    message: '相机相册',
-    child: SizedBox(
-      width: 54,
-      height: 54,
-      child: Material(
-        color: live.glass,
-        shape: CircleBorder(side: BorderSide(color: live.hairline)),
-        child: InkWell(
-          onTap: onOpenAlbum,
-          customBorder: const CircleBorder(),
-          child: thumb != null
-              ? ClipOval(
-                  child: Image.memory(thumb,
-                      fit: BoxFit.cover, gaplessPlayback: true))
-              : Icon(Icons.photo_library_outlined,
-                  size: 22, color: live.text),
+/// 相册缩略图钮:最近一拍的即拍图([RemoteController.reviewThumb],
+/// 即拍即览同源),无图时相册图标占位;点按进相机相册(手机相机语言
+/// —— 拍完即看)。竖屏底行左端(2026-10-12 自控制行迁出)与横屏快门
+/// 柱底共用。
+class AlbumThumbButton extends StatelessWidget {
+  const AlbumThumbButton({super.key, required this.controller, this.onTap});
+
+  final RemoteController controller;
+
+  /// 点按 → 打开相机相册(页面侧路由);null 置灰。
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final live = LiveDesign.of(context);
+    final thumb = controller.reviewThumb;
+    return Tooltip(
+      message: '相机相册',
+      child: SizedBox(
+        width: 54,
+        height: 54,
+        child: Material(
+          color: live.glass,
+          shape: CircleBorder(side: BorderSide(color: live.hairline)),
+          child: InkWell(
+            onTap: onTap,
+            customBorder: const CircleBorder(),
+            child: thumb != null
+                ? ClipOval(
+                    child: Image.memory(thumb,
+                        fit: BoxFit.cover, gaplessPlayback: true))
+                : Icon(Icons.photo_library_outlined,
+                    size: 22, color: live.text),
+          ),
         ),
       ),
-    ),
-  );
+    );
+  }
 }

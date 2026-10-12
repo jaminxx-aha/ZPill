@@ -8,13 +8,15 @@ import 'shooting_param_catalog.dart';
 
 /// 拍摄设置浮层(2026-10-10 iPhone 相机式重排:控制行「设置」钮的非
 /// 模态玻璃浮层,竖屏底锚居中/横屏让位右缘快门柱;吸收原「监看辅助」
-/// 浮层 —— tune 钮由胶囊/顶栏移到控制行):三段 —— ①拍摄参数(全
-/// 目录 tile,点按走读出条同款 [onEditParam] → 参数编辑底单;读出条
-/// 仍是第一入口,零功能损失)②监看开关(网格/斑马纹/直方图/水平仪/
-/// 伪色/峰值;拉焦轮在对焦浮层)③辅助芯片(对焦后拍/自拍/APP 接管)。
-/// [maxHeight] 限高内滚(竖屏约 0.55 屏高,横屏顶栏与底条之间);点
-/// 取景画面或再点设置钮即收(见 RemotePage);状态随控制器 +
-/// [toggles](页面级视图偏好),监听由外层 AnimatedBuilder 驱动。
+/// 浮层 —— tune 钮由胶囊/顶栏移到控制行):四段 —— ①拍摄参数(全
+/// 目录 tile,点按走 [onEditParam] → 参数编辑底单;2026-10-12 竖屏
+/// 读出行与横屏左参数栏先后删除后成为唯一参数入口)②对焦
+/// (2026-10-12 自对焦浮层迁入:MF 步进/拉焦轮 —— 快门旁对焦钮已瘦身
+/// 为一键 AF)③监看开关(网格/斑马纹/直方图/水平仪/伪色/峰值)④辅
+/// 助芯片(对焦后拍/自拍/APP 接管)。[maxHeight] 限高内滚(竖屏约
+/// 0.55 屏高,横屏顶栏与底条之间);点取景画面或再点设置钮即收(见
+/// RemotePage);状态随控制器 + [toggles](页面级视图偏好),监听由
+/// 外层 AnimatedBuilder 驱动。
 class CaptureSettingsPanel extends StatelessWidget {
   const CaptureSettingsPanel({
     super.key,
@@ -60,6 +62,8 @@ class CaptureSettingsPanel extends StatelessWidget {
                       context, controller, activeParam, onEditParam, p),
               ],
             ),
+            _sectionHeader(live, '对焦'),
+            _focusControls(context),
             _sectionHeader(live, '监看'),
             _monitorToggles(context),
             _sectionHeader(live, '辅助'),
@@ -90,7 +94,123 @@ class CaptureSettingsPanel extends StatelessWidget {
                 color: live.faint)),
       );
 
-  /// 监看开关组(原辅助浮层迁移,拉焦轮除外 —— 移对焦浮层):斑马纹/
+  /// 对焦控制组(2026-10-12 自对焦浮层迁入):MF 步进(0x9204 相对量,
+  /// 近/远各一步)+ 拉焦轮开关(取景画面右缘竖条,开 = 金;重开清失败
+  /// 预算 resetFocusDial,从可用态起步)。机身对焦模式为 MF 时全部灰化
+  /// (机内马达脱开,远程对焦失效 —— 只有镜头对焦环能动焦)+ 常驻提示
+  /// 行(盲按无响应的困惑根源)。
+  Widget _focusControls(BuildContext context) {
+    final live = LiveDesign.of(context);
+    final usable = controller.linkUp &&
+        controller.liveViewActive &&
+        !controller.focusModeIsMf;
+    Widget step(IconData icon, bool towardNear, String label, String tip) {
+      return Tooltip(
+        message: tip,
+        child: InkWell(
+          onTap: usable ? () => controller.mfDriveStep(towardNear: towardNear) : null,
+          splashFactory: NoSplash.splashFactory,
+          highlightColor: Colors.transparent,
+          hoverColor: Colors.transparent,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 2),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SizedBox(
+                  width: 40,
+                  height: 34,
+                  child: Material(
+                    color: live.glass,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      side: BorderSide(color: live.hairline),
+                    ),
+                    child: InkWell(
+                      onTap: usable
+                          ? () =>
+                              controller.mfDriveStep(towardNear: towardNear)
+                          : null,
+                      customBorder: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10)),
+                      child: Icon(icon,
+                          size: 18, color: usable ? live.text : live.faint),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(label,
+                    style: TextStyle(fontSize: 10, color: live.faint)),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    final dialOn = toggles.focusDial;
+    Widget dialToggle = InkWell(
+      onTap: () {
+        if (!dialOn) controller.resetFocusDial();
+        onTogglesChanged(toggles.copyWith(focusDial: !dialOn));
+      },
+      splashFactory: NoSplash.splashFactory,
+      highlightColor: Colors.transparent,
+      hoverColor: Colors.transparent,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 2),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              width: 40,
+              height: 34,
+              child: Material(
+                color: dialOn ? live.accentDim : Colors.transparent,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  side: BorderSide(
+                    color: dialOn
+                        ? live.accent.withValues(alpha: 0.5)
+                        : live.hairline,
+                  ),
+                ),
+                child: Icon(Icons.vertical_align_center,
+                    size: 18, color: dialOn ? live.accent : live.muted),
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text('拉焦轮',
+                style: TextStyle(
+                    fontSize: 10, color: dialOn ? live.accent : live.faint)),
+          ],
+        ),
+      ),
+    );
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Wrap(
+          spacing: 2,
+          runSpacing: 4,
+          children: [
+            step(Icons.remove, true, 'MF 近', 'MF 向近(步进)'),
+            step(Icons.add, false, 'MF 远', 'MF 向远(步进)'),
+            dialToggle,
+          ],
+        ),
+        if (controller.focusModeIsMf) ...[
+          const SizedBox(height: 6),
+          Text('机身对焦模式为 MF,远程对焦已停用',
+              style: TextStyle(fontSize: 10, color: live.muted)),
+        ],
+      ],
+    );
+  }
+
+  /// 监看开关组(原辅助浮层迁移,拉焦轮除外 —— 在上方对焦段):斑马纹/
   /// 直方图/伪色/峰值四项共享一份帧分析 —— 开关落定后由页面同步
   /// RemoteController.analyzer 启停(见 RemotePage._syncAnalyzerEnabled)。
   Widget _monitorToggles(BuildContext context) {

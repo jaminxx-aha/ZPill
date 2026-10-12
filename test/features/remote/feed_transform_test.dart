@@ -117,6 +117,65 @@ void main() {
     });
   });
 
+  group('FeedFit 适配模式(2026-10-12「不留黑边」)', () {
+    test('widthFill:9:16 竖拍在偏宽盒恒满宽,两侧永无黑边', () {
+      // 600×800 盒(横向偏宽):contain 高限 → 450×800 居中,两侧
+      // 各 75 黑边 —— 用户竖拍报障场景。
+      final c = FeedTransform(
+          imageSize: const Size(9, 16), boxSize: const Size(600, 800));
+      expect(c.fitScale, 50.0);
+      expect(c.displayRect, const Rect.fromLTWH(75, 0, 450, 800));
+      // widthFill 恒满宽:scale = 600/9 → 600×1066.7 居中,上下越出
+      // (取景区 ClipRect 裁掉),两侧贴盒。
+      final f = FeedTransform(
+          imageSize: const Size(9, 16),
+          boxSize: const Size(600, 800),
+          fit: FeedFit.widthFill);
+      expect(f.fitScale, closeTo(600 / 9, 1e-9));
+      expect(f.displayRect.left, 0);
+      expect(f.displayRect.width, 600);
+      expect(f.displayRect.top, closeTo(-133.33, 0.01));
+      expect(f.displayRect.height, closeTo(1066.67, 0.01));
+    });
+
+    test('heightFill:超宽内容在偏高盒恒满高,上下永无黑边', () {
+      // 2:1 内容在 600×800 盒:contain 宽限 → 600×300 居中,上下各
+      // 250 黑边 —— 横屏「取景上下黑边」场景。
+      final c = FeedTransform(
+          imageSize: const Size(2, 1), boxSize: const Size(600, 800));
+      expect(c.fitScale, 300.0);
+      expect(c.displayRect, const Rect.fromLTWH(0, 250, 600, 300));
+      // heightFill 恒满高:scale = 800 → 1600×800 居中,左右越出被裁,
+      // 上下贴盒。
+      final f = FeedTransform(
+          imageSize: const Size(2, 1),
+          boxSize: const Size(600, 800),
+          fit: FeedFit.heightFill);
+      expect(f.fitScale, 800.0);
+      expect(f.displayRect, const Rect.fromLTWH(-500, 0, 1600, 800));
+    });
+
+    test('常态等价:本就贴禁边的方向上 fill 与 contain 同果(零裁切)', () {
+      // 2:1 宽内容在 600×300 盒:本就宽限 → widthFill 同 contain 整盒。
+      final w = FeedTransform(
+          imageSize: const Size(2, 1),
+          boxSize: const Size(600, 300),
+          fit: FeedFit.widthFill);
+      expect(w.displayRect, const Rect.fromLTWH(0, 0, 600, 300));
+      // 16:9 视频在横屏取景盒 1506×800(右缩 94 让柱,六轮破安全区):
+      // 本就高限 → heightFill 同 contain 满高零裁切,余量黑边只落在左右两侧。
+      final h = FeedTransform(
+          imageSize: const Size(16, 9),
+          boxSize: const Size(1506, 800),
+          fit: FeedFit.heightFill);
+      expect(h.fitScale, closeTo(800 / 9, 1e-9));
+      expect(h.displayRect.top, 0);
+      expect(h.displayRect.height, 800);
+      expect(h.displayRect.left, closeTo(41.89, 0.01));
+      expect(h.displayRect.width, closeTo(1422.22, 0.01));
+    });
+  });
+
   group('逆映射', () {
     FeedTransform t({
       int quarter = 0,
