@@ -402,8 +402,9 @@ final kShootingParams = <ShootingParam>[
   // 0x8018 宽S 815×884 / 0x8019 宽L 1859×1452 / 0x801E 宽C1 横带
   // 5513×884 / 0x801F 宽C2 竖条 815×3724 —— 无 动态区域/3D 追踪。
   // 0x8010/0x8011/0x8017 形状定案;宽 S/L/C1/C2 按框尺寸/形状推断,
-  // 机身菜单核对后定稿。竖条/横带模式框高度饱和,触控对焦 Y 轴不动
-  // 属预期 —— 面板可在切换模式时提示(待做)。STA 无线侧在册性待核。
+  // 机身菜单核对后定稿。宽C1/C2 饱和轴触屏移框不动属预期 —— 提示
+  // 已做(afAreaAxisHint:AF 面板常驻行 + 切换沿 notice)。STA 无线
+  // 侧在册性待核。
   ShootingParam(
     code: PtpDevicePropCode.stillFocusMeteringMode,
     label: 'AF 区域',
@@ -492,3 +493,13 @@ final kShootingParams = <ShootingParam>[
     format: _formatPicCtrl,
   ),
 ];
+
+/// AF 区域宽C1/C2(0x801E 横带 5513×884 / 0x801F 竖条 815×3724,
+/// whole-size 空间)框已顶满一条轴:触屏移框(0x9205)在饱和轴被机身
+/// 钳位,「点了框不动」属相机行为非缺陷 —— AF 编辑面板常驻提示行与
+/// 切换沿 notice(RemoteController.setParam)共用此文案。
+String? afAreaAxisHint(int? value) {
+  if (value == 0x801E) return '宽C1 是横向条形区域,触屏移框仅上下生效';
+  if (value == 0x801F) return '宽C2 是纵向条形区域,触屏移框仅左右生效';
+  return null;
+}
