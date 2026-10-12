@@ -227,12 +227,17 @@ final class PtpDevicePropDesc {
 
   /// 防御性解析:头部三字段 + 当前值缺失时其余字段可全空,不抛异常
   /// (相机方言的截断数据集仍可显示「存在但未知」)。
-  static PtpDevicePropDesc parse(Uint8List data) {
+  static PtpDevicePropDesc parse(Uint8List data, {int? expectedCode}) {
     final r = ByteReader(data);
     if (r.remaining < 5) {
       throw FormatException('DevicePropDesc 头部截断(${r.remaining}B)');
     }
-    final code = r.u16();
+    // Gen-3 Ex desc(0x943A,2026-10-12 USB 探针实证)的数据集首字段是
+    // **u32 扩展码**(标准 desc 是 u16),其余布局与标准完全同构 —— 按
+    // 调用方已知的属性码定宽读,Ex 码把 u32 整个吃掉,不认 0x0001_ 前缀
+    // 当类型码。
+    final code =
+        expectedCode != null && expectedCode > 0xFFFF ? r.u32() : r.u16();
     final dataType = PtpDataType.fromCode(r.u16());
     final getSet = r.u8() != 0;
 

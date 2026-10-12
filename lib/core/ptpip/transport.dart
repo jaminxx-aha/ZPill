@@ -92,6 +92,7 @@ int _dataPhaseFor(int opcode, Uint8List? dataOut) {
     NikonOperationCode.getLiveViewImage,
     NikonOperationCode.getLiveViewImageEx,
     NikonOperationCode.getDevicePropValueEx,
+    NikonOperationCode.getDevicePropDescEx,
     NikonOperationCode.getPictCtrlData,
   };
   return dataInOps.contains(opcode) ? 3 : 1;
