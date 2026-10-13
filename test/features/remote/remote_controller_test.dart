@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:nikon_pill/core/browser/object_entry.dart';
 import 'package:nikon_pill/core/camera/camera_connection.dart';
 import 'package:nikon_pill/core/ptp/device_prop.dart';
 import 'package:nikon_pill/core/ptp/operation_codes.dart';
@@ -11,6 +12,8 @@ import 'package:nikon_pill/core/ptp/ptp_session.dart';
 import 'package:nikon_pill/core/ptp/ptp_transport.dart';
 import 'package:nikon_pill/core/remote/live_view_engine.dart';
 import 'package:nikon_pill/core/remote/live_view_header.dart';
+import 'package:nikon_pill/core/transfer/transfer_engine.dart';
+import 'package:nikon_pill/core/transfer/transfer_task.dart';
 import 'package:nikon_pill/core/utils/byte_writer.dart';
 import 'package:nikon_pill/features/remote/remote_controller.dart';
 import 'package:nikon_pill/features/remote/shooting_param_catalog.dart';
@@ -400,6 +403,81 @@ Uint8List _minimalHeaderFrame({required bool recording}) {
   return b;
 }
 
+/// GetObjectInfo 数据集(SDRAM 直拍链测试):52B 定长头 + 文件名/拍摄/
+/// 修改三串(format 0x3801 = JPEG → ObjectKind.image)。
+Uint8List _objectInfoDataset({
+  String name = 'DSC_0001.JPG',
+  int size = 123456,
+  int format = 0x3801,
+}) {
+  final w = ByteWriter()
+    ..u32(1) // storageId
+    ..u16(format)
+    ..u16(0) // protection
+    ..u32(size)
+    ..u16(0)..u32(0)..u32(0)..u32(0) // 缩略图四件
+    ..u32(0)..u32(0)..u32(0) // 图像宽/高/位深
+    ..u32(0) // parentObject
+    ..u16(0)..u32(0)..u32(0); // assocType/assocDesc/sequence
+  void str(String s) {
+    w
+      ..u8(s.length + 1)
+      ..utf16le(s)
+      ..u16(0);
+  }
+
+  str(name);
+  str('20261013T120000.0');
+  str('20261013T120000.0');
+  return w.takeBytes();
+}
+
+/// 0x941C GetEventEx 数据集(单事件单参数)。
+Uint8List _eventExDataset(int code, int param) {
+  final w = ByteWriter()
+    ..u32(1)
+    ..u16(code)
+    ..u16(1)
+    ..u32(param);
+  return w.takeBytes();
+}
+
+/// 图库导入假引擎(SDRAM 直拍收尾链):enqueue 记账并广播一帧终态。
+final class _FakeTransferEngine implements TransferEngine {
+  final enqueued = <ObjectEntry>[];
+  TransferDestination? lastDestination;
+  TransferState state = TransferState.completed;
+  final tasksCtrl = StreamController<List<TransferTask>>.broadcast();
+
+  @override
+  Stream<List<TransferTask>> get tasks => tasksCtrl.stream;
+
+  @override
+  Future<void> enqueue(Iterable<ObjectEntry> entries,
+      {required TransferDestination destination}) async {
+    enqueued.addAll(entries);
+    lastDestination = destination;
+    for (final e in entries) {
+      tasksCtrl.add([
+        TransferTask(
+          id: 't0',
+          handle: e.handle,
+          filename: e.name,
+          totalBytes: e.sizeInBytes,
+          destination: destination,
+          state: state,
+        ),
+      ]);
+    }
+  }
+
+  @override
+  Future<void> cancel(String taskId) async {}
+
+  @override
+  Future<void> clearHistory() async {}
+}
+
 void main() {
   late _ScriptTransport transport;
   late _FakeConnection conn;
@@ -488,7 +566,9 @@ void main() {
   });
 
   test('capture:快门 0x2019 忙 → 报错且不轮询', () async {
-    transport.reply(PtpResponseCode.deviceBusy); // 首选码忙(0x9207)
+    transport
+      ..reply(PtpResponseCode.deviceBusy) // 首选码忙(0x9207)
+      ..ok(data: _u32Bytes(0x0)); // 0xD102 复核:无警告位
     await controller.capture();
     expect(controller.error, contains('快门释放失败'));
     expect(controller.capturing, isFalse);
@@ -555,7 +635,8 @@ void main() {
   test('capture:两码皆拒 → 报后码异常,不轮询', () async {
     transport
       ..reply(PtpResponseCode.generalError) // 0x9207 拒
-      ..reply(PtpResponseCode.operationNotSupported); // 0x100E 也拒
+      ..reply(PtpResponseCode.operationNotSupported) // 0x100E 也拒
+      ..ok(data: _u32Bytes(0x0)); // 0xD102 复核:无警告位
     await controller.capture();
     expect(controller.error, contains('快门释放失败'));
     expect(controller.error, contains('0x100E'), reason: '回退码失败更可诊断');
@@ -2485,6 +2566,236 @@ void main() {
             getSet: true, enums: [200, 280]));
       await controller.setParam(PtpDevicePropCode.movieFnumber, 200);
       expect(controller.notice, isNull);
+    });
+  });
+
+  group('官方指令书候选区接线·控制器(2026-10-13 批:AF 取消/主体追踪/'
+      'AE 锁/0xD102/SDRAM 直拍)', () {
+    late _ScriptTransport transport;
+    late _FakeConnection conn;
+    late _FakeTransferEngine gallery;
+    late RemoteController controller;
+
+    setUp(() {
+      transport = _ScriptTransport();
+      conn = _FakeConnection();
+      gallery = _FakeTransferEngine();
+      controller = RemoteController(
+        session: PtpSession(transport: transport),
+        connection: conn,
+        transferEngine: gallery,
+        engine: LiveViewEngine(
+            session: PtpSession(transport: transport), delay: _parkedDelay),
+        delay: delay.call,
+        aeDelay: _parkedDelay,
+      );
+      // 5s/120s 真窗拨小:超时分支即时收口,不拖测试钟。
+      controller
+        ..sdramHandleTimeout = const Duration(milliseconds: 80)
+        ..sdramTransferTimeout = const Duration(milliseconds: 80);
+    });
+
+    tearDown(() async {
+      controller.dispose();
+    });
+
+    Future<void> startLiveView() async {
+      transport
+        ..ok() // 0x9201
+        ..ok(data: _fakeFrame()); // 首帧
+      await controller.toggleLiveView();
+      await pumpEventQueue();
+    }
+
+    test('对焦中再点对焦钮 → 0x9206 取消 + notice(打断实效待真机核对)',
+        () async {
+      controller.focusing = true;
+      transport.ok(); // 0x9206
+      await controller.afDriveNow();
+      expect(transport.requests.single.opcode,
+          NikonOperationCode.afDriveCancel);
+      expect(controller.notice, '已取消对焦');
+      expect(controller.error, isNull);
+    });
+
+    test('主体追踪:未开取景 → 拦下不发票', () async {
+      await controller.startTracking();
+      expect(controller.error, '请先开启取景');
+      expect(transport.requests, isEmpty);
+    });
+
+    test('主体追踪:AF 区域非「自动」(0x8010 单点)→ notice 指引,不发票',
+        () async {
+      await startLiveView();
+      controller.paramProps[PtpDevicePropCode.stillFocusMeteringMode] =
+          const PropState(value: 0x8010);
+      await controller.startTracking();
+      expect(controller.notice, contains('自动'));
+      expect(
+          transport.requests
+              .where((r) => r.opcode == NikonOperationCode.startTracking),
+          isEmpty);
+    });
+
+    test('主体追踪:启动 → 0x9424 whole-size 中心坐标(无触控点),'
+        'tracking=true', () async {
+      await startLiveView();
+      controller.engine.header.value =
+          parseLiveViewHeader(_minimalHeaderFrame(recording: false));
+      controller.paramProps[PtpDevicePropCode.stillFocusMeteringMode] =
+          const PropState(value: 0x8011);
+      transport.ok(); // 0x9424
+      await controller.startTracking();
+      final req = transport.requests
+          .singleWhere((r) => r.opcode == NikonOperationCode.startTracking);
+      expect(req.params, [3024, 1700],
+          reason: '0.5×6048、0.5×3400(0x9205 同坐标系)');
+      expect(controller.tracking, isTrue);
+      expect(controller.error, isNull);
+    });
+
+    test('主体追踪:停止 → 0x9425 无参,tracking=false', () async {
+      await startLiveView();
+      controller.paramProps[PtpDevicePropCode.stillFocusMeteringMode] =
+          const PropState(value: 0x8011);
+      transport
+        ..ok() // 0x9424
+        ..ok(); // 0x9425
+      await controller.startTracking();
+      await controller.endTracking();
+      expect(transport.count(NikonOperationCode.startTracking), 1);
+      final end = transport.requests
+          .singleWhere((r) => r.opcode == NikonOperationCode.endTracking);
+      expect(end.params, isEmpty);
+      expect(controller.tracking, isFalse);
+    });
+
+    test('AE 锁:切换写 0x9426 [1,2]/[0,2](探针形),0xD105 读回对表',
+        () async {
+      transport
+        ..ok() // 0x9426 锁
+        ..ok(data: Uint8List.fromList([1])) // 0xD105:1=锁定
+        ..ok() // 0x9426 解锁
+        ..ok(data: Uint8List.fromList([0])); // 读回 0
+      await controller.toggleAELock();
+      expect(transport.requests[0].opcode, NikonOperationCode.changeAELock);
+      expect(transport.requests[0].params, [1, 2]);
+      expect(controller.aeLocked, isTrue);
+      await controller.toggleAELock();
+      expect(transport.requests[2].params, [0, 2]);
+      expect(controller.aeLocked, isFalse);
+    });
+
+    test('AE 锁:0x200F 拒(WB 非 auto 时机身拒 AWB 锁)→ error,旗标不动',
+        () async {
+      transport.reply(PtpResponseCode.accessDenied);
+      await controller.toggleAELock();
+      expect(controller.error, contains('AE 锁切换失败'));
+      expect(controller.aeLocked, isFalse);
+    });
+
+    test('AE 锁:读回与乐观态不一致 → 以读回为准(不亮假锁)', () async {
+      transport
+        ..ok() // 0x9426 OK
+        ..ok(data: Uint8List.fromList([0])); // 0xD105 读回未锁
+      await controller.toggleAELock();
+      expect(controller.aeLocked, isFalse);
+    });
+
+    test('内屏强关:0x9422 [1]/[0] 切换,0xD1BA 读回对表(B 组)', () async {
+      transport
+        ..ok() // 0x9422 强关
+        ..ok(data: Uint8List.fromList([1])) // 0xD1BA:1=已强关
+        ..ok() // 0x9422 取消
+        ..ok(data: Uint8List.fromList([0])); // 读回 0
+      await controller.toggleMonitorOff();
+      expect(transport.requests[0].opcode, NikonOperationCode.changeMonitorOff);
+      expect(transport.requests[0].params, [1]);
+      expect(controller.monitorOff, isTrue);
+      await controller.toggleMonitorOff();
+      expect(transport.requests[2].params, [0]);
+      expect(controller.monitorOff, isFalse);
+    });
+
+    test('内屏强关:拒答 → error,旗标不动', () async {
+      transport.reply(PtpResponseCode.accessDenied); // 电池耗尽等拒 0x200F
+      await controller.toggleMonitorOff();
+      expect(controller.error, contains('内屏开关失败'));
+      expect(controller.monitorOff, isFalse);
+    });
+
+    test('capture 通用错误 + 0xD102 Bit0 → 追加序列错误自愈指引'
+        '(官方 §11.7.5:下一次释放自清)', () async {
+      transport
+        ..reply(NikonResponseCode.hardwareError) // 0x9207 → hint
+        ..ok(data: _u32Bytes(0x1)); // 0xD102 Bit0=1
+      await controller.capture();
+      expect(controller.error, contains('相机硬件错误'));
+      expect(controller.error, contains('再按一次快门'));
+    });
+
+    test('capture 通用错误 + 0xD102 无位 → 原错误不动', () async {
+      transport
+        ..reply(NikonResponseCode.hardwareError)
+        ..ok(data: _u32Bytes(0x0));
+      await controller.capture();
+      expect(controller.error, contains('相机硬件错误'));
+      expect(controller.error, isNot(contains('序列错误')));
+    });
+
+    test('SDRAM 直拍全链:0x90CB → 手拉事件 0xC101 句柄 → ObjectInfo → '
+        '图库入队(gallery)→ 终态 notice', () async {
+      controller.sdramCapture = true;
+      transport
+        ..ok() // 0x90CB AF+SDRAM 一体
+        ..ok() // deviceReady → true(settle)
+        ..ok(data: _eventExDataset(NikonEventCode.objectAddedInSdram, 0x1234))
+        ..ok(data: _objectInfoDataset()); // getObjectInfo(0x1234)
+      final capture = controller.capture();
+      await pumpEventQueue();
+      delay.release(); // DeviceReady 轮询放行
+      await capture;
+      expect(transport.count(NikonOperationCode.afAndCaptureRecInSdram), 1);
+      expect(gallery.enqueued, hasLength(1));
+      expect(gallery.enqueued.single.handle, 0x1234);
+      expect(gallery.lastDestination, TransferDestination.gallery);
+      expect(controller.notice, '已拍摄并保存到图库(SDRAM,不入卡)');
+      expect(controller.error, isNull);
+      expect(controller.capturing, isFalse);
+    });
+
+    test('SDRAM 直拍:0xC101 未到(5s 窗)→ notice 如实,不上 error 不入队',
+        () async {
+      controller.sdramCapture = true;
+      transport
+        ..ok() // 0x90CB
+        ..ok() // deviceReady
+        ..ok(data: Uint8List.fromList([0, 0, 0, 0])); // getEventEx 空队列
+      final capture = controller.capture();
+      await pumpEventQueue();
+      delay.release();
+      await capture;
+      expect(controller.notice, contains('未收到相机回传对象'));
+      expect(controller.error, isNull);
+      expect(gallery.enqueued, isEmpty);
+    });
+
+    test('断链 → tracking/AE 锁旗标清零(会话级状态不跨会话)', () async {
+      await startLiveView();
+      controller.paramProps[PtpDevicePropCode.stillFocusMeteringMode] =
+          const PropState(value: 0x8011);
+      transport
+        ..ok() // 0x9424
+        ..ok() // 0x9426 锁
+        ..ok(data: Uint8List.fromList([1])); // 0xD105 读回
+      await controller.startTracking();
+      await controller.toggleAELock();
+      expect(controller.tracking, isTrue);
+      expect(controller.aeLocked, isTrue);
+      conn.statesCtrl.add(CameraLinkState.disconnected);
+      await pumpEventQueue();
+      expect(controller.tracking, isFalse);
+      expect(controller.aeLocked, isFalse);
     });
   });
 }

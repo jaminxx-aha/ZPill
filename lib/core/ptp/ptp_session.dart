@@ -1060,6 +1060,234 @@ final class PtpSession {
     return true;
   }
 
+  // ── 官方指令书候选区接线(2026-10-13 USB 探针批 + §6.2 规格比对)──
+
+  /// GetFhdPicture(0x920F):对象的 FHD 尺寸 JPEG(探针实录 744KB)。
+  /// 无 FHD 可取回 0xA00F NoFullHDPresent(由 [_ensureOk] 抛,调用方
+  /// 回落 GetThumb)。NEF 预览快路:744KB 对比整档 NEF 数十 MB。
+  Future<Uint8List> getFhdPicture(int handle) async {
+    final result = await _serialized(() => transport.execute(
+          PtpRequest(
+              opcode: NikonOperationCode.getFhdPicture, params: [handle]),
+        ));
+    _ensureOk(result, NikonOperationCode.getFhdPicture);
+    return _sniffJpegStart(result.data ?? Uint8List(0));
+  }
+
+  /// ChangeAELock(0x9426,官方 §6.2.4.5):AE/AWB 锁开关。
+  /// [lock] P1 LockValue(0 释放/1 锁 hold);[type] P2 LockType
+  /// (0=AE/1=AWB/2=AE+AWB,2026-10-13 规格书坐标重排定案;探针
+  /// (1,2) 锁/(0,2) 解锁双 OK)。**应答 OK ≠ 生效**(官方明说):调用方
+  /// 事后读 AELockStatus 0xD105 / AWBLockStatus 0xD12F 确认。WB 非
+  /// auto 时 AWB 锁被拒 0x200F、AE+AWB 只生效 AE(官方 Response 表)。
+  Future<void> changeAELock({required bool lock, int type = 2}) async {
+    final result = await _serialized(() => transport.execute(PtpRequest(
+          opcode: NikonOperationCode.changeAELock,
+          params: [lock ? 1 : 0, type],
+        )));
+    _ensureOk(result, NikonOperationCode.changeAELock);
+  }
+
+  /// StartTracking(0x9424,官方 §6.2.6.7):开始主体追踪 / 更新追踪目标。
+  /// 参数同 ChangeAfArea(0x9205):whole-size 坐标系 x/y。门控在官方
+  /// Access_Denied 条文:照片档 0xD05D 须自动区/追踪档(拒 0x200F),
+  /// 无取景 0xA00B;坐标处有识别目标则更新选中并进待命,没有则以该
+  /// 坐标起追。追踪态跟 LiveViewObject 帧头(§2.9),不设独立读回。
+  Future<void> startTracking(int x, int y) async {
+    final result = await _serialized(() => transport.execute(PtpRequest(
+          opcode: NikonOperationCode.startTracking,
+          params: [x, y],
+        )));
+    _ensureOk(result, NikonOperationCode.startTracking);
+  }
+
+  /// EndTracking(0x9425):结束主体追踪(无参)。
+  Future<void> endTracking() async {
+    final result = await _serialized(() => transport.execute(
+          const PtpRequest(opcode: NikonOperationCode.endTracking),
+        ));
+    _ensureOk(result, NikonOperationCode.endTracking);
+  }
+
+  /// ClearEvent(0x9461,探针 2026-10-13 OK):清相机事件队列 ——
+  /// 重连沿清上一会话残留,防旧事件误触发即拍即览等消费端。
+  Future<void> clearEvent() async {
+    final result = await _serialized(() => transport.execute(
+          const PtpRequest(opcode: NikonOperationCode.clearEvent),
+        ));
+    _ensureOk(result, NikonOperationCode.clearEvent);
+  }
+
+  /// AfAndCaptureRecInSdram(0x90CB,官方 §6.2.4.3 无参):AF 驱动后
+  /// 拍摄入 SDRAM(= 0x9207 [0xFFFFFFFE, 0x0001] 的固定形,探针无参
+  /// OK)。对象随后按 §2.8.2 流出:ObjectAddedInSdram 0xC101(逐张带
+  /// 句柄)→ GetObjectInfo → GetObject/GetPartialObject → 全部取完
+  /// 收 CaptureCompleteRecInSdram 0xC102。
+  Future<void> afAndCaptureRecInSdram() async {
+    final result = await _serialized(() => transport.execute(
+          const PtpRequest(opcode: NikonOperationCode.afAndCaptureRecInSdram),
+        ));
+    _ensureOk(result, NikonOperationCode.afAndCaptureRecInSdram);
+  }
+
+  /// ChangeMonitorOff(0x9422,官方 §6.2.2.17):主监听器(机背屏)
+  /// 强制关/取消。P1 0 取消强制关闭 / 1 强制关闭。**应答 OK 只代表
+  /// 「请求已收到」,完成不保证**;状态读回 MonitorOffStatus 0xD1BA
+  /// (u8 只读 0/1)。电池耗尽拒 0x200F、拍摄中拒 0x2019。
+  Future<void> changeMonitorOff({required bool off}) async {
+    final result = await _serialized(() => transport.execute(PtpRequest(
+          opcode: NikonOperationCode.changeMonitorOff,
+          params: [off ? 1 : 0],
+        )));
+    _ensureOk(result, NikonOperationCode.changeMonitorOff);
+  }
+
+  /// SaveCameraSetting(0x9420,官方 §6.2.2.18):设置落非易失区(与
+  /// 关机时落盘同动作)。**响应后除 CloseSession 外禁发任何命令**
+  /// (官方 Command Outline)—— 调用方须自行遵守,故不接 UI。
+  Future<void> saveCameraSetting() async {
+    final result = await _serialized(() => transport.execute(
+          const PtpRequest(opcode: NikonOperationCode.saveCameraSetting),
+        ));
+    _ensureOk(result, NikonOperationCode.saveCameraSetting);
+  }
+
+  /// GetCameraSettingData(0x946D,官方 §6.2.2.19):读卡 1 上的相机
+  /// 设定文件(机身菜单「保存/载入设定」产物)。数据集 = 64B ASCII
+  /// 文件名(63 字符 + NUL)+ 文件体;无卡/卡初始化中 Store_Not_Available。
+  Future<({String name, Uint8List data})> getCameraSettingData() async {
+    final result = await _serialized(() => transport.execute(
+          const PtpRequest(opcode: NikonOperationCode.getCameraSettingData),
+        ));
+    _ensureOk(result, NikonOperationCode.getCameraSettingData);
+    final data = result.data ?? Uint8List(0);
+    var name = '';
+    if (data.length >= 64) {
+      final end = data.indexWhere((b) => b == 0, 0);
+      name = String.fromCharCodes(
+          data.sublist(0, end < 0 || end > 63 ? 63 : end));
+      return (name: name, data: Uint8List.sublistView(data, 64));
+    }
+    return (name: name, data: data);
+  }
+
+  /// SendCameraSettingData(0x946E,官方 §6.2.2.20):把设定文件写回
+  /// 卡 1。**只写卡,不应用到相机**(应用须机身菜单载入)—— 与快照
+  /// 逐属性恢复(直接写属性)语义不同,调用方提示语须如实区分。
+  Future<void> sendCameraSettingData(String name, Uint8List data) async {
+    final bytes = ByteWriter();
+    final nameBytes = name.length > 63 ? name.substring(0, 63) : name;
+    for (var i = 0; i < 64; i++) {
+      bytes.u8(i < nameBytes.length ? nameBytes.codeUnitAt(i) : 0);
+    }
+    bytes.raw(data);
+    final result = await _serialized(() => transport.execute(PtpRequest(
+          opcode: NikonOperationCode.sendCameraSettingData,
+          dataOut: bytes.takeBytes(),
+        )));
+    _ensureOk(result, NikonOperationCode.sendCameraSettingData);
+  }
+
+  /// GetObjectPropsSupported(0x9801,官方 §6.2.11.1):相机支持的对象
+  /// 属性码表(u32 计数 + N×u16)。
+  Future<List<int>> getObjectPropsSupported() async {
+    final result = await _serialized(() => transport.execute(
+          const PtpRequest(opcode: NikonOperationCode.getObjectPropsSupported),
+        ));
+    _ensureOk(result, NikonOperationCode.getObjectPropsSupported);
+    return _parseU16Array(result.data);
+  }
+
+  /// GetObjectPropDesc(0x9802,官方 §6.2.11.2):对象属性描述(类型/
+  /// 可写性/FORM)。数据集随类型变宽(u16 类型 + u8 GetSet + FORM),
+  /// 本轮无消费方,先裸透传,接线时按属性定宽解。
+  Future<Uint8List> getObjectPropDesc(int handle, int propCode) async {
+    final result = await _serialized(() => transport.execute(PtpRequest(
+          opcode: NikonOperationCode.getObjectPropDesc,
+          params: [handle, propCode],
+        )));
+    _ensureOk(result, NikonOperationCode.getObjectPropDesc);
+    return result.data ?? Uint8List(0);
+  }
+
+  /// GetObjectPropValue(0x9803,官方 §6.2.11.3):读对象属性裸值。
+  /// 类型自描述不在值内(见 0x9802 Desc),调用方按已知属性定宽解
+  /// (如 ProtectionStatus 0x0004 = u16)。
+  Future<Uint8List> getObjectPropValue(int handle, int propCode) async {
+    final result = await _serialized(() => transport.execute(PtpRequest(
+          opcode: NikonOperationCode.getObjectPropValue,
+          params: [handle, propCode],
+        )));
+    _ensureOk(result, NikonOperationCode.getObjectPropValue);
+    return result.data ?? Uint8List(0);
+  }
+
+  /// SetObjectPropValue(0x9804,官方 §6.2.11.4):写对象属性裸值。
+  Future<void> setObjectPropValue(
+      int handle, int propCode, Uint8List value) async {
+    final result = await _serialized(() => transport.execute(PtpRequest(
+          opcode: NikonOperationCode.setObjectPropValue,
+          params: [handle, propCode],
+          dataOut: value,
+        )));
+    _ensureOk(result, NikonOperationCode.setObjectPropValue);
+  }
+
+  /// GetObjectPropList(0x9805,官方 §6.2.11.5):对象属性批量读。
+  /// [handle]:具体句柄 / 0x00000000 根层直下 / 0xFFFFFFFF 全部对象;
+  /// [formatCode]:0 = 全部格式;[propCode]:具体属性码 / 0x00000000
+  /// 按 [groupCode] 组 / 0xFFFFFFFF 全部属性;[depth]:null = 仅 [handle]
+  /// 指定对象(P5 省略),0 = 层级深度内,0xFFFFFFFF = 整个层级。
+  /// 数据集 = u32 计数 + N×(u32 句柄 + u16 属性码 + u16 类型 + DTS 值)。
+  Future<List<PtpObjectProp>> getObjectPropList(
+    int handle, {
+    int formatCode = 0x00000000,
+    int propCode = 0xFFFFFFFF,
+    int? depth,
+  }) async {
+    final params = [handle, formatCode, propCode];
+    if (depth != null) params.add(depth);
+    final result = await _serialized(() => transport.execute(PtpRequest(
+          opcode: NikonOperationCode.getObjectPropList,
+          params: params,
+        )));
+    _ensureOk(result, NikonOperationCode.getObjectPropList);
+    final data = result.data;
+    if (data == null || data.length < 4) return const [];
+    final reader = ByteReader(data);
+    final count = reader.u32();
+    final props = <PtpObjectProp>[];
+    for (var i = 0; i < count && !reader.eof; i++) {
+      final objectHandle = reader.u32();
+      final code = reader.u16();
+      final type = reader.u16();
+      final dt = PtpDataType.fromCode(type);
+      final valueStart = reader.offset;
+      final value = dt.read(reader);
+      final consumed = reader.offset - valueStart;
+      props.add(PtpObjectProp(
+        handle: objectHandle,
+        code: code,
+        dataType: type,
+        rawValue: Uint8List.sublistView(data, valueStart, valueStart + consumed),
+        value: value,
+      ));
+    }
+    return props;
+  }
+
+  /// u32 计数 + N×u16 数组解析(0x9801)。
+  static List<int> _parseU16Array(Uint8List? data) {
+    if (data == null || data.length < 4) return const [];
+    final reader = ByteReader(data);
+    final count = reader.u32();
+    final out = <int>[];
+    for (var i = 0; i < count && !reader.eof; i++) {
+      out.add(reader.u16());
+    }
+    return out;
+  }
+
   void _ensureOk(PtpResult result, int opcode) {
     if (result.responseCode != PtpResponseCode.ok) {
       throw PtpResponseException(
@@ -1069,4 +1297,25 @@ final class PtpSession {
       );
     }
   }
+}
+
+/// 0x9805 GetObjectPropList 数据集元素(官方 §6.2.11.5)。
+final class PtpObjectProp {
+  const PtpObjectProp({
+    required this.handle,
+    required this.code,
+    required this.dataType,
+    required this.rawValue,
+    this.value,
+  });
+
+  final int handle;
+  final int code;
+  final int dataType;
+
+  /// 值字节(未解出类型时的兜底)。
+  final Uint8List rawValue;
+
+  /// 按 DTS 类型解出的值(string 可能 null)。
+  final Object? value;
 }

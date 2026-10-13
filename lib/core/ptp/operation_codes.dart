@@ -95,12 +95,16 @@ abstract final class NikonOperationCode {
   // NiConn_DEMO 对 SnapBridge 的抓包分析,真机流程待核对):
   static const int completePairing = 0x935A; // 配对确认(param 0x2001),相机记录本客户端
   static const int getPtpIpPairingCode = 0x952B; // 取配对验证码,data-in
-  // ── 官方指令书候选区(2026-10-12 §6.2 定名入册,项目未接线;真机
-  // 在册性以接线时行为为准)。主体追踪启停(参数同 0x9205):
+  // ── 官方指令书候选区(2026-10-12 §6.2 定名入册)。主体追踪启停
+  // (参数同 0x9205,P1=X/P2=Y whole-size 坐标系;官方 §6.2.6.7:
+  // 静照域 0xD05D 须自动区/追踪档,拒 0x200F,无取景 0xA00B):
   static const int startTracking = 0x9424;
   static const int endTracking = 0x9425;
-  // AE/AWB 锁:P1 0 释放/1 锁,P2 锁类型(pdf 表列错位,编码前重对
-  // §6.2.4.5;应答 OK 仍须读 AELockStatus/AWBLockStatus §6.5.6.5/8 确认)。
+  // AE/AWB 锁(2026-10-13 规格书坐标重排定案):P1 LockValue 0 释放/
+  // 1 锁(hold);P2 LockType 0=AE/1=AWB/2=AE+AWB(pdf 表行错位,
+  // AE/AWB/AE+AWB 与 0/1/2 同序;探针 (1,2) 锁/(0,2) 解锁双 OK)。
+  // 应答 OK ≠ 生效:读回 AELockStatus 0xD105 / AWBLockStatus 0xD12F;
+  // WB 非 auto 时 AWB 锁拒 0x200F、AE+AWB 只锁 AE(§6.2.4.5)。
   static const int changeAELock = 0x9426;
   static const int clearEvent = 0x9461; // 清相机事件队列(重连沿清残留可试)
   static const int changeMonitorOff = 0x9422; // 机内屏关/开(监看省电)
@@ -302,6 +306,13 @@ abstract final class PtpDevicePropCode {
   // 机身警告状态位掩码(u32 只读,官方 §6.5.6.24;Bit0=序列错误 ——
   // 快门失败提示可指名,恢复口径官方 §11.7.5)。
   static const int warningStatus = 0xD102;
+  // AE/AWB 锁状态(2026-10-13 接线:0x9426 应答 OK 后的生效读回,
+  // u8 只读 0=释放/1=锁定,§6.5.6.5/§6.5.6.8)。
+  static const int aeLockStatus = 0xD105;
+  static const int awbLockStatus = 0xD12F;
+  // 主监听器强制关闭状态(0x9422 的读回,u8 只读 0=未关/1=已关,
+  // §6.5.6.18;注意「实际监看控制状态不在此显示」)。
+  static const int monitorOffStatus = 0xD1BA;
   // 取景画质/带宽(官方 §6.5.11.4-5,Get/Set u8;0x9428 帧分辨率随
   // 尺寸档 —— §9.7「The size set in the LiveViewImageSize property
   // becomes the image size」)。尺寸档 1=QVGA(320×240)/2=VGA(640×480,
@@ -333,3 +344,12 @@ abstract final class PtpDevicePropCode {
   // 色调模式 OpenZCine 记作 0x0001D01C(u32 扩展形态,超 u16 属性码宽;
   // USB 载体会截断成 0xD01C 阴天微调 = 静默错值)—— 不入册,留抓包项。
 }
+
+/// MTP 标准对象属性码(0x9801-05 组用;ISO 15740 §16 / 官方 §6.6,
+/// 只入册用到的)。
+abstract final class PtpObjectPropCode {
+  /// 对象保护状态(u16:0x0000 不保护 / 0x0001 只读)—— 0x1012 写保护
+  /// 无读回,真实态走 0x9803 对象属性读回。
+  static const int protectionStatus = 0x0004;
+}
+

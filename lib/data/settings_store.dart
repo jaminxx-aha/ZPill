@@ -57,6 +57,7 @@ final class AppSettings {
     this.liveViewOn = true,
     this.liveViewImageSize,
     this.liveViewImageCompression,
+    this.sdramCapture = false,
   });
 
   final bool autoTransfer;
@@ -125,6 +126,10 @@ final class AppSettings {
   final int? liveViewImageSize;
   final int? liveViewImageCompression;
 
+  /// SDRAM 直拍(0x90CB AF+SDRAM 一体拍):开 = 快门改发一体拍并把
+  /// 0xC101 回传对象收进图库(不入卡);关 = 常规快门 0x2019/0x9207。
+  final bool sdramCapture;
+
   /// copyWith 的「未传」哨兵:画质两字段要能把 null(跟随相机)写回,
   /// `??` 模式做不到 —— 传值(含显式 null)即覆盖,不传保持原值。
   static const Object _unset = Object();
@@ -156,6 +161,7 @@ final class AppSettings {
     bool? liveViewOn,
     Object? liveViewImageSize = _unset,
     Object? liveViewImageCompression = _unset,
+    bool? sdramCapture,
   }) =>
       AppSettings(
         autoTransfer: autoTransfer ?? this.autoTransfer,
@@ -188,6 +194,7 @@ final class AppSettings {
         liveViewImageCompression: liveViewImageCompression == _unset
             ? this.liveViewImageCompression
             : liveViewImageCompression as int?,
+        sdramCapture: sdramCapture ?? this.sdramCapture,
       );
 
   @override
@@ -218,7 +225,8 @@ final class AppSettings {
       other.monitorFocusDial == monitorFocusDial &&
       other.liveViewOn == liveViewOn &&
       other.liveViewImageSize == liveViewImageSize &&
-      other.liveViewImageCompression == liveViewImageCompression;
+      other.liveViewImageCompression == liveViewImageCompression &&
+      other.sdramCapture == sdramCapture;
 
   @override
   // Object.hash 位置参上限 20,字段 24 个 → hashAll(列表序即上面 == 序)。
@@ -229,7 +237,7 @@ final class AppSettings {
         autoRotateFeed, deSqueeze,
         monitorGrid, monitorZebra, monitorHistogram, monitorLevel,
         monitorFalseColor, monitorPeaking, monitorFocusDial, liveViewOn,
-        liveViewImageSize, liveViewImageCompression,
+        liveViewImageSize, liveViewImageCompression, sdramCapture,
       ]);
 
   Map<String, Object?> toJson() => {
@@ -261,6 +269,7 @@ final class AppSettings {
           'liveViewImageSize': liveViewImageSize,
         if (liveViewImageCompression != null)
           'liveViewImageCompression': liveViewImageCompression,
+        'sdramCapture': sdramCapture,
       };
 
   static AppSettings fromJson(Map<String, Object?> json) => AppSettings(
@@ -304,6 +313,7 @@ final class AppSettings {
             const [1, 2, 3]),
         liveViewImageCompression: _pickLiveViewValue(
             json['liveViewImageCompression'], const [0, 1, 2, 3, 4, 5]),
+        sdramCapture: json['sdramCapture'] == true,
       );
 
   /// 取景画质档反序列化:表外值(旧版本/手改文件)回落「跟随相机」。

@@ -52,6 +52,8 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import '../../core/browser/object_entry.dart';
+import '../../core/browser/object_repository.dart';
 import '../../core/camera/camera_connection.dart';
 import '../../core/ptp/device_prop.dart';
 import '../../core/ptp/operation_codes.dart';
@@ -60,6 +62,8 @@ import '../../core/ptp/ptp_transport.dart';
 import '../../core/remote/frame_analysis.dart';
 import '../../core/remote/frame_analyzer.dart';
 import '../../core/remote/live_view_engine.dart';
+import '../../core/transfer/transfer_engine.dart';
+import '../../core/transfer/transfer_task.dart';
 import 'shooting_param_catalog.dart';
 
 /// 曝光三要素(只读快照;null = 该属性读取失败/未读)。
@@ -124,6 +128,7 @@ final class RemoteController extends ChangeNotifier {
   RemoteController({
     required this.session,
     this.connection,
+    this.transferEngine,
     LiveViewEngine? engine,
     Future<void> Function(Duration)? delay,
     Future<void> Function(Duration)? aeDelay,
@@ -187,6 +192,11 @@ final class RemoteController extends ChangeNotifier {
   final PtpSession session;
   final CameraConnection? connection;
   final LiveViewEngine engine;
+
+  /// 图库导入通道(SDRAM 直拍收尾用):生产装配 [TransferEngineImpl],
+  /// null = 未接(直拍对象停在「已取回句柄」提示)。接口类型 —— 测试
+  /// 注假实现。
+  final TransferEngine? transferEngine;
 
   /// 监看辅助帧分析(直方图/斑马纹)。
   final FrameAnalyzer analyzer = FrameAnalyzer();
@@ -546,6 +556,25 @@ final class RemoteController extends ChangeNotifier {
   StreamSubscription<CameraLinkState>? _statesSub;
   Completer<void>? _captureDone;
 
+  // ---- SDRAM 直拍(0x90CB AF+SDRAM 一体拍,对象不入卡)----
+
+  /// SDRAM 直拍旗标(面板芯片,AppSettings 持久化):开 = 快门改发
+  /// 0x90CB(官方 §6.2.4.3 无参;探针实证),对象经 0xC101 事件回传后
+  /// 由 [_collectSdramObject] 存入图库。
+  bool sdramCapture = false;
+
+  /// 在途直拍的句柄接力:0xC101 objectAddedInSdram 事件参数补全
+  /// ([_onEvent])。句柄不跨会话、不进对象仓库持久缓存。
+  Completer<int>? _sdramHandle;
+
+  /// 等回传对象的窗口(0xC101 未到 = 快门已实发但对象未回,如实提示)。
+  /// 实例字段:测试拨小即时收口。
+  Duration sdramHandleTimeout = const Duration(seconds: 5);
+
+  /// 等图库落地的窗口(TransferEngine 自带 3 次重试;超窗如实转为
+  /// 「后台保存中」提示,传输页可见)。同上,测试可拨小。
+  Duration sdramTransferTimeout = const Duration(seconds: 120);
+
   /// 最近取景帧尺寸(SOF 嗅探):触控对焦坐标映射 + 页面画幅计算用。
   final frameSize = ValueNotifier<({int width, int height})?>(null);
 
@@ -596,11 +625,16 @@ final class RemoteController extends ChangeNotifier {
     PtpResponseCode.accessDenied,
   };
 
-  /// 快门码选择:首选码按相机 op 表(在册 0x9207 直用,OpenZCine 全系
-  /// 口径 —— Zf 在册;表拿不到退标准 0x100E)。0x9207 的 CaptureSort
-  /// 首参按 [_captureSortCandidates] 序换形(0x201D);被拒(码级)
-  /// 自动换另一码,成功后缓存。0x2013(存储不可用)转友好提示。
+  /// 快门码选择:SDRAM 直拍开 = 0x90CB AF+SDRAM 一体(不入卡,收尾见
+  /// [_collectSdramObject]);否则首选码按相机 op 表(在册 0x9207 直用,
+  /// OpenZCine 全系口径 —— Zf 在册;表拿不到退标准 0x100E)。0x9207 的
+  /// CaptureSort 首参按 [_captureSortCandidates] 序换形(0x201D);被拒
+  /// (码级)自动换另一码,成功后缓存。0x2013(存储不可用)转友好提示。
   Future<void> _fireShutter() async {
+    if (sdramCapture) {
+      await session.afAndCaptureRecInSdram();
+      return;
+    }
     final pref = _captureOpPref;
     if (pref == PtpOperationCode.initiateCapture) {
       await session.initiateCapture();
@@ -1153,9 +1187,22 @@ final class RemoteController extends ChangeNotifier {
   }
 
   /// 对焦按钮:独立驱动一次自动对焦(取景开启是前置条件 ——
-  /// 0xA00B notLiveView 为未开取景的应答形态)。
+  /// 0xA00B notLiveView 为未开取景的应答形态)。对焦中再点 = 0x9206
+  /// 取消在途 AF(事务串行,能否真的打断长对焦待真机核对;应答与
+  /// 合焦框仍由 [_driveAf] 的在途路径如实落地)。
   Future<void> afDriveNow() async {
-    if (focusing) return;
+    if (focusing) {
+      unawaited(() async {
+        try {
+          await session.afDriveCancel();
+        } on Exception {
+          // 取消失败不打断在途对焦的应答处理
+        }
+      }());
+      notice = '已取消对焦';
+      notifyListeners();
+      return;
+    }
     if (!_linkUp) {
       error = '未连接相机';
       notifyListeners();
@@ -1226,6 +1273,165 @@ final class RemoteController extends ChangeNotifier {
         return '录像中的静照拍摄尚在进行,请稍候(官方 0xA202)';
       default:
         return null;
+    }
+  }
+
+  // ---- 主体追踪(0x9424/0x9425,官方 §6.2.6)----
+
+  /// 追踪进行中(0x9424 启动成功 → 0x9425/断连收口;相机侧随取景
+  /// 关闭自灭,本旗标只是 UI 态)。
+  bool _tracking = false;
+  bool get tracking => _tracking;
+
+  /// 主体追踪门控(官方 §6.2.6.7):AF 区域(0xD05D)须「自动」
+  /// (0x8011)且取景开启。Zf FORM 七值无 3D 追踪档,单值判定;
+  /// 值未知(拒答/未读到)不锁 —— 宁可按了被机身拒(focusModeIsMf
+  /// 同口径)。
+  bool get afAreaCanTrack =>
+      paramProps[PtpDevicePropCode.stillFocusMeteringMode]?.value == 0x8011;
+
+  /// 开启主体追踪:坐标 = 最近触控对焦点(无则 whole-size 中心),
+  /// 坐标系同 0x9205(帧头 whole-size)。
+  Future<void> startTracking() async {
+    if (!_linkUp) {
+      error = '未连接相机';
+      notifyListeners();
+      return;
+    }
+    if (!liveViewActive) {
+      error = '请先开启取景';
+      notifyListeners();
+      return;
+    }
+    if (_rejectIfFocusModeMf()) return;
+    if (!afAreaCanTrack) {
+      notice = '主体追踪需 AF 区域为「自动」(「AF 区域」芯片可切换)';
+      notifyListeners();
+      return;
+    }
+    final box = afBox;
+    final h = engine.header.value;
+    final size = h != null && h.coordinateWidth > 0 && h.coordinateHeight > 0
+        ? (width: h.coordinateWidth, height: h.coordinateHeight)
+        : _lastHeaderSpace ?? frameSize.value;
+    if (size == null) {
+      error = '暂无取景帧,无法定位追踪目标';
+      notifyListeners();
+      return;
+    }
+    final nx = box?.nx ?? 0.5;
+    final ny = box?.ny ?? 0.5;
+    error = null;
+    notifyListeners();
+    try {
+      await session.startTracking(
+        (nx * size.width).round().clamp(0, size.width),
+        (ny * size.height).round().clamp(0, size.height),
+      );
+      _tracking = true;
+    } on PtpResponseException catch (e) {
+      error = '主体追踪启动失败:${_nikonHint(e.responseCode) ?? e}';
+    } on Exception catch (e) {
+      error = '主体追踪启动失败:$e';
+    }
+    if (_linkUp) notifyListeners();
+  }
+
+  /// 停止主体追踪(0x9425 无参)。收尾失败不上 error(追踪随会话/
+  /// 取景消亡,旗标照落)。
+  Future<void> endTracking() async {
+    if (!_tracking) return;
+    _tracking = false;
+    notifyListeners();
+    try {
+      await session.endTracking();
+    } on Exception {
+      // 状态已落,链路级失败由断链路径收口
+    }
+  }
+
+  // ---- AE/AWB 锁(0x9426,官方 §6.2.4.5)----
+
+  /// 锁定态(乐观,读回对表):type 2 = AE+AWB。WB 非 auto 时机身
+  /// 拒 AWB 锁(0x200F)—— 应答失败走 error,旗标不动。
+  bool _aeLocked = false;
+  bool get aeLocked => _aeLocked;
+
+  /// 切换 AE/AWB 锁:应答 OK 先落乐观态,随即尽力读 AELockStatus
+  /// (0xD105)对表 —— 读失败保持乐观态(不亮假态);断连沿清零
+  /// (会话级状态,重连后未知)。
+  Future<void> toggleAELock() async {
+    if (!_linkUp) {
+      error = '未连接相机';
+      notifyListeners();
+      return;
+    }
+    final target = !_aeLocked;
+    try {
+      await session.changeAELock(lock: target, type: 2);
+    } on PtpResponseException catch (e) {
+      error = 'AE 锁切换失败:${_nikonHint(e.responseCode) ?? e}';
+      notifyListeners();
+      return;
+    } on Exception catch (e) {
+      error = 'AE 锁切换失败:$e';
+      notifyListeners();
+      return;
+    }
+    _aeLocked = target;
+    notifyListeners();
+    try {
+      final v = await session.getDevicePropValue(PtpDevicePropCode.aeLockStatus);
+      final actual = v.value == 1;
+      if (actual != _aeLocked && !_disposed) {
+        _aeLocked = actual;
+        notifyListeners();
+      }
+    } on Exception {
+      // 读回失败:保持乐观态
+    }
+  }
+
+  // ---- 相机内屏强关(0x9422,官方 §6.2.2.17,B 组:线上未验)----
+
+  /// 强关态(乐观,读回对表):应答 OK 只代表「请求已收到」;会话级
+  /// 不持久化,断连沿清零(重连后内屏随会话新开未知)。
+  bool _monitorOff = false;
+  bool get monitorOff => _monitorOff;
+
+  /// 切换机背内屏强关:OK 先落乐观态,随即尽力读 MonitorOffStatus
+  /// (0xD1BA)对表 —— 读失败保持乐观态;失败不动旗标。副作用未知
+  /// (可能断取景流)由看门狗既有兜底,UI 标实验性。
+  Future<void> toggleMonitorOff() async {
+    if (!_linkUp) {
+      error = '未连接相机';
+      notifyListeners();
+      return;
+    }
+    final target = !_monitorOff;
+    try {
+      await session.changeMonitorOff(off: target);
+    } on PtpResponseException catch (e) {
+      error = '内屏开关失败:${_nikonHint(e.responseCode) ?? e}';
+      notifyListeners();
+      return;
+    } on Exception catch (e) {
+      error = '内屏开关失败:$e';
+      notifyListeners();
+      return;
+    }
+    _monitorOff = target;
+    notifyListeners();
+    try {
+      final v =
+          await session.getDevicePropValue(PtpDevicePropCode.monitorOffStatus);
+      final actual = v.value == 1;
+      if (actual != _monitorOff && !_disposed) {
+        _monitorOff = actual;
+        notifyListeners();
+      }
+    } on Exception {
+      // 读回失败:保持乐观态
     }
   }
 
@@ -1561,10 +1767,23 @@ final class RemoteController extends ChangeNotifier {
           // 码随文浮出:有提示语时附 〔0x????〕(同连接梯诊断风格);
           // 无提示语时异常文本自带码,不再重复。
           final hint = _nikonHint(e.responseCode);
-          error = hint == null
+          var msg = hint == null
               ? '快门释放失败:$e'
               : '快门释放失败:$hint'
                   '〔0x${e.responseCode.toRadixString(16).toUpperCase()}〕';
+          // 尽力读 WarningStatus(0xD102,官方 §6.5.6.24):Bit0 序列错误
+          // → 自愈指引(官方 §11.7.5:下一次释放自清,非重启级故障)。
+          try {
+            final w = await session
+                .getDevicePropValue(PtpDevicePropCode.warningStatus);
+            final raw = w.value;
+            if (raw is int && (raw & 0x1) != 0) {
+              msg = '$msg —— 相机上报序列错误,再按一次快门通常可恢复';
+            }
+          } on Exception {
+            // 读不到就只报原错误
+          }
+          error = msg;
         }
         return;
       } on Exception catch (e) {
@@ -1572,9 +1791,14 @@ final class RemoteController extends ChangeNotifier {
         return;
       }
       _captureDone = Completer<void>();
+      if (sdramCapture) _sdramHandle = Completer<int>();
       await _awaitCaptureSettled();
+      if (sdramCapture && _linkUp) {
+        await _collectSdramObject();
+      }
     } finally {
       _captureDone = null;
+      _sdramHandle = null;
       if (wasLive && _viewerVisible) engine.resume();
       capturing = false;
       notifyListeners();
@@ -1597,6 +1821,83 @@ final class RemoteController extends ChangeNotifier {
         return; // DeviceReady 非忙错误:命令已接受,不再兜底
       }
       if (ready) return;
+    }
+  }
+
+  /// SDRAM 直拍收尾:取回相机内存对象并入图库(0x90CB → 0xC101 句柄 →
+  /// GetObjectInfo → TransferEngine 图库目的地,水印/XMP/后台保活全链
+  /// 共用)。句柄一律取 0xC101 事件参数(不硬编码,不跨会话);5s 无
+  /// 事件如实提示不上 error(快门已实发)。
+  Future<void> _collectSdramObject() async {
+    // 压掉 2s 轮询延迟:手动拉一轮厂商事件队列(0xC101 经 _onEvent 补
+    // 全 [_sdramHandle]);拉取失败不致命,异步通道/轮询器还有机会。
+    try {
+      session.emitPolledEvents(await session.getEventEx());
+    } on Exception {
+      // 下面的 5s 窗兜底
+    }
+    int? handle;
+    try {
+      handle = await _sdramHandle?.future.timeout(sdramHandleTimeout);
+    } on TimeoutException {
+      handle = null;
+    }
+    if (!_linkUp) return;
+    if (handle == null || handle == 0) {
+      notice = '拍摄完成,但未收到相机回传对象(SDRAM 对象未到,'
+          '可稍后在相机相册确认)';
+      notifyListeners();
+      return;
+    }
+    final engine = transferEngine;
+    try {
+      final info = await session.getObjectInfo(handle);
+      if (!_linkUp) return;
+      final entry = ObjectRepository.toEntry(info);
+      if (engine == null) {
+        notice = '已拍摄(SDRAM,不入卡):未接图库通道,对象未保存';
+        notifyListeners();
+        return;
+      }
+      final state = await _awaitGalleryTerminal(engine, entry);
+      if (!_linkUp) return;
+      switch (state) {
+        case TransferState.completed:
+          notice = '已拍摄并保存到图库(SDRAM,不入卡)';
+        case TransferState.failed:
+          notice = '已拍摄(SDRAM,不入卡):图库保存失败,可到传输页重试';
+        default:
+          notice = '已拍摄(SDRAM,不入卡):仍在后台保存到图库,'
+              '进度见传输页';
+      }
+      notifyListeners();
+    } on Exception catch (e) {
+      if (!_linkUp) return;
+      notice = '拍摄完成,但回传对象保存失败:$e';
+      notifyListeners();
+    }
+  }
+
+  /// 入队图库目的地并等到终态(或超窗)。订阅先于入队(广播流不补发,
+  /// 错过终态帧会白等);返回最后观测到的状态,null = 超窗未终态。
+  Future<TransferState?> _awaitGalleryTerminal(
+    TransferEngine engine,
+    ObjectEntry entry,
+  ) async {
+    TransferState? finalState;
+    final terminal = Completer<void>();
+    final sub = engine.tasks.listen((ts) {
+      for (final t in ts) {
+        if (t.handle == entry.handle && t.isTerminal) finalState = t.state;
+      }
+      if (finalState != null && !terminal.isCompleted) terminal.complete();
+    });
+    try {
+      await engine.enqueue([entry], destination: TransferDestination.gallery);
+      await terminal.future.timeout(sdramTransferTimeout, onTimeout: () {});
+      return finalState;
+    } finally {
+      await sub.cancel();
     }
   }
 
@@ -1870,6 +2171,18 @@ final class RemoteController extends ChangeNotifier {
         }
       case PtpEventCode.objectAdded:
       case NikonEventCode.objectAddedInSdram:
+        // SDRAM 直拍在途:0xC101 参数 = 回传对象句柄,交给直拍收尾链
+        // ([_collectSdramObject]),不走进卡的即览/刷参分支。
+        if (event.code == NikonEventCode.objectAddedInSdram) {
+          final pending = _sdramHandle;
+          if (pending != null &&
+              !pending.isCompleted &&
+              event.params.isNotEmpty) {
+            pending.complete(event.params.first);
+            return;
+          }
+          // 无在途链:照旧按卡对象提示(防御 —— 相机内存残留等)
+        }
         notice = '已拍摄';
         notifyListeners();
         // 先缩略图(即拍即览要快)再全量刷参 —— 顺序确定,事务排队
@@ -1966,6 +2279,9 @@ final class RemoteController extends ChangeNotifier {
     reviewThumb = null;
     _reviewTimer?.cancel();
     lockedProps.clear();
+    _tracking = false; // 追踪随会话消亡(0x9425 不必发)
+    _aeLocked = false; // 会话级锁态,重连后未知(乐观态不留假亮)
+    _monitorOff = false; // 同上:内屏强关态,重连后未知
     if (_takeoverActive) {
       // 链路已死无法发 0x90C2 [0]:记悬挂,重连后防御性解除。
       _takeoverDangling = true;

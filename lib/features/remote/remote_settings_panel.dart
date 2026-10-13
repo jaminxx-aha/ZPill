@@ -14,7 +14,7 @@ import 'shooting_param_catalog.dart';
 /// (2026-10-12 自对焦浮层迁入:MF 步进/拉焦轮 —— 快门旁对焦钮已瘦身
 /// 为一键 AF)③监看开关(取景/网格/斑马纹/直方图/水平仪/伪色/峰值;
 /// 2026-10-12 十二轮起全部持久化 —— 关掉重进拍摄页保持,取景开关
-/// 同款)④辅助芯片(对焦后拍/自拍/APP 接管)。[maxHeight] 限高内滚
+/// 同款)④辅助芯片(对焦后拍/SDRAM 直拍/AE-L/自拍/APP 接管)。[maxHeight] 限高内滚
 /// (竖屏约 0.55 屏高,横屏顶栏与底条之间);点取景画面或再点设置钮
 /// 即收(见 RemotePage);状态随控制器 + [toggles](持久化设置桥接),
 /// 监听由外层 AnimatedBuilder 驱动。
@@ -29,6 +29,7 @@ class CaptureSettingsPanel extends StatelessWidget {
     required this.onLiveViewToggle,
     required this.onTakeoverRequest,
     required this.onLiveViewQualityChanged,
+    required this.onSdramCaptureChanged,
     this.liveViewImageSize,
     this.liveViewImageCompression,
     this.maxHeight,
@@ -52,6 +53,10 @@ class CaptureSettingsPanel extends StatelessWidget {
   /// 选,null = 跟随相机;持久化与相机写入由页面侧收口。
   final void Function(int? imageSize, int? compression)
       onLiveViewQualityChanged;
+
+  /// SDRAM 直拍落定(0x90CB 一体拍 + 0xC101 回传入图库):控制器即时
+  /// 生效与持久化由页面侧收口(同取景画质)。
+  final void Function(bool value) onSdramCaptureChanged;
 
   /// 当前画质档(持久化设置镜像;null = 跟随相机)。
   final int? liveViewImageSize;
@@ -171,6 +176,18 @@ class CaptureSettingsPanel extends StatelessWidget {
     }
 
     final dialOn = toggles.focusDial;
+    // 主体追踪(0x9424/0x9425):门控 = 取景在 + 非 MF + AF 区域「自动」
+    // (0x8011;芯片读控制器实时值);追踪进行中保持可点(停止优先于门控)。
+    final trackUsable = usable && controller.afAreaCanTrack;
+    Widget trackChip = _smallChip(
+      live: live,
+      label: '主体追踪',
+      selected: controller.tracking,
+      onTap: controller.tracking
+          ? controller.endTracking
+          : (trackUsable ? controller.startTracking : null),
+      tooltip: '启动后相机持续追焦所选主体(点取景画面选目标),再点停止',
+    );
     Widget dialToggle = InkWell(
       onTap: () {
         if (!dialOn) controller.resetFocusDial();
@@ -221,11 +238,16 @@ class CaptureSettingsPanel extends StatelessWidget {
             step(Icons.remove, true, 'MF 近', 'MF 向近(步进)'),
             step(Icons.add, false, 'MF 远', 'MF 向远(步进)'),
             dialToggle,
+            trackChip,
           ],
         ),
         if (controller.focusModeIsMf) ...[
           const SizedBox(height: 6),
           Text('机身对焦模式为 MF,远程对焦已停用',
+              style: TextStyle(fontSize: 10, color: live.muted)),
+        ] else if (usable && !controller.afAreaCanTrack) ...[
+          const SizedBox(height: 6),
+          Text('主体追踪:AF 区域切到「自动」后可用',
               style: TextStyle(fontSize: 10, color: live.muted)),
         ],
       ],
@@ -318,6 +340,14 @@ class CaptureSettingsPanel extends StatelessWidget {
             (v) => onTogglesChanged(toggles.copyWith(falseColor: v))),
         toggle(Icons.blur_on, '峰值', toggles.peaking,
             (v) => onTogglesChanged(toggles.copyWith(peaking: v))),
+        // 内屏强关(0x9422,B 组线上未验):乐观态会话级,tooltip 标
+        // 实验性(副作用未知,断流由看门狗兜底)。
+        Tooltip(
+          message: '实验性:强制关闭机背内屏(重连/重开后状态未知)',
+          child: toggle(Icons.mobile_off, '内屏', controller.monitorOff,
+              (_) => controller.toggleMonitorOff(),
+              enabled: controller.linkUp),
+        ),
       ],
     );
   }
@@ -389,6 +419,20 @@ class CaptureSettingsPanel extends StatelessWidget {
           onTap: () => controller.focusBeforeCapture =
               !controller.focusBeforeCapture,
           tooltip: '释放快门前先自动对焦(半按-全按;候选参数,待真机核对)',
+        ),
+        _smallChip(
+          live: LiveDesign.of(context),
+          label: 'SDRAM 直拍',
+          selected: controller.sdramCapture,
+          onTap: () => onSdramCaptureChanged(!controller.sdramCapture),
+          tooltip: 'AF+SDRAM 一体拍(0x90CB):对象不入卡,回传 APP 存图库',
+        ),
+        _smallChip(
+          live: LiveDesign.of(context),
+          label: 'AE-L',
+          selected: controller.aeLocked,
+          onTap: !controller.linkUp ? null : controller.toggleAELock,
+          tooltip: 'AE/AWB 锁定(0x9426):曝光随锁定时刻固定,再点解除',
         ),
         Builder(
           // Builder 让 showMenu 锚到自拍芯片本身(而非整条浮层)。

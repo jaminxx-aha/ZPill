@@ -5,8 +5,9 @@
 /// - 小图席位(先显,即时):JPG = Nikon 0x90C4(实测 640×424,
 ///   **直发不查能力表** —— 无线 STA 的 op 小表是假门,查表会把大图
 ///   无谓拒成 160×120 回落,2026-10-09 装机复报「点进去很小」根因;
-///   相机拒绝时回落 GetThumb);NEF = GetThumb(0x90C4 对 NEF 回
-///   320×212 的 NEF 压缩条带非 JPEG,Z f 定案档内也无大 JPEG)。
+///   相机拒绝时回落 GetThumb);NEF = 0x920F FHD JPEG 中档直发
+///   (2026-10-13 接线:档内无大 JPEG 的旧定案被官方 FHD 通道推翻,
+///   相机拒 0xA00F 等回落 GetThumb)。
 /// - 高清席位([warmPreview],查看器页 settle 触发):整档下载 →
 ///   原生解码(iOS ImageIO,长边 ≤ [ThumbnailCache.previewMaxPixelSize],
 ///   JPG/NEF 通吃)→ 落盘 → [ThumbnailCache.previewUpgrades] 发换图
@@ -289,12 +290,19 @@ class ThumbnailCache {
   /// 大图预览的**小图席位**(先显,即时):JPG = Nikon 0x90C4 **直发
   /// 不查能力表**(无线 STA 的 op 小表是假门,查表会把大图无谓拒成
   /// 160×120 回落);相机拒绝(错误码)回落标准 GetThumb。NEF =
-  /// GetThumb 直取(0x90C4 对 NEF 回非 JPEG 的压缩条带,Z f 定案)。
+  /// 0x920F FHD JPEG 中档直发(官方 §6.2.3.7:P1=ObjectHandle,RAW
+  /// 对象合法;0xA00F 无 FHD 数据回落 GetThumb 小图)—— 不查 op 能力表
+  /// (0x90C4 无线假门同款教训),真机核对:0x920F 对卡上 NEF 的在册性。
   /// 小图撑满是糊的 —— 高清席位见 [warmPreview](整档下载 + 原生
   /// 解码,先显后换)。
   Future<Uint8List> _fetchPreview(ObjectEntry entry) async {
     if (isRawFile(entry)) {
-      return _orientThumb(entry, await _session.getThumb(entry.handle));
+      try {
+        return await _orientThumb(
+            entry, await _session.getFhdPicture(entry.handle));
+      } on PtpResponseException {
+        return _orientThumb(entry, await _session.getThumb(entry.handle));
+      }
     }
     try {
       return await _orientThumb(

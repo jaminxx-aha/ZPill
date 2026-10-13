@@ -769,9 +769,50 @@ void main() {
 
   group('相机内保护(SetObjectProtection 0x1012,2026-10-12 官方 §6.2.1.14)',
       () {
+    testWidgets('开页 0x9803 读回真实态(1 = 已保护,图标直亮锁)', (tester) async {
+      final t = _FakePtpTransport();
+      // 0x9803 ProtectionStatus(u16 LE):1 = 只读
+      t.reply(PtpResult(
+          responseCode: PtpResponseCode.ok,
+          data: Uint8List.fromList([1, 0])));
+      await _openViewer(
+          tester,
+          PhotoViewerPage(
+            items: [PhotoGroup([_file(0x1234, 'DSC_0001.JPG')])],
+            initialIndex: 0,
+            thumbnails: _FakeThumbs(),
+            session: PtpSession(transport: t),
+          ));
+      expect(t.requests.single.opcode, NikonOperationCode.getObjectPropValue);
+      expect(t.requests.single.params, [0x1234, 0x0004]);
+      expect(find.byIcon(Icons.lock), findsOneWidget,
+          reason: '0x1012 无读回,开页沿 0x9803 对表真态');
+    });
+
+    testWidgets('读回失败(0x9804 连坐/断链):图标回落未保护,fail-open', (tester) async {
+      final t = _FakePtpTransport();
+      t.fail(const PtpResponseException(
+          opcode: NikonOperationCode.getObjectPropValue,
+          responseCode: PtpResponseCode.operationNotSupported));
+      await _openViewer(
+          tester,
+          PhotoViewerPage(
+            items: [PhotoGroup([_file(0x1234, 'DSC_0001.JPG')])],
+            initialIndex: 0,
+            thumbnails: _FakeThumbs(),
+            session: PtpSession(transport: t),
+          ));
+      expect(find.byIcon(Icons.lock_outline), findsOneWidget,
+          reason: '读回失败不挡查看,回落乐观基线(未保护)');
+    });
+
     testWidgets('锁钮点按发 [句柄, 0x0001],再点发解除;失败走 SnackBar',
         (tester) async {
       final t = _FakePtpTransport();
+      // 开页读回:未保护(u16 0)
+      t.reply(PtpResult(
+          responseCode: PtpResponseCode.ok,
+          data: Uint8List.fromList([0, 0])));
       final group = PhotoGroup([_file(0x1234, 'DSC_0001.JPG')]);
       await _openViewer(
           tester,
@@ -786,8 +827,12 @@ void main() {
       t.reply(const PtpResult(responseCode: PtpResponseCode.ok));
       await tester.tap(find.byIcon(Icons.lock_outline));
       await tester.pumpAndSettle();
-      expect(t.requests.single.opcode, PtpOperationCode.setObjectProtection);
-      expect(t.requests.single.params, [0x1234, 0x0001]);
+      expect(
+          t.requests
+              .where((r) => r.opcode == PtpOperationCode.setObjectProtection)
+              .single
+              .params,
+          [0x1234, 0x0001]);
       expect(find.text('已设为相机内保护(只读)'), findsOneWidget);
       expect(find.byIcon(Icons.lock), findsOneWidget, reason: '乐观态跟本地写');
       await _drainSnackBar(tester);
@@ -803,6 +848,10 @@ void main() {
 
     testWidgets('写被拒(断链/卡写保护):图标不动,SnackBar 指路', (tester) async {
       final t = _FakePtpTransport();
+      // 开页读回:未保护
+      t.reply(PtpResult(
+          responseCode: PtpResponseCode.ok,
+          data: Uint8List.fromList([0, 0])));
       final group = PhotoGroup([_file(0x1234, 'DSC_0001.JPG')]);
       await _openViewer(
           tester,
