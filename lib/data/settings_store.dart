@@ -55,8 +55,8 @@ final class AppSettings {
     this.monitorPeaking = false,
     this.monitorFocusDial = false,
     this.liveViewOn = true,
-    this.liveViewImageSize,
-    this.liveViewImageCompression,
+    this.liveViewImageSize = 3,
+    this.liveViewImageCompression = 5,
     this.sdramCapture = false,
   });
 
@@ -120,9 +120,11 @@ final class AppSettings {
   /// 浮层「取景」钮再开。
   final bool liveViewOn;
 
-  /// 取景画质档(2026-10-12 官方 §6.5.11.4-5):null = 跟随相机(默认,
-  /// 不写机身);非 null = 连接沿/改动沿写 0xD1AC/0xD1BC(尺寸 1=QVGA/
-  /// 2=VGA/3=XGA;压缩 0=Basic 尺寸优先…5=Fine 质量优先)。
+  /// 取景画质档(2026-10-12 官方 §6.5.11.4-5):null = 跟随相机(不写
+  /// 机身);非 null = 连接沿/改动沿写 0xD1AC/0xD1BC(尺寸 1=QVGA/
+  /// 2=VGA/3=XGA;压缩 0=Basic 尺寸优先…5=Fine 质量优先)。默认 XGA/
+  /// Fine(2026-10-13:出厂默认档全屏放大约 3 倍发糊,SnapBridge 同款
+  /// 定档;「跟随相机」降级为显式选项 —— 旧档无键仍回落 null)。
   final int? liveViewImageSize;
   final int? liveViewImageCompression;
 

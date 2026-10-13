@@ -227,10 +227,21 @@ final class AppServices {
     remoteController.autoLiveViewEnabled = settingsController.value.liveViewOn;
     // SDRAM 直拍开关同样双向不冲突(同值幂等):设置改动沿即时跟随。
     remoteController.sdramCapture = settingsController.value.sdramCapture;
+    // 取景画质档(2026-10-13 默认 XGA/Fine):装配沿只对齐字段,连接沿
+    // _applyLiveViewQuality 起景前写入(首帧即目标分辨率);相机写在
+    // 拍摄页浮层收口,这里直赋不发写、不 notify(同 sdramCapture 款)。
+    remoteController.liveViewImageSize =
+        settingsController.value.liveViewImageSize;
+    remoteController.liveViewImageCompression =
+        settingsController.value.liveViewImageCompression;
     settingsController.addListener(() {
       remoteController.autoLiveViewEnabled =
           settingsController.value.liveViewOn;
       remoteController.sdramCapture = settingsController.value.sdramCapture;
+      remoteController.liveViewImageSize =
+          settingsController.value.liveViewImageSize;
+      remoteController.liveViewImageCompression =
+          settingsController.value.liveViewImageCompression;
     });
     transfersController = TransfersController(
       engine: transferEngine,
