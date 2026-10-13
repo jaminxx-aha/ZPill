@@ -83,6 +83,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../app_services.dart';
+import '../../core/ble/ble_camera_session.dart';
 import '../../core/browser/album.dart';
 import '../../data/settings_store.dart';
 import '../../platform/motion_host.dart';
@@ -167,6 +168,11 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   /// 风暴暂停)才弹,回根页拿重试入口。
   bool _wasRecovering = false;
 
+  /// BLE GPS 注入芯片就绪态(未配对禁点;页面只读,起停全在
+  /// AppServices 注入驱动)。
+  bool _bleReady = false;
+  StreamSubscription<BleSessionState>? _bleStateSub;
+
   @override
   void initState() {
     super.initState();
@@ -183,6 +189,16 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     _syncAnalyzerEnabled();
     controller.autoLiveViewEnabled = _settings.value.liveViewOn;
     _settings.addListener(_onSettingsChanged);
+    // BLE GPS 注入芯片门禁 = 已配对(身份在),**不是**瞬时就绪 ——
+    // 相机进 USB 会话/待机会主动掉 BLE,门禁若挂 ready,用户永远点不
+    // 了芯片、驱动也起不来(死锁,2026-10-13 真机实证)。就绪与否只
+    // 影响注入是否在跑,掉线时点亮芯片 = 启动驱动自动重连。
+    _bleReady = AppServices.instance.bleSession.identity != null;
+    _bleStateSub = AppServices.instance.bleSession.states.listen((s) {
+      if (!mounted) return;
+      setState(
+          () => _bleReady = AppServices.instance.bleSession.identity != null);
+    });
     // 取景默认打开(2026-10-10 用户需求,取景开关钮撤除):未跑则自动
     // 起景 —— 幂等(HomeShell 连接沿的 autoLiveViewOnConnect 同款),
     // 引擎 failed 态进页也由此重试。直挂/未连接场景 linkUp 是冷启乐观
@@ -235,6 +251,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     controller.removeListener(_onControllerChanged);
     _settings.removeListener(_onSettingsChanged);
+    _bleStateSub?.cancel();
     // 离页只挂起轮询(取景生命周期跟连接走,不因拆页发 0x9202)。
     // 方向收口走 PopScope(pop 起点即发,不等 dispose);此处不动锁。
     controller.setViewerVisible(false);
@@ -344,6 +361,12 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   void _updateSdramCapture(bool value) {
     controller.sdramCapture = value;
     _persistSettings(_settings.value.copyWith(sdramCapture: value));
+  }
+
+  /// BLE GPS 注入落定:只写设置;会话起停/重连由 AppServices 注入驱动
+  /// 收口(BLE 独立于 PTP 链接;芯片未就绪 = 未配对,浮层侧已禁点)。
+  void _updateBleGpsInject(bool value) {
+    _persistSettings(_settings.value.copyWith(bleGpsInject: value));
   }
 
   /// 设置浮层开/关(再点同钮即收)。
@@ -578,6 +601,9 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                               onTakeoverRequest: _confirmTakeover,
                               onLiveViewQualityChanged: _updateLiveViewQuality,
                               onSdramCaptureChanged: _updateSdramCapture,
+                              onBleGpsInjectChanged: _updateBleGpsInject,
+                              bleGpsInject: _settings.value.bleGpsInject,
+                              bleReady: _bleReady,
                               liveViewImageSize:
                                   _settings.value.liveViewImageSize,
                               liveViewImageCompression:
@@ -888,6 +914,9 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                           onTakeoverRequest: _confirmTakeover,
                           onLiveViewQualityChanged: _updateLiveViewQuality,
                           onSdramCaptureChanged: _updateSdramCapture,
+                          onBleGpsInjectChanged: _updateBleGpsInject,
+                          bleGpsInject: _settings.value.bleGpsInject,
+                          bleReady: _bleReady,
                           liveViewImageSize: _settings.value.liveViewImageSize,
                           liveViewImageCompression:
                               _settings.value.liveViewImageCompression,

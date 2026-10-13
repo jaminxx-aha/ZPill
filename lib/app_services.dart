@@ -8,9 +8,11 @@
 /// ConnectionController / BrowserController / TransfersController 从这里取。
 library;
 
-import 'dart:async' show unawaited;
+import 'dart:async';
 import 'dart:io' show Platform;
 
+import 'core/ble/ble_camera_session.dart';
+import 'core/ble/geo_payload.dart';
 import 'core/browser/camera_file_ops.dart';
 import 'core/browser/object_repository.dart';
 import 'core/browser/thumbnail_cache.dart';
@@ -26,6 +28,7 @@ import 'core/remote/live_view_engine.dart';
 import 'core/transfer/auto_transfer.dart';
 import 'core/transfer/object_downloader.dart';
 import 'core/transfer/transfer_engine.dart';
+import 'data/ble_identity_store.dart';
 import 'data/client_identity_store.dart';
 import 'data/config_snapshot_store.dart';
 import 'data/paired_cameras_store.dart';
@@ -59,6 +62,8 @@ final class AppServices {
         FilePairedCamerasStore(dataDir: PlatformServices.gallery.dataDir);
     settingsStore =
         FileSettingsStore(dataDir: PlatformServices.gallery.dataDir);
+    bleIdentityStore =
+        BleIdentityStore(dataDir: PlatformServices.gallery.dataDir);
 
     // 看门狗装饰器包住平台通道:相机拔出/挂死时 bulk 收发秒败 +
     // breakages 事件(连接层订阅转 failed)。裸通道无检测能力。
@@ -243,6 +248,25 @@ final class AppServices {
       remoteController.liveViewImageCompression =
           settingsController.value.liveViewImageCompression;
     });
+    // BLE 相机会话 + GPS 注入驱动(协议层零 Timer,前台驱动全收在这里:
+    // 定位流 → onFix;15s tick → TIME 心跳/keep-alive;退避重试一次性
+    // Timer 按 nextRetryDelay 定时。BLE 会话独立于 PTP 链接 —— 开关开
+    // 即起,app 存活期维持,不随 USB/无线断连拆)。
+    bleSession = BleCameraSession(host: PlatformServices.ble);
+    settingsController.addListener(_updateBleInjection);
+    unawaited(() async {
+      final saved = await bleIdentityStore.load();
+      if (saved != null) {
+        bleSession.identity = BleIdentity(
+          peripheralUuid: saved.peripheralUuid,
+          deviceId: saved.deviceId,
+          nonce: saved.nonce,
+          serial: saved.serial,
+          name: saved.controllerName,
+        );
+      }
+      _updateBleInjection();
+    }());
     transfersController = TransfersController(
       engine: transferEngine,
       gallery: PlatformServices.gallery,
@@ -313,6 +337,111 @@ final class AppServices {
     });
   }
 
+  // ------------------------------------------------------------------
+  // BLE GPS 注入驱动(M4/M5):开关开 + 已配对 → 起定位流 + tick +
+  // 退避重连循环;关 → 全停。session 层零 Timer,前台驱动全收在这里。
+  // ------------------------------------------------------------------
+
+  Timer? _bleTick;
+  Timer? _bleRetry;
+  StreamSubscription<LocationSample>? _bleFixSub;
+  StreamSubscription<BleSessionState>? _bleStateSub;
+  bool _bleRunning = false;
+
+  /// 配对页配对成功/解除后刷新(设置监听之外的显式入口)。
+  void refreshBleInjection() => _updateBleInjection();
+
+  void _updateBleInjection() {
+    final enabled =
+        settingsController.value.bleGpsInject && bleSession.identity != null;
+    if (enabled == _bleRunning) return;
+    _bleRunning = enabled;
+    if (enabled) {
+      _startBleInjection();
+    } else {
+      _stopBleInjection();
+    }
+  }
+
+  void _startBleInjection() {
+    _bleStateSub = bleSession.states.listen((s) {
+      if (s == BleSessionState.reconnecting) {
+        _scheduleBleRetry();
+      } else if (s == BleSessionState.ready) {
+        // 就绪沿起定位流(断连重连沿天然复启;未授权/通道缺失时静默
+        // 无坐标,TIME 心跳仍维持会话)。
+        unawaited(_startLocationStream());
+      } else if (s == BleSessionState.idle) {
+        _bleRetry?.cancel();
+      }
+    });
+    _bleFixSub = PlatformServices.locationStream.stream().listen(
+          (s) => bleSession.onFix(GeoFix(
+            latitude: s.latitude,
+            longitude: s.longitude,
+            altitude: s.altitude,
+            // iOS 无卫星数 API。真机 2026-10-13:填 0 相机按「无定位」
+            // 处理 —— EXIF 只落 GPS 空壳(仅 VersionID)不写坐标,故
+            // 填常规可视卫星数(坐标本身是真实的,卫星数仅为修饰)。
+            satellites: 8,
+            utcTime: DateTime.now().toUtc(),
+          )),
+          onError: (Object e) => bleSession.lastError = '定位流失败:$e',
+        );
+    _bleTick = Timer.periodic(
+        const Duration(seconds: 15), (_) => unawaited(bleSession.tick()));
+    // 冷启恢复档:idle 且盘载身份在 → 直接进重试循环(免重走菜单配对);
+    // 已 ready(配对页「重连」按钮走的路)→ 定位流同样要起,不能只盯
+    // 状态跃迁沿。
+    if (bleSession.state == BleSessionState.idle &&
+        bleSession.identity != null) {
+      _scheduleBleRetry();
+    } else if (bleSession.state == BleSessionState.ready) {
+      unawaited(_startLocationStream());
+    }
+  }
+
+  void _scheduleBleRetry() {
+    _bleRetry?.cancel();
+    if (!_bleRunning) return;
+    _bleRetry = Timer(bleSession.nextRetryDelay, () async {
+      if (!_bleRunning) return;
+      final ok = await bleSession.retryReconnect();
+      if (!ok &&
+          _bleRunning &&
+          bleSession.state == BleSessionState.reconnecting) {
+        _scheduleBleRetry();
+      }
+    });
+  }
+
+  void _stopBleInjection() {
+    _bleRetry?.cancel();
+    _bleRetry = null;
+    _bleTick?.cancel();
+    _bleTick = null;
+    unawaited(_bleFixSub?.cancel());
+    _bleFixSub = null;
+    unawaited(_bleStateSub?.cancel());
+    _bleStateSub = null;
+    unawaited(() async {
+      try {
+        await PlatformServices.locationStream.stopStream();
+      } on Exception {
+        // 通道未实现(异端):流本就没起,无妨
+      }
+    }());
+    unawaited(bleSession.disconnect());
+  }
+
+  Future<void> _startLocationStream() async {
+    try {
+      await PlatformServices.locationStream.startStream();
+    } on Exception {
+      // 定位源不可用(未授权/通道缺失):会话 TIME 心跳照常,零坐标注入
+    }
+  }
+
   static AppServices? _instance;
 
   /// 应用级单例;首次访问时构建(pumpWidget 的测试不经 main 也能跑)。
@@ -347,4 +476,6 @@ final class AppServices {
   late final StorageOverviewController storageOverview;
   late final RemoteController remoteController;
   late final TransfersController transfersController;
+  late final BleIdentityStore bleIdentityStore;
+  late final BleCameraSession bleSession;
 }

@@ -40,7 +40,10 @@ final class PlatformServices {
   static late final NetworkMonitor network;
   static late final GallerySaver gallery;
   static late final BackgroundTransferScheduler background;
-  static late final BleScanner ble;
+  /// BLE 宿主(`nikonpill/ble`:扫描/GATT 读写订阅;iOS 已实现,
+  /// Android/ohos 待补,缺失时调用抛 MissingPluginException 按降级处理)。
+  /// 协议层(配对/GEO/TIME)在 lib/core/ble/,本层零方言知识。
+  static late final BleHost ble;
   static late final UsbHostChannel usb;
 
   /// mDNS/Bonjour 相机发现(`nikonpill/nsd`;三端已实现:ohos/Android
@@ -54,6 +57,10 @@ final class PlatformServices {
   /// 位置采样(`nikonpill/location`;三端已实现:iOS/ohos/Android 均
   /// 编译过待真机验证,native 缺失时调用报错按「无位置」降级)。
   static late final LocationHost location;
+
+  /// 定位流 + 后台授权(`nikonpill/location/stream`;iOS 已实现,
+  /// Android/ohos 待补,缺失时订阅抛 MissingPluginException 降级)。
+  static late final LocationStreamHost locationStream;
 
   /// RAW→JPEG 原生解码(`nikonpill/raw`;iOS 已实现,Android/ohos 待补,
   /// 缺失时 ThumbnailCache 回落 GetThumb 小图)。NEF 查看的数据源,
@@ -76,11 +83,12 @@ final class PlatformServices {
     network = MethodChannelNetworkMonitor();
     gallery = MethodChannelGallerySaver();
     background = MethodChannelBackgroundScheduler();
-    ble = MethodChannelBleScanner();
+    ble = MethodChannelBleHost();
     usb = MethodChannelUsbHost();
     nsd = MethodChannelNsdScanner();
     motion = MethodChannelMotionHost();
     location = MethodChannelLocationHost();
+    locationStream = MethodChannelLocationStream();
     rawDecoder = MethodChannelRawDecoder();
     videoPlayer = MethodChannelVideoPlayer();
   }
