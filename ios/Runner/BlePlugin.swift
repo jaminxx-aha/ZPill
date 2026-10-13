@@ -97,6 +97,8 @@ public final class BlePlugin: NSObject, FlutterPlugin, CBCentralManagerDelegate,
             result: result)
     case "disconnect":
       disconnect(result: result)
+    case "openBluetoothSettings":
+      openBluetoothSettings(result: result)
     default:
       result(FlutterMethodNotImplemented)
     }
@@ -116,9 +118,11 @@ public final class BlePlugin: NSObject, FlutterPlugin, CBCentralManagerDelegate,
   // MARK: - 扫描
 
   private func startScan(timeoutSeconds: Int, filterDeviceId: Int?, result: @escaping FlutterResult) {
-    guard scanResult == nil else {
-      result(FlutterError(code: "busy", message: "已有扫描在进行", details: nil))
-      return
+    if scanResult != nil {
+      // 旧扫描在途(多为注入驱动退避轮的 scanForDeviceId):先收掉再起新扫
+      // —— 旧调用方拿到当前已见列表按无/有命中处理,均无害;否则 busy
+      // 会卡到旧超时才放行(真机踩过:重进配对页首扫必 busy)。
+      endScan()
     }
     let central = ensureCentral()
     guard central.state != .unknown else {
@@ -233,8 +237,28 @@ public final class BlePlugin: NSObject, FlutterPlugin, CBCentralManagerDelegate,
   private func disconnect(result: @escaping FlutterResult) {
     if let peripheral {
       central?.cancelPeripheralConnection(peripheral)
+      self.peripheral = nil  // 立即释放:随后的 connect 不再撞 busy 守卫
     }
     result(nil)
+  }
+
+  /// 直达系统蓝牙设置页(App-Prefs 私有 scheme,新 iOS 可能失效 →
+  /// 回落本 app 设置页);result = 是否直达蓝牙页成功。
+  private func openBluetoothSettings(result: @escaping FlutterResult) {
+    guard let url = URL(string: "App-Prefs:root=Bluetooth") else {
+      result(false)
+      return
+    }
+    UIApplication.shared.open(url, options: [:]) { ok in
+      if ok {
+        result(true)
+        return
+      }
+      if let appSettings = URL(string: UIApplication.openSettingsURLString) {
+        UIApplication.shared.open(appSettings, options: [:])
+      }
+      result(false)
+    }
   }
 
   private func findCharacteristic(_ uuidString: String?) -> CBCharacteristic? {

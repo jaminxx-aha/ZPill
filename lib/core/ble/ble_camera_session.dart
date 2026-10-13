@@ -70,7 +70,9 @@ final class BleCameraSession {
   }
 
   /// 写 0x2002 的控制器名(32B ASCII 零填充;相机「已配对设备」显示)。
-  final String controllerName;
+  /// 可变:配对页实验用(SnapBridge 按平台写前缀名 —— Android 版实证
+  /// `Android_<机型>_<4位随机>`;相机以名识别客户端类型,见 0x2008 注)。
+  String controllerName;
 
   /// 握手/连接总闸(15s):连上非相机(扫描全量列表误点)或相机已退出
   /// 配对菜单时,stage1 无应答 —— 没有超时 pair() 会永久挂在 pairing。
@@ -109,6 +111,13 @@ final class BleCameraSession {
   String? _serial;
   int _backoffStep = 0;
   DateTime? _gateWritesUntil;
+  /// 首配注册等待(NOT1 01 00 = 相机侧注册完成信号;2026-10-13 定案:
+  /// 注册在配对事务的 bond 落地后完成,NOT1 此前从不出现)。
+  Completer<bool>? _registrationWait;
+  /// 第二段静默窗(相机 DEEP_SLEEP_WAIT 周期:配对后半段相机进深睡,
+  /// 醒来才发 SMP 安全请求;期间任何 GATT 流量都会被打断掐线 ——
+  /// SnapBridge 同名 Progress 阶段实证)。0 = 不静默。
+  Duration silentBondWait = Duration.zero;
 
   GeoFix? _lastFix;
   GeoFix? _pendingFix;
@@ -206,6 +215,80 @@ final class BleCameraSession {
     _stage3Sent = false;
     unawaited(_host.disconnect());
     _setState(BleSessionState.idle);
+  }
+
+  /// 直连重连(iOS 首配第二段):相机静默等待态无广播可扫,直接按
+  /// 本会话已知 peripheralUuid 连(iOS retrievePeripherals 能找回本
+  /// 会话已见外设)。连接沿相机可能发 SMP 安全请求 → iOS 弹配对码 →
+  /// 确认后 bond 落、注册完成。握手超时放宽(60s):等用户确认弹窗。
+  Future<bool> reconnectDirect() async {
+    if (identity == null ||
+        (_state != BleSessionState.idle &&
+            _state != BleSessionState.reconnecting)) {
+      return false;
+    }
+    _resuming = true;
+    _serial = null;
+    _setState(BleSessionState.pairing);
+    final done = _handshake = Completer<void>();
+    try {
+      await _host
+          .connectPaired(identity!.peripheralUuid)
+          .timeout(const Duration(seconds: 20));
+      await done.future.timeout(const Duration(seconds: 60));
+      return true;
+    } on TimeoutException {
+      _abandonHandshake(done);
+      _setState(BleSessionState.reconnecting);
+      _backoffStep = min(_backoffStep + 1, _backoffSeconds.length - 1);
+      return false;
+    } on Exception catch (e) {
+      lastError = '第二段连接失败:$e';
+      _setState(BleSessionState.reconnecting);
+      _backoffStep = min(_backoffStep + 1, _backoffSeconds.length - 1);
+      return false;
+    }
+  }
+
+  /// 扫描式二连(iOS 首配第二段,2026-10-14 订正):未注册相机每次广播
+  /// 轮换 RPA(iOS identifier 随之变),直连旧 uuid = 打给已旋转的地址
+  /// —— 必须像 SnapBridge BLE2ND 的 FIND_CAMERA_BLE 一样**重扫**,拿
+  /// 新广播的新 uuid 连接;连上**立即**跑复用握手(device/nonce 在
+  /// stage1 里走,与 BLE 地址无关),静默等待反而会被相机当死客户端
+  /// 掐线。握手超时放宽(45s):等用户确认可能出现的系统配对码弹窗。
+  Future<bool> reconnectScan({Duration scanTimeout = const Duration(seconds: 10)}) async {
+    if (identity == null ||
+        (_state != BleSessionState.idle &&
+            _state != BleSessionState.reconnecting)) {
+      return false;
+    }
+    silentBondWait = Duration.zero;
+    final devices = await _host.scan(timeout: scanTimeout);
+    if (devices.isEmpty) {
+      lastError = '二段扫描无相机广播';
+      _backoffStep = min(_backoffStep + 1, _backoffSeconds.length - 1);
+      return false;
+    }
+    final target = devices.first;
+    _resuming = true;
+    _serial = null;
+    _setState(BleSessionState.pairing);
+    final done = _handshake = Completer<void>();
+    try {
+      await _host.connectPaired(target.uuid).timeout(const Duration(seconds: 20));
+      await done.future.timeout(const Duration(seconds: 45));
+      return true;
+    } on TimeoutException {
+      _abandonHandshake(done);
+      _setState(BleSessionState.reconnecting);
+      _backoffStep = min(_backoffStep + 1, _backoffSeconds.length - 1);
+      return false;
+    } on Exception catch (e) {
+      lastError = '二段连接失败:$e';
+      _setState(BleSessionState.reconnecting);
+      _backoffStep = min(_backoffStep + 1, _backoffSeconds.length - 1);
+      return false;
+    }
   }
 
   /// 断开回 idle(身份保留;重连仍可复用)。
@@ -314,10 +397,40 @@ final class BleCameraSession {
           _gateWritesUntil = _now().add(_writeGate);
         }
         try {
+          // 第二段静默窗:深睡周期内零 GATT 流量(SnapBridge 的
+          // DEEP_SLEEP_WAIT 同款);窗内相机发安全请求 → 系统配对码。
+          if (_resuming && silentBondWait > Duration.zero) {
+            _trace('第二段静默 ${silentBondWait.inSeconds}s'
+                '(等相机唤醒/安全请求/配对码)…');
+            await Future<void>.delayed(silentBondWait);
+            silentBondWait = Duration.zero;
+            _trace('静默窗结束 → 复用握手');
+          }
           await _host.setNotify(kNikonCharPairing);
           await _host.setNotify(kNikonCharNot1);
           // NOT2(0x200A)留观察窗:方言核对期跟踪信号帧,不参与状态机。
           await _host.setNotify(kNikonCharNot2);
+          // 读特征面(SnapBridge 配对期读 0x2004 同款;若相机挂「加密
+          // 读」权限,读触发 iOS LE 配对弹窗 —— 首配注册通道,弹窗由
+          // 系统处理,读失败照常继续不挡握手)。
+          unawaited(() async {
+            for (final uuid in const [
+              kNikonCharConfig,
+              kNikonCharServerName,
+              kNikonCharFeature,
+              kNikonCharPowerControl,
+              kNikonCharSerialString,
+              kNikonCharStatusForControl,
+            ]) {
+              try {
+                final v = await _host.read(uuid);
+                _trace(
+                    'read ${uuid.substring(4, 8)} → ${v == null ? 'null' : '${v.length}B'}');
+              } on Exception catch (e) {
+                _trace('read ${uuid.substring(4, 8)} 失败:$e');
+              }
+            }
+          }());
           // 会话控制面观察(SnapBridge 方言):帧落诊断日志,不参与状态机。
           await _host.setNotify(kNikonCharStatusForControl);
           await _host.setNotify(kNikonCharControlPoint);
@@ -404,11 +517,40 @@ final class BleCameraSession {
     }
   }
 
-  /// NOT1 只作跟踪(真机 2026-10-13 实测:Zf 收下名字后并不回 NOT1,
-  /// 闸门在名字写;此帧若到,配对多半已收口,纯信息)。
+  /// 0x2008 LSS_CONTROL_POINT 跟踪(SnapBridge smali 定案:2B LE 位域
+  /// `(Connection<<8)|(Location<<4)|Time`,相机经 notify 发布自己的请求
+  /// 位,app 读后清位应答;`01 00` = TimeRequest ON「要时间」而非配对
+  /// 成功标志)。此帧若到,顺带完结注册等待(注册后相机才会发请求位)。
   Future<void> _onNot1(Uint8List data) async {
-    _trace(
-        'NOT1 ← ${data.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}');
+    if (data.length == 2) {
+      final time = data[0] & 0x0F;
+      final loc = (data[0] >> 4) & 0x0F;
+      final conn = data[1] & 0x0F;
+      _trace('0x2008 ← ${hex(data)} '
+          '(Time=$time Loc=$loc Conn=$conn)');
+      if (time >= 1) {
+        _registrationWait?.complete(true);
+        _registrationWait = null;
+      }
+    } else {
+      _trace('0x2008 ← ${hex(data)}');
+    }
+  }
+
+  static String hex(List<int> bytes) =>
+      bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ');
+
+  /// 挂在原连接上等注册完成信号(NOT1 01 00;相机在注册挂起态可能于
+  /// 原连接上延迟发安全请求 → 用户确认 → bond → 注册 → NOT1)。
+  /// 到窗未至返回 false(调用方转第二段直连)。
+  Future<bool> waitRegistration({Duration window = const Duration(seconds: 45)}) async {
+    if (_state != BleSessionState.ready) {
+      return false;
+    }
+    final wait = _registrationWait = Completer<bool>();
+    final got = await wait.future.timeout(window, onTimeout: () => false);
+    _registrationWait = null;
+    return got;
   }
 
   /// 写 0x2002 控制器名(32B ASCII 零填充)。真机方言(2026-10-13

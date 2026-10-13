@@ -34,7 +34,7 @@ class BlePairPage extends StatefulWidget {
   State<BlePairPage> createState() => _BlePairPageState();
 }
 
-class _BlePairPageState extends State<BlePairPage> {
+class _BlePairPageState extends State<BlePairPage> with WidgetsBindingObserver {
   StreamSubscription<BleSessionState>? _stateSub;
   StreamSubscription<BleEvent>? _eventSub;
   final List<String> _lines = [];
@@ -54,6 +54,9 @@ class _BlePairPageState extends State<BlePairPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    // 手动配对期间挂起注入驱动(自动重连/GEO tick 会与手动流程撞车)
+    AppServices.instance.suspendBleDriver();
     _sessionState = _session.state;
     _session.onTrace = _log; // 帧级诊断(→ stage1/3、← stage2/4 全落日志)
     _stateSub = _session.states.listen((s) {
@@ -73,8 +76,22 @@ class _BlePairPageState extends State<BlePairPage> {
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // 从系统蓝牙页回来:自动复用重连(注册闭环的最后一步,免手点)。
+    if (state == AppLifecycleState.resumed &&
+        _saved != null &&
+        !_binding &&
+        _sessionState == BleSessionState.idle) {
+      _log('回到前台:自动重连…');
+      unawaited(_resume());
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _retrying = false;
+    AppServices.instance.resumeBleDriver();
     _session.onTrace = null;
     _stateSub?.cancel();
     _eventSub?.cancel();
@@ -183,6 +200,17 @@ class _BlePairPageState extends State<BlePairPage> {
     app.refreshBleInjection();
     _log('配对成功 ✓ device=${id.deviceId.toRadixString(16)} '
         'serial=${id.serial} 身份已落盘');
+    // iOS 首配注册走系统蓝牙(用户裁定 2026-10-14:兜底转正):iOS 无程序
+    // 化绑定 API,LE SMP 触发器五轮实验未获(v1-v5 详见 TODO「二」),
+    // 系统蓝牙页点一下是 iOS 平台不可省的动作。配对成功即自动断开 +
+    // 深链直达蓝牙页;用户在系统页点相机完成配对后回前台,生命周期
+    // 监听自动复用身份重连 → 注册落档。
+    if (Platform.operatingSystem == 'ios') {
+      await _loadSaved();
+      await Future<void>.delayed(const Duration(milliseconds: 1500));
+      await _goSystemBluetooth();
+      return;
+    }
     await _loadSaved();
   }
 
@@ -242,6 +270,23 @@ class _BlePairPageState extends State<BlePairPage> {
       if (mounted) {
         setState(() => _binding = false);
       }
+    }
+  }
+
+  /// iOS 注册引导:断开(相机释放 BLE 后才暴露经典蓝牙)→ 深链直达
+  /// 系统蓝牙页;用户点相机完成经典绑定,回前台由生命周期监听自动重连
+  /// —— iOS 平台把手动路径压缩到「蓝牙页点一下」这唯一不可省的动作。
+  Future<void> _goSystemBluetooth() async {
+    await _session.disconnect();
+    _log('已断开 → 直达系统蓝牙页,点相机完成配对');
+    try {
+      final direct =
+          await _bleChannel.invokeMethod<bool>('openBluetoothSettings');
+      if (direct != true) {
+        _log('深链未直达蓝牙页(已开 app 设置页),请手动进「蓝牙」');
+      }
+    } on Exception catch (e) {
+      _log('打开系统设置失败:$e');
     }
   }
 
@@ -335,6 +380,12 @@ class _BlePairPageState extends State<BlePairPage> {
                   '相机先进菜单「连接至智能设备」(广播窗约 30 秒),再点扫描。',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
+                if (Platform.operatingSystem == 'ios')
+                  Text(
+                    'iOS:配对成功后自动断开并跳系统蓝牙页,点相机完成配对'
+                    '(核对配对码)→ 回本页自动重连注册。',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
               ],
             ),
           ),
@@ -378,6 +429,19 @@ class _BlePairPageState extends State<BlePairPage> {
                   onPressed: _auth == 'always' ? null : _requestAlways,
                   child: const Text('申请后台定位'),
                 ),
+                if (_saved != null &&
+                    !ready &&
+                    Platform.operatingSystem == 'ios') ...[
+                  OutlinedButton(
+                    onPressed: () => unawaited(_goSystemBluetooth()),
+                    child: const Text('去系统蓝牙完成注册'),
+                  ),
+                  Text(
+                    '未注册时可再跳一次:系统蓝牙页点相机配对(核对配对码)'
+                    '→ 回本页自动重连(配对成功后通常已自动跳过一次)',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
                 if (ready) ...[
                   OutlinedButton(
                     onPressed: () => _manual(
