@@ -337,6 +337,13 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     ));
   }
 
+  /// SDRAM 直拍落定(0x90CB 一体拍 + 0xC101 回传入图库):控制器即时
+  /// 生效 + 持久化(连接沿由 AppServices 同步,这里同值幂等)。
+  void _updateSdramCapture(bool value) {
+    controller.sdramCapture = value;
+    _persistSettings(_settings.value.copyWith(sdramCapture: value));
+  }
+
   /// 设置浮层开/关(再点同钮即收)。
   void _toggleSettings() {
     setState(() => _settingsOpen = !_settingsOpen);
@@ -568,6 +575,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                               onLiveViewToggle: _setLiveView,
                               onTakeoverRequest: _confirmTakeover,
                               onLiveViewQualityChanged: _updateLiveViewQuality,
+                              onSdramCaptureChanged: _updateSdramCapture,
                               liveViewImageSize:
                                   _settings.value.liveViewImageSize,
                               liveViewImageCompression:
@@ -877,6 +885,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                           onLiveViewToggle: _setLiveView,
                           onTakeoverRequest: _confirmTakeover,
                           onLiveViewQualityChanged: _updateLiveViewQuality,
+                          onSdramCaptureChanged: _updateSdramCapture,
                           liveViewImageSize: _settings.value.liveViewImageSize,
                           liveViewImageCompression:
                               _settings.value.liveViewImageCompression,

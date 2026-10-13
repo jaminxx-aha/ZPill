@@ -482,10 +482,10 @@ void main() {
         [NikonOperationCode.getLargeThumb, PtpOperationCode.getThumb, PtpOperationCode.getPartialObject]);
   });
 
-  test('preview:NEF 小图先显(GetThumb),warm 后整档解码换高清'
-      '(再开直取高清)', () async {
+  test('preview:NEF 中档 = 0x920F FHD 直发(不查能力表),方向注入后先显;'
+      'warm 后整档解码换高清', () async {
     final fake = FakePtpTransport()
-      ..reply(_okData(_jpeg)) // 小图 getThumb(裸)
+      ..reply(_okData(_jpeg)) // 0x920F FHD(裸)
       ..reply(_okData(_tiffHead(6))); // 头读:NEF 头即 TIFF(竖拍 6)
     final gallery = FakeGallerySaver();
     final downloader = _FakeDownloader();
@@ -499,12 +499,12 @@ void main() {
       ..previewUpgrades.listen(upgrades.add);
     final entry = _entry(0x12, name: 'DSC_0001.NEF');
 
-    // 打开即回:注入方向的小图,不等整档(旧管线要拉完整 NEF)
+    // 打开即回:0x920F 中档(带方向注入),不等整档
     final path = await cache.pathFor(entry, ThumbSource.preview);
     expect(jpegExifOrientation(File(path).readAsBytesSync()), 6);
     expect(downloader.calls, isEmpty);
     expect(fake.requests.map((r) => r.opcode),
-        [PtpOperationCode.getThumb, PtpOperationCode.getPartialObject]);
+        [NikonOperationCode.getFhdPicture, PtpOperationCode.getPartialObject]);
 
     // 页 settle 预热:整档下载 + 原生解码 → 高清席位 + 换图事件
     await cache.warmPreview(entry);
@@ -520,6 +520,25 @@ void main() {
     final again = await cache.pathFor(entry, ThumbSource.preview);
     expect(again, upgrades.single.path);
     expect(fake.requests.length, 2);
+  });
+
+  test('preview:NEF 0x920F 拒(0xA00F 无 FHD 数据)→ 回落 GetThumb 小图',
+      () async {
+    final fake = FakePtpTransport()
+      ..reply(PtpResult(
+          responseCode: NikonResponseCode.noFullHdPresent)) // 0x920F 拒
+      ..reply(_okData(_jpeg)) // 回落 getThumb
+      ..reply(_okData(_jpgHead(1)));
+    final cache = ThumbnailCache(
+        session: PtpSession(transport: fake), gallery: FakeGallerySaver());
+
+    final path =
+        await cache.pathFor(_entry(0x12, name: 'DSC_0001.NEF'),
+            ThumbSource.preview);
+    expect(File(path).existsSync(), isTrue);
+    expect(fake.requests.map((r) => r.opcode),
+        [NikonOperationCode.getFhdPicture, PtpOperationCode.getThumb,
+         PtpOperationCode.getPartialObject]);
   });
 
   test('preview:JPG 高清席位 —— 0x90C4 小图先显,warm 整档解码换高清',
@@ -569,7 +588,7 @@ void main() {
         _entry(0x12, name: 'DSC_0001.NEF'), ThumbSource.preview);
     expect(jpegExifOrientation(File(path).readAsBytesSync()), 6);
     expect(fake.requests.map((r) => r.opcode),
-        [PtpOperationCode.getThumb, PtpOperationCode.getPartialObject]);
+        [NikonOperationCode.getFhdPicture, PtpOperationCode.getPartialObject]);
     // warm 是无操作:不拉整档
     await cache.warmPreview(_entry(0x12, name: 'DSC_0001.NEF'));
     expect(fake.requests.length, 2);

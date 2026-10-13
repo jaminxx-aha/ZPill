@@ -94,6 +94,14 @@ int _dataPhaseFor(int opcode, Uint8List? dataOut) {
     NikonOperationCode.getDevicePropValueEx,
     NikonOperationCode.getDevicePropDescEx,
     NikonOperationCode.getPictCtrlData,
+    // 2026-10-13 接线批(官方指令书候选区):FHD 预览 / 卡上设定文件 /
+    // MTP 对象属性组读面。
+    NikonOperationCode.getFhdPicture,
+    NikonOperationCode.getCameraSettingData,
+    NikonOperationCode.getObjectPropsSupported,
+    NikonOperationCode.getObjectPropDesc,
+    NikonOperationCode.getObjectPropValue,
+    NikonOperationCode.getObjectPropList,
   };
   return dataInOps.contains(opcode) ? 3 : 1;
 }

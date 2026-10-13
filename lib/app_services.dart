@@ -218,14 +218,19 @@ final class AppServices {
       session: session,
       connection: connection,
       engine: lvEngine,
+      // SDRAM 直拍收尾的图库通道(0xC101 对象 → 图库目的地全链)。
+      transferEngine: transferEngine,
     );
     // 取景总开关(十二轮持久化):连接沿自动起景闸 —— 设置里关了
     // 取景,重连/冷启都不再自动 0x9201;拍摄页浮层「取景」钮改动
     // 即时同步到这里(页面自己也同步一份,双向不冲突,同值幂等)。
     remoteController.autoLiveViewEnabled = settingsController.value.liveViewOn;
+    // SDRAM 直拍开关同样双向不冲突(同值幂等):设置改动沿即时跟随。
+    remoteController.sdramCapture = settingsController.value.sdramCapture;
     settingsController.addListener(() {
       remoteController.autoLiveViewEnabled =
           settingsController.value.liveViewOn;
+      remoteController.sdramCapture = settingsController.value.sdramCapture;
     });
     transfersController = TransfersController(
       engine: transferEngine,
@@ -265,6 +270,16 @@ final class AppServices {
           diagRan = true;
           PtpDiagnostics.run(session: session, repository: repository);
         }
+        // 重连沿清相机事件队列残留(0x9461,官方候选;best-effort ——
+        // 不支持/会话未开静默跳过,不挡连接)。先清再开轮询器,免得
+        // 首拍把陈年事件当新鲜货推给 UI。
+        unawaited(() async {
+          try {
+            await session.clearEvent();
+          } on Exception {
+            // 静默:候选码,机身不支持属常态
+          }
+        }());
         eventPoller.start();
         // 相机时钟校准(OpenZCine CameraClockSync 口径:漂移 > 5s 才写,
         // 尽力而为不影响连接)。

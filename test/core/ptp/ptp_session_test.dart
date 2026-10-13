@@ -1330,4 +1330,216 @@ void main() {
       expect(d.enumValues, [0, 1, 2]);
     });
   });
+
+  group('官方指令书候选区接线(2026-10-13 探针批 + §6.2 规格比对)', () {
+    late FakePtpTransport t;
+    late PtpSession session;
+    setUp(() {
+      t = FakePtpTransport();
+      session = PtpSession(transport: t);
+    });
+
+    test('getFhdPicture:params=[句柄],JPEG SOI 嗅探;0xA00F 无 FHD 抛'
+        'PtpResponseException', () async {
+      t.reply(PtpResult(
+          responseCode: PtpResponseCode.ok,
+          data: Uint8List.fromList([0xFF, 0xD8, 1, 2, 3])));
+      final jpeg = await session.getFhdPicture(0x1234);
+      final req = t.requests.single;
+      expect(req.opcode, NikonOperationCode.getFhdPicture);
+      expect(req.params, [0x1234]);
+      expect(jpeg, [0xFF, 0xD8, 1, 2, 3]);
+
+      // 「头 + JPEG」形态:SOI 嗅探剥头
+      t.reply(PtpResult(
+          responseCode: PtpResponseCode.ok,
+          data: Uint8List.fromList([3, 0, 0, 0, 0xFF, 0xD8, 9])));
+      expect(await session.getFhdPicture(1), [0xFF, 0xD8, 9]);
+
+      t.reply(const PtpResult(
+          responseCode: NikonResponseCode.noFullHdPresent));
+      await expectLater(
+          session.getFhdPicture(1), throwsA(isA<PtpResponseException>()));
+    });
+
+    test('changeAELock:params=[1,2] 锁 / [0,2] 解锁(探针双 OK 形),'
+        'type 可指定', () async {
+      t.reply(const PtpResult(responseCode: PtpResponseCode.ok));
+      await session.changeAELock(lock: true);
+      expect(t.requests.single.opcode, NikonOperationCode.changeAELock);
+      expect(t.requests.single.params, [1, 2]);
+
+      t.reply(const PtpResult(responseCode: PtpResponseCode.ok));
+      await session.changeAELock(lock: false);
+      expect(t.requests.last.params, [0, 2]);
+
+      t.reply(const PtpResult(responseCode: PtpResponseCode.ok));
+      await session.changeAELock(lock: true, type: 0);
+      expect(t.requests.last.params, [1, 0]);
+    });
+
+    test('startTracking/endTracking:参数同 0x9205 两参 / 无参', () async {
+      t.reply(const PtpResult(responseCode: PtpResponseCode.ok));
+      await session.startTracking(3024, 2016);
+      expect(t.requests.single.opcode, NikonOperationCode.startTracking);
+      expect(t.requests.single.params, [3024, 2016]);
+
+      t.reply(const PtpResult(responseCode: PtpResponseCode.ok));
+      await session.endTracking();
+      expect(t.requests.last.opcode, NikonOperationCode.endTracking);
+      expect(t.requests.last.params, isEmpty);
+    });
+
+    test('clearEvent/afAndCaptureRecInSdram/saveCameraSetting:无参直发',
+        () async {
+      for (final _ in [
+        NikonOperationCode.clearEvent,
+        NikonOperationCode.afAndCaptureRecInSdram,
+        NikonOperationCode.saveCameraSetting,
+      ]) {
+        t.reply(const PtpResult(responseCode: PtpResponseCode.ok));
+      }
+      await session.clearEvent();
+      await session.afAndCaptureRecInSdram();
+      await session.saveCameraSetting();
+      expect(t.requests.map((r) => r.opcode).toList(), [
+        NikonOperationCode.clearEvent,
+        NikonOperationCode.afAndCaptureRecInSdram,
+        NikonOperationCode.saveCameraSetting,
+      ]);
+      expect(t.requests.every((r) => r.params.isEmpty), isTrue);
+    });
+
+    test('changeMonitorOff:params=[1] 强制关 / [0] 取消(§6.2.2.17)',
+        () async {
+      t.reply(const PtpResult(responseCode: PtpResponseCode.ok));
+      await session.changeMonitorOff(off: true);
+      expect(t.requests.single.opcode, NikonOperationCode.changeMonitorOff);
+      expect(t.requests.single.params, [1]);
+
+      t.reply(const PtpResult(responseCode: PtpResponseCode.ok));
+      await session.changeMonitorOff(off: false);
+      expect(t.requests.last.params, [0]);
+    });
+
+    test('getCameraSettingData:64B 文件名(63+NUL)+ 文件体拆分', () async {
+      final name = 'Z7_2_01012026.NCSETUTF8'.codeUnits;
+      final dataset = <int>[
+        ...name,
+        ...List.filled(64 - name.length, 0), // NUL 填充到 64B
+        0xDE, 0xAD, 0xBE, 0xEF, // 文件体
+      ];
+      t.reply(PtpResult(
+          responseCode: PtpResponseCode.ok,
+          data: Uint8List.fromList(dataset)));
+      final setting = await session.getCameraSettingData();
+      expect(t.requests.single.opcode, NikonOperationCode.getCameraSettingData);
+      expect(setting.name, 'Z7_2_01012026.NCSETUTF8');
+      expect(setting.data, [0xDE, 0xAD, 0xBE, 0xEF]);
+    });
+
+    test('sendCameraSettingData:dataOut = 64B 文件名 + 文件体', () async {
+      t.reply(const PtpResult(responseCode: PtpResponseCode.ok));
+      await session.sendCameraSettingData(
+          'AB', Uint8List.fromList([1, 2, 3]));
+      final out = t.requests.single.dataOut!;
+      expect(out.length, 67);
+      expect(out.sublist(0, 2), 'AB'.codeUnits);
+      expect(out.sublist(2, 64), List.filled(62, 0));
+      expect(out.sublist(64), [1, 2, 3]);
+    });
+
+    test('getObjectPropsSupported:u32 计数 + N×u16 解析', () async {
+      t.reply(PtpResult(
+          responseCode: PtpResponseCode.ok,
+          data: Uint8List.fromList([
+            0x02, 0x00, 0x00, 0x00, // count = 2
+            0x04, 0x00, // 0x0004 ProtectionStatus
+            0x08, 0x00, // 0x0008 ObjectSize
+          ])));
+      final props = await session.getObjectPropsSupported();
+      expect(t.requests.single.opcode,
+          NikonOperationCode.getObjectPropsSupported);
+      expect(props, [0x0004, 0x0008]);
+    });
+
+    test('getObjectPropDesc:参数 [句柄, 属性码],数据集裸透传(无消费方,'
+        '定宽解留接线时)', () async {
+      t.reply(PtpResult(
+          responseCode: PtpResponseCode.ok,
+          data: Uint8List.fromList([0x06, 0x00, 0x00, 0x00])));
+      final desc = await session.getObjectPropDesc(0x1234, 0x0004);
+      expect(t.requests.single.opcode,
+          NikonOperationCode.getObjectPropDesc);
+      expect(t.requests.single.params, [0x1234, 0x0004]);
+      expect(desc, [0x06, 0x00, 0x00, 0x00]);
+    });
+
+    test('getObjectPropValue/setObjectPropValue:参数 [句柄, 属性码],'
+        '裸值透传', () async {
+      t.reply(PtpResult(
+          responseCode: PtpResponseCode.ok,
+          data: Uint8List.fromList([0x01, 0x00])));
+      final value = await session.getObjectPropValue(0x1234, 0x0004);
+      expect(t.requests.single.params, [0x1234, 0x0004]);
+      expect(value, [0x01, 0x00]);
+
+      t.reply(const PtpResult(responseCode: PtpResponseCode.ok));
+      await session.setObjectPropValue(
+          0x1234, 0x0004, Uint8List.fromList([0x00, 0x00]));
+      expect(t.requests.last.opcode,
+          NikonOperationCode.setObjectPropValue);
+      expect(t.requests.last.params, [0x1234, 0x0004]);
+      expect(t.requests.last.dataOut, [0x00, 0x00]);
+    });
+
+    test('getObjectPropList:u32 计数 + N×(句柄+码+类型+DTS 值)解析',
+        () async {
+      t.reply(PtpResult(
+          responseCode: PtpResponseCode.ok,
+          data: Uint8List.fromList([
+            0x02, 0x00, 0x00, 0x00, // count = 2
+            0x34, 0x12, 0x00, 0x00, // 句柄 0x1234
+            0x04, 0x00, // 属性 0x0004 ProtectionStatus
+            0x06, 0x00, // UINT32
+            0x01, 0x00, 0x00, 0x00, // 值 1(只读)
+            0x35, 0x12, 0x00, 0x00, // 句柄 0x1235
+            0x08, 0x00, // 属性 0x0008 ObjectSize
+            0x04, 0x00, // UINT16
+            0xF4, 0x01, // 值 500
+          ])));
+      final props = await session.getObjectPropList(0x1234,
+          propCode: 0xFFFFFFFF);
+      expect(t.requests.single.params,
+          [0x1234, 0x00000000, 0xFFFFFFFF]);
+      expect(props, hasLength(2));
+      expect(props[0].handle, 0x1234);
+      expect(props[0].code, 0x0004);
+      expect(props[0].dataType, PtpDataType.uint32.code);
+      expect(props[0].value, 1);
+      expect(props[1].handle, 0x1235);
+      expect(props[1].code, 0x0008);
+      expect(props[1].value, 500);
+    });
+
+    test('getObjectPropList:depth 省略时 3 参,给了才追加 P5', () async {
+      t.reply(PtpResult(
+          responseCode: PtpResponseCode.ok,
+          data: Uint8List.fromList([0, 0, 0, 0])));
+      await session.getObjectPropList(0x10, propCode: 0x0004);
+      expect(t.requests.single.params, [0x10, 0, 0x0004]);
+
+      t.reply(PtpResult(
+          responseCode: PtpResponseCode.ok,
+          data: Uint8List.fromList([0, 0, 0, 0])));
+      await session.getObjectPropList(0x10, propCode: 0x0004, depth: 0xFFFFFFFF);
+      expect(t.requests.last.params, [0x10, 0, 0x0004, 0xFFFFFFFF]);
+    });
+
+    test('非 OK 响应统一抛 PtpResponseException(clearEvent 例)', () async {
+      t.reply(const PtpResult(responseCode: PtpResponseCode.deviceBusy));
+      await expectLater(
+          session.clearEvent(), throwsA(isA<PtpResponseException>()));
+    });
+  });
 }

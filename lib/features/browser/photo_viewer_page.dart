@@ -24,6 +24,7 @@ import 'package:flutter/services.dart';
 
 import '../../app_services.dart';
 import '../../core/browser/object_entry.dart';
+import '../../core/ptp/operation_codes.dart' show PtpObjectPropCode;
 import '../../core/ptp/ptp_session.dart';
 import '../../core/browser/photo_group.dart';
 import '../../core/browser/thumbnail_cache.dart';
@@ -124,8 +125,41 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
       widget.session ?? AppServices.instance.remoteController.session;
 
   /// 保护标记会话内缓存(0x1012 无读回 —— ObjectInfo 的 ProtectionStatus
-  /// 未解析,这里以本页发出的写为准;重开页面回落未保护态如实)。
+  /// 未解析,这里以本页发出的写为准;开页沿 0x9803 读回对表,见
+  /// [_readProtectState])。
   final _protectedHandles = <int>{};
+
+  /// 本页发出的保护写代数(乐观上屏后在途读回不得用旧真态覆盖)。
+  int _protectWrites = 0;
+
+  /// 开页/翻页沿读真实保护态(0x9803 GetObjectPropValue,
+  /// ProtectionStatus 0x0004 = u16:0 不保护/1 只读):重开页面不再回落
+  /// 未保护假态。失败(0x9804 曾不应答的连坐/断链)保持现状 fail-open,
+  /// 不挡查看;未知值不猜。读回在途时用户写入 → 代际不符丢弃。
+  void _readProtectState(PhotoGroup group) {
+    final handle = group.primary.handle;
+    final gen = _protectWrites;
+    unawaited(() async {
+      try {
+        final data = await _session.getObjectPropValue(
+            handle, PtpObjectPropCode.protectionStatus);
+        if (!mounted || gen != _protectWrites || data.length < 2) return;
+        final value = data[0] | (data[1] << 8);
+        if (value != 0 && value != 1) return;
+        final isProtected = value == 1;
+        if (isProtected == _protectedHandles.contains(handle)) return;
+        setState(() => isProtected
+            ? _protectedHandles.add(handle)
+            : _protectedHandles.remove(handle));
+      } on Exception {
+        // 读回失败:保持现状(下页翻回再试)
+      } on Object catch (e) {
+        // 意外(Error 类:未连接的缺省会话/测试桩耗尽等)同样尽力而为,
+        // 不挡查看(与缩略图方向头读同款兜底)
+        debugPrint('[查看器] 保护态读回失败 0x${handle.toRadixString(16)}: $e');
+      }
+    }());
+  }
 
   /// 保护标记开关(2026-10-12 官方 §6.2.1.14:SetObjectProtection 0x1012,
   /// 参数 [句柄, 0x0000 不保护/0x0001 只读];SDRAM/目录对象会被拒)。
@@ -133,6 +167,7 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
   Future<void> _toggleProtect(PhotoGroup group) async {
     final handle = group.primary.handle;
     final protect = !_protectedHandles.contains(handle);
+    _protectWrites++;
     try {
       await _session.setObjectProtection(handle, protect: protect);
       if (!mounted) return;
@@ -154,6 +189,7 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
   void initState() {
     super.initState();
     _warmCurrent();
+    _readProtectState(widget.items[_index]);
   }
 
   /// 当前页预览预热(高清席位):小图已先显,后台拉整档解码换高清;
@@ -434,6 +470,7 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
             onPageChanged: (i) {
               setState(() => _index = i);
               _warmCurrent();
+              _readProtectState(widget.items[i]);
               // 全屏是视频语境:滑到非视频页自动退出(还原方向与栏)
               if (_fullscreen && !widget.items[i].isVideo) {
                 _setFullscreen(false);

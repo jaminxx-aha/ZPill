@@ -46,6 +46,17 @@ void _ptpString(ByteWriter w, String s) {
     ..u16(0);
 }
 
+/// 0x946D 设定文件数据集:64B ASCII 文件名(63+NUL)+ 文件体。
+Uint8List _settingDataDataset(String name, List<int> body) {
+  final w = ByteWriter();
+  final nameUnits = name.codeUnits;
+  for (var i = 0; i < 64; i++) {
+    w.u8(i < nameUnits.length ? nameUnits[i] : 0);
+  }
+  w.raw(Uint8List.fromList(body));
+  return w.takeBytes();
+}
+
 /// DeviceInfo 数据集(布局抄 ptp_session_test 的手搓版,deviceProps 参数化)。
 Uint8List _deviceInfoDataset(List<int> deviceProps) {
   final w = ByteWriter()
@@ -105,7 +116,8 @@ void main() {
         ..ok(data: _propDescDataset(
             0x5007, PtpDataType.uint16, 28, getSet: false))
         ..ok(data: _propDescDataset(
-            0x500F, PtpDataType.uint16, 200));
+            0x500F, PtpDataType.uint16, 200))
+        ..ok(); // 0x946D 设定文件:数据空 → blob 缺席
       final snap = await CameraConfigSnapshotter.capture(session);
 
       expect(snap.model, 'TestModel');
@@ -117,8 +129,12 @@ void main() {
       expect(snap.props[0].writable, isTrue);
       expect(snap.props[1].code, 0x5007);
       expect(snap.props[1].writable, isFalse);
-      expect(transport.requests.map((r) => r.opcode),
-          [PtpOperationCode.getDeviceInfo, ...List.filled(3, PtpOperationCode.getDevicePropDesc)]);
+      expect(snap.settingsBlob, isNull);
+      expect(transport.requests.map((r) => r.opcode), [
+        PtpOperationCode.getDeviceInfo,
+        ...List.filled(3, PtpOperationCode.getDevicePropDesc),
+        NikonOperationCode.getCameraSettingData,
+      ]);
     });
 
     test('单属性失败/值区截断:跳过该属性,整体不失败', () async {
@@ -127,7 +143,8 @@ void main() {
         ..reply(PtpResponseCode.operationNotSupported) // 0x5001 拒
         ..ok(data: _propDescDataset(
             0x5007, PtpDataType.uint16, 28, truncateValue: true)) // 值区截断
-        ..ok(data: _propDescDataset(0x500F, PtpDataType.uint16, 200));
+        ..ok(data: _propDescDataset(0x500F, PtpDataType.uint16, 200))
+        ..ok(); // 0x946D:数据空 → blob 缺席
       final snap = await CameraConfigSnapshotter.capture(session);
       expect(snap.props.map((p) => p.code), [0x500F],
           reason: '失败与值截断的属性均不入快照');
@@ -136,7 +153,8 @@ void main() {
     test('一个属性都拿不到 → FormatException', () async {
       transport
         ..ok(data: _deviceInfoDataset([0x5001]))
-        ..reply(PtpResponseCode.deviceBusy);
+        ..reply(PtpResponseCode.deviceBusy)
+        ..ok(); // 0x946D:数据空,blob 也救不了场
       expect(() => CameraConfigSnapshotter.capture(session),
           throwsA(isA<FormatException>()));
     });
@@ -162,6 +180,121 @@ void main() {
       expect(back.props[0].code, 0x5007);
       expect(back.props[0].value, 28);
       expect(back.props[1].writable, isFalse);
+    });
+  });
+
+  group('blob 轨道(0x946D 读卡设定文件 / 0x946E 回写)', () {
+    test('capture:设定文件读得 → 名字与体入快照;JSON 往返无损', () async {
+      transport
+        ..ok(data: _deviceInfoDataset([0x5001]))
+        ..ok(data: _propDescDataset(0x5001, PtpDataType.uint8, 80))
+        ..ok(data: _settingDataDataset('NCSET011.BIN', [1, 2, 3, 4]));
+      final snap = await CameraConfigSnapshotter.capture(session);
+      expect(snap.settingsBlobName, 'NCSET011.BIN');
+      expect(snap.settingsBlob, [1, 2, 3, 4]);
+
+      final back = CameraConfigSnapshot.fromJson(
+          snap.toJson()..cast<String, Object?>());
+      expect(back.settingsBlobName, 'NCSET011.BIN');
+      expect(back.settingsBlob, [1, 2, 3, 4],
+          reason: 'base64 往返字节无损');
+    });
+
+    test('capture:0x946D 拒答(无卡等)→ blob 缺席,逐属性快照照常', () async {
+      transport
+        ..ok(data: _deviceInfoDataset([0x5001]))
+        ..ok(data: _propDescDataset(0x5001, PtpDataType.uint8, 80))
+        ..reply(PtpResponseCode.storeNotAvailable);
+      final snap = await CameraConfigSnapshotter.capture(session);
+      expect(snap.settingsBlob, isNull);
+      expect(snap.props, hasLength(1));
+    });
+
+    test('restore:blob 先行 —— 0x946E 单事务整档写卡,不走逐属性', () async {
+      PtpSession.kSetPropEnabled = true;
+      addTearDown(() => PtpSession.kSetPropEnabled = true);
+      transport
+        ..ok(data: _deviceInfoDataset([])) // 型号比对
+        ..ok(); // 0x946E 收下
+      final snap = CameraConfigSnapshot(
+        model: 'TestModel',
+        deviceVersion: 'V1.00',
+        capturedAt: DateTime.now(),
+        props: const [
+          ConfigPropSnapshot(
+              code: 0x5007, type: 'uint16', value: 28, writable: true),
+        ],
+        settingsBlobName: 'NCSET011.BIN',
+        settingsBlob: Uint8List.fromList([9, 8, 7]),
+      );
+      final report = await CameraConfigSnapshotter.restore(session, snap);
+
+      expect(report.blobSaved, isTrue);
+      expect(report.applied, 0, reason: 'blob 轨道成功,属性未逐个写');
+      final send = transport.requests
+          .where((r) => r.opcode == NikonOperationCode.sendCameraSettingData)
+          .single;
+      expect(send.dataOut, hasLength(64 + 3));
+      expect(send.dataOut!.sublist(0, 12),
+          Uint8List.fromList('NCSET011.BIN'.codeUnits));
+      expect(send.dataOut!.sublist(64), [9, 8, 7]);
+      expect(
+          transport.requests
+              .where((r) => r.opcode == PtpOperationCode.setDevicePropValue),
+          isEmpty,
+          reason: 'blob 成功不再逐属性写');
+    });
+
+    test('restore:0x946E 拒答 → 回落逐属性', () async {
+      PtpSession.kSetPropEnabled = true;
+      addTearDown(() => PtpSession.kSetPropEnabled = true);
+      transport
+        ..ok(data: _deviceInfoDataset([]))
+        ..reply(PtpResponseCode.storeNotAvailable) // 0x946E 拒(无卡)
+        ..ok(data: _propDescDataset(0x5007, PtpDataType.uint16, 28))
+        ..ok(); // 0x1016 写成功
+      final snap = CameraConfigSnapshot(
+        model: 'TestModel',
+        deviceVersion: 'V1.00',
+        capturedAt: DateTime.now(),
+        props: const [
+          ConfigPropSnapshot(
+              code: 0x5007, type: 'uint16', value: 28, writable: true),
+        ],
+        settingsBlobName: 'NCSET011.BIN',
+        settingsBlob: Uint8List.fromList([9, 8, 7]),
+      );
+      final report = await CameraConfigSnapshotter.restore(session, snap);
+      expect(report.blobSaved, isFalse);
+      expect(report.applied, 1, reason: '逐属性兜底照常写');
+    });
+
+    test('restore:blob 无名字(截断档/旧档)→ 不盲写卡,直接逐属性', () async {
+      PtpSession.kSetPropEnabled = true;
+      addTearDown(() => PtpSession.kSetPropEnabled = true);
+      transport
+        ..ok(data: _deviceInfoDataset([]))
+        ..ok(data: _propDescDataset(0x5007, PtpDataType.uint16, 28))
+        ..ok(); // 0x1016
+      final snap = CameraConfigSnapshot(
+        model: 'TestModel',
+        deviceVersion: 'V1.00',
+        capturedAt: DateTime.now(),
+        props: const [
+          ConfigPropSnapshot(
+              code: 0x5007, type: 'uint16', value: 28, writable: true),
+        ],
+        settingsBlob: Uint8List.fromList([9, 8, 7]),
+      );
+      final report = await CameraConfigSnapshotter.restore(session, snap);
+      expect(report.blobSaved, isFalse);
+      expect(report.applied, 1);
+      expect(
+          transport.requests
+              .where(
+                  (r) => r.opcode == NikonOperationCode.sendCameraSettingData),
+          isEmpty,
+          reason: '无名不写卡');
     });
   });
 

@@ -100,4 +100,25 @@ void main() {
       expect(s.liveViewImageCompression, 3);
     });
   });
+
+  group('SDRAM 直拍开关持久化(0x90CB,2026-10-13)', () {
+    test('默认关;JSON 往返;旧档缺省回落关', () {
+      expect(const AppSettings().sdramCapture, isFalse);
+      final on = const AppSettings().copyWith(sdramCapture: true);
+      final back = AppSettings.fromJson(on.toJson());
+      expect(back.sdramCapture, isTrue);
+      // 旧版本文件无此键 → 关
+      expect(AppSettings.fromJson({'autoTransfer': true}).sdramCapture,
+          isFalse);
+    });
+
+    test('文件落盘往返(FileSettingsStore)', () async {
+      final dir = await Directory.systemTemp.createTemp('np_settings_sdram');
+      addTearDown(() => dir.delete(recursive: true));
+      final store = FileSettingsStore(dataDir: () async => dir.path);
+      await store.update(const AppSettings().copyWith(sdramCapture: true));
+      final reloaded = FileSettingsStore(dataDir: () async => dir.path);
+      expect((await reloaded.current()).sdramCapture, isTrue);
+    });
+  });
 }
