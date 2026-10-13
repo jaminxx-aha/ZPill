@@ -4,8 +4,11 @@
 /// → 0x9202 EndLiveView。每帧一个短事务,与拍照/属性读在 PtpSession 的
 /// 全局串行锁上自然交错;间隔从**上一帧完成时刻**起算。
 ///
-/// 失败策略:指数退避(间隔 ×2,封顶 2s),连续 5 帧失败转 failed 并停轮
-/// —— 链路死亡(拔线/无线断)时 5s 内收口,不会无限打链路。
+/// 失败策略:指数退避(200ms 起步 ×2,封顶 2s),连续 5 帧失败转
+/// failed 并停轮 —— 链路死亡(拔线/无线断)时 5s 内收口,不会无限
+/// 打链路。健康路径帧间睡眠 50ms(2026-10-13:200ms 写死把吞吐钳在
+/// ~4fps,是相对 SnapBridge 流畅度差距的主项;50ms + 事务耗时 ≈
+/// USB 12fps / WiFi 5fps 起,真机再收)。
 /// 0xC10C LiveViewStateChanged 事件**不参与启停**:引擎纯轮询自治
 /// (事件语义未实证,待真机核对)。
 ///
@@ -41,7 +44,7 @@ enum LiveViewHealth { ok, busy, frozen }
 final class LiveViewEngine {
   LiveViewEngine({
     required this.session,
-    this.interval = const Duration(milliseconds: 200),
+    this.interval = const Duration(milliseconds: 50),
     LiveViewWatchdog? watchdog,
     this.onEscalateToLinkRecovery,
     Future<void> Function(Duration)? delay,
@@ -52,7 +55,8 @@ final class LiveViewEngine {
 
   final PtpSession session;
 
-  /// 轮询基础间隔(失败退避从它翻倍)。
+  /// 轮询基础间隔(健康路径帧间睡眠,从上一帧完成起算;失败退避基数
+  /// 独立 [_backoffBase],不随它缩水)。
   final Duration interval;
 
   /// 帧签名看门狗:事务成功但内容冻结的检测与分级(纯值类,阈值全
@@ -91,6 +95,11 @@ final class LiveViewEngine {
 
   static const int _maxFailures = 5;
   static const Duration _maxBackoff = Duration(seconds: 2);
+
+  /// 失败退避基数(200ms 起步 ×2,封顶 2s):与轮询间隔解耦 —— 帧间
+  /// 睡眠降到 50ms 后,退避梯仍按真机定案的「5s 内收口」节奏走,链路
+  /// 挣扎期不因高频重试提前判死,也不以 50ms 连拍式打垂死链路。
+  static const Duration _backoffBase = Duration(milliseconds: 200);
   static const Duration _pausedTick = Duration(milliseconds: 50);
 
   /// start/stop 轮换世代:旧循环的迟到迭代不得触碰新状态。
@@ -373,7 +382,7 @@ final class LiveViewEngine {
   }
 
   Duration _backoff() {
-    final ms = interval.inMilliseconds * (1 << (_failures - 1));
+    final ms = _backoffBase.inMilliseconds * (1 << (_failures - 1));
     final capped = ms < _maxBackoff.inMilliseconds ? ms : _maxBackoff.inMilliseconds;
     return Duration(milliseconds: capped);
   }

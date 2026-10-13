@@ -182,7 +182,6 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     _toggles = monitorTogglesFromSettings(_settings.value);
     _syncAnalyzerEnabled();
     controller.autoLiveViewEnabled = _settings.value.liveViewOn;
-    _syncLiveViewQualityFromSettings();
     _settings.addListener(_onSettingsChanged);
     // 取景默认打开(2026-10-10 用户需求,取景开关钮撤除):未跑则自动
     // 起景 —— 幂等(HomeShell 连接沿的 autoLiveViewOnConnect 同款),
@@ -289,8 +288,11 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     }
   }
 
-  /// 取景画质档跟随持久化设置(进页恢复 + 外部改动沿;自己写回的回声
-  /// 在差分上零动作)。控制器侧改动即时写相机,这里只对齐字段。
+  /// 取景画质档跟随持久化设置(外部改动沿;自己写回的回声在差分上零
+  /// 动作)。控制器侧改动即时写相机,这里只对齐字段。进页**不**同步
+  /// (2026-10-13):装配沿 AppServices 已把控制器字段对表设置值且监听
+  /// 沿持续跟随,进页时必然同值;而直挂/单测的控制器字段保持默认
+  /// null,连接链不凭空多两笔画质写(0x1015)搅乱脚本对表沿。
   void _syncLiveViewQualityFromSettings() {
     final s = _settings.value;
     if (controller.liveViewImageSize != s.liveViewImageSize ||

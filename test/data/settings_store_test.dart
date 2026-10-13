@@ -60,10 +60,10 @@ void main() {
   });
 
   group('取景画质档持久化(2026-10-12 官方 §6.5.11.4-5)', () {
-    test('默认 null(跟随相机);哨兵 copyWith 可写回 null', () {
+    test('默认 XGA/Fine(2026-10-13 清晰度定档);哨兵 copyWith 可写回 null', () {
       var s = const AppSettings();
-      expect(s.liveViewImageSize, isNull);
-      expect(s.liveViewImageCompression, isNull);
+      expect(s.liveViewImageSize, 3);
+      expect(s.liveViewImageCompression, 5);
       s = s.copyWith(liveViewImageSize: 1, liveViewImageCompression: 5);
       expect(s.liveViewImageSize, 1);
       expect(s.liveViewImageCompression, 5);
