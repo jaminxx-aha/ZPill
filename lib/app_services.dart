@@ -347,13 +347,31 @@ final class AppServices {
   StreamSubscription<LocationSample>? _bleFixSub;
   StreamSubscription<BleSessionState>? _bleStateSub;
   bool _bleRunning = false;
+  /// 配对页手动流程期间挂起(驱动自动重连/ GEO tick 会与手动配对撞车:
+  /// 扫描互踩 + 拆链沿 GEO 写 notFound 污染 lastError —— 真机实证)。
+  bool _bleSuspended = false;
+
+  /// 配对页进入时挂驱动、离页恢复(见 _bleSuspended)。
+  void suspendBleDriver() {
+    _bleSuspended = true;
+    if (_bleRunning) {
+      _bleRunning = false;
+      _stopBleInjection();
+    }
+  }
+
+  void resumeBleDriver() {
+    _bleSuspended = false;
+    _updateBleInjection();
+  }
 
   /// 配对页配对成功/解除后刷新(设置监听之外的显式入口)。
   void refreshBleInjection() => _updateBleInjection();
 
   void _updateBleInjection() {
-    final enabled =
-        settingsController.value.bleGpsInject && bleSession.identity != null;
+    final enabled = !_bleSuspended &&
+        settingsController.value.bleGpsInject &&
+        bleSession.identity != null;
     if (enabled == _bleRunning) return;
     _bleRunning = enabled;
     if (enabled) {
