@@ -30,6 +30,9 @@ class CaptureSettingsPanel extends StatelessWidget {
     required this.onTakeoverRequest,
     required this.onLiveViewQualityChanged,
     required this.onSdramCaptureChanged,
+    required this.onBleGpsInjectChanged,
+    this.bleGpsInject = false,
+    this.bleReady = false,
     this.liveViewImageSize,
     this.liveViewImageCompression,
     this.maxHeight,
@@ -57,6 +60,12 @@ class CaptureSettingsPanel extends StatelessWidget {
   /// SDRAM 直拍落定(0x90CB 一体拍 + 0xC101 回传入图库):控制器即时
   /// 生效与持久化由页面侧收口(同取景画质)。
   final void Function(bool value) onSdramCaptureChanged;
+
+  /// BLE GPS 注入落定(0x2007):开关写设置;会话起停/重连由
+  /// AppServices 驱动收口。[bleReady] = BLE 会话就绪(未配对禁点)。
+  final void Function(bool value) onBleGpsInjectChanged;
+  final bool bleGpsInject;
+  final bool bleReady;
 
   /// 当前画质档(持久化设置镜像;null = 跟随相机)。
   final int? liveViewImageSize;
@@ -433,6 +442,15 @@ class CaptureSettingsPanel extends StatelessWidget {
           selected: controller.aeLocked,
           onTap: !controller.linkUp ? null : controller.toggleAELock,
           tooltip: 'AE/AWB 锁定(0x9426):曝光随锁定时刻固定,再点解除',
+        ),
+        _smallChip(
+          live: LiveDesign.of(context),
+          label: 'GPS',
+          selected: bleGpsInject,
+          onTap: !bleReady ? null : () => onBleGpsInjectChanged(!bleGpsInject),
+          tooltip: bleReady
+              ? 'BLE 定位注入(0x2007):拍进卡的照片原生带 EXIF 坐标'
+              : '未配对:设置页「BLE 配对 / GPS 注入」先配对相机',
         ),
         Builder(
           // Builder 让 showMenu 锚到自拍芯片本身(而非整条浮层)。

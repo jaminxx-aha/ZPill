@@ -32,12 +32,25 @@
           }
         ],
         "backgroundModes": [
-          "dataTransfer"
+          "dataTransfer",
+          "bluetoothInteraction",
+          "location"
         ]
       }
     ],
     "requestPermissions": [
       {"name" :  "ohos.permission.INTERNET"},
+      {"name" :  "ohos.permission.ACCESS_BLUETOOTH",
+        "reason": "$string:bluetooth_reason",
+        "usedScene": {
+          "abilities": [
+            "EntryAbility"
+          ],
+          "when": "inuse"
+        }
+      },
+      {"name" :  "ohos.permission.USE_BLUETOOTH"},
+      {"name" :  "ohos.permission.DISCOVER_BLUETOOTH"},
       {
         "name": "ohos.permission.APPROXIMATELY_LOCATION",
         "reason": "$string:location_reason",

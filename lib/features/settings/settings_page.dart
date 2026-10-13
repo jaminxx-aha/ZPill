@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import '../../app_services.dart';
 import '../../core/browser/photo_group.dart';
 import '../../data/settings_store.dart';
+import 'ble_pair_page.dart';
 import 'snapshot_controller.dart' show buildSnapshotSection;
 
 /// 取景页/取景区消费设置(autoRotateFeed/deSqueeze)时把本控制器当
@@ -369,6 +370,15 @@ class _SettingsPageState extends State<SettingsPage> {
                 title: Text('传输质量'),
                 subtitle: Text('原图直传(压缩传输待后续版本)'),
                 enabled: false,
+              ),
+              ListTile(
+                title: const Text('BLE 配对 / GPS 注入'),
+                subtitle: const Text(
+                    '相机智能设备模式配对;拍进卡的照片原生带 EXIF 坐标'),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                      builder: (_) => const BlePairPage()),
+                ),
               ),
               buildSnapshotSection(context),
             ],

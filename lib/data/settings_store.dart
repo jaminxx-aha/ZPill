@@ -58,6 +58,7 @@ final class AppSettings {
     this.liveViewImageSize = 3,
     this.liveViewImageCompression = 5,
     this.sdramCapture = false,
+    this.bleGpsInject = false,
   });
 
   final bool autoTransfer;
@@ -132,6 +133,11 @@ final class AppSettings {
   /// 0xC101 回传对象收进图库(不入卡);关 = 常规快门 0x2019/0x9207。
   final bool sdramCapture;
 
+  /// BLE GPS 注入(0x2007):开 = 与已配对相机保持 BLE 会话并持续注入
+  /// 定位(拍进卡的 NEF/JPG 原生带 EXIF 坐标);未配对时开关无效,
+  /// 配对入口在设置页。
+  final bool bleGpsInject;
+
   /// copyWith 的「未传」哨兵:画质两字段要能把 null(跟随相机)写回,
   /// `??` 模式做不到 —— 传值(含显式 null)即覆盖,不传保持原值。
   static const Object _unset = Object();
@@ -164,6 +170,7 @@ final class AppSettings {
     Object? liveViewImageSize = _unset,
     Object? liveViewImageCompression = _unset,
     bool? sdramCapture,
+    bool? bleGpsInject,
   }) =>
       AppSettings(
         autoTransfer: autoTransfer ?? this.autoTransfer,
@@ -197,6 +204,7 @@ final class AppSettings {
             ? this.liveViewImageCompression
             : liveViewImageCompression as int?,
         sdramCapture: sdramCapture ?? this.sdramCapture,
+        bleGpsInject: bleGpsInject ?? this.bleGpsInject,
       );
 
   @override
@@ -228,7 +236,8 @@ final class AppSettings {
       other.liveViewOn == liveViewOn &&
       other.liveViewImageSize == liveViewImageSize &&
       other.liveViewImageCompression == liveViewImageCompression &&
-      other.sdramCapture == sdramCapture;
+      other.sdramCapture == sdramCapture &&
+      other.bleGpsInject == bleGpsInject;
 
   @override
   // Object.hash 位置参上限 20,字段 24 个 → hashAll(列表序即上面 == 序)。
@@ -240,6 +249,7 @@ final class AppSettings {
         monitorGrid, monitorZebra, monitorHistogram, monitorLevel,
         monitorFalseColor, monitorPeaking, monitorFocusDial, liveViewOn,
         liveViewImageSize, liveViewImageCompression, sdramCapture,
+        bleGpsInject,
       ]);
 
   Map<String, Object?> toJson() => {
@@ -272,6 +282,7 @@ final class AppSettings {
         if (liveViewImageCompression != null)
           'liveViewImageCompression': liveViewImageCompression,
         'sdramCapture': sdramCapture,
+        'bleGpsInject': bleGpsInject,
       };
 
   static AppSettings fromJson(Map<String, Object?> json) => AppSettings(
@@ -316,6 +327,8 @@ final class AppSettings {
         liveViewImageCompression: _pickLiveViewValue(
             json['liveViewImageCompression'], const [0, 1, 2, 3, 4, 5]),
         sdramCapture: json['sdramCapture'] == true,
+        // 旧档无键回落 false(「跟随相机」同款语义:无键不覆写)。
+        bleGpsInject: json['bleGpsInject'] == true,
       );
 
   /// 取景画质档反序列化:表外值(旧版本/手改文件)回落「跟随相机」。

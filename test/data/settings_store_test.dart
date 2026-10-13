@@ -121,4 +121,25 @@ void main() {
       expect((await reloaded.current()).sdramCapture, isTrue);
     });
   });
+
+  group('BLE GPS 注入开关持久化(0x2007,2026-10-13)', () {
+    test('默认关;JSON 往返;旧档缺省回落关', () {
+      expect(const AppSettings().bleGpsInject, isFalse);
+      final on = const AppSettings().copyWith(bleGpsInject: true);
+      final back = AppSettings.fromJson(on.toJson());
+      expect(back.bleGpsInject, isTrue);
+      // 旧版本文件无此键 → 关
+      expect(AppSettings.fromJson({'autoTransfer': true}).bleGpsInject,
+          isFalse);
+    });
+
+    test('文件落盘往返(FileSettingsStore)', () async {
+      final dir = await Directory.systemTemp.createTemp('np_settings_blegps');
+      addTearDown(() => dir.delete(recursive: true));
+      final store = FileSettingsStore(dataDir: () async => dir.path);
+      await store.update(const AppSettings().copyWith(bleGpsInject: true));
+      final reloaded = FileSettingsStore(dataDir: () async => dir.path);
+      expect((await reloaded.current()).bleGpsInject, isTrue);
+    });
+  });
 }

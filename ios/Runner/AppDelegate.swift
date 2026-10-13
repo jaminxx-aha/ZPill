@@ -28,6 +28,9 @@ import UIKit
     if let registrar = registry.registrar(forPlugin: "LocationPlugin") {
       LocationPlugin.register(with: registrar)
     }
+    if let registrar = registry.registrar(forPlugin: "BlePlugin") {
+      BlePlugin.register(with: registrar)
+    }
     if let registrar = registry.registrar(forPlugin: "BGPlugin") {
       BGPlugin.register(with: registrar)
     }

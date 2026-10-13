@@ -15,6 +15,10 @@
     {
       "name": "location_reason",
       "value": "下载照片时读取当前位置,将 GPS 坐标写入照片元数据"
+    },
+    {
+      "name": "bluetooth_reason",
+      "value": "与尼康相机建立蓝牙连接,完成配对并注入 GPS 定位"
     }
   ]
 }
