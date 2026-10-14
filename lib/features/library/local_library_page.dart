@@ -2,8 +2,10 @@
 /// TransfersController 的 appFiles 数据源)。**不含**已导入系统相册的
 /// 文件 —— 那些归系统相册 App 管,这里只看应用自留的份。
 ///
-/// 网格按修改时间倒序(新下载在前);顶栏下格式过滤 chips(全部/RAW/
-/// JPG/视频,按文件名扩展名,与相机侧判定同源)。Flutter 可解码的图片
+/// 网格默认按修改时间倒序(新下载在前,排序可翻「旧→新」);顶栏下
+/// 格式过滤 chips(全部/RAW/JPG/视频,按文件名扩展名,与相机侧判定同
+/// 源)再叠一行类型/排序 chips(全部/照片/视频 × 新→旧/旧→新,内存
+/// 态不落库)。Flutter 可解码的图片
 /// 直接铺格(cacheWidth 限内存);NEF 走原生解码、MOV 走原生抽帧出
 /// 网格缩略(iOS ImageIO / AVAssetImageGenerator,≤512px 同一管线
 /// 落盘缓存,MOV 格内叠摄像机角标;无解码器/无抽帧/失败回落图标格)。
@@ -59,6 +61,37 @@ enum _LibFilter {
       };
 }
 
+/// 图库类型过滤:照片/视频大类。视频集与格式过滤「视频」同源同集
+/// (两处「视频」永远同口径,分叉会对不上);其余一律归照片 —— 相机
+/// 下载物(RAW/JPG/其他图像)没有第三类去处,「非视频即照片」。
+enum _LibType {
+  all('全部'),
+  photo('照片'),
+  video('视频');
+
+  const _LibType(this.label);
+
+  final String label;
+
+  bool allows(String filename) => switch (this) {
+        all => true,
+        photo => !isVideoFilename(filename),
+        video => isVideoFilename(filename),
+      };
+}
+
+/// 图库排序:时间两向(新→旧 = 既有默认,下载的新货在前)。评分档
+/// 不做 —— 本地评分键挂相机侧照片组(基名+组总字节),应用内文件
+/// 没有现成评分数据源,不发明。
+enum _LibSort {
+  newestFirst('新→旧'),
+  oldestFirst('旧→新');
+
+  const _LibSort(this.label);
+
+  final String label;
+}
+
 /// Flutter 可解码的图片扩展名(NEF 等原生格式走解码管线)。
 const _viewableExts = {'.jpg', '.jpeg', '.png', '.webp', '.gif'};
 
@@ -110,6 +143,8 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
       widget.videoPlayer ?? PlatformServices.videoPlayer;
 
   _LibFilter _filter = _LibFilter.all;
+  _LibType _type = _LibType.all;
+  _LibSort _sort = _LibSort.newestFirst;
 
   /// NEF/MOV 网格缩略:原生解码/抽帧一次(≤512px)落盘复用。会话内
   /// future 合并(滚动反复 build 不重复解码);解码串行(整档 RAW 解码
@@ -171,10 +206,12 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     return ListenableBuilder(
       listenable: _controller,
       builder: (context, _) {
-        // 修改时间倒序:新下载在前。
+        // 修改时间排序:默认新在前(新下载的先看),「旧→新」翻向。
+        final newestFirst = _sort == _LibSort.newestFirst;
         final files = List<File>.of(_controller.appFiles)
-          ..sort(
-              (a, b) => b.statSync().modified.compareTo(a.statSync().modified));
+          ..sort((a, b) => newestFirst
+              ? b.statSync().modified.compareTo(a.statSync().modified)
+              : a.statSync().modified.compareTo(b.statSync().modified));
         final activeCount =
             _controller.tasks.where((t) => !t.isTerminal).length;
         final filtered = _filtered(files);
@@ -212,10 +249,38 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
                             setState(() => _filter = s.first),
                       ),
                     ),
+                    // 类型 + 排序 chips(ChoiceChip 行,与相册页文件夹
+                    // chips 同款):类型是大类照片/视频,可与格式筛子叠
+                    // (一个管大类、一个管扩展名细分);排序只翻方向。
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
+                      child: Wrap(
+                        spacing: 8,
+                        runSpacing: 4,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          for (final t in _LibType.values)
+                            ChoiceChip(
+                              label: Text(t.label),
+                              selected: _type == t,
+                              onSelected: (_) => setState(() => _type = t),
+                            ),
+                          // 分组视觉分隔:后两组是排序,不与类型混读。
+                          Icon(Icons.sort,
+                              size: 18, color: Theme.of(context).hintColor),
+                          for (final s in _LibSort.values)
+                            ChoiceChip(
+                              label: Text(s.label),
+                              selected: _sort == s,
+                              onSelected: (_) => setState(() => _sort = s),
+                            ),
+                        ],
+                      ),
+                    ),
                     Expanded(
                       child: filtered.isEmpty
                           ? Center(
-                              child: Text('没有${_filter.label}格式的文件',
+                              child: Text(_emptyMessage,
                                   textAlign: TextAlign.center,
                                   style: TextStyle(
                                       color: Theme.of(context).hintColor)),
@@ -240,9 +305,17 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     );
   }
 
+  // 格式与类型两把筛子都过(格式管扩展名细分,类型管照片/视频大类)。
   List<File> _filtered(List<File> files) => files
-      .where((f) => _filter.allows(_nameOf(f)))
+      .where((f) =>
+          _filter.allows(_nameOf(f)) && _type.allows(_nameOf(f)))
       .toList(growable: false);
+
+  /// 空筛选文案:单格式筛子沿用原文案(既有认知/用例不动);类型筛子
+  /// 在场(单独或与格式叠加)说不清哪把筛子拦的,退泛化一行。
+  String get _emptyMessage => _type == _LibType.all
+      ? '没有${_filter.label}格式的文件'
+      : '没有符合条件的文件';
 
   Widget _transfersBadge(BuildContext context, int activeCount) {
     return Stack(
