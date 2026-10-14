@@ -275,6 +275,29 @@ void main() {
     });
   });
 
+  group('峰值档位色(2026-10-14:金/白/红可配)', () {
+    test('peakingColorOf:三档取色,表外档回落金(旧行为)', () {
+      expect(peakingColorOf(0), const Color(0xFFE9AC35),
+          reason: '金 = 旧写死色');
+      expect(peakingColorOf(1), Colors.white);
+      expect(peakingColorOf(2), LiveDesign.dark.bad,
+          reason: '红跟暗面 bad 令牌(与斑马纹/未合焦框同族警示色)');
+      expect(peakingColorOf(-1), const Color(0xFFE9AC35),
+          reason: '表外档回落金');
+      expect(peakingColorOf(9), const Color(0xFFE9AC35));
+    });
+
+    testWidgets('PeakingOverlay:色参数上屏不炸;缺省金', (tester) async {
+      await tester.pumpWidget(const MaterialApp(
+          home: Scaffold(body: PeakingOverlay(analysis: null))));
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const MaterialApp(
+          home: Scaffold(
+              body: PeakingOverlay(analysis: null, color: Colors.white))));
+      expect(tester.takeException(), isNull);
+    });
+  });
+
   group('监看差集叠层(2026-10-14:波形/构图框)', () {
     FrameAnalysis buildAnalysis() {
       final waveform = Uint32List(8 * 64);

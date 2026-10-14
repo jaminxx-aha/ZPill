@@ -127,6 +127,42 @@ void main() {
       expect(gradient!.hasPeaking, isFalse);
     });
 
+    test('峰值灵敏度阈值:参数改档产生不同掩码(24/40/64 = 低/中/高档)', () {
+      // 渐变帧按 8 列峰格采样,相邻格均值差恰 32(0..248 渐变 / 4px 格):
+      // 低于中档、高于低档 —— 三档在此帧上分出三种结果。
+      FrameAnalysis grad(int threshold) => analyzeJpegFrame(_gradientJpeg(),
+          maskCols: 8,
+          maskRows: 6,
+          peakingCols: 8,
+          peakingRows: 6,
+          peakingThreshold: threshold)!;
+      expect(
+          analyzeJpegFrame(_gradientJpeg(),
+                  maskCols: 8, maskRows: 6, peakingCols: 8, peakingRows: 6)!
+              .hasPeaking,
+          isFalse,
+          reason: '缺省阈值 = 中档 40(旧行为不变)');
+      expect(grad(40).hasPeaking, isFalse, reason: '32 < 40:中档不圈渐变');
+      expect(grad(64).hasPeaking, isFalse, reason: '高档只圈最陡边缘');
+      final low = grad(24);
+      expect(low.hasPeaking, isTrue, reason: '32 ≥ 24:低档连渐变也圈');
+      // 每行第 0..6 列右向邻格差 32 入掩码(末列无右邻、竖向差 0 不入)
+      expect(low.peakingMask.where((c) => c == 1).length, 7 * 6);
+      // 白角陡变(格均值差 ~235)三档全命中:高档压掉的是渐变级弱边缘
+      for (final t in const [24, 40, 64]) {
+        expect(
+            analyzeJpegFrame(_whiteCornerJpeg(),
+                    maskCols: 8,
+                    maskRows: 6,
+                    peakingCols: 8,
+                    peakingRows: 6,
+                    peakingThreshold: t)!
+                .hasPeaking,
+            isTrue,
+            reason: '黑底→白角陡变远超最高档 64');
+      }
+    });
+
     group('波形(列-亮度桶密度,2026-10-14 监看差集)', () {
       test('白角帧:右上列顶桶命中、左下暗列不见白;各列采样总数相等', () {
         final a = analyzeJpegFrame(_whiteCornerJpeg(), waveformCols: 8);

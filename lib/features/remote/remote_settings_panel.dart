@@ -387,6 +387,11 @@ class CaptureSettingsPanel extends StatelessWidget {
         chips,
         const SizedBox(height: 4),
         _monitorLutRow(context),
+        // 峰值选项行:峰值开着才出现(关了藏行,少占面板高)。
+        if (toggles.peaking) ...[
+          const SizedBox(height: 4),
+          _peakingOptionRows(context),
+        ],
       ],
     );
   }
@@ -422,6 +427,51 @@ class CaptureSettingsPanel extends StatelessWidget {
             selected: toggles.lutIndex == i,
             onTap: () => onTogglesChanged(toggles.copyWith(lutIndex: i)),
           ),
+      ],
+    );
+  }
+
+  /// 峰值选项行(2026-10-14 灵敏度/颜色可配):灵敏度三档(低/中/高 =
+  /// 梯度阈值 24/40/64,调优档非协议常量,映射在 monitor_toggles 的
+  /// monitorPeakingThresholdOf)+ 高亮色三档(金/白/红,取色在
+  /// live_view_overlays 的 peakingColorOf);走 [onTogglesChanged] 持久化。
+  Widget _peakingOptionRows(BuildContext context) {
+    final live = LiveDesign.of(context);
+    Widget row(String label, List<(String, int)> options, int current,
+        void Function(int) pick) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 2),
+        child: Wrap(
+          spacing: 2,
+          runSpacing: 2,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: Text(label,
+                  style: TextStyle(fontSize: 11, color: live.faint)),
+            ),
+            for (final option in options)
+              _smallChip(
+                live: live,
+                label: option.$1,
+                selected: current == option.$2,
+                onTap: () => pick(option.$2),
+              ),
+          ],
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        row('峰值灵敏度', const [('低', 0), ('中', 1), ('高', 2)],
+            toggles.peakingLevel,
+            (v) => onTogglesChanged(toggles.copyWith(peakingLevel: v))),
+        row('峰值颜色', const [('金', 0), ('白', 1), ('红', 2)],
+            toggles.peakingColor,
+            (v) => onTogglesChanged(toggles.copyWith(peakingColor: v))),
       ],
     );
   }

@@ -81,6 +81,8 @@ final class AppSettings {
     this.monitorLevel = false,
     this.monitorFalseColor = false,
     this.monitorPeaking = false,
+    this.monitorPeakingLevel = 1,
+    this.monitorPeakingColor = 0,
     this.monitorFocusDial = false,
     this.framingAspect = FramingAspect.off,
     this.framingSafeArea = false,
@@ -149,6 +151,15 @@ final class AppSettings {
   final bool monitorPeaking;
   final bool monitorFocusDial;
 
+  /// 峰值灵敏度档(0=低/1=中/2=高):中 = 旧写死梯度阈值 40(行为
+  /// 不变)。**调优档非协议常量** —— 档位 → 阈值映射在监看桥接层
+  /// (features/remote/monitor_toggles.dart 的 monitorPeakingThresholdOf)。
+  final int monitorPeakingLevel;
+
+  /// 峰值高亮色档(0=金/1=白/2=红;金 = 旧行为)。取色在显示层
+  /// (features/remote/live_view_overlays.dart 的 peakingColorOf)。
+  final int monitorPeakingColor;
+
   /// 构图框(OpenZCine 差集):遮幅画幅 + 安全框 + 中心标;门框数学
   /// 与绘制见 live_view_overlays.dart 的 FramingOverlay。
   final FramingAspect framingAspect;
@@ -212,6 +223,8 @@ final class AppSettings {
     bool? monitorLevel,
     bool? monitorFalseColor,
     bool? monitorPeaking,
+    int? monitorPeakingLevel,
+    int? monitorPeakingColor,
     bool? monitorFocusDial,
     FramingAspect? framingAspect,
     bool? framingSafeArea,
@@ -247,6 +260,8 @@ final class AppSettings {
         monitorLevel: monitorLevel ?? this.monitorLevel,
         monitorFalseColor: monitorFalseColor ?? this.monitorFalseColor,
         monitorPeaking: monitorPeaking ?? this.monitorPeaking,
+        monitorPeakingLevel: monitorPeakingLevel ?? this.monitorPeakingLevel,
+        monitorPeakingColor: monitorPeakingColor ?? this.monitorPeakingColor,
         monitorFocusDial: monitorFocusDial ?? this.monitorFocusDial,
         framingAspect: framingAspect ?? this.framingAspect,
         framingSafeArea: framingSafeArea ?? this.framingSafeArea,
@@ -289,6 +304,8 @@ final class AppSettings {
       other.monitorLevel == monitorLevel &&
       other.monitorFalseColor == monitorFalseColor &&
       other.monitorPeaking == monitorPeaking &&
+      other.monitorPeakingLevel == monitorPeakingLevel &&
+      other.monitorPeakingColor == monitorPeakingColor &&
       other.monitorFocusDial == monitorFocusDial &&
       other.framingAspect == framingAspect &&
       other.framingSafeArea == framingSafeArea &&
@@ -302,14 +319,15 @@ final class AppSettings {
       other.bleGpsInject == bleGpsInject;
 
   @override
-  // Object.hash 位置参上限 20,字段 24 个 → hashAll(列表序即上面 == 序)。
+  // Object.hash 位置参上限 20,字段 26 个 → hashAll(列表序即上面 == 序)。
   int get hashCode => Object.hashAll([
         autoTransfer, autoTransferFormat, quality, batterySaver, customSavePath,
         themeMode, xmpCreator, xmpRights, xmpInjectRating, xmpInjectGps,
         watermarkStyle, watermarkText, feedUpscaler, temporalDenoise,
         autoRotateFeed, deSqueeze,
         monitorGrid, monitorZebra, monitorHistogram, monitorLevel,
-        monitorFalseColor, monitorPeaking, monitorFocusDial,
+        monitorFalseColor, monitorPeaking, monitorPeakingLevel,
+        monitorPeakingColor, monitorFocusDial,
         framingAspect, framingSafeArea, framingCenterMark,
         monitorWaveform, monitorLutIndex, liveViewOn,
         liveViewImageSize, liveViewImageCompression, sdramCapture,
@@ -339,6 +357,8 @@ final class AppSettings {
         'monitorLevel': monitorLevel,
         'monitorFalseColor': monitorFalseColor,
         'monitorPeaking': monitorPeaking,
+        'monitorPeakingLevel': monitorPeakingLevel,
+        'monitorPeakingColor': monitorPeakingColor,
         'monitorFocusDial': monitorFocusDial,
         'framingAspect': framingAspect.name,
         'framingSafeArea': framingSafeArea,
@@ -388,6 +408,11 @@ final class AppSettings {
         monitorLevel: json['monitorLevel'] == true,
         monitorFalseColor: json['monitorFalseColor'] == true,
         monitorPeaking: json['monitorPeaking'] == true,
+        // 旧档缺省/表外值回落默认档(中灵敏度/金色 = 旧行为)。
+        monitorPeakingLevel:
+            _pickEnumIndex(json['monitorPeakingLevel'], const [0, 1, 2], 1),
+        monitorPeakingColor:
+            _pickEnumIndex(json['monitorPeakingColor'], const [0, 1, 2], 0),
         monitorFocusDial: json['monitorFocusDial'] == true,
         framingAspect: _enumByName(FramingAspect.values, json['framingAspect']) ??
             FramingAspect.off,
@@ -412,6 +437,12 @@ final class AppSettings {
   /// 取景画质档反序列化:表外值(旧版本/手改文件)回落「跟随相机」。
   static int? _pickLiveViewValue(Object? raw, List<int> allowed) {
     if (raw is! int || !allowed.contains(raw)) return null;
+    return raw;
+  }
+
+  /// 枚举档反序列化:非 int/表外值(旧版本/手改文件)回落默认档。
+  static int _pickEnumIndex(Object? raw, List<int> allowed, int fallback) {
+    if (raw is! int || !allowed.contains(raw)) return fallback;
     return raw;
   }
 
