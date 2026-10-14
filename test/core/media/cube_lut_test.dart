@@ -111,6 +111,18 @@ Lut_3d_Size 2
         CubeLut.fromFunction('invert', 2, (r, g, b) => [1 - r, 1 - g, 1 - b]);
     expect(invert.apply(0.2, 0.8, 0.4), closeTo3(0.8, 0.2, 0.6));
   });
+
+  test('textureRgba:RGBA8 扁平化,像素序 = 表序(蓝最慢/红最快),alpha 满', () {
+    final lut = CubeLut.fromFunction('identity', 2, (r, g, b) => [r, g, b]);
+    final tex = lut.textureRgba();
+    expect(tex.length, 2 * 2 * 2 * 4);
+    // 表序 b 外/g 中/r 最快;纹理布局 x = r + g·N、y = b 同序展开:
+    // 首 (0,0,0)、次 (1,0,0)、三 (0,1,0)、末 (1,1,1)。
+    expect(tex.sublist(0, 4), orderedEquals([0, 0, 0, 255]));
+    expect(tex.sublist(4, 8), orderedEquals([255, 0, 0, 255]));
+    expect(tex.sublist(8, 12), orderedEquals([0, 255, 0, 255]));
+    expect(tex.sublist(28, 32), orderedEquals([255, 255, 255, 255]));
+  });
 }
 
 Matcher closeTo3(double r, double g, double b) => predicate<List<double>>(

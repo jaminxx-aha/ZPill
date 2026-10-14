@@ -13,6 +13,7 @@
 
 uniform sampler2D curr_tex;
 uniform sampler2D prev_tex;
+uniform sampler2D lut_tex; // 监看 LUT 查表纹理(宽 = N²、高 = N)
 
 uniform vec2 uEdgeX; // 图像 x 轴单位向量(层空间)
 uniform vec2 uEdgeY; // 图像 y 轴单位向量(层空间)
@@ -20,6 +21,8 @@ uniform vec2 uOrigin; // 图像 (0,0) 在层空间
 uniform vec2 uSrcSize; // 源帧像素尺寸
 uniform float uMotion; // 时域混合强度(0 = 关)
 uniform float uSharpen; // 细节增强量
+uniform float uLutOn; // LUT 查表开关(0 = 直通)
+uniform float uLutSize; // LUT 每轴格点数 N
 
 out vec4 fragColor;
 
@@ -54,6 +57,28 @@ vec3 catmullRom(vec2 uv, vec2 texel) {
   return sum / wsum;
 }
 
+// 监看 LUT 三线性查表:纹理布局 x = r + g·N、y = b(Dart 侧
+// CubeLut.textureRgba 同布局导出)。8 角点取纹素中心(±线性过滤
+// 取样 = 精确格点),按分数距离三线性插值;输入钳 0..1。
+vec3 lutFetch(float r, float g, float b) {
+  float n = uLutSize;
+  vec2 uv = vec2((r + g * n + 0.5) / (n * n), (b + 0.5) / n);
+  return texture(lut_tex, uv).rgb;
+}
+
+vec3 lutLookup(vec3 c) {
+  float n = uLutSize;
+  vec3 g = clamp(c, 0.0, 1.0) * (n - 1.0);
+  vec3 lo = floor(g);
+  vec3 hi = min(lo + 1.0, n - 1.0);
+  vec3 f = g - lo;
+  vec3 c00 = mix(lutFetch(lo.r, lo.g, lo.b), lutFetch(hi.r, lo.g, lo.b), f.r);
+  vec3 c10 = mix(lutFetch(lo.r, hi.g, lo.b), lutFetch(hi.r, hi.g, lo.b), f.r);
+  vec3 c01 = mix(lutFetch(lo.r, lo.g, hi.b), lutFetch(hi.r, lo.g, hi.b), f.r);
+  vec3 c11 = mix(lutFetch(lo.r, hi.g, hi.b), lutFetch(hi.r, hi.g, hi.b), f.r);
+  return mix(mix(c00, c10, f.g), mix(c01, c11, f.g), f.b);
+}
+
 void main() {
   // CTM 逆映射:frag − origin = u·edgeX + v·edgeY
   vec2 f = FlutterFragCoord() - uOrigin;
@@ -77,6 +102,11 @@ void main() {
     float d = max(max(abs(c.r - p.r), abs(c.g - p.g)), abs(c.b - p.b));
     float w = uMotion * clamp(1.0 - d * 6.0, 0.0, 1.0);
     c = mix(c, (c + p) * 0.5, w);
+  }
+
+  // 监看套色收尾(纯显示层调色,最后一环)。
+  if (uLutOn > 0.5) {
+    c = lutLookup(c);
   }
 
   fragColor = vec4(c, 1.0);

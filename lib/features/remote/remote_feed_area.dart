@@ -197,6 +197,9 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea> {
           ? Size.zero
           : Size(fs.width.toDouble(), fs.height.toDouble());
       final settings = _settings.value;
+      // 监看 LUT:选中即自动走高质量渲染管线(仅 shader 路径能查表;
+      // 设备不支持时 ShaderFeed 自行回落,无 LUT 但画面照常)。
+      final lut = monitorLutOf(settings);
       final t = FeedTransform(
         imageSize: imageSize,
         boxSize: boxSize,
@@ -247,17 +250,23 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea> {
                       // high,见 feed_quality.dart)。
                       child: Stack(fit: StackFit.expand, children: [
                           switch (settings.feedUpscaler) {
-                            FeedUpscaler.off => Image.memory(frame,
-                                fit: BoxFit.fill,
-                                gaplessPlayback: true, // 换帧不闪黑
-                                filterQuality: FilterQuality.low),
-                            FeedUpscaler.fast => Image.memory(frame,
-                                fit: BoxFit.fill,
-                                gaplessPlayback: true, // 换帧不闪黑
-                                filterQuality: FilterQuality.high),
-                            FeedUpscaler.quality => ShaderFeed(
+                            // LUT 开 → shader 档(查表只在片元路径;
+                            // off/fast 仅在无 LUT 时维持原路)。
+                            FeedUpscaler.off when lut == null =>
+                              Image.memory(frame,
+                                  fit: BoxFit.fill,
+                                  gaplessPlayback: true, // 换帧不闪黑
+                                  filterQuality: FilterQuality.low),
+                            FeedUpscaler.fast when lut == null =>
+                              Image.memory(frame,
+                                  fit: BoxFit.fill,
+                                  gaplessPlayback: true, // 换帧不闪黑
+                                  filterQuality: FilterQuality.high),
+                            _ => ShaderFeed(
                                 frame: frame,
-                                temporalDenoise: settings.temporalDenoise),
+                                temporalDenoise: settings.temporalDenoise,
+                                lut: lut,
+                              ),
                           },
                         if (widget.toggles.grid)
                           ValueListenableBuilder(
@@ -286,6 +295,18 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea> {
                             valueListenable: controller.analyzer.analysis,
                             builder: (context, FrameAnalysis? analysis, _) =>
                                 PeakingOverlay(analysis: analysis),
+                          ),
+                        // 构图框(遮幅/安全框/中心标;纯显示层,不占
+                        // 分析器 —— 叠层随外层变换上屏)。
+                        if (widget.toggles.framingAspect !=
+                                FramingAspect.off ||
+                            widget.toggles.framingSafeArea ||
+                            widget.toggles.framingCenterMark)
+                          FramingOverlay(
+                            aspect: widget.toggles.framingAspect.ratio,
+                            deSqueeze: settings.deSqueeze,
+                            safeArea: widget.toggles.framingSafeArea,
+                            centerMark: widget.toggles.framingCenterMark,
                           ),
                         // 相机自报 AF 框组(真实尺寸随 AF 区域设置:单点
                         // 小框/动态大框;主体检测开着时附人脸/眼睛框)——
@@ -410,6 +431,26 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea> {
                     valueListenable: controller.analyzer.analysis,
                     builder: (context, FrameAnalysis? analysis, _) =>
                         HistogramView(analysis: analysis),
+                  ),
+                ),
+              ),
+            // 波形示波器:与直方图同锚(左下),双开时上移让位
+            // (直方图盒 64 + 贴边 8 + 间隙 4)。
+            if (widget.toggles.waveform)
+              Align(
+                alignment: Alignment.bottomLeft,
+                child: Padding(
+                  padding: EdgeInsets.fromLTRB(
+                      8,
+                      8,
+                      8,
+                      8 +
+                          widget.bottomInset +
+                          (widget.toggles.histogram ? 76 : 0)),
+                  child: ValueListenableBuilder(
+                    valueListenable: controller.analyzer.analysis,
+                    builder: (context, FrameAnalysis? analysis, _) =>
+                        WaveformView(analysis: analysis),
                   ),
                 ),
               ),

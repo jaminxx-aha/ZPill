@@ -290,6 +290,190 @@ final class _HistogramPainter extends CustomPainter {
   bool shouldRepaint(_HistogramPainter old) => old.analysis != analysis;
 }
 
+/// 构图框(OpenZCine FramingGuides 口径):遮幅画幅(目标画幅外
+/// 压暗 + 门框细线)/ 安全框(门框内 5% 动作安全 + 10% 字幕安全双
+/// 矩形)/ 中心标(十字 + 圆环),三件可独立开关、同绘一层。
+///
+/// 画在图像系取景盒上(与网格同层)。变宽还原拉伸发生在显示层,门框
+/// 宽比按 [deSqueeze] 预除 —— 屏上观感即目标画幅;[aspect] 为 null
+/// (off)时门框 = 全画面,安全框/中心标照画。
+class FramingOverlay extends StatelessWidget {
+  const FramingOverlay({
+    super.key,
+    required this.aspect,
+    this.deSqueeze = 1.0,
+    this.safeArea = false,
+    this.centerMark = false,
+  });
+
+  /// 目标画幅比(2.39/2.35/1.85;null = 不遮幅)。
+  final double? aspect;
+
+  /// 变宽还原倍率(1.0 = 关)。
+  final double deSqueeze;
+
+  final bool safeArea;
+  final bool centerMark;
+
+  @override
+  Widget build(BuildContext context) {
+    return RepaintBoundary(
+      child: CustomPaint(
+        foregroundPainter:
+            _FramingPainter(aspect, deSqueeze, safeArea, centerMark),
+        size: Size.infinite,
+      ),
+    );
+  }
+}
+
+final class _FramingPainter extends CustomPainter {
+  const _FramingPainter(this.aspect, this.deSqueeze, this.safeArea,
+      this.centerMark);
+
+  final double? aspect;
+  final double deSqueeze;
+  final bool safeArea;
+  final bool centerMark;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    // 门框矩形:遮幅开按目标画幅(除以变宽倍率)适配,关 = 全画面。
+    final ratio = aspect == null || deSqueeze <= 0 ? null : aspect! / deSqueeze;
+    final gate = containRect(size, ratio);
+    if (ratio != null && (gate.left > 0 || gate.top > 0)) {
+      // 遮幅:门框外四条带 even-odd 挖洞一次铺满。
+      final mask = Path()
+        ..addRect(Offset.zero & size)
+        ..addRect(gate)
+        ..fillType = PathFillType.evenOdd;
+      canvas.drawPath(
+          mask, Paint()..color = Colors.black.withValues(alpha: 0.85));
+      canvas.drawRect(
+        gate,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1
+          ..color = Colors.white.withValues(alpha: 0.4),
+      );
+    }
+    if (safeArea) {
+      for (final inset in const [0.05, 0.10]) {
+        canvas.drawRect(
+          Rect.fromLTWH(
+              gate.left + gate.width * inset,
+              gate.top + gate.height * inset,
+              gate.width * (1 - 2 * inset),
+              gate.height * (1 - 2 * inset)),
+          Paint()
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 1
+            ..color = Colors.white.withValues(alpha: 0.35),
+        );
+      }
+    }
+    if (centerMark) {
+      final c = gate.center;
+      final paint = Paint()
+        ..color = Colors.white.withValues(alpha: 0.5)
+        ..strokeWidth = 1;
+      canvas.drawLine(Offset(c.dx - 10, c.dy), Offset(c.dx + 10, c.dy), paint);
+      canvas.drawLine(Offset(c.dx, c.dy - 10), Offset(c.dx, c.dy + 10), paint);
+      canvas.drawCircle(
+          c,
+          4,
+          Paint()
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 1
+            ..color = Colors.white.withValues(alpha: 0.5));
+    }
+  }
+
+  @override
+  bool shouldRepaint(_FramingPainter old) =>
+      old.aspect != aspect ||
+      old.deSqueeze != deSqueeze ||
+      old.safeArea != safeArea ||
+      old.centerMark != centerMark;
+}
+
+/// 波形示波器(OpenZCine Waveform 口径,左下角直方图上方):x =
+/// 画面列、y = 亮度(底黑顶白),点密度 = 亮度分布 —— 过曝亮脊
+/// (顶部)、欠曝底脊、对比度分布一眼可读。数据来自帧分析的列-亮度
+/// 桶计数(与直方图同一采样环,见 FrameAnalysis.waveform)。
+class WaveformView extends StatelessWidget {
+  const WaveformView({super.key, required this.analysis});
+
+  final FrameAnalysis? analysis;
+
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      child: SizedBox(
+        width: 160,
+        height: 90,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(4),
+          child: Container(
+            color: Colors.black.withValues(alpha: 0.55),
+            child: CustomPaint(
+              painter: _WaveformPainter(analysis),
+              size: Size.infinite,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+final class _WaveformPainter extends CustomPainter {
+  const _WaveformPainter(this.analysis);
+
+  final FrameAnalysis? analysis;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final a = analysis;
+    if (a == null || a.waveformCols == 0) return;
+    // IRE 刻度线:0/25/50/75/100 五条水平参考。
+    final grid = Paint()
+      ..color = Colors.white.withValues(alpha: 0.18)
+      ..strokeWidth = 1;
+    for (var i = 0; i <= 4; i++) {
+      final y = (size.height - 2) * i / 4 + 1;
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), grid);
+    }
+    final max = a.waveform.reduce((x, y) => x > y ? x : y);
+    if (max <= 0) return;
+    final cellW = size.width / a.waveformCols;
+    final cellH = (size.height - 2) / a.waveformBins;
+    final paint = Paint();
+    for (var col = 0; col < a.waveformCols; col++) {
+      for (var bin = 0; bin < a.waveformBins; bin++) {
+        final v = a.waveform[col * a.waveformBins + bin];
+        if (v <= 0) continue;
+        final density = (v / max).clamp(0.0, 1.0);
+        paint.color = _waveformColor(density);
+        // 桶 0(黑)在底,高端在顶;顶/底各留 1px 给刻度边。
+        canvas.drawRect(
+          Rect.fromLTWH(
+              col * cellW, size.height - 1 - (bin + 1) * cellH,
+              cellW + 0.5, cellH + 0.5),
+          paint,
+        );
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(_WaveformPainter old) => old.analysis != analysis;
+}
+
+/// 波形密度色(示波器磷光绿,与电平表绿区同族):越密越实。
+Color _waveformColor(double density) =>
+    const Color(0xFF56EB84).withValues(alpha: 0.25 + 0.75 * density);
+
 /// 相机自报的 AF 框组(帧头 display-info):框 0 = 当前 AF 区域
 /// (**真实尺寸** —— 单点小框/动态 L 大框随相机设置),主体检测开着时
 /// 后续框 = 人脸/眼睛。**框色跟机身屏对齐,只有红绿两色**(2026-10-12

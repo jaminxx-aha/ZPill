@@ -276,10 +276,13 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     Navigator.of(context).popUntil((r) => r.isFirst);
   }
 
-  /// 斑马纹/直方图/伪色/峰值共享同一份帧分析:任一开启即启用分析器。
+  /// 斑马纹/直方图/伪色/峰值/波形共享同一份帧分析:任一开启即启用分析器。
   void _syncAnalyzerEnabled() {
-    final want =
-        _toggles.zebra || _toggles.histogram || _toggles.falseColor || _toggles.peaking;
+    final want = _toggles.zebra ||
+        _toggles.histogram ||
+        _toggles.falseColor ||
+        _toggles.peaking ||
+        _toggles.waveform;
     if (controller.analyzer.enabled.value != want) {
       controller.analyzer.enabled.value = want;
     }

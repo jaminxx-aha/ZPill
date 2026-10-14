@@ -966,6 +966,97 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('监看 LUT 路由:选中即 ShaderFeed(画质档关也走 shader 查表路)',
+      (tester) async {
+    _portrait(tester);
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = _directRemoteController(transport, conn: conn);
+    addTearDown(controller.dispose);
+    final settings = ValueNotifier<AppSettings>(const AppSettings());
+
+    _scriptAutoStart(transport); // 进页自动起景(0x9201 + 首帧)
+    await tester.pumpWidget(MaterialApp(
+        home: RemotePage(
+            controller: controller, settingsListenable: settings)));
+    await tester.pumpAndSettle();
+    expect(find.byType(ShaderFeed), findsNothing);
+
+    // 选内置 LUT(索引 0):off 档也自动走 shader 路(查表只在片元路径)
+    settings.value = const AppSettings(monitorLutIndex: 0);
+    await tester.pump();
+    expect(find.byType(ShaderFeed), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    // 关 LUT:回落原路(off = 低采样 Image)
+    settings.value = const AppSettings();
+    await tester.pump();
+    expect(find.byType(ShaderFeed), findsNothing);
+  });
+
+  testWidgets('波形示波器:开关同步分析器启停,小盒上屏;关闭即退场',
+      (tester) async {
+    _portrait(tester);
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = _directRemoteController(transport, conn: conn);
+    addTearDown(controller.dispose);
+    _scriptAutoStart(transport);
+    await tester
+        .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
+    await tester.pumpAndSettle();
+    expect(find.byType(WaveformView), findsNothing);
+
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byIcon(Icons.stacked_line_chart)); // 波形
+    await tester.pumpAndSettle();
+    expect(controller.analyzer.enabled.value, isTrue,
+        reason: '波形共享帧分析,必须同步启用分析器,否则永远无数据');
+    expect(find.byType(WaveformView), findsOneWidget);
+
+    await tester.tap(find.byIcon(Icons.stacked_line_chart));
+    await tester.pumpAndSettle();
+    expect(controller.analyzer.enabled.value, isFalse);
+    expect(find.byType(WaveformView), findsNothing);
+  });
+
+  testWidgets('构图遮幅:芯片循环 off→2.39→2.35→1.85,遮幅层随开关上屏',
+      (tester) async {
+    _portrait(tester);
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = _directRemoteController(transport, conn: conn);
+    addTearDown(controller.dispose);
+    _scriptAutoStart(transport);
+    await tester
+        .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
+    await tester.pumpAndSettle();
+    expect(find.byType(FramingOverlay), findsNothing);
+
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('遮幅'));
+    await tester.pumpAndSettle();
+    expect(find.text('遮幅 2.39'), findsOneWidget,
+        reason: 'off → 2.39 循环首站');
+    expect(find.byType(FramingOverlay), findsOneWidget);
+
+    // 2.39 → 2.35 → 1.85 → off:回到 off 全退
+    await tester.tap(find.text('遮幅 2.39'));
+    await tester.pumpAndSettle();
+    expect(find.text('遮幅 2.35'), findsOneWidget);
+    await tester.tap(find.text('遮幅 2.35'));
+    await tester.pumpAndSettle();
+    expect(find.text('遮幅 1.85'), findsOneWidget);
+    expect(find.byType(FramingOverlay), findsOneWidget);
+    await tester.tap(find.text('遮幅 1.85'));
+    await tester.pumpAndSettle();
+    expect(find.text('遮幅'), findsOneWidget);
+    expect(find.byType(FramingOverlay), findsNothing,
+        reason: 'off + 安全框/中心标全关 → 层整体退场');
+  });
+
   testWidgets('「对焦后拍」开关:横滚行尾,点选即切换(零相机流量)',
       (tester) async {
     _portrait(tester);

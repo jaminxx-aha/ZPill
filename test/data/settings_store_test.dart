@@ -142,4 +142,45 @@ void main() {
       expect((await reloaded.current()).bleGpsInject, isTrue);
     });
   });
+
+  group('监看差集五字段持久化(2026-10-14:遮幅/安全框/中心标/波形/LUT)', () {
+    test('默认全关;JSON 往返;旧档缺省回落默认(遮幅 off/LUT 关)', () {
+      expect(const AppSettings().framingAspect, FramingAspect.off);
+      expect(const AppSettings().framingSafeArea, isFalse);
+      expect(const AppSettings().framingCenterMark, isFalse);
+      expect(const AppSettings().monitorWaveform, isFalse);
+      expect(const AppSettings().monitorLutIndex, -1);
+
+      final on = const AppSettings().copyWith(
+        framingAspect: FramingAspect.a239,
+        framingSafeArea: true,
+        framingCenterMark: true,
+        monitorWaveform: true,
+        monitorLutIndex: 2,
+      );
+      final back = AppSettings.fromJson(on.toJson());
+      expect(back.framingAspect, FramingAspect.a239);
+      expect(back.framingSafeArea, isTrue);
+      expect(back.framingCenterMark, isTrue);
+      expect(back.monitorWaveform, isTrue);
+      expect(back.monitorLutIndex, 2);
+
+      final bare = AppSettings.fromJson({'autoTransfer': true});
+      expect(bare.framingAspect, FramingAspect.off);
+      expect(bare.monitorLutIndex, -1);
+    });
+
+    test('遮幅枚举:循环 next 与 label/ratio;未知档名回落 off', () {
+      expect(FramingAspect.off.next, FramingAspect.a239);
+      expect(FramingAspect.a185.next, FramingAspect.off);
+      expect(FramingAspect.a239.ratio, 2.39);
+      expect(FramingAspect.off.ratio, isNull);
+      expect(FramingAspect.a235.label, '2.35');
+      expect(
+          AppSettings.fromJson(const {
+            'framingAspect': 'bogus',
+          }).framingAspect,
+          FramingAspect.off);
+    });
+  });
 }
