@@ -360,12 +360,15 @@ final class AppServices {
   /// 扫描互踩 + 拆链沿 GEO 写 notFound 污染 lastError —— 真机实证)。
   bool _bleSuspended = false;
 
-  /// 配对页进入时挂驱动、离页恢复(见 _bleSuspended)。
+  /// 配对页进入时挂驱动、离页恢复(见 _bleSuspended)。只停驱动循环
+  /// (tick/重试/定位流/订阅),不动已建立的 BLE 链路 —— 管理页进出
+  /// 不应拆链(真机 2026-10-14:挂起沿 disconnect 把 ready 链路也拆了,
+  /// 连接页「配对管理」一点蓝牙就断)。
   void suspendBleDriver() {
     _bleSuspended = true;
     if (_bleRunning) {
       _bleRunning = false;
-      _stopBleInjection();
+      _stopBleDriverLoop();
     }
   }
 
@@ -417,11 +420,13 @@ final class AppServices {
         );
     _bleTick = Timer.periodic(
         const Duration(seconds: 15), (_) => unawaited(bleSession.tick()));
-    // 冷启恢复档:idle 且盘载身份在 → 直接进重试循环(免重走菜单配对);
+    // 冷启恢复档:idle/reconnecting 且盘载身份在 → 直接进重试循环(免
+    // 重走菜单配对;挂起恢复沿链路保留,可停在 reconnecting,同样续跑);
     // 已 ready(配对页「重连」按钮走的路)→ 定位流同样要起,不能只盯
     // 状态跃迁沿。
-    if (bleSession.state == BleSessionState.idle &&
-        bleSession.identity != null) {
+    if (bleSession.identity != null &&
+        (bleSession.state == BleSessionState.idle ||
+            bleSession.state == BleSessionState.reconnecting)) {
       _scheduleBleRetry();
     } else if (bleSession.state == BleSessionState.ready) {
       unawaited(_startLocationStream());
@@ -442,7 +447,16 @@ final class AppServices {
     });
   }
 
+  /// 注入关停(开关关沿):驱动循环 + BLE 链路一起停(「关 → 全停」)。
   void _stopBleInjection() {
+    _stopBleDriverLoop();
+    unawaited(bleSession.disconnect());
+  }
+
+  /// 停驱动循环(tick/重试/订阅/定位流),保留 BLE 链路本身。恢复时
+  /// [_startBleInjection] 按当前会话态续上(ready → 定位流;idle/
+  /// reconnecting → 重试循环)。
+  void _stopBleDriverLoop() {
     _bleRetry?.cancel();
     _bleRetry = null;
     _bleTick?.cancel();
@@ -458,7 +472,6 @@ final class AppServices {
         // 通道未实现(异端):流本就没起,无妨
       }
     }());
-    unawaited(bleSession.disconnect());
   }
 
   Future<void> _startLocationStream() async {
