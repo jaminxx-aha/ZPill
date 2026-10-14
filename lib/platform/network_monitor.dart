@@ -53,10 +53,12 @@ final class WifiJoinResult {
 /// BLE→WiFi 交接用(SnapBridge 同款):0x2004 凭据 → 写 0x2005 断
 /// BLE → join → PTP/IP。Android = WifiNetworkSpecifier + requestNetwork
 /// + bindProcessToNetwork(specifier 网络无互联网,socket 须绑过去,
-/// [release] 解绑);iOS 需 Network Extensions capability(免费签名
-/// 挂不了,2026-10-14 定)回落手动;ohos wifiManager 属 system_basic
-/// 权限,同回落 —— 通道缺失时 [join] 返回 unsupported 不抛,调用点
-/// 按手动指引降级。
+/// [release] 解绑);iOS = NEHotspotConfiguration(代码已就位,真机
+/// 调用要求 Network Extensions capability —— 免费签名签发被拒,
+/// 2026-10-15 实验:profile 不含该 entitlement,build 拒;未挂时
+/// apply 运行时报错走回落,付费账号挂上即插即用);ohos wifiManager
+/// 属 system_basic 权限,同回落 —— 通道缺失时 [join] 返回
+/// unsupported 不抛,调用点按手动指引降级。
 abstract interface class WifiJoiner {
   /// [security] 传 0x2004 原始字节(0-4),映射在各 native。
   Future<WifiJoinResult> join({

@@ -6,7 +6,7 @@
 /// | channel                | Android(Kotlin)      | iOS(Swift)             | ohos(ArkTS)          |
 /// |------------------------|------------------------|------------------------|-----------------------|
 /// | `nikonpill/network`  | WifiManager/Connectivity | NEHotspotNetwork*     | @ohos.wifiManager     |
-/// |   (join/release)     | WifiNetworkSpecifier ✓ | NetworkExtensions**(待)| (system_basic,待)  |
+/// |   (join/release)     | WifiNetworkSpecifier ✓ | NEHotspot 代码就位*** | (system_basic,待)  |
 /// | `nikonpill/gallery`  | MediaStore             | PHPhotoLibrary         | photoAccessHelper     |
 /// | `nikonpill/bg`       | WorkManager+前台服务   | BGTaskScheduler        | 后台任务+通知         |
 /// | `nikonpill/ble`      | BluetoothLeScanner     | CoreBluetooth          | @ohos.bluetooth.ble   |
