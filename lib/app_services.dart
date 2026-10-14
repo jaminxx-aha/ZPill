@@ -188,11 +188,23 @@ final class AppServices {
       connection: connection,
       store: configSnapshots,
     );
+    // BLE 相机会话先建(连接页「蓝牙」分段装配要引用;GPS 注入驱动
+    // 挂接在其后 —— 协议层零 Timer,前台驱动全收在这里:定位流 →
+    // onFix;15s tick → TIME 心跳/keep-alive;退避重试一次性 Timer
+    // 按 nextRetryDelay 定时。BLE 会话独立于 PTP 链接 —— 开关开即起,
+    // app 存活期维持,不随 USB/无线断连拆)。
+    bleSession = BleCameraSession(host: PlatformServices.ble);
     connectionController = ConnectionController(
       connection: connection,
       scanner: PlatformServices.nsd,
       pairedCameras: pairedCameras,
       identityStore: identityStore,
+      // 蓝牙工具通道(连接页「蓝牙」分段):GPS 注入 / 唤醒 WiFi;
+      // 开关落库沿接注入驱动刷新(同 refreshBleInjection 收口)。
+      bleSession: bleSession,
+      bleIdentityStore: bleIdentityStore,
+      settingsController: settingsController,
+      onBleInjectChanged: refreshBleInjection,
     );
     browserController = BrowserController(
       repository: repository,
@@ -248,11 +260,8 @@ final class AppServices {
       remoteController.liveViewImageCompression =
           settingsController.value.liveViewImageCompression;
     });
-    // BLE 相机会话 + GPS 注入驱动(协议层零 Timer,前台驱动全收在这里:
-    // 定位流 → onFix;15s tick → TIME 心跳/keep-alive;退避重试一次性
-    // Timer 按 nextRetryDelay 定时。BLE 会话独立于 PTP 链接 —— 开关开
-    // 即起,app 存活期维持,不随 USB/无线断连拆)。
-    bleSession = BleCameraSession(host: PlatformServices.ble);
+    // BLE 会话已提前创建(连接页装配沿);这里只挂驱动:注入开关监听
+    // + 盘载身份恢复(冷启直进重连,免重走相机菜单配对)。
     settingsController.addListener(_updateBleInjection);
     unawaited(() async {
       final saved = await bleIdentityStore.load();
@@ -495,5 +504,7 @@ final class AppServices {
   late final RemoteController remoteController;
   late final TransfersController transfersController;
   late final BleIdentityStore bleIdentityStore;
+  /// BLE 相机会话(构造沿即建 —— 连接页「蓝牙」分段装配要引用;
+  /// 驱动挂接在其后)。
   late final BleCameraSession bleSession;
 }
