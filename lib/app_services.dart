@@ -203,6 +203,9 @@ final class AppServices {
       // 开关落库沿接注入驱动刷新(同 refreshBleInjection 收口)。
       bleSession: bleSession,
       bleIdentityStore: bleIdentityStore,
+      // 程序化加入相机热点(Android 落地;iOS/ohos 未装配自动回落
+      // 手动指引)—— BLE→WiFi 交接最后一段,SnapBridge 全程。
+      wifiJoiner: PlatformServices.wifiJoiner,
       settingsController: settingsController,
       onBleInjectChanged: refreshBleInjection,
     );

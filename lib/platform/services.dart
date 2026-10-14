@@ -6,6 +6,7 @@
 /// | channel                | Android(Kotlin)      | iOS(Swift)             | ohos(ArkTS)          |
 /// |------------------------|------------------------|------------------------|-----------------------|
 /// | `nikonpill/network`  | WifiManager/Connectivity | NEHotspotNetwork*     | @ohos.wifiManager     |
+/// |   (join/release)     | WifiNetworkSpecifier ✓ | NetworkExtensions**(待)| (system_basic,待)  |
 /// | `nikonpill/gallery`  | MediaStore             | PHPhotoLibrary         | photoAccessHelper     |
 /// | `nikonpill/bg`       | WorkManager+前台服务   | BGTaskScheduler        | 后台任务+通知         |
 /// | `nikonpill/ble`      | BluetoothLeScanner     | CoreBluetooth          | @ohos.bluetooth.ble   |
@@ -38,6 +39,11 @@ final class PlatformServices {
   PlatformServices._();
 
   static late final NetworkMonitor network;
+
+  /// 程序化加入热点(`nikonpill/network` join/release;Android 已实现,
+  /// iOS/ohos 未落地,调用返回 unsupported 按手动指引降级)。
+  /// BLE→WiFi 交接用,见 ConnectionController.joinCameraAp。
+  static late final WifiJoiner wifiJoiner;
   static late final GallerySaver gallery;
   static late final BackgroundTransferScheduler background;
   /// BLE 宿主(`nikonpill/ble`:扫描/GATT 读写订阅;iOS 已实现,
@@ -81,6 +87,7 @@ final class PlatformServices {
     }
     _bootstrapped = true;
     network = MethodChannelNetworkMonitor();
+    wifiJoiner = MethodChannelWifiJoiner();
     gallery = MethodChannelGallerySaver();
     background = MethodChannelBackgroundScheduler();
     ble = MethodChannelBleHost();

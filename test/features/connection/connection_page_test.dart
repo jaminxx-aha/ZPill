@@ -26,6 +26,7 @@ import 'package:nikon_pill/features/remote/remote_controller.dart';
 import 'package:nikon_pill/features/remote/remote_page.dart';
 import 'package:nikon_pill/features/settings/settings_page.dart';
 import 'package:nikon_pill/platform/ble_scanner.dart';
+import 'package:nikon_pill/platform/network_monitor.dart';
 import 'package:nikon_pill/platform/nsd_scanner.dart';
 
 import '../../core/ble/ble_camera_session_test.dart'
@@ -50,6 +51,34 @@ class _FakeSettingsStore implements SettingsStore {
     updateCalls++;
     ctrl.add(settings);
   }
+}
+
+/// 记账假 joiner:join 落账可编程返回(SSID/密码/安全字节断言用),
+/// release 计数(断连沿释放进程路由)。
+final class _FakeWifiJoiner implements WifiJoiner {
+  _FakeWifiJoiner({this.ok = true, this.reason});
+
+  bool ok;
+  String? reason;
+  String? joinedSsid;
+  String? joinedPassword;
+  int? joinedSecurity;
+  int releaseCalls = 0;
+
+  @override
+  Future<WifiJoinResult> join({
+    required String ssid,
+    required String password,
+    required int security,
+  }) async {
+    joinedSsid = ssid;
+    joinedPassword = password;
+    joinedSecurity = security;
+    return WifiJoinResult(ok: ok, reason: reason);
+  }
+
+  @override
+  Future<void> release() async => releaseCalls++;
 }
 
 /// 记账假连接:connect/disconnect/配对确认落账,states 流由测试驱动。
@@ -850,7 +879,10 @@ void main() {
       SettingsController settings,
       _FakeSettingsStore settingsStore,
       ConnectionController controller,
-    })> readyFixture() async {
+    })> readyFixture({
+      _FakeConnection? connection,
+      _FakeWifiJoiner? joiner,
+    }) async {
       final host = FakeBleHost();
       final session = BleCameraSession(host: host);
       final identityStore = await tempIdentityStore();
@@ -858,8 +890,10 @@ void main() {
       final settings = SettingsController(store: settingsStore);
       var refreshCalls = 0;
       final controller = ConnectionController(
+        connection: connection,
         bleSession: session,
         bleIdentityStore: identityStore,
+        wifiJoiner: joiner,
         settingsController: settings,
         onBleInjectChanged: () => refreshCalls++,
       );
@@ -953,8 +987,8 @@ void main() {
           reason: 'GPS 开关门禁 = 已配对(开关注入驱动自己会连)');
     });
 
-    testWidgets('ready 后:GPS 开关拨通落库 + 刷新钩子;唤醒/关闭写 0x2005',
-        (tester) async {
+    testWidgets('ready 后:GPS 开关拨通落库 + 刷新钩子;关闭/唤醒写 0x2005;'
+        '唤醒沿断链(相机等 BLE 释放才开热点)', (tester) async {
       // 夹具有真文件 IO(临时目录/身份存档),testWidgets 的
       // fake-async zone 吃不到 —— 必须 runAsync 放行。
       final f = (await tester.runAsync(readyFixture))!;
@@ -970,14 +1004,18 @@ void main() {
       expect(f.settingsStore.value.bleGpsInject, isTrue);
       expect(f.controller.bleGpsInject, isTrue);
 
-      await tester.tap(find.text('唤醒相机 Wi-Fi'));
-      await tester.pumpAndSettle();
-      expect(f.host.lastWrite(kNikonCharWifi), Uint8List.fromList([0x01]));
-      expect(find.byType(SnackBar), findsOneWidget);
-
+      // 关闭先测(须 ready 态;唤醒沿会断链,0x80 不断链)。
       await tester.tap(find.text('关闭'));
       await tester.pumpAndSettle();
       expect(f.host.lastWrite(kNikonCharWifi), Uint8List.fromList([0x80]));
+      expect(f.session.state, BleSessionState.ready);
+
+      await tester.tap(find.text('唤醒相机 Wi-Fi'));
+      await tester.pumpAndSettle();
+      expect(f.host.lastWrite(kNikonCharWifi), Uint8List.fromList([0x01]));
+      expect(f.session.state, BleSessionState.idle,
+          reason: '写成功即断链:相机等 BLE 释放才真正开热点');
+      expect(find.byType(SnackBar), findsOneWidget);
     });
 
     testWidgets('未就绪时 WiFi 动作如实失败(controller 门禁)', (tester) async {
@@ -1003,6 +1041,8 @@ void main() {
       expect(f.host.lastWrite(kNikonCharWifi), Uint8List.fromList([0x01]));
       expect(f.controller.cameraApCredentials, isNotNull);
       expect(f.controller.cameraApCredentials!.ssid, 'Zf_80114411');
+      expect(f.session.state, BleSessionState.idle,
+          reason: '唤醒沿断链(相机等 BLE 释放才开热点),凭据已先落控制器');
 
       await tester.tap(find.text('AP 热点'));
       await tester.pumpAndSettle();
@@ -1023,12 +1063,154 @@ void main() {
       await tester.tap(find.text('唤醒相机 Wi-Fi'));
       await tester.pumpAndSettle();
       expect(f.controller.cameraApCredentials, isNull);
+      expect(f.session.state, BleSessionState.idle,
+          reason: '凭据未解出也断链:相机开热点不依赖凭据解出');
       expect(find.byType(SnackBar), findsOneWidget);
       expect(find.textContaining('凭据未解出'), findsOneWidget);
 
       await tester.tap(find.text('AP 热点'));
       await tester.pumpAndSettle();
       expect(find.text('相机热点凭据(蓝牙通道解出)'), findsNothing);
+    });
+
+    testWidgets('唤醒沿 joiner ok:自动加入热点 + 发射 AP 连接(连接层收到 connect)',
+        (tester) async {
+      final conn = _FakeConnection();
+      final joiner = _FakeWifiJoiner();
+      final f = (await tester.runAsync(
+          () => readyFixture(connection: conn, joiner: joiner)))!;
+      f.host.reads[kNikonCharConfig] =
+          craftBlob('Zf_80114411', 'wpa2pass99', 0x02, cbc: false);
+      await tester.pumpWidget(
+          MaterialApp(home: ConnectionPage(controller: f.controller)));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('蓝牙'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('唤醒相机 Wi-Fi'));
+      await tester.pumpAndSettle();
+      expect(f.host.lastWrite(kNikonCharWifi), Uint8List.fromList([0x01]));
+      expect(f.session.state, BleSessionState.idle, reason: '交接沿断链');
+      expect(joiner.joinedSsid, 'Zf_80114411');
+      expect(joiner.joinedPassword, 'wpa2pass99');
+      expect(joiner.joinedSecurity, 0x02, reason: '0x2004 安全字节原样透传');
+      expect(conn.connectIp, '192.168.1.1',
+          reason: 'join 成功沿自动发射 AP 连接(SnapBridge 全程)');
+      expect(f.controller.method, ConnectionMethod.ap, reason: '自动切到 AP 分段');
+      expect(find.textContaining('已加入相机热点'), findsOneWidget);
+    });
+
+    testWidgets('唤醒沿 joiner fail:不发射连接,终态含手动指引与原因',
+        (tester) async {
+      final conn = _FakeConnection();
+      final joiner = _FakeWifiJoiner(ok: false, reason: 'unavailable');
+      final f = (await tester.runAsync(
+          () => readyFixture(connection: conn, joiner: joiner)))!;
+      f.host.reads[kNikonCharConfig] =
+          craftBlob('Zf_80114411', 'wpa2pass99', 0x02, cbc: false);
+      await tester.pumpWidget(
+          MaterialApp(home: ConnectionPage(controller: f.controller)));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('蓝牙'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('唤醒相机 Wi-Fi'));
+      await tester.pumpAndSettle();
+      expect(joiner.joinedSsid, 'Zf_80114411',
+          reason: '凭据在手仍尝试加入,失败才回落');
+      expect(conn.connectIp, isNull, reason: 'join 失败不发射连接');
+      expect(find.textContaining('自动加入热点失败'), findsOneWidget);
+      expect(find.textContaining('unavailable'), findsOneWidget);
+    });
+
+    /// 真异步排微任务(握手事件沿各排一轮;普通 test 无 fake-async 痛)。
+    Future<void> drainMicrotasks() async {
+      for (var i = 0; i < 8; i++) {
+        await Future<void>.delayed(Duration.zero);
+      }
+    }
+
+    test('关闭 Wi-Fi(BLE 断态):先补链再写 0x80,链路保持 —— 控制器层',
+        () async {
+      // 握手舞步靠事件沿驱动,widget 测试的 fake-async zone 排不动
+      // 这条微任务链 —— 下放到控制器层普通 test(真异步)。
+      final host = FakeBleHost();
+      final session = BleCameraSession(host: host);
+      final identityStore = await tempIdentityStore();
+      final controller = ConnectionController(
+        bleSession: session,
+        bleIdentityStore: identityStore,
+      );
+      await identityStore.save(BlePairedIdentity(
+        peripheralUuid: 'P1',
+        deviceId: 0x11223344,
+        nonce: 0x55667788,
+        serial: '1641397',
+        controllerName: 'NikonPill',
+        pairedAt: DateTime(2026, 10, 14),
+      ));
+      await controller.loadBleIdentity();
+      // 先到 ready(完整握手),再断到 idle —— 传图后常态。
+      final done = session
+          .pair(const BleDevice(name: 'Z f_8014411', uuid: 'P1', rssi: -50));
+      await drainMicrotasks();
+      host.emit(const BleConnected(
+          uuid: 'P1', characteristics: {}, writeWithoutResponseMtu: 20));
+      await drainMicrotasks();
+      final stage1 = PairingMessage.decode(host.lastWrite(kNikonCharPairing));
+      host.emit(BleNotified(
+          uuid: kNikonCharPairing, data: buildStage2(stage1).encode()));
+      await drainMicrotasks();
+      host.emit(BleNotified(
+          uuid: kNikonCharPairing, data: buildStage4().encode()));
+      await drainMicrotasks();
+      await done;
+      expect(session.state, BleSessionState.ready);
+      await session.disconnect();
+      await drainMicrotasks(); // 控制器 bleState 镜像(流异步投递)跟到 idle
+      expect(session.state, BleSessionState.idle);
+
+      // 补链关 Wi-Fi:重连命中 → 复用握手 → 写 0x80 → 链路保持。
+      // reconnectDeviceId 用会话现役身份的 deviceId(pair 沿 stage4
+      // 派生,与 store 存档值无关 —— 会话层测试同款口径)。
+      host.reconnectDeviceId = session.identity!.deviceId;
+      final closeFut = controller.closeCameraWifi();
+      await drainMicrotasks();
+      host.emit(const BleConnected(
+          uuid: 'P1', characteristics: {}, writeWithoutResponseMtu: 20));
+      await drainMicrotasks();
+      final stage1r =
+          PairingMessage.decode(host.lastWrite(kNikonCharPairing));
+      host.emit(BleNotified(
+          uuid: kNikonCharPairing, data: buildStage2(stage1r).encode()));
+      await drainMicrotasks();
+      host.emit(BleNotified(
+          uuid: kNikonCharPairing, data: buildStage4().encode()));
+      expect(await closeFut, isTrue);
+      expect(host.lastWrite(kNikonCharWifi), Uint8List.fromList([0x80]));
+      expect(session.state, BleSessionState.ready,
+          reason: '关 Wi-Fi 后无线单元空出,BLE 保持连接(注入续上)');
+    });
+
+    testWidgets('关闭 Wi-Fi(补链无命中):如实失败,态回落可重试', (tester) async {
+      final f = (await tester.runAsync(readyFixture))!;
+      await f.session.disconnect(); // BLE 断;host 未预置重连命中
+      await tester.pumpWidget(
+          MaterialApp(home: ConnectionPage(controller: f.controller)));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('蓝牙'));
+      await tester.pumpAndSettle();
+
+      await tester.ensureVisible(find.text('关闭')); // 断态卡多一行,钮可能折出视口
+      await tester.tap(find.text('关闭'));
+      await tester.pumpAndSettle(); // 第 1 轮扫描无命中 → 退避定时器挂起
+      await tester.pump(const Duration(seconds: 2)); // 退避(1s 档)到点
+      await tester.pumpAndSettle(); // 第 2 轮无命中 → 两轮尽 → 如实失败
+      expect(f.host.countWrite(kNikonCharWifi), 0,
+          reason: '两轮无命中:不该有 0x80 写入');
+      expect(f.session.state, BleSessionState.idle,
+          reason: '无命中不进连接尝试,态不翻转');
+      expect(find.textContaining('重连无命中'), findsOneWidget);
     });
   });
 }

@@ -93,7 +93,7 @@ channel 命名统一 `nikonpill/<service>`,完整契约表见
 | 后台传输 | WorkManager+前台服务(可靠) | BGTaskScheduler(尽力,前台续传) | 后台任务+通知 |
 | 相册 | MediaStore | PHPhotoLibrary | photoAccessHelper |
 | BLE | TRANSPORT_LE,免配对 | CoreBluetooth | ble kit |
-| 强切 WiFi | **不可能**(Android 10+,保持手动连接模式) | 同左 | 同左 |
+| 强切 WiFi | **可程序化加入**(2026-10-14:WifiNetworkSpecifier + requestNetwork + bindProcessToNetwork,`nikonpill/network` join/release;系统可弹确认框) | 不可(NEHotspot 需 Network Extensions capability,免费签名挂不了) | 不可(wifiManager 写侧 system_basic,ACL 过不了) |
 
 ## 5. 测试策略
 
