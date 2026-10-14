@@ -809,14 +809,14 @@ void main() {
 
     test('USB 连接流括号 1→0 全通 → 接管从 OFF 起步(连接即及时取景)'
         '(OpenZCine 效果,2026-10-07 v8/v9 真机定案)', () async {
-      // 生产链建模:USB 连接流 enableAppControl(usbRemoteFallback) 的
+      // 生产链建模:USB 连接流 enableAppControl(remoteLatch) 的
       // 0x90C2(1)→(0) 开闩括号 —— 闩单向,退步不关门;remote 持有态
       // 才是机身停「已连接到计算机」屏的元凶,开闩即还身(已连接屏只
       // 闪一次往返的宽度,机身直回自己的取景屏)。
       transport.reply(PtpResponseCode.operationNotSupported); // 0x9435 拒
       transport.ok(); // 0x90C2 [1] 开闩兜底通
       transport.ok(); // 0x90C2 [0] 括号退步通(还身)
-      await controller.session.enableAppControl(usbRemoteFallback: true);
+      await controller.session.enableAppControl(remoteLatch: true);
       expect(controller.session.remoteModeActive, isFalse,
           reason: '开闩即还身,remote 不持有');
 
@@ -856,7 +856,7 @@ void main() {
       transport.reply(PtpResponseCode.operationNotSupported); // 0x9435 拒
       transport.ok(); // 0x90C2 [1] 开闩通
       transport.reply(NikonResponseCode.changeCameraModeFailed); // [0] 退步被拒
-      await controller.session.enableAppControl(usbRemoteFallback: true);
+      await controller.session.enableAppControl(remoteLatch: true);
       expect(controller.session.remoteModeActive, isTrue,
           reason: '退步被拒 → remote 仍持有');
       _scriptParams(transport);
