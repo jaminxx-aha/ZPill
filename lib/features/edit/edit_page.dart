@@ -20,6 +20,7 @@ import '../../core/media/image_edit.dart';
 import '../../core/ptpip/object_format.dart' show ObjectKind;
 import '../../core/transfer/object_downloader.dart' show ObjectDownloader;
 import '../../design/app_colors.dart';
+import '../../l10n/l10n.dart';
 import '../../platform/gallery_saver.dart';
 import '../../platform/services.dart';
 import 'edit_controller.dart';
@@ -137,7 +138,10 @@ class _EditPageState extends State<EditPage> {
     final r = _workingCrop;
     // 全幅(边距 <1%)视为不裁:省一次无谓的重编码。
     final isFull = r == null ||
-        (r.left <= 0.01 && r.top <= 0.01 && r.right >= 0.99 && r.bottom >= 0.99);
+        (r.left <= 0.01 &&
+            r.top <= 0.01 &&
+            r.right >= 0.99 &&
+            r.bottom >= 0.99);
     _controller.setCrop(isFull ? null : r);
     _exitCrop();
   }
@@ -167,6 +171,8 @@ class _EditPageState extends State<EditPage> {
 
   Future<void> _importLutFromClipboard() async {
     final data = await Clipboard.getData('text/plain');
+    // await 后用 context(未命名兜底/带参模板),mounted 守卫同 _save。
+    if (!mounted) return;
     final text = data?.text?.trim();
     if (text == null || text.isEmpty) {
       _toast('剪贴板没有文本');
@@ -176,18 +182,23 @@ class _EditPageState extends State<EditPage> {
       final lut = CubeLut.parse(text);
       setState(() => _importedLut = lut);
       _controller.setLut(lut);
-      final title = lut.title.isEmpty ? '未命名' : lut.title;
-      _toast('已导入「$title」(${lut.size}³)');
+      final title = lut.title.isEmpty ? context.t('未命名') : lut.title;
+      // 带参模板在调用点先 t+填充;_toast 内的二次 t 对已填充串不命中
+      // 键、原样回落(双重包裹无害,i18n-7 在案)。
+      _toast(context
+          .t('已导入「{title}」({size}³)', {'title': title, 'size': lut.size}));
     } on FormatException catch (e) {
-      _toast('导入失败:${e.message}');
+      _toast(context.t('导入失败:{e}', {'e': e.message}));
     }
   }
 
+  /// await 后的消费点收口:静态键原文直传,由这里统一 t;带参模板在
+  /// 调用点已 t+填充,二次 t 不命中键原样回落(无害)。
   void _toast(String message) {
     if (!mounted) return;
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(message)));
+      ..showSnackBar(SnackBar(content: Text(context.t(message))));
   }
 
   @override
@@ -204,12 +215,12 @@ class _EditPageState extends State<EditPage> {
           title: Text(widget.filename, style: const TextStyle(fontSize: 16)),
           actions: [
             IconButton(
-              tooltip: '重置',
+              tooltip: context.t('重置'),
               onPressed: _controller.edited ? _reset : null,
               icon: const Icon(Icons.restart_alt),
             ),
             IconButton(
-              tooltip: '保存到相册',
+              tooltip: context.t('保存到相册'),
               onPressed: (_controller.edited && !_saving) ? _save : null,
               icon: _saving
                   ? const SizedBox(
@@ -223,9 +234,9 @@ class _EditPageState extends State<EditPage> {
           ],
         ),
         body: !_controller.isReady
-            ? const Center(
-                child: Text('无法编辑此文件(仅支持 JPEG)',
-                    style: TextStyle(color: AppMedia.onMediaMuted)),
+            ? Center(
+                child: Text(context.t('无法编辑此文件(仅支持 JPEG)'),
+                    style: const TextStyle(color: AppMedia.onMediaMuted)),
               )
             : Column(
                 children: [
@@ -265,9 +276,7 @@ class _EditPageState extends State<EditPage> {
             backdrop: backdrop,
             frameSize: frame,
             rect: _workingCrop ?? const Rect.fromLTRB(0.05, 0.05, 0.95, 0.95),
-            aspect: _aspect == -1
-                ? (frame.width / frame.height)
-                : _aspect,
+            aspect: _aspect == -1 ? (frame.width / frame.height) : _aspect,
             onChanged: (r) => setState(() => _workingCrop = r),
           );
         }
@@ -312,9 +321,9 @@ class _EditPageState extends State<EditPage> {
                           _Tool.lut => Icons.palette_outlined,
                         }),
                         tooltip: switch (t) {
-                          _Tool.rotate => '旋转',
-                          _Tool.crop => '裁剪',
-                          _Tool.adjust => '调节',
+                          _Tool.rotate => context.t('旋转'),
+                          _Tool.crop => context.t('裁剪'),
+                          _Tool.adjust => context.t('调节'),
                           _Tool.lut => 'LUT',
                         },
                       ),
@@ -361,7 +370,8 @@ class _EditPageState extends State<EditPage> {
           style: OutlinedButton.styleFrom(foregroundColor: AppMedia.onMedia),
           onPressed: onTap,
           icon: Icon(icon),
-          label: Text(label),
+          // label 原文即键,显示点包 t(调用点传中文原文字面量)。
+          label: Text(context.t(label)),
         );
 
     return Padding(
@@ -387,7 +397,7 @@ class _EditPageState extends State<EditPage> {
       child: FilledButton.icon(
         onPressed: _enterCropMode,
         icon: const Icon(Icons.crop),
-        label: const Text('选择裁剪区域'),
+        label: Text(context.t('选择裁剪区域')),
       ),
     );
   }
@@ -416,7 +426,8 @@ class _EditPageState extends State<EditPage> {
                   Padding(
                     padding: const EdgeInsets.only(right: 8),
                     child: ChoiceChip(
-                      label: Text(label),
+                      // 「自由」入目录;1:1 等纯比例串未命中原文直返。
+                      label: Text(context.t(label)),
                       selected: _aspect == a,
                       onSelected: (_) => _setAspect(a),
                     ),
@@ -424,7 +435,7 @@ class _EditPageState extends State<EditPage> {
                 Padding(
                   padding: const EdgeInsets.only(right: 8),
                   child: ChoiceChip(
-                    label: const Text('原比例'),
+                    label: Text(context.t('原比例')),
                     selected: _aspect == -1,
                     onSelected: (_) => _setAspect(-1),
                   ),
@@ -438,11 +449,15 @@ class _EditPageState extends State<EditPage> {
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: [
                 TextButton(
-                  style: TextButton.styleFrom(foregroundColor: AppMedia.onMediaMuted),
+                  style: TextButton.styleFrom(
+                      foregroundColor: AppMedia.onMediaMuted),
                   onPressed: _exitCrop,
-                  child: const Text('取消'),
+                  child: Text(context.t('取消')),
                 ),
-                FilledButton(onPressed: _applyCrop, child: const Text('应用')),
+                // 「应用」是 Apply 动词(i18n-6 预留的决定:browser 段的
+                // 「到应用/下载到应用」是名词性介词片段,不同键不撞义)。
+                FilledButton(
+                    onPressed: _applyCrop, child: Text(context.t('应用'))),
               ],
             ),
           ),
@@ -465,9 +480,10 @@ class _EditPageState extends State<EditPage> {
           children: [
             SizedBox(
                 width: 52,
-                child: Text(label,
-                    style:
-                        const TextStyle(color: AppMedia.onMediaMuted, fontSize: 13))),
+                // label 原文即键,显示点包 t(调用点传中文原文字面量)。
+                child: Text(context.t(label),
+                    style: const TextStyle(
+                        color: AppMedia.onMediaMuted, fontSize: 13))),
             Expanded(
               child: Slider(
                 value: value.clamp(min, max),
@@ -483,8 +499,8 @@ class _EditPageState extends State<EditPage> {
                 width: 48,
                 child: Text(fmt(value),
                     textAlign: TextAlign.right,
-                    style:
-                        const TextStyle(color: AppMedia.onMediaFaint, fontSize: 12))),
+                    style: const TextStyle(
+                        color: AppMedia.onMediaFaint, fontSize: 12))),
           ],
         );
 
@@ -503,12 +519,12 @@ class _EditPageState extends State<EditPage> {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          slider('亮度', _brightness, 0.5, 1.5, pct,
-              (v) => _brightness = v, (_) => push()),
-          slider('对比', _contrast, 0.5, 1.5, pct,
-              (v) => _contrast = v, (_) => push()),
-          slider('饱和', _saturation, 0, 2, pct,
-              (v) => _saturation = v, (_) => push()),
+          slider('亮度', _brightness, 0.5, 1.5, pct, (v) => _brightness = v,
+              (_) => push()),
+          slider('对比', _contrast, 0.5, 1.5, pct, (v) => _contrast = v,
+              (_) => push()),
+          slider('饱和', _saturation, 0, 2, pct, (v) => _saturation = v,
+              (_) => push()),
           slider('暖调', _warmth, -1, 1, (v) => v.toStringAsFixed(1),
               (v) => _warmth = v, (_) => push()),
         ],
@@ -521,8 +537,10 @@ class _EditPageState extends State<EditPage> {
       ('无', null),
       for (final l in builtinLuts) (l.title, l),
       if (_importedLut != null)
-        (_importedLut!.title.isEmpty ? '导入' : _importedLut!.title,
-            _importedLut),
+        (
+          _importedLut!.title.isEmpty ? '导入' : _importedLut!.title,
+          _importedLut
+        ),
     ];
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -537,7 +555,11 @@ class _EditPageState extends State<EditPage> {
                   Padding(
                     padding: const EdgeInsets.only(right: 8),
                     child: ChoiceChip(
-                      label: Text(name),
+                      // LUT 标题键存 edit/lut_presets 的 builtinLuts
+                      // (4 条已按 i18n-3 先例在 i18n-4 入目录,remote_
+                      // settings_panel 同款显示点包 t);「无/导入」与剪贴板
+                      // 导入的 .cube TITLE(通常拉丁)未命中原样回落。
+                      label: Text(context.t(name)),
                       selected: _controller.lut == lut,
                       onSelected: (_) => _controller.setLut(lut),
                     ),
@@ -550,7 +572,7 @@ class _EditPageState extends State<EditPage> {
             style: OutlinedButton.styleFrom(foregroundColor: AppMedia.onMedia),
             onPressed: _importLutFromClipboard,
             icon: const Icon(Icons.content_paste),
-            label: const Text('从剪贴板导入 .cube'),
+            label: Text(context.t('从剪贴板导入 .cube')),
           ),
         ],
       ),
@@ -622,16 +644,20 @@ class _CropViewState extends State<CropView> {
                   if (_drag == _Handle.move) {
                     final nx =
                         (d.localPosition.dx - fitted.left) / fitted.width;
-                    final ny = (d.localPosition.dy - fitted.top) / fitted.height;
+                    final ny =
+                        (d.localPosition.dy - fitted.top) / fitted.height;
                     _moveAnchor = Offset(
-                      ((nx - _startRect.left) / _startRect.width).clamp(0.0, 1.0),
-                      ((ny - _startRect.top) / _startRect.height).clamp(0.0, 1.0),
+                      ((nx - _startRect.left) / _startRect.width)
+                          .clamp(0.0, 1.0),
+                      ((ny - _startRect.top) / _startRect.height)
+                          .clamp(0.0, 1.0),
                     );
                   }
                 },
                 onPanUpdate: (d) {
                   if (_drag != null) {
-                    widget.onChanged(_applyDrag(fitted, _drag!, d.localPosition));
+                    widget
+                        .onChanged(_applyDrag(fitted, _drag!, d.localPosition));
                   }
                 },
                 onPanEnd: (_) => _drag = null,
@@ -649,7 +675,8 @@ class _CropViewState extends State<CropView> {
     final scale = math.min(area.width / widget.frameSize.width,
         area.height / widget.frameSize.height);
     final size = widget.frameSize * scale;
-    return Offset((area.width - size.width) / 2, (area.height - size.height) / 2) &
+    return Offset(
+            (area.width - size.width) / 2, (area.height - size.height) / 2) &
         size;
   }
 
@@ -734,7 +761,9 @@ class _CropViewState extends State<CropView> {
     // 最小尺寸与边界钳制(拖动侧让位,固定侧不动)。
     var left = r.left, top = r.top, right = r.right, bottom = r.bottom;
     if (right - left < minSize) {
-      if (h == _Handle.left || h == _Handle.topLeft || h == _Handle.bottomLeft) {
+      if (h == _Handle.left ||
+          h == _Handle.topLeft ||
+          h == _Handle.bottomLeft) {
         left = right - minSize;
       } else {
         right = left + minSize;
@@ -821,7 +850,8 @@ class _CropPainter extends CustomPainter {
       fitted.top + rect.bottom * fitted.height,
     );
     // 遮罩:全幅半透黑,裁剪区内清透(露出底图)。
-    canvas.drawRect(Offset.zero & size, Paint()..color = AppMedia.background.withValues(alpha: 0.54));
+    canvas.drawRect(Offset.zero & size,
+        Paint()..color = AppMedia.background.withValues(alpha: 0.54));
     canvas.save();
     canvas.clipRect(crop);
     canvas.drawRect(crop, Paint()..blendMode = BlendMode.clear);
