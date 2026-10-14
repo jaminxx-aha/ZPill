@@ -1021,6 +1021,63 @@ void main() {
     expect(find.byType(WaveformView), findsNothing);
   });
 
+  testWidgets('峰值档位:开关门控选项行,灵敏度同步分析器阈值,颜色入叠层',
+      (tester) async {
+    _portrait(tester);
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = _directRemoteController(transport, conn: conn);
+    addTearDown(controller.dispose);
+    _scriptAutoStart(transport);
+    final settings = ValueNotifier(const AppSettings());
+    addTearDown(settings.dispose);
+    await tester.pumpWidget(MaterialApp(
+        home: RemotePage(
+            controller: controller, settingsListenable: settings)));
+    await tester.pumpAndSettle();
+
+    // 峰值关:选项行不占面板
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
+    expect(find.text('峰值灵敏度'), findsNothing);
+    expect(find.text('峰值颜色'), findsNothing);
+
+    // 开峰值:分析器启用 + 阈值 = 中档 40(默认,旧行为)+ 叠层金边
+    await tester.tap(find.byIcon(Icons.blur_on)); // 峰值
+    await tester.pumpAndSettle();
+    expect(controller.analyzer.enabled.value, isTrue);
+    expect(controller.analyzer.peakingThreshold, 40,
+        reason: '默认中档 = 旧写死阈值');
+    expect(find.text('峰值灵敏度'), findsOneWidget);
+    expect(find.text('峰值颜色'), findsOneWidget);
+    expect(tester.widget<PeakingOverlay>(find.byType(PeakingOverlay)).color,
+        const Color(0xFFE9AC35),
+        reason: '默认金 = 旧行为');
+
+    // 选「高」→「低」:设置落档,阈值 64 / 24 同步分析器
+    await tester.tap(find.text('高'));
+    await tester.pumpAndSettle();
+    expect(settings.value.monitorPeakingLevel, 2);
+    expect(controller.analyzer.peakingThreshold, 64);
+    await tester.tap(find.text('低'));
+    await tester.pumpAndSettle();
+    expect(settings.value.monitorPeakingLevel, 0);
+    expect(controller.analyzer.peakingThreshold, 24);
+
+    // 选「红」:设置落档,叠层换色
+    await tester.tap(find.text('红'));
+    await tester.pumpAndSettle();
+    expect(settings.value.monitorPeakingColor, 2);
+    expect(tester.widget<PeakingOverlay>(find.byType(PeakingOverlay)).color,
+        LiveDesign.dark.bad);
+
+    // 关峰值:选项行随退场(开关收行,不留孤儿档位)
+    await tester.tap(find.byIcon(Icons.blur_on));
+    await tester.pumpAndSettle();
+    expect(find.text('峰值灵敏度'), findsNothing);
+    expect(find.byType(PeakingOverlay), findsNothing);
+  });
+
   testWidgets('构图遮幅:芯片循环 off→2.39→2.35→1.85,遮幅层随开关上屏',
       (tester) async {
     _portrait(tester);

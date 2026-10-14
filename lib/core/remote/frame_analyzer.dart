@@ -16,6 +16,10 @@ final class FrameAnalyzer {
   /// 分析开关(斑马纹/直方图任一开启时置 true;false 时帧到达即返回)。
   final enabled = ValueNotifier<bool>(false);
 
+  /// 峰值梯度阈值(0-255):页面按灵敏度档同步,改档下一帧分析起生效
+  /// (分析结果是快照,无须清缓存重算)。
+  int peakingThreshold = FrameAnalysis.peakingGradientThreshold;
+
   /// 最近一次分析(null = 尚无/最近帧解码失败;禁用重开时清)。
   final ValueNotifier<FrameAnalysis?> analysis = ValueNotifier<FrameAnalysis?>(null);
 
@@ -40,7 +44,8 @@ final class FrameAnalyzer {
     if (_seen++ % everyNth != 0) return;
     final frame = _frames?.value;
     if (frame == null) return;
-    analysis.value = analyzeJpegFrame(frame);
+    analysis.value =
+        analyzeJpegFrame(frame, peakingThreshold: peakingThreshold);
   }
 
   void dispose() {

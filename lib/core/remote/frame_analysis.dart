@@ -62,7 +62,11 @@ final class FrameAnalysis {
   /// 波形亮度桶数(与直方图同一分桶,采样环共用一次 bin 计算)。
   int get waveformBins => lumaHistogram.length;
 
-  /// 峰值判定的相邻格亮度梯度阈值(0-255)。
+  /// 峰值判定的相邻格亮度梯度阈值(0-255):分析缺省档(= 监看灵敏度
+  /// 「中」档)。**调优值非协议常量** —— 用户可配档位(低/中/高)在
+  /// 监看桥接层映射(features/remote/monitor_toggles.dart 的
+  /// monitorPeakingThresholdOf),经 [analyzeJpegFrame] 的
+  /// peakingThreshold 参数传入。
   static const int peakingGradientThreshold = 40;
 
   /// 伪色亮度带边界(升序;带索引 = luma 落入的区间序号,共
@@ -135,8 +139,9 @@ final class FrameAnalysis {
 ///
 /// 采样步长 = 一个掩码格的像素宽,保证每格至少被扫到;直方图/斑马纹/
 /// 伪色(格均值 → 亮度带)共用同一批采样;对焦峰值用更细的
-/// [peakingCols]×[peakingRows] 均值网格做相邻梯度。luma =
-/// 0.299R + 0.587G + 0.114B(Rec.601)。
+/// [peakingCols]×[peakingRows] 均值网格做相邻梯度,梯度阈值
+/// [peakingThreshold](缺省 = [FrameAnalysis.peakingGradientThreshold]
+/// 中档,用户可配)。luma = 0.299R + 0.587G + 0.114B(Rec.601)。
 FrameAnalysis? analyzeJpegFrame(
   Uint8List jpeg, {
   int histogramBins = 64,
@@ -145,6 +150,7 @@ FrameAnalysis? analyzeJpegFrame(
   int lumaThreshold = 250,
   int peakingCols = 64,
   int peakingRows = 48,
+  int peakingThreshold = FrameAnalysis.peakingGradientThreshold,
   int waveformCols = 64,
 }) {
   // 解码器对畸形/截断字节可能抛 Error(image 包格式嗅探的越界读,
@@ -222,7 +228,7 @@ FrameAnalysis? analyzeJpegFrame(
     peakMeans[i] = n > 0 ? peakSums[i] / n : 0;
   }
   final peaking = Uint8List(peakingCols * peakingRows);
-  const grad = FrameAnalysis.peakingGradientThreshold;
+  final grad = peakingThreshold;
   for (var row = 0; row < peakingRows; row++) {
     for (var col = 0; col < peakingCols; col++) {
       final i = row * peakingCols + col;

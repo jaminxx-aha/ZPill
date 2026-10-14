@@ -191,18 +191,44 @@ final class _FalseColorPainter extends CustomPainter {
   bool shouldRepaint(_FalseColorPainter old) => old.analysis != analysis;
 }
 
-/// 对焦峰值(Peaking):强亮度梯度的细格描金边 —— 合焦面在画面里
-/// 通常正是细节最锐的地方,峰值高亮圈出“哪里实了”。
+/// 对焦峰值(Peaking):强亮度梯度的细格描边(色可配,默认金)——
+/// 合焦面在画面里通常正是细节最锐的地方,峰值高亮圈出“哪里实了”。
+///
+/// 灵敏度档(梯度阈值)在分析侧(frame_analysis.dart),色档在绘制侧
+/// ([peakingColorOf]);两档都持久化在 AppSettings。
+/// 峰值高亮金(默认档色 = 旧行为的写死值)。
+const Color kPeakingGold = Color(0xFFE9AC35);
+
+/// 峰值高亮色档表(索引 = AppSettings.monitorPeakingColor:
+/// 0=金(默认)/1=白/2=红)。红 = LiveDesign.dark.bad 的值(内容层
+/// 警示红,与斑马纹/未合焦 AF 框同族)—— const 列表不能取令牌属性,
+/// 以字面量落值,测试侧与令牌对账。
+const kPeakingColors = <Color>[
+  kPeakingGold,
+  Colors.white,
+  Color(0xFFD13437),
+];
+
+/// 峰值高亮色(档位索引 → 色;表外档回落金 = 旧行为)。纯函数,测试直取。
+Color peakingColorOf(int index) =>
+    index >= 0 && index < kPeakingColors.length
+        ? kPeakingColors[index]
+        : kPeakingGold;
+
 class PeakingOverlay extends StatelessWidget {
-  const PeakingOverlay({super.key, required this.analysis});
+  const PeakingOverlay(
+      {super.key, required this.analysis, this.color = kPeakingGold});
 
   final FrameAnalysis? analysis;
+
+  /// 高亮色(取景区按设置档经 [peakingColorOf] 传入;缺省金 = 旧行为)。
+  final Color color;
 
   @override
   Widget build(BuildContext context) {
     return RepaintBoundary(
       child: CustomPaint(
-        foregroundPainter: _PeakingPainter(analysis),
+        foregroundPainter: _PeakingPainter(analysis, color),
         size: Size.infinite,
       ),
     );
@@ -210,9 +236,10 @@ class PeakingOverlay extends StatelessWidget {
 }
 
 final class _PeakingPainter extends CustomPainter {
-  const _PeakingPainter(this.analysis);
+  const _PeakingPainter(this.analysis, this.color);
 
   final FrameAnalysis? analysis;
+  final Color color;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -221,8 +248,7 @@ final class _PeakingPainter extends CustomPainter {
     final rect = containRect(size, a.width / a.height);
     final cellW = rect.width / a.peakingCols;
     final cellH = rect.height / a.peakingRows;
-    final paint = Paint()
-      ..color = const Color(0xFFE9AC35).withValues(alpha: 0.8);
+    final paint = Paint()..color = color.withValues(alpha: 0.8);
     for (var row = 0; row < a.peakingRows; row++) {
       for (var col = 0; col < a.peakingCols; col++) {
         if (a.peakingMask[row * a.peakingCols + col] == 0) continue;
@@ -236,7 +262,8 @@ final class _PeakingPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_PeakingPainter old) => old.analysis != analysis;
+  bool shouldRepaint(_PeakingPainter old) =>
+      old.analysis != analysis || old.color != color;
 }
 
 /// 直方图(左下角小窗,64 桶亮度)。

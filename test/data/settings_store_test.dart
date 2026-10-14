@@ -143,6 +143,41 @@ void main() {
     });
   });
 
+  group('峰值档位持久化(2026-10-14:灵敏度/颜色可配)', () {
+    test('默认中灵敏度/金色(= 旧行为);JSON 往返;旧档缺省与表外值回落', () {
+      expect(const AppSettings().monitorPeakingLevel, 1);
+      expect(const AppSettings().monitorPeakingColor, 0);
+
+      final tuned = const AppSettings().copyWith(
+          monitorPeakingLevel: 2, monitorPeakingColor: 1);
+      final back = AppSettings.fromJson(tuned.toJson());
+      expect(back.monitorPeakingLevel, 2);
+      expect(back.monitorPeakingColor, 1);
+
+      // 旧版本文件无此键 → 默认档(中/金 = 旧行为)
+      final bare = AppSettings.fromJson({'autoTransfer': true});
+      expect(bare.monitorPeakingLevel, 1);
+      expect(bare.monitorPeakingColor, 0);
+      // 表外值(手改文件)回落默认档
+      final bogus = AppSettings.fromJson(
+          {'monitorPeakingLevel': 7, 'monitorPeakingColor': -1});
+      expect(bogus.monitorPeakingLevel, 1);
+      expect(bogus.monitorPeakingColor, 0);
+    });
+
+    test('文件落盘往返(FileSettingsStore)', () async {
+      final dir = await Directory.systemTemp.createTemp('np_settings_peaking');
+      addTearDown(() => dir.delete(recursive: true));
+      final store = FileSettingsStore(dataDir: () async => dir.path);
+      await store.update(const AppSettings().copyWith(
+          monitorPeakingLevel: 0, monitorPeakingColor: 2));
+      final reloaded = FileSettingsStore(dataDir: () async => dir.path);
+      final s = await reloaded.current();
+      expect(s.monitorPeakingLevel, 0);
+      expect(s.monitorPeakingColor, 2);
+    });
+  });
+
   group('监看差集五字段持久化(2026-10-14:遮幅/安全框/中心标/波形/LUT)', () {
     test('默认全关;JSON 往返;旧档缺省回落默认(遮幅 off/LUT 关)', () {
       expect(const AppSettings().framingAspect, FramingAspect.off);

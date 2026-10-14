@@ -276,7 +276,8 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     Navigator.of(context).popUntil((r) => r.isFirst);
   }
 
-  /// 斑马纹/直方图/伪色/峰值/波形共享同一份帧分析:任一开启即启用分析器。
+  /// 斑马纹/直方图/伪色/峰值/波形共享同一份帧分析:任一开启即启用分析
+  /// 器;峰值灵敏度档随同同步(梯度阈值,下一帧分析起生效)。
   void _syncAnalyzerEnabled() {
     final want = _toggles.zebra ||
         _toggles.histogram ||
@@ -286,6 +287,8 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     if (controller.analyzer.enabled.value != want) {
       controller.analyzer.enabled.value = want;
     }
+    controller.analyzer.peakingThreshold =
+        monitorPeakingThresholdOf(_toggles.peakingLevel);
   }
 
   /// 开关组落定(监看开关 + 帧分析器启停同步 + 持久化写回)。

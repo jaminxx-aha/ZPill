@@ -294,7 +294,12 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea> {
                           ValueListenableBuilder(
                             valueListenable: controller.analyzer.analysis,
                             builder: (context, FrameAnalysis? analysis, _) =>
-                                PeakingOverlay(analysis: analysis),
+                                PeakingOverlay(
+                              analysis: analysis,
+                              // 色档(金/白/红)随持久化设置,表外档回落金。
+                              color: peakingColorOf(
+                                  widget.toggles.peakingColor),
+                            ),
                           ),
                         // 构图框(遮幅/安全框/中心标;纯显示层,不占
                         // 分析器 —— 叠层随外层变换上屏)。
