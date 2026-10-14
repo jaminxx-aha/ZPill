@@ -32,6 +32,7 @@ import '../../data/client_identity_store.dart';
 import '../../data/paired_cameras_store.dart';
 import '../../design/app_dimens.dart';
 import '../../l10n/l10n.dart';
+import '../../platform/network_monitor.dart';
 import '../../platform/nsd_scanner.dart';
 import '../browser/photo_grid_page.dart';
 import '../common/widgets/confirm_dialog.dart';
@@ -45,6 +46,18 @@ import 'connection_status_card.dart';
 /// 连接方式(未连接视图的分段选择;切到哪种出哪种卡)。
 enum ConnectionMethod { usb, ap, sta, ble }
 
+/// 程序化加入相机热点的结局([ConnectionController.joinCameraAp])。
+enum ApJoinOutcome {
+  /// 加入成功且已自动发起 AP 连接(状态沿走既定连接路)。
+  joined,
+
+  /// 加入失败(reason 在 [ConnectionController.apJoinError])。
+  failed,
+
+  /// 无法自动加入(凭据未解出 / joiner 未装配):维持手动指引。
+  skipped,
+}
+
 class ConnectionController extends ChangeNotifier {
   /// 注入应用级连接(全局单例状态,经 AppServices 收口)+ 扫描器与
   /// 配对档案(均可空:测试/未装配平台降级)。BLE 三件 + 设置控制器
@@ -56,6 +69,7 @@ class ConnectionController extends ChangeNotifier {
     this.identityStore,
     this.bleSession,
     this.bleIdentityStore,
+    this.wifiJoiner,
     this.settingsController,
     this.onBleInjectChanged,
   }) {
@@ -79,6 +93,10 @@ class ConnectionController extends ChangeNotifier {
   /// 蓝牙工具通道(GPS 注入 / 唤醒 WiFi;不参与相机 PTP 连接状态)。
   final BleCameraSession? bleSession;
   final BleIdentityStore? bleIdentityStore;
+
+  /// 程序化加入相机热点(`nikonpill/network` join;Android 已实现,
+  /// iOS/ohos 未装配 → joinCameraAp 走 skipped 手动指引)。
+  final WifiJoiner? wifiJoiner;
   final SettingsController? settingsController;
 
   /// BLE 注入开关落库后的刷新钩子(装配沿接 AppServices.refreshBle
@@ -167,14 +185,83 @@ class ConnectionController extends ChangeNotifier {
     onBleInjectChanged?.call();
   }
 
-  /// 唤醒相机 WiFi(0x2005=0x01):相机热点开启后到系统 Wi-Fi 加入,
-  /// 走 AP 方式连相机传图(见 AP 卡)。返回是否成功;失败看 [bleHint]。
-  Future<bool> wakeCameraWifi() async =>
-      await bleSession?.wakeCameraWifi() ?? false;
+  /// 唤醒相机 WiFi 全程(SnapBridge 序,反编译实证 CameraConnectByWiFi
+  /// UseCase):①ready 态先读 0x2004(凭据配对期已生成,官方读在写前;
+  /// 读失败不清旧值 —— 凭据随机身配置不轮换,瞬时失败不该抹掉已展示
+  /// 的卡)②写 0x2005=0x01 ③成功沿**主动断开 BLE** —— 相机要等链路
+  /// 释放才真正开热点(真机 2026-10-14:握着链路热点不出来),SnapBridge
+  /// 写后也不等 BLE 应答直接转 Wi-Fi 路(Join AP → Bonjour → PTP/IP)。
+  /// 身份保留,「重连」即回;GPS 注入随断链暂停。返回唤醒是否成功;
+  /// 失败原因看 [bleLastError](读凭据或写 0x2005 的,读失败不清旧错)。
+  Future<bool> wakeCameraWifi() async {
+    final session = bleSession;
+    if (session == null) return false;
+    final creds = await session.readWifiCredentials();
+    final ok = await session.wakeCameraWifi();
+    if (!ok) return false;
+    if (creds != null) {
+      cameraApCredentials = creds;
+      notifyListeners();
+    }
+    await session.disconnect();
+    return true;
+  }
 
-  /// 关闭相机 WiFi(0x2005=0x80)。
-  Future<bool> closeCameraWifi() async =>
-      await bleSession?.closeCameraWifi() ?? false;
+  /// 最近一次程序化加入失败原因(joinCameraAp 落账;终态文案如实用)。
+  String? apJoinError;
+
+  /// 断链后程序化加入相机热点并自动接续 AP 连接(BLE→WiFi 交接最后
+  /// 一段,SnapBridge 全程:0x2004 凭据 → 写 0x2005 断 BLE → join →
+  /// PTP/IP)。凭据缺 / joiner 未装配(iOS/ohos/测试)→ skipped,UI
+  /// 维持手动指引;join 成功沿切到 AP 分段并**发射** connectWireless
+  /// (不等待 —— 连接进度/失败/重试全走既定连接卡状态机,与手点
+  /// 「AP 连接」同路;进程路由已由 native 在 onAvailable 沿绑到相机
+  /// 网,socket 直达 192.168.1.1)。
+  Future<ApJoinOutcome> joinCameraAp() async {
+    final joiner = wifiJoiner;
+    final creds = cameraApCredentials;
+    if (joiner == null || creds == null) {
+      return ApJoinOutcome.skipped;
+    }
+    final r = await joiner.join(
+      ssid: creds.ssid,
+      password: creds.password,
+      security: creds.security,
+    );
+    if (!r.ok) {
+      apJoinError = r.reason;
+      return ApJoinOutcome.failed;
+    }
+    selectMethod(ConnectionMethod.ap);
+    unawaited(connectWireless());
+    return ApJoinOutcome.joined;
+  }
+
+  /// 关闭相机 Wi-Fi(0x2005=0x80)。「关闭」接口必须传图后够得着:
+  /// 传图全程 BLE 断开,故非 ready 态先补链(retryReconnect 至多 2 轮)
+  /// 再写。相机热点期可能不广播蓝牙(n-link 实证 Z50II 热点在 PTP 会话
+  /// 结束 ~34s 后自行消失 —— 机身本就有自动收尾,0x80 是显式关断的补
+  /// 充),两轮无命中如实落 lastError,相机菜单可关。成功后 BLE 保持
+  /// 连接(无线单元空出),注入驱动 ready 沿自动续定位流。
+  Future<bool> closeCameraWifi() async {
+    final session = bleSession;
+    if (session == null) return false;
+    if (bleState != BleSessionState.ready) {
+      var reconnected = false;
+      for (var attempt = 0; attempt < 2 && !reconnected; attempt++) {
+        reconnected = await session.retryReconnect();
+        if (!reconnected && attempt == 0) {
+          await Future<void>.delayed(session.nextRetryDelay);
+        }
+      }
+      if (!reconnected) {
+        session.lastError = '重连无命中(相机热点期可能不广播蓝牙),'
+            '可从相机菜单关闭 Wi-Fi';
+        return false;
+      }
+    }
+    return await session.closeCameraWifi();
+  }
 
   /// 相机 AP 凭据(0x2004 蓝牙通道解出;null = 未读/解密未中/未 ready)。
   /// BLE→WiFi 二期:唤醒成功沿自动读取,AP 卡凭据块展示。
@@ -268,6 +355,15 @@ class ConnectionController extends ChangeNotifier {
       awaitingCameraConfirm = false;
     }
     state = s;
+    // 无线链路收尾沿释放进程网络绑定:join 相机热点沿 native 把路由
+    // 绑到了相机网(specifier 网络无互联网),不释放会吃掉外网路由。
+    // 幂等,未持有时无操作。
+    if (s == CameraLinkState.disconnected || s == CameraLinkState.failed) {
+      final joiner = wifiJoiner;
+      if (joiner != null) {
+        unawaited(joiner.release());
+      }
+    }
     notifyListeners();
   }
 
@@ -759,8 +855,9 @@ class _ConnectionPageState extends State<ConnectionPage>
               subtitle: Text(context.t('拍摄时自动把手机定位写进相机,'
                   '卡内照片原生带坐标')),
             ),
-            // WiFi 唤起(就绪才可用):写 0x2005,相机开热点后回 AP 卡
-            // 走既定连接路;关闭 = 反义 op。
+            // WiFi 唤起(就绪才可用):先读 0x2004 凭据(SnapBridge 序)
+            // 再写 0x2005,成功沿断 BLE —— 相机等链路释放才开热点;关闭
+            // = 反义 op(0x80),不断链。
             Row(children: [
               Expanded(
                 child: FilledButton.tonalIcon(
@@ -774,7 +871,10 @@ class _ConnectionPageState extends State<ConnectionPage>
               const SizedBox(width: 8),
               Expanded(
                 child: OutlinedButton(
-                  onPressed: ready
+                  // 门禁 = 有身份(传图后 BLE 断开是常态,方法内先补链
+                  // 再写 0x80);握手/relink 中禁用。
+                  onPressed: hasIdentity &&
+                          controller.bleState != BleSessionState.pairing
                       ? () => unawaited(_bleWifiAction(
                           controller, controller.closeCameraWifi,
                           success: context.t('已请求相机关闭 Wi-Fi')))
@@ -799,8 +899,12 @@ class _ConnectionPageState extends State<ConnectionPage>
     );
   }
 
-  /// 唤醒相机 WiFi(BLE→WiFi 二期):0x2005 写成功沿自动读 0x2004,
-  /// 凭据解出即填「AP 热点」卡(SnackBar 带去向;未解出如实提示)。
+  /// 唤醒相机 WiFi(BLE→WiFi 交接):[ConnectionController.wakeCameraWifi]
+  /// 全程 = 读 0x2004(SnapBridge 序)→ 写 0x2005=0x01 → 成功沿断 BLE
+  /// (相机等链路释放才开热点)。凭据解出且平台装配 joiner → 接着程序
+  /// 化加入热点并自动发起 AP 连接([ConnectionController.joinCameraAp],
+  /// SnapBridge 全程);否则维持手动指引(密码看相机屏幕)。GPS 注入随
+  /// 断链暂停,传图完蓝牙卡「关闭」关相机 Wi-Fi、「重连」恢复蓝牙。
   Future<void> _wakeWifiWithCredentials(ConnectionController controller) async {
     final ok = await controller.wakeCameraWifi();
     if (!mounted) return;
@@ -811,21 +915,59 @@ class _ConnectionPageState extends State<ConnectionPage>
               {'e': controller.bleLastError ?? context.t('未知')}));
       return;
     }
-    final got = await controller.loadCameraApCredentials();
-    if (!mounted) return;
     final creds = controller.cameraApCredentials;
-    _showHint(
+    if (creds == null || controller.wifiJoiner == null) {
+      // 无法自动加入(凭据未解出 / 平台未装配 joiner):手动指引如实。
+      _showHint(
         controller,
-        got && creds != null
+        creds != null
             ? context.t(
-                '相机 Wi-Fi 已唤醒:热点「{ssid}」凭据已解出,'
-                '见「AP 热点」卡',
+                '相机 Wi-Fi 已唤醒:已断开蓝牙等相机开热点「{ssid}」;'
+                '凭据见「AP 热点」卡,到系统 Wi-Fi 加入后回「AP 热点」卡'
+                '连接',
                 {'ssid': creds.ssid})
             : context.t(
-                '相机 Wi-Fi 已唤醒:到系统 Wi-Fi 加入相机热点'
-                '(凭据未解出:{e}),'
-                '再回「AP 热点」卡连接',
-                {'e': controller.bleLastError ?? context.t('未下发')}));
+                '相机 Wi-Fi 已唤醒:已断开蓝牙等相机开热点;'
+                '凭据未解出:{e},密码看相机屏幕到系统 Wi-Fi 加入;'
+                '传图完点「重连」恢复蓝牙',
+                {'e': controller.bleLastError ?? context.t('未下发')}),
+        duration: const Duration(seconds: 5),
+      );
+      return;
+    }
+    // 自动加入路上:join 看门狗 30s 兜底,过渡提示给足时长。
+    _showHint(
+        controller,
+        context.t('已断开蓝牙,正在加入相机热点「{ssid}」…',
+            {'ssid': creds.ssid}),
+        duration: const Duration(seconds: 30));
+    final outcome = await controller.joinCameraAp();
+    if (!mounted) return;
+    if (outcome == ApJoinOutcome.joined) {
+      _showHint(
+          controller,
+          context.t('已加入相机热点「{ssid}」,正在连接相机…',
+              {'ssid': creds.ssid}),
+          duration: const Duration(seconds: 5));
+    } else if (outcome == ApJoinOutcome.failed) {
+      _showHint(
+        controller,
+        context.t('自动加入热点失败:{e};请到系统 Wi-Fi 手动加入'
+            '(密码看相机屏幕),回「AP 热点」卡连接',
+            {'e': controller.apJoinError ?? context.t('未知')}),
+        duration: const Duration(seconds: 5),
+      );
+    } else {
+      // skipped:防御路(joiner 在 wake 后被置空等)—— 手动指引兜底。
+      _showHint(
+        controller,
+        context.t(
+            '相机 Wi-Fi 已唤醒:已断开蓝牙等相机开热点「{ssid}」;'
+            '到系统 Wi-Fi 加入后回「AP 热点」卡连接',
+            {'ssid': creds.ssid}),
+        duration: const Duration(seconds: 5),
+      );
+    }
   }
 
   /// 手动读凭据(唤醒早于配对/重试场景):结果如实回 SnackBar。
@@ -842,11 +984,16 @@ class _ConnectionPageState extends State<ConnectionPage>
                 {'e': controller.bleLastError ?? context.t('未知')}));
   }
 
-  void _showHint(ConnectionController controller, String message) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(message),
-      duration: const Duration(seconds: 3),
-    ));
+  void _showHint(ConnectionController controller, String message,
+      {Duration duration = const Duration(seconds: 3)}) {
+    ScaffoldMessenger.of(context)
+      // 先撤在场提示再显:showSnackBar 是排队不替换,30s 的过渡提示
+      // 会把终态消息压到 30s 后(真机/测试同病)。
+      ..removeCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+        content: Text(message),
+        duration: duration,
+      ));
   }
 
   /// 配对页往返:返回沿重载身份(配对/解除后卡片状态即翻新)。

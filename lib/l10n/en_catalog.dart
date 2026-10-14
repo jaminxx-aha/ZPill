@@ -197,10 +197,18 @@ const Map<String, String> enCatalog = {
   '唤醒失败:{e}': 'Wake failed: {e}',
   '未知': 'Unknown',
   '未下发': 'not sent',
-  '相机 Wi-Fi 已唤醒:热点「{ssid}」凭据已解出,见「AP 热点」卡':
-      'Camera Wi-Fi is awake: hotspot "{ssid}" credentials decoded; see the "AP Hotspot" card',
-  '相机 Wi-Fi 已唤醒:到系统 Wi-Fi 加入相机热点(凭据未解出:{e}),再回「AP 热点」卡连接':
-      'Camera Wi-Fi is awake: join the camera hotspot in system Wi-Fi settings (credentials not decoded: {e}), then return to the "AP Hotspot" card to connect',
+  '相机 Wi-Fi 已唤醒:已断开蓝牙等相机开热点「{ssid}」;凭据见「AP 热点」卡,到系统 Wi-Fi 加入后回「AP 热点」卡连接':
+      'Camera Wi-Fi is awake: Bluetooth released to let the camera raise hotspot "{ssid}"; credentials are on the "AP Hotspot" card — join it via system Wi-Fi, then connect from the "AP Hotspot" card',
+  '相机 Wi-Fi 已唤醒:已断开蓝牙等相机开热点「{ssid}」;到系统 Wi-Fi 加入后回「AP 热点」卡连接':
+      'Camera Wi-Fi is awake: Bluetooth released to let the camera raise hotspot "{ssid}" — join it via system Wi-Fi, then connect from the "AP Hotspot" card',
+  '已断开蓝牙,正在加入相机热点「{ssid}」…':
+      'Bluetooth released; joining camera hotspot "{ssid}"…',
+  '已加入相机热点「{ssid}」,正在连接相机…':
+      'Joined camera hotspot "{ssid}"; connecting to the camera…',
+  '自动加入热点失败:{e};请到系统 Wi-Fi 手动加入(密码看相机屏幕),回「AP 热点」卡连接':
+      'Auto-join failed: {e} — join via system Wi-Fi manually (password on the camera screen), then connect from the "AP Hotspot" card',
+  '相机 Wi-Fi 已唤醒:已断开蓝牙等相机开热点;凭据未解出:{e},密码看相机屏幕到系统 Wi-Fi 加入;传图完点「重连」恢复蓝牙':
+      'Camera Wi-Fi is awake: Bluetooth released to let the camera raise its hotspot; credentials not decoded: {e} — join via system Wi-Fi (password on the camera screen); tap "Reconnect" to resume Bluetooth after transfers',
   '已解出热点「{ssid}」,见「AP 热点」卡':
       'Hotspot "{ssid}" credentials decoded; see the "AP Hotspot" card',
   '未取得凭据:{e}': 'Credentials not retrieved: {e}',

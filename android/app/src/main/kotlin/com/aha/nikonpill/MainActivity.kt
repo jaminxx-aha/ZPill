@@ -6,6 +6,7 @@ import com.aha.nikonpill.ble.BlePlugin
 import com.aha.nikonpill.gallery.GalleryPlugin
 import com.aha.nikonpill.location.LocationPlugin
 import com.aha.nikonpill.motion.MotionPlugin
+import com.aha.nikonpill.network.NetworkPlugin
 import com.aha.nikonpill.nsd.NsdPlugin
 import com.aha.nikonpill.usb.UsbHostPlugin
 import com.aha.nikonpill.video.VideoPlugin
@@ -37,6 +38,7 @@ class MainActivity : FlutterActivity() {
         flutterEngine.plugins.add(BlePlugin())
         flutterEngine.plugins.add(BgPlugin())
         flutterEngine.plugins.add(VideoPlugin())
+        flutterEngine.plugins.add(NetworkPlugin())
         volumeChannel = MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             VOLUME_CHANNEL
