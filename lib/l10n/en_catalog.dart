@@ -550,7 +550,10 @@ const Map<String, String> enCatalog = {
   '请先开启取景': 'Start the viewfinder first',
   '相机当前状态不允许录制 —— 请把机顶「照片/视频」切换拨杆拨到视频档后重试(取景保持开启)':
       'The camera does not allow recording right now — switch the top "photo/video" lever to video and retry (the viewfinder stays on)',
-  '对焦行程尽头': 'End of focus travel',
+  '对焦已到近端': 'Focus reached the near limit',
+  '对焦已到远端': 'Focus reached the far limit',
+  '近端已到,反向驱动解锁': 'Near limit reached; drive the other way to unlock',
+  '远端已到,反向驱动解锁': 'Far limit reached; drive the other way to unlock',
   '步进量过小,镜头未动': 'Step too small; the lens did not move',
   '手动对焦不可用(机械对焦环或机身忙)':
       'Manual focus unavailable (mechanical focus ring or camera busy)',

@@ -145,7 +145,8 @@ class CaptureSettingsPanel extends StatelessWidget {
   /// 近/远各一步)+ 拉焦轮开关(取景画面右缘竖条,开 = 金;重开清失败
   /// 预算 resetFocusDial,从可用态起步)。机身对焦模式为 MF 时全部灰化
   /// (机内马达脱开,远程对焦失效 —— 只有镜头对焦环能动焦)+ 常驻提示
-  /// 行(盲按无响应的困惑根源)。
+  /// 行(盲按无响应的困惑根源)。端点态(0xA00C 方向归因,近端/远端
+  /// 已到)另有常驻提示行,反向驱动即解锁。
   Widget _focusControls(BuildContext context) {
     final live = LiveDesign.of(context);
     final usable = controller.linkUp &&
@@ -264,6 +265,15 @@ class CaptureSettingsPanel extends StatelessWidget {
         if (controller.focusModeIsMf) ...[
           const SizedBox(height: 6),
           Text(context.t('机身对焦模式为 MF,远程对焦已停用'),
+              style: TextStyle(fontSize: 10, color: live.muted)),
+        ] else if (controller.mfNearEnd || controller.mfFarEnd) ...[
+          // 端点态常驻行(0xA00C 按请求方向归因,RemoteController
+          // .mfNearEnd/mfFarEnd):反向驱动一步即解锁(轮锁同步解除)。
+          const SizedBox(height: 6),
+          Text(
+              context.t(controller.mfNearEnd
+                  ? '近端已到,反向驱动解锁'
+                  : '远端已到,反向驱动解锁'),
               style: TextStyle(fontSize: 10, color: live.muted)),
         ] else if (usable && !controller.afAreaCanTrack) ...[
           const SizedBox(height: 6),

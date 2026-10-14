@@ -62,6 +62,7 @@ import '../../core/ptp/ptp_transport.dart';
 import '../../core/remote/frame_analysis.dart';
 import '../../core/remote/frame_analyzer.dart';
 import '../../core/remote/live_view_engine.dart';
+import '../../core/remote/mf_travel_ends.dart';
 import '../../core/transfer/transfer_engine.dart';
 import '../../core/transfer/transfer_task.dart';
 import 'bulb_close_policy.dart';
@@ -1104,7 +1105,8 @@ final class RemoteController extends ChangeNotifier {
 
   /// MF 步进(0x9204):向近/远驱动一步([pulses] 脉冲,默认 300)。
   /// 取景挂起防事务挤占;结果转提示(行程尽头/步进过小是结果非错误,
-  /// OpenZCine 口径)。
+  /// OpenZCine 口径),并按方向归因进端点态([MfTravelEnds],步进/滚轮
+  /// 两路共用 —— 提示行与轮压暗跟读)。
   Future<void> mfDriveStep({required bool towardNear, int pulses = 300}) async {
     if (!_linkUp) {
       error = '未连接相机';
@@ -1122,13 +1124,15 @@ final class RemoteController extends ChangeNotifier {
     notifyListeners();
     engine.pause();
     try {
+      _noteMfDrive(towardNear); // 反向请求即解锁(nico 语义)
       final outcome =
           await session.mfDrive(towardNear: towardNear, pulses: pulses);
+      _applyMfOutcome(towardNear: towardNear, outcome: outcome);
       switch (outcome) {
         case MfDriveOutcome.complete:
           break;
         case MfDriveOutcome.endOfTravel:
-          notice = '对焦行程尽头';
+          notice = towardNear ? '对焦已到近端' : '对焦已到远端';
         case MfDriveOutcome.stepTooSmall:
           notice = '步进量过小,镜头未动';
         case MfDriveOutcome.refused:
@@ -1146,12 +1150,21 @@ final class RemoteController extends ChangeNotifier {
   /// 通道上永远最多一个滚轮事务。**不挂起取景**(跟焦要在画面上看
   /// 焦点变化,与 [mfDriveStep] 的单发路径不同)。AF 驱动(点按对焦/
   /// 对焦按钮)抢占:代数自增,在途脉冲发完后不再续发。
+  ///
+  /// 端点锁(0xA00C 方向归因,见 [MfTravelEnds]):目标方向端点已到
+  /// → 该增量静默丢弃(不发 0x9204,省流量防错;余量保留 —— 反向
+  /// 增量照常攒步)。拖动方向反转后首步请求即解锁([_noteMfDrive]),
+  /// 轮身压暗随 [_mfEnds] 翻转。
   void focusDialDrag(double dy) {
     if (dy == 0 || !_linkUp || capturing) return;
     if (focusModeIsMf) {
       // 机身 MF:拖动无效。静默丢弃(拖动事件高频,不刷横幅)+ 清
       // 余量,防锁定解除瞬间陈旧增量爆发成一次误驱动。
       _dialAccum = 0;
+      return;
+    }
+    if ((dy > 0 && _mfEnds.nearEnd) || (dy < 0 && _mfEnds.farEnd)) {
+      // 端点锁:该方向没有更多行程,静默丢增量(反向余量保留)。
       return;
     }
     _dialAccum += dy;
@@ -1181,6 +1194,35 @@ final class RemoteController extends ChangeNotifier {
   final _dialFailures = <DateTime>[];
   bool _dialSuspended = false;
 
+  /// MF 端点态(0xA00C/0xA00E 按请求方向归因学习,见 [MfTravelEnds]);
+  /// 步进/滚轮两条 0x9204 路径共用。UI 读 [mfNearEnd]/[mfFarEnd]。
+  final MfTravelEnds _mfEnds = MfTravelEnds();
+
+  /// 近端已到(0xA00C 向近归因;反向驱动/驱动成功/AF 移焦即清)。
+  bool get mfNearEnd => _mfEnds.nearEnd;
+
+  /// 远端已到(0xA00C 向远归因;反向驱动/驱动成功/AF 移焦即清)。
+  bool get mfFarEnd => _mfEnds.farEnd;
+
+  /// 一次 0x9204 派出:反向端点旗作废 + 端点态变化才广播(轮压暗/
+  /// 提示行跟随;高频拖动下不额外刷监听)。
+  void _noteMfDrive(bool towardNear) {
+    final before = _mfEnds.anyEnd;
+    _mfEnds.noteDrive(towardNear);
+    if (_mfEnds.anyEnd != before) notifyListeners();
+  }
+
+  /// 一次 0x9204 结果归因落账(端点态变化才广播,同 [_noteMfDrive])。
+  /// 行程尽头落锁时滚轮余量一并清零 —— 步进路径落锁时滚轮可能正攒
+  /// 着同向余量,不清会在解锁后陈旧爆发成一次误驱动。
+  void _applyMfOutcome(
+      {required bool towardNear, required MfDriveOutcome outcome}) {
+    final before = _mfEnds.anyEnd;
+    _mfEnds.apply(towardNear: towardNear, outcome: outcome);
+    if (outcome == MfDriveOutcome.endOfTravel) _dialAccum = 0;
+    if (_mfEnds.anyEnd != before) notifyListeners();
+  }
+
   void _dialPump() {
     if (_dialDriving) return;
     if (!_linkUp || !liveViewActive) {
@@ -1197,18 +1239,21 @@ final class RemoteController extends ChangeNotifier {
     if (steps == 0) return;
     _dialAccum -= steps * _dialStepPx;
     final gen = _dialGen;
+    final towardNear = steps > 0;
+    _noteMfDrive(towardNear); // 反向请求即解锁(nico 语义,镜头正离开该端)
     _dialDriving = true;
     unawaited(() async {
       try {
         final outcome = await session.mfDrive(
-            towardNear: steps > 0, pulses: steps.abs() * _dialStepPulses);
+            towardNear: towardNear,
+            pulses: steps.abs() * _dialStepPulses);
+        _applyMfOutcome(towardNear: towardNear, outcome: outcome);
         switch (outcome) {
           case MfDriveOutcome.complete:
           case MfDriveOutcome.stepTooSmall:
             break; // 过小是结果:不提示(拖快些即可),不挡续发
           case MfDriveOutcome.endOfTravel:
-            notice = '对焦行程尽头';
-            _dialAccum = 0; // 该方向没有更多行程:余量丢弃
+            notice = towardNear ? '对焦已到近端' : '对焦已到远端';
             notifyListeners();
           case MfDriveOutcome.refused:
             notice = '手动对焦不可用(机械对焦环或机身忙)';
@@ -1247,10 +1292,12 @@ final class RemoteController extends ChangeNotifier {
   }
 
   /// AF 驱动(点按对焦/对焦按钮)抢占在途滚轮:代数自增即止续发,
-  /// 余量清零(AF 改变了焦点位置,攒的像素是陈旧意图)。
+  /// 余量清零(AF 改变了焦点位置,攒的像素是陈旧意图);端点态同样
+  /// 作废(AF 移焦后镜头不再顶在已记端点,nico clearMfLimits 同款)。
   void _preemptFocusDial() {
     _dialGen++;
     _dialAccum = 0;
+    _mfEnds.clear();
   }
 
   /// 录制时长(秒;未录制为 null)。

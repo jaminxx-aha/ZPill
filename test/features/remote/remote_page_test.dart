@@ -946,6 +946,111 @@ void main() {
         reason: '轮子点按不落到画面手势');
   });
 
+  testWidgets('拉焦轮端点态:0xA00C 后轮身压暗,反向拖一步即解锁复亮',
+      (tester) async {
+    _portrait(tester);
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = _directRemoteController(transport, conn: conn);
+    addTearDown(controller.dispose);
+
+    _scriptAutoStart(transport);
+    final settings = ValueNotifier(const AppSettings());
+    addTearDown(settings.dispose);
+    await tester.pumpWidget(MaterialApp(
+        home: RemotePage(
+            controller: controller, settingsListenable: settings)));
+    await tester.pumpAndSettle();
+
+    // 开拉焦轮(设置浮层),收浮层再拖。
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('拉焦轮'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
+
+    final rail = find.byKey(const ValueKey('focus-dial-rail'));
+    Opacity railOpacity() => tester.widget<Opacity>(
+        find.descendant(of: rail, matching: find.byType(Opacity)).first);
+    expect(railOpacity().opacity, 1.0, reason: '常态全亮');
+
+    // 向近拖一步 → 0xA00C → 近端锁定:轮身压暗(既有 MF 门控 0.35 形态)。
+    transport.reply(NikonResponseCode.mfDriveStepEnd);
+    final g = await tester.startGesture(tester.getCenter(rail));
+    await g.moveBy(const Offset(0, 20)); // 越过 slop,起手势
+    await tester.pump();
+    await g.moveBy(const Offset(0, 30)); // +30 → 向近一步
+    await tester.pump();
+    await g.up();
+    await tester.pumpAndSettle();
+    expect(controller.mfNearEnd, isTrue);
+    expect(railOpacity().opacity, 0.35, reason: '端点态轮身压暗');
+
+    // 锁定方向继续拖:静默丢增量,零新流量(端点锁不发令)。
+    int mfCount() => transport.requests
+        .where((r) => r.opcode == NikonOperationCode.mfDrive)
+        .length;
+    final countBefore = mfCount();
+    final g2 = await tester.startGesture(tester.getCenter(rail));
+    await g2.moveBy(const Offset(0, 20));
+    await tester.pump();
+    await g2.moveBy(const Offset(0, 30));
+    await tester.pump();
+    await g2.up();
+    await tester.pumpAndSettle();
+    expect(mfCount(), countBefore, reason: '近端已锁:向近增量静默丢弃');
+
+    // 反向(向上)拖一步 → 解锁 + 驱动成功 → 复亮。
+    transport.ok();
+    final g3 = await tester.startGesture(tester.getCenter(rail));
+    await g3.moveBy(const Offset(0, -20)); // 越过 slop
+    await tester.pump();
+    await g3.moveBy(const Offset(0, -30)); // -30 → 向远一步
+    await tester.pump();
+    await g3.up();
+    await tester.pumpAndSettle();
+    expect(railOpacity().opacity, 1.0, reason: '反向驱动解锁,复亮');
+    final mf = transport.requests
+        .lastWhere((r) => r.opcode == NikonOperationCode.mfDrive);
+    expect(mf.params, [2, 60], reason: '解锁后的向远一步照发');
+  });
+
+  testWidgets('对焦区端点提示行:0xA00C 后常驻「近端已到」,反向步进即清',
+      (tester) async {
+    _portrait(tester);
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = _directRemoteController(transport, conn: conn);
+    addTearDown(controller.dispose);
+
+    _scriptAutoStart(transport);
+    final settings = ValueNotifier(const AppSettings());
+    addTearDown(settings.dispose);
+    await tester.pumpWidget(MaterialApp(
+        home: RemotePage(
+            controller: controller, settingsListenable: settings)));
+    await tester.pumpAndSettle();
+
+    // 开设置浮层:MF 步进向近 → 0xA00C → 端点常驻提示行(对焦区)。
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
+    transport.reply(NikonResponseCode.mfDriveStepEnd);
+    await tester.tap(find.text('MF 近'));
+    await tester.pumpAndSettle();
+    expect(controller.mfNearEnd, isTrue);
+    expect(find.text('近端已到,反向驱动解锁'), findsOneWidget,
+        reason: '常驻提示行形态(对焦区,0xA00C 向近归因)');
+
+    // 反向步进(向远)成功 → 提示行随解锁消失。
+    transport.ok();
+    await tester.tap(find.text('MF 远'));
+    await tester.pumpAndSettle();
+    expect(controller.mfNearEnd, isFalse);
+    expect(find.text('近端已到,反向驱动解锁'), findsNothing);
+    expect(find.text('远端已到,反向驱动解锁'), findsNothing);
+  });
+
   testWidgets('画质档路由:默认关 = 低采样 Image;高质量 → ShaderFeed',
       (tester) async {
     _portrait(tester);
