@@ -13,6 +13,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/remote/frame_analysis.dart';
 import '../../core/remote/live_view_header.dart';
+import '../../l10n/l10n.dart';
 import '../../platform/motion_host.dart';
 import 'live_design.dart';
 
@@ -716,8 +717,14 @@ class OverheatBadge extends StatelessWidget {
         children: [
           Icon(Icons.device_thermostat, size: 13, color: color),
           const SizedBox(width: 4),
+          // overheatBadgeText 产出原文即 t() 键(纯函数无 BuildContext),
+          // 显示点包 t();倒计时尾段是 m:ss 数字串,拼接在译文之后
+          //(与 overheatBadgeText 的拼接语义一致)。
           Text(
-            overheatBadgeText(level, countdownSeconds: countdownSeconds),
+            countdownSeconds == null
+                ? context.t(overheatBadgeText(level))
+                : '${context.t(overheatBadgeText(level))}'
+                    ' ${overheatCountdownText(countdownSeconds!)}',
             style: TextStyle(
               fontSize: 12,
               color: color,

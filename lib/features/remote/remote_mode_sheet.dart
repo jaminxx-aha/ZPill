@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../l10n/l10n.dart';
 import 'live_design.dart';
 import 'remote_controller.dart';
 import 'remote_param_sheet.dart' show TakeoverSection;
@@ -31,7 +32,7 @@ Future<void> showModeTakeoverSheet(
             children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
-                child: Text('拍摄模式',
+                child: Text(context.t('拍摄模式'),
                     style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w600,

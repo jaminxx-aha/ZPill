@@ -377,4 +377,215 @@ const Map<String, String> enCatalog = {
   'APP 接管': 'APP Takeover',
   '拨盘级参数(快门/模式/ISO/光圈)需先接管才能遥控调整':
       'Dial-level params (shutter/mode/ISO/aperture) require takeover before remote adjustment',
+
+  // ── remote-rest(i18n-5)──
+  // live_view_overlays(overheatBadgeText 纯函数产出原文即 t() 键,Overheat
+  // Badge 显示点包 t(),倒计时 m:ss 尾段数字串拼在译文后)
+  '机内温度升高': 'Internal temperature rising',
+  '机内温度较高': 'Internal temperature high',
+  '机内高温,录制即将停止': 'Camera overheating; recording will stop soon',
+  '即将自动停止录制': 'Recording will stop automatically',
+
+  // remote_feed_area(取景空态/横幅;lastError 为引擎运行期串,如实回落)
+  '取景中…(等待首帧)': 'Viewfinder On… (waiting for first frame)',
+  '取景失败({e})': 'Viewfinder failed ({e})',
+  '取景未开启\n点按画面可触控对焦':
+      'Viewfinder off\nTap the image to set the focus point',
+  '未知错误': 'Unknown error',
+  '重试取景': 'Retry Viewfinder',
+  '连接中断 —— 正在自动重连;画面为断开前的保持帧,非实时':
+      'Connection lost — reconnecting automatically; the image is the frozen frame from before the drop, not live',
+  '相机忙(写卡/下载中),取景画面保持':
+      'Camera busy (card write/download in progress); viewfinder frame held',
+  '未连接相机 —— 请先在「相机」页建立连接':
+      'Camera not connected — connect from the "Camera" page first',
+
+  // remote_action_row(tooltip;「相机相册」复用 connection 组)
+  '拍摄设置(参数 / 网格斑马纹 / 辅助)':
+      'Shooting Settings (params / grids & zebra / assist)',
+  '自动对焦': 'Autofocus',
+
+  // remote_capture_strip(CaptureParamTile 的「(自动)」值后缀;label 与
+  // 值文案的键见下方 shooting_param_catalog / remote_controller 组)
+  '(自动)': '(auto)',
+
+  // remote_info_pill(「已连接/APP 接管中」复用既有键;未连接相机与
+  // remote_controller 共键)
+  '未连接相机': 'Camera not connected',
+  '{n} 张': '{n} shots',
+  '纯净监看(隐藏全部控制,只留画面)':
+      'Clean Monitoring (hide all controls, image only)',
+
+  // remote_mode_sheet(门头标;接管区文案复用 remote_param_sheet 组)
+  '拍摄模式': 'Shooting Mode',
+
+  // shooting_param_catalog(label/枚举值/格式化静态文案原文即 t() 键,
+  // 显示点 remote_param_sheet(i18n-4)与 remote_capture_strip 已包 t;
+  // 「关闭/关/快速/自拍/光圈」复用既有键,纯拉丁串 ISO/EV/FX/DX/AF-S/
+  // N-Log 等不译;「创意 N/自定义 N/云 N/值 N」与快门分数为运行期
+  // 插值串,无静态键,如实回落中文。「快门」是 l10n_test 钉死的
+  // 「未命中回落」样例键,不入表 —— EN 下快门 tile label 回落中文,
+  // 宁缺毋错)
+  '模式': 'Mode',
+  '白平衡': 'White Balance',
+  '色温': 'Color Temperature',
+  '闪光': 'Flash',
+  '测光': 'Metering',
+  '对焦模式': 'Focus Mode',
+  '释放': 'Release',
+  '画质': 'Quality',
+  'RAW 压缩': 'RAW Compression',
+  '图像区域': 'Image Area',
+  'AF 区域': 'AF Area',
+  '主体检测': 'Subject Detection',
+  '色调': 'Tone Mode',
+  '优化校准': 'Picture Control',
+  '手动 M': 'Manual M',
+  '程序 P': 'Program P',
+  '光圈优先 A': 'Aperture Priority A',
+  '快门优先 S': 'Shutter Priority S',
+  '自动': 'Auto',
+  '人像': 'Portrait',
+  '风景': 'Landscape',
+  '微距': 'Macro',
+  '运动': 'Sports',
+  '夜景': 'Night',
+  '夜景人像': 'Night Portrait',
+  '儿童': 'Children',
+  '场景': 'Scene',
+  '特效': 'Effects',
+  '直射阳光': 'Direct Sunlight',
+  '荧光灯': 'Fluorescent',
+  '白炽灯': 'Incandescent',
+  '阴天': 'Cloudy',
+  '背阴': 'Shade',
+  '手动预设': 'Preset Manual',
+  '自然自动': 'Natural Auto',
+  '防红眼': 'Red-eye Reduction',
+  '补充闪光': 'Fill Flash',
+  '慢速同步': 'Slow Sync',
+  '后帘同步': 'Rear-curtain Sync',
+  '防红眼慢速': 'Red-eye Slow Sync',
+  '中央重点': 'Center-weighted',
+  '矩阵': 'Matrix',
+  '点测光': 'Spot',
+  '高光': 'Highlight',
+  '单张': 'Single',
+  '低速连拍': 'Low-speed Burst',
+  '高速连拍': 'High-speed Burst',
+  '高速连拍+': 'High-speed Burst+',
+  '连拍 C15': 'Burst C15',
+  '连拍 C30': 'Burst C30',
+  '连拍 C60': 'Burst C60',
+  '连拍 C120': 'Burst C120',
+  'JPEG 基本': 'JPEG Basic',
+  'JPEG 基本★': 'JPEG Basic ★',
+  'JPEG 标准': 'JPEG Normal',
+  'JPEG 标准★': 'JPEG Normal ★',
+  'JPEG 精细': 'JPEG Fine',
+  'JPEG 精细★': 'JPEG Fine ★',
+  'RAW+JPEG 基本': 'RAW+JPEG Basic',
+  'RAW+JPEG 基本★': 'RAW+JPEG Basic ★',
+  'RAW+JPEG 标准': 'RAW+JPEG Normal',
+  'RAW+JPEG 标准★': 'RAW+JPEG Normal ★',
+  'RAW+JPEG 精细': 'RAW+JPEG Fine',
+  'RAW+JPEG 精细★': 'RAW+JPEG Fine ★',
+  '无损压缩': 'Lossless',
+  '压缩(旧型)': 'Compressed (legacy)',
+  '未压缩': 'Uncompressed',
+  '高效率★': 'High Efficiency ★',
+  '高效率': 'High Efficiency',
+  '单点': 'Single Point',
+  '精确': 'Pinpoint',
+  '宽S': 'Wide S',
+  '宽L': 'Wide L',
+  '宽C1': 'Wide C1',
+  '宽C2': 'Wide C2',
+  '人': 'People',
+  '动物': 'Animals',
+  '车辆': 'Vehicles',
+  '鸟': 'Birds',
+  '飞机': 'Airplanes',
+  '标准': 'Standard',
+  '中性': 'Neutral',
+  '鲜艳': 'Vivid',
+  '单色': 'Monochrome',
+  '平面': 'Flat',
+  'X 同步': 'X-sync',
+  '视频光圈': 'Movie Aperture',
+  '视频快门': 'Movie Shutter',
+  '视频 ISO': 'Movie ISO',
+  '视频 EV': 'Movie EV',
+  '视频白平衡': 'Movie White Balance',
+  '开': 'On',
+  '开(HDMI 外录)': 'On (HDMI external)',
+  '正常': 'Normal',
+  '同照片设置': 'Same as Photos',
+  '视频减震': 'Movie Stabilization',
+  '电子减震': 'Electronic Stabilization',
+  '录制时间码': 'Record Timecodes',
+  '计数方法': 'Count-up Method',
+  '丢帧': 'Drop Frame',
+  '视频区域': 'Movie Image Area',
+  'H.265 色调': 'H.265 Tone Mode',
+  '宽C1 是横向条形区域,触屏移框仅上下生效':
+      'Wide C1 is a horizontal-strip area: touch-dragging the frame moves only vertically',
+  '宽C2 是纵向条形区域,触屏移框仅左右生效':
+      'Wide C2 is a vertical-strip area: touch-dragging the frame moves only horizontally',
+
+  // remote_controller(error/notice 原文即 t() 键:无 BuildContext 中文
+  // 直存,消费点 remote_banner/LiveBannerHost 包 t();含 $e/$mode/响应码
+  // 插值的运行期串无静态键,如实回落中文,_nikonHint 七段同此仅作插值
+  // 片段)
+  '请先开启取景再录制': 'Start the viewfinder before recording',
+  '请先开启取景': 'Start the viewfinder first',
+  '相机当前状态不允许录制 —— 请把机顶「照片/视频」切换拨杆拨到视频档后重试(取景保持开启)':
+      'The camera does not allow recording right now — switch the top "photo/video" lever to video and retry (the viewfinder stays on)',
+  '对焦行程尽头': 'End of focus travel',
+  '步进量过小,镜头未动': 'Step too small; the lens did not move',
+  '手动对焦不可用(机械对焦环或机身忙)':
+      'Manual focus unavailable (mechanical focus ring or camera busy)',
+  '对焦滚轮已暂停(连续失败),稍后自动恢复':
+      'Focus dial paused (repeated failures); it will resume automatically',
+  '机身对焦模式为 MF —— 远程对焦不可用,请切回 AF-S/AF-C(「对焦模式」芯片可直接切换)':
+      'Camera focus mode is MF — remote focus is unavailable; switch back to AF-S/AF-C (the "Focus Mode" chip switches directly)',
+  '暂无取景帧,无法定位对焦点':
+      'No viewfinder frame yet; cannot place the focus point',
+  '暂无取景帧,无法定位追踪目标':
+      'No viewfinder frame yet; cannot locate the tracking target',
+  '已取消对焦': 'Focus cancelled',
+  '主体追踪需 AF 区域为「自动」(「AF 区域」芯片可切换)':
+      'Subject tracking needs the AF area set to "Auto" (switch it from the "AF Area" chip)',
+  '相机拒绝了远程切换拍摄模式 —— 请直接用机顶拨杆切换':
+      'The camera refused the remote mode switch — use the top lever directly',
+  '参数写入已关断,无法切换拍摄模式':
+      'Parameter writing is disabled; cannot switch shooting mode',
+  '快门释放失败:相机存储不可用 —— 请检查存储卡与插槽;若卡在位,可能是机身拨杆在视频档拒绝了远程拍照,请拨回照片档重试(视频档请用拍摄页的录制钮拍视频)':
+      'Shutter release failed: camera storage unavailable — check the memory card and slot; if the card is seated, the lever may be in the video position and refused the remote photo — switch back to photo and retry (use the record button on the shooting page for video)',
+  '快门释放失败:相机不接受快门参数(0x201D,已试全部已知形态)—— 请反馈当时的「APP 接管」与「对焦后拍」状态':
+      'Shutter release failed: the camera rejected the shutter parameters (0x201D, all known forms tried) — please report the "APP Takeover" and "Focus Then Capture" states at the time',
+  '快门释放失败:录像中的静照拍摄尚在进行,请稍候再试':
+      'Shutter release failed: a still capture during recording is still in progress; try again shortly',
+  '相机当前状态不允许拍照 —— 请把机顶「照片/视频」切换拨杆拨回照片档后重试(视频档请用拍摄页的录制钮拍视频)':
+      'The camera does not allow photos right now — switch the top "photo/video" lever back to photo and retry (use the record button on the shooting page for video)',
+  '拍摄完成,但未收到相机回传对象(SDRAM 对象未到,可稍后在相机相册确认)':
+      'Capture finished, but no object came back from the camera (SDRAM object not received; check the camera album later)',
+  '已拍摄(SDRAM,不入卡):未接图库通道,对象未保存':
+      'Captured (SDRAM, not to card): no gallery channel attached; object not saved',
+  '已拍摄并保存到图库(SDRAM,不入卡)':
+      'Captured and saved to the gallery (SDRAM, not to card)',
+  '已拍摄(SDRAM,不入卡):图库保存失败,可到传输页重试':
+      'Captured (SDRAM, not to card): gallery save failed; retry from the transfers page',
+  '已拍摄(SDRAM,不入卡):仍在后台保存到图库,进度见传输页':
+      'Captured (SDRAM, not to card): still saving to the gallery in the background; see the transfers page for progress',
+  '已拍摄': 'Captured',
+  '参数写入已被总闸关断(kSetPropEnabled=false,紧急关断)':
+      'Parameter writing is disabled by the kill switch (kSetPropEnabled=false, emergency shutoff)',
+  '该参数由机身转盘控制,不支持遥控修改':
+      'This parameter is owned by the camera dial; remote changes are not supported',
+  '该参数当前由相机自动控制,不可手调':
+      'This parameter is currently auto-controlled by the camera; not manually adjustable',
+  '相机上报该属性为只读': 'The camera reports this property as read-only',
+  '该值无法换算为机身写码(0x100),未发送':
+      'This value cannot be converted to the camera write code (0x100); not sent',
 };
