@@ -617,6 +617,10 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea> {
                         // 机身对焦模式为 MF 时远程拉焦失效:轮子压暗
                         // (拖动被控制器静默丢弃,姿态不消失)。
                         enabled: !controller.focusModeIsMf,
+                        // 端点态(0xA00C 方向归因):轮身压暗反馈 ——
+                        // 锁定方向增量被控制器静默丢弃,反向拖动照常
+                        // 驱动、首步请求即解锁(压暗随之解除)。
+                        dimmed: controller.mfNearEnd || controller.mfFarEnd,
                         onDrag: controller.focusDialDrag),
                   ),
                 ),
@@ -698,12 +702,15 @@ class _ZoomBadge extends StatelessWidget {
 /// 标定见 RemoteController.focusDialDrag)。自吃竖拖与点按,不落到画面
 /// 手势;近/远方向 = 下/上(跟焦轮手感的「向自己转 = 向近」)。
 /// [enabled] = false(机身对焦模式为 MF)时压暗且不回调,手势照旧
-/// 自吃(松手漏给缩放手势反而更怪)。
+/// 自吃(松手漏给缩放手势反而更怪)。[dimmed](端点态:近端/远端已到)
+/// 仅压暗轮身 —— 反向拖动仍须能驱动(那是解锁路径),方向过滤在
+/// 控制器端点锁。压暗同款 0.35(既有 MF 门控形态)。
 class _FocusDialRail extends StatelessWidget {
   const _FocusDialRail(
-      {super.key, this.enabled = true, required this.onDrag});
+      {super.key, this.enabled = true, this.dimmed = false, required this.onDrag});
 
   final bool enabled;
+  final bool dimmed;
   final ValueChanged<double> onDrag;
 
   @override
@@ -713,7 +720,7 @@ class _FocusDialRail extends StatelessWidget {
       onTap: () {}, // 自吃点按:点轮子不触发对焦
       onVerticalDragUpdate: enabled ? (d) => onDrag(d.delta.dy) : null,
       child: Opacity(
-        opacity: enabled ? 1 : 0.35,
+        opacity: enabled && !dimmed ? 1 : 0.35,
         child: Container(
           width: 44,
           height: 180,

@@ -2567,6 +2567,115 @@ void main() {
       expect(transport.count(NikonOperationCode.mfDrive), 1);
     });
 
+    test('MF 端点方向归因(0xA00C):步进路径近/远各归因,提示随向',
+        () async {
+      await startLiveView();
+      transport.reply(NikonResponseCode.mfDriveStepEnd); // 向近 0x9204 → 0xA00C
+      await controller.mfDriveStep(towardNear: true);
+      expect(controller.mfNearEnd, isTrue, reason: '向近步进撞尽头 → 近端已到');
+      expect(controller.mfFarEnd, isFalse);
+      expect(controller.notice, '对焦已到近端');
+
+      transport.reply(NikonResponseCode.mfDriveStepEnd); // 向远 → 0xA00C
+      await controller.mfDriveStep(towardNear: false);
+      expect(controller.mfFarEnd, isTrue, reason: '向远步进撞尽头 → 远端已到');
+      expect(controller.mfNearEnd, isFalse, reason: '镜头不可能同时顶两端');
+      expect(controller.notice, '对焦已到远端');
+    });
+
+    test('MF 端点:0xA00E 步进过小不动旗(提示保留);反向请求即解锁',
+        () async {
+      await startLiveView();
+      transport.reply(NikonResponseCode.mfDriveStepEnd);
+      await controller.mfDriveStep(towardNear: true);
+      expect(controller.mfNearEnd, isTrue);
+
+      // 同向再步进撞 0xA00E(步进过小,镜头未动):提示保留、旗不动。
+      transport.reply(NikonResponseCode.mfDriveStepInsufficiency);
+      await controller.mfDriveStep(towardNear: true);
+      expect(controller.notice, '步进量过小,镜头未动');
+      expect(controller.mfNearEnd, isTrue, reason: '镜头未动,近端旗保留');
+
+      // 反向(向远)请求:近端旗在请求沿作废;0xA00E 不置远端旗。
+      transport.reply(NikonResponseCode.mfDriveStepInsufficiency);
+      await controller.mfDriveStep(towardNear: false);
+      expect(controller.mfNearEnd, isFalse, reason: '反向请求即解锁近端');
+      expect(controller.mfFarEnd, isFalse, reason: '0xA00E 镜头未动,不置远端旗');
+    });
+
+    test('拉焦轮端点锁:锁向静默不发 0x9204,反向拖一步即解锁续发',
+        () async {
+      await startLiveView();
+      // 首步向近撞尽头(0xA00C)→ 近端锁定。
+      transport.reply(NikonResponseCode.mfDriveStepEnd);
+      controller.focusDialDrag(24);
+      await pumpEventQueue();
+      expect(transport.count(NikonOperationCode.mfDrive), 1);
+      expect(controller.mfNearEnd, isTrue);
+
+      // 锁定方向继续拖:静默丢增量(反向余量保留),零新流量。
+      controller.focusDialDrag(48);
+      controller.focusDialDrag(30);
+      await pumpEventQueue();
+      expect(transport.count(NikonOperationCode.mfDrive), 1,
+          reason: '近端已锁:向近增量静默丢弃');
+
+      // 反向(向远)拖:一步即解锁 + 续发照常。
+      transport.ok(); // 向远 0x9204 成功
+      controller.focusDialDrag(-24);
+      await pumpEventQueue();
+      expect(transport.count(NikonOperationCode.mfDrive), 2);
+      expect(controller.mfNearEnd, isFalse, reason: '反向请求即解锁');
+      final far = transport.requests
+          .lastWhere((r) => r.opcode == NikonOperationCode.mfDrive);
+      expect(far.params, [2, 60], reason: '向远一步 60 脉冲');
+
+      // 解锁后向近拖动恢复发送;驱动成功双清端点态。
+      transport.ok();
+      controller.focusDialDrag(24);
+      await pumpEventQueue();
+      expect(transport.count(NikonOperationCode.mfDrive), 3);
+      expect(controller.mfNearEnd, isFalse);
+    });
+
+    test('端点锁与滚轮余量:步进路径落锁清滚轮陈旧余量(防反向拖被抵)',
+        () async {
+      await startLiveView();
+      controller.focusDialDrag(20); // 不足一步:攒近向余量
+      await pumpEventQueue();
+      expect(transport.count(NikonOperationCode.mfDrive), 0);
+
+      transport.reply(NikonResponseCode.mfDriveStepEnd);
+      await controller.mfDriveStep(towardNear: true); // 步进路径落锁
+      expect(controller.mfNearEnd, isTrue);
+
+      // 陈旧 +20 近向余量已被落锁清空:向远恰一步(-24)即发(1 条步进
+      // + 1 条向远),不被抵成「不足一步」。
+      transport.ok();
+      controller.focusDialDrag(-24);
+      await pumpEventQueue();
+      expect(transport.count(NikonOperationCode.mfDrive), 2,
+          reason: '步进 1 条 + 向远 1 条(陈旧余量未抵消反向一步)');
+      final far = transport.requests
+          .lastWhere((r) => r.opcode == NikonOperationCode.mfDrive);
+      expect(far.params, [2, 60]);
+    });
+
+    test('AF 驱动移焦 → 端点态作废(nico clearMfLimits 同款)', () async {
+      await startLiveView();
+      transport.reply(NikonResponseCode.mfDriveStepEnd);
+      await controller.mfDriveStep(towardNear: true);
+      expect(controller.mfNearEnd, isTrue);
+
+      // 触控对焦(AF 移焦):端点旗随抢占清空。
+      transport
+        ..ok() // changeAfArea
+        ..ok(); // afDrive
+      await controller.touchFocus(0.5, 0.5);
+      await pumpEventQueue();
+      expect(controller.mfNearEnd, isFalse, reason: 'AF 移焦后近端旗作废');
+    });
+
     test('0xD061 值未知(desc 拒答未读到)→ 不锁,触控对焦照常', () async {
       await startLiveView();
       // paramProps 无 stillFocusMode 条目 = 值未知(fail-open,不把可用
