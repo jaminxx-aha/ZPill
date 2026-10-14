@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../data/settings_store.dart';
+import '../../l10n/l10n.dart';
 import '../edit/lut_presets.dart';
 import 'live_design.dart';
 import 'monitor_toggles.dart';
@@ -99,7 +100,7 @@ class CaptureSettingsPanel extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _sectionHeader(live, '拍摄参数'),
+            _sectionHeader(live, context.t('拍摄参数')),
             Wrap(
               spacing: 4,
               runSpacing: 4,
@@ -110,21 +111,20 @@ class CaptureSettingsPanel extends StatelessWidget {
                       context, controller, activeParam, onEditParam, p),
               ],
             ),
-            _sectionHeader(live, '对焦'),
+            _sectionHeader(live, context.t('对焦')),
             _focusControls(context),
-            _sectionHeader(live, '监看'),
+            _sectionHeader(live, context.t('监看')),
             _monitorToggles(context),
             _liveViewQualityRows(context),
-            _sectionHeader(live, '辅助'),
+            _sectionHeader(live, context.t('辅助')),
             _assistChips(context),
           ],
         ),
       ),
     );
     return Container(
-      constraints: maxHeight == null
-          ? null
-          : BoxConstraints(maxHeight: maxHeight!),
+      constraints:
+          maxHeight == null ? null : BoxConstraints(maxHeight: maxHeight!),
       decoration: BoxDecoration(
         color: live.glass,
         borderRadius: BorderRadius.circular(14),
@@ -138,9 +138,7 @@ class CaptureSettingsPanel extends StatelessWidget {
         padding: const EdgeInsets.only(top: 8, bottom: 4),
         child: Text(label,
             style: TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w600,
-                color: live.faint)),
+                fontSize: 11, fontWeight: FontWeight.w600, color: live.faint)),
       );
 
   /// 对焦控制组(2026-10-12 自对焦浮层迁入):MF 步进(0x9204 相对量,
@@ -157,7 +155,9 @@ class CaptureSettingsPanel extends StatelessWidget {
       return Tooltip(
         message: tip,
         child: InkWell(
-          onTap: usable ? () => controller.mfDriveStep(towardNear: towardNear) : null,
+          onTap: usable
+              ? () => controller.mfDriveStep(towardNear: towardNear)
+              : null,
           splashFactory: NoSplash.splashFactory,
           highlightColor: Colors.transparent,
           hoverColor: Colors.transparent,
@@ -177,8 +177,7 @@ class CaptureSettingsPanel extends StatelessWidget {
                     ),
                     child: InkWell(
                       onTap: usable
-                          ? () =>
-                              controller.mfDriveStep(towardNear: towardNear)
+                          ? () => controller.mfDriveStep(towardNear: towardNear)
                           : null,
                       customBorder: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(10)),
@@ -188,8 +187,7 @@ class CaptureSettingsPanel extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 2),
-                Text(label,
-                    style: TextStyle(fontSize: 10, color: live.faint)),
+                Text(label, style: TextStyle(fontSize: 10, color: live.faint)),
               ],
             ),
           ),
@@ -203,12 +201,12 @@ class CaptureSettingsPanel extends StatelessWidget {
     final trackUsable = usable && controller.afAreaCanTrack;
     Widget trackChip = _smallChip(
       live: live,
-      label: '主体追踪',
+      label: context.t('主体追踪'),
       selected: controller.tracking,
       onTap: controller.tracking
           ? controller.endTracking
           : (trackUsable ? controller.startTracking : null),
-      tooltip: '启动后相机持续追焦所选主体(点取景画面选目标),再点停止',
+      tooltip: context.t('启动后相机持续追焦所选主体(点取景画面选目标),再点停止'),
     );
     Widget dialToggle = InkWell(
       onTap: () {
@@ -241,7 +239,7 @@ class CaptureSettingsPanel extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 2),
-            Text('拉焦轮',
+            Text(context.t('拉焦轮'),
                 style: TextStyle(
                     fontSize: 10, color: dialOn ? live.accent : live.faint)),
           ],
@@ -257,19 +255,19 @@ class CaptureSettingsPanel extends StatelessWidget {
           spacing: 2,
           runSpacing: 4,
           children: [
-            step(Icons.remove, true, 'MF 近', 'MF 向近(步进)'),
-            step(Icons.add, false, 'MF 远', 'MF 向远(步进)'),
+            step(Icons.remove, true, context.t('MF 近'), context.t('MF 向近(步进)')),
+            step(Icons.add, false, context.t('MF 远'), context.t('MF 向远(步进)')),
             dialToggle,
             trackChip,
           ],
         ),
         if (controller.focusModeIsMf) ...[
           const SizedBox(height: 6),
-          Text('机身对焦模式为 MF,远程对焦已停用',
+          Text(context.t('机身对焦模式为 MF,远程对焦已停用'),
               style: TextStyle(fontSize: 10, color: live.muted)),
         ] else if (usable && !controller.afAreaCanTrack) ...[
           const SizedBox(height: 6),
-          Text('主体追踪:AF 区域切到「自动」后可用',
+          Text(context.t('主体追踪:AF 区域切到「自动」后可用'),
               style: TextStyle(fontSize: 10, color: live.muted)),
         ],
       ],
@@ -283,8 +281,8 @@ class CaptureSettingsPanel extends StatelessWidget {
   /// RemoteController.analyzer 启停(见 RemotePage._syncAnalyzerEnabled)。
   Widget _monitorToggles(BuildContext context) {
     final live = LiveDesign.of(context);
-    Widget toggle(IconData icon, String label, bool current,
-        void Function(bool) set,
+    Widget toggle(
+        IconData icon, String label, bool current, void Function(bool) set,
         {bool enabled = true}) {
       // 命中区 ≥44×44(视觉盒 40×34 不变,标签纳入点击):InkWell 包住
       // 整列再垫透明 padding;外层不画水波/高亮 —— 视觉零变化。
@@ -347,46 +345,50 @@ class CaptureSettingsPanel extends StatelessWidget {
         // 取景总开关(十二轮「取景器关闭的开关」):当前态跟
         // liveViewActive(起景失败/引擎态即时可见,不跟持久位);录制中
         // 禁点 —— 视频模式停录门依赖取景在跑。
-        toggle(Icons.videocam_outlined, '取景', controller.liveViewActive,
-            onLiveViewToggle,
+        toggle(Icons.videocam_outlined, context.t('取景'),
+            controller.liveViewActive, onLiveViewToggle,
             enabled: !controller.recording),
-        toggle(Icons.grid_on, '网格', toggles.grid,
+        toggle(Icons.grid_on, context.t('网格'), toggles.grid,
             (v) => onTogglesChanged(toggles.copyWith(grid: v))),
-        toggle(Icons.warning_amber, '斑马纹', toggles.zebra,
+        toggle(Icons.warning_amber, context.t('斑马纹'), toggles.zebra,
             (v) => onTogglesChanged(toggles.copyWith(zebra: v))),
-        toggle(Icons.bar_chart, '直方图', toggles.histogram,
+        toggle(Icons.bar_chart, context.t('直方图'), toggles.histogram,
             (v) => onTogglesChanged(toggles.copyWith(histogram: v))),
-        toggle(Icons.linear_scale, '水平仪', toggles.level,
+        toggle(Icons.linear_scale, context.t('水平仪'), toggles.level,
             (v) => onTogglesChanged(toggles.copyWith(level: v))),
-        toggle(Icons.palette_outlined, '伪色', toggles.falseColor,
+        toggle(Icons.palette_outlined, context.t('伪色'), toggles.falseColor,
             (v) => onTogglesChanged(toggles.copyWith(falseColor: v))),
-        toggle(Icons.blur_on, '峰值', toggles.peaking,
+        toggle(Icons.blur_on, context.t('峰值'), toggles.peaking,
             (v) => onTogglesChanged(toggles.copyWith(peaking: v))),
         // 波形示波器(帧分析路:开关落定由页面同步分析器启停)。
-        toggle(Icons.stacked_line_chart, '波形', toggles.waveform,
+        toggle(Icons.stacked_line_chart, context.t('波形'), toggles.waveform,
             (v) => onTogglesChanged(toggles.copyWith(waveform: v))),
         // 构图框三件(纯显示层,不占分析器):遮幅循环芯片 + 安全框 +
         // 中心标。
         _smallChip(
           live: live,
+          // framingAspect.label 是画幅比数字串(「2.39」等),无需翻译。
           label: toggles.framingAspect == FramingAspect.off
-              ? '遮幅'
-              : '遮幅 ${toggles.framingAspect.label}',
+              ? context.t('遮幅')
+              : context.t('遮幅 {v}', {'v': toggles.framingAspect.label}),
           selected: toggles.framingAspect != FramingAspect.off,
-          onTap: () => onTogglesChanged(toggles.copyWith(
-              framingAspect: toggles.framingAspect.next)),
-          tooltip: '构图遮幅:2.39/2.35/1.85 循环;画幅外压暗(变宽还原已计入)',
+          onTap: () => onTogglesChanged(
+              toggles.copyWith(framingAspect: toggles.framingAspect.next)),
+          tooltip: context.t('构图遮幅:2.39/2.35/1.85 循环;画幅外压暗(变宽还原已计入)'),
         ),
-        toggle(Icons.crop_free, '安全框', toggles.framingSafeArea,
+        toggle(Icons.crop_free, context.t('安全框'), toggles.framingSafeArea,
             (v) => onTogglesChanged(toggles.copyWith(framingSafeArea: v))),
-        toggle(Icons.center_focus_weak, '中心标', toggles.framingCenterMark,
+        toggle(
+            Icons.center_focus_weak,
+            context.t('中心标'),
+            toggles.framingCenterMark,
             (v) => onTogglesChanged(toggles.copyWith(framingCenterMark: v))),
         // 内屏强关(0x9422,B 组线上未验):乐观态会话级,tooltip 标
         // 实验性(副作用未知,断流由看门狗兜底)。
         Tooltip(
-          message: '实验性:强制关闭机背内屏(重连/重开后状态未知)',
-          child: toggle(Icons.mobile_off, '内屏', controller.monitorOff,
-              (_) => controller.toggleMonitorOff(),
+          message: context.t('实验性:强制关闭机背内屏(重连/重开后状态未知)'),
+          child: toggle(Icons.mobile_off, context.t('内屏'),
+              controller.monitorOff, (_) => controller.toggleMonitorOff(),
               enabled: controller.linkUp),
         ),
       ],
@@ -417,24 +419,25 @@ class CaptureSettingsPanel extends StatelessWidget {
       crossAxisAlignment: WrapCrossAlignment.center,
       children: [
         Tooltip(
-          message:
-              '监看套色(不写帧数据):选中即自动走高质量渲染管线,shader 不可用时无 LUT',
+          message: context.t('监看套色(不写帧数据):选中即自动走高质量渲染管线,shader 不可用时无 LUT'),
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 4),
-            child: Text('监看 LUT',
+            child: Text(context.t('监看 LUT'),
                 style: TextStyle(fontSize: 11, color: live.faint)),
           ),
         ),
         _smallChip(
           live: live,
-          label: '关',
+          label: context.t('关'),
           selected: toggles.lutIndex < 0,
           onTap: () => onTogglesChanged(toggles.copyWith(lutIndex: -1)),
         ),
         for (var i = 0; i < builtinLuts.length; i++)
           _smallChip(
             live: live,
-            label: builtinLuts[i].title,
+            // LUT 标题(edit/lut_presets 的 builtinLuts 产出)原文即
+            // t() 键,显示点包 t()。
+            label: context.t(builtinLuts[i].title),
             selected: toggles.lutIndex == i,
             onTap: () => onTogglesChanged(toggles.copyWith(lutIndex: i)),
           ),
@@ -465,7 +468,9 @@ class CaptureSettingsPanel extends StatelessWidget {
             for (final option in options)
               _smallChip(
                 live: live,
-                label: option.$1,
+                // 选项文案(本文件调用点的字面量表)经 t() 查目录,
+                // 表外值(QVGA 等拉丁串)未命中原样回落。
+                label: context.t(option.$1),
                 selected: current == option.$2,
                 onTap: () => pick(option.$2),
               ),
@@ -477,10 +482,14 @@ class CaptureSettingsPanel extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        row('峰值灵敏度', const [('低', 0), ('中', 1), ('高', 2)],
+        row(
+            context.t('峰值灵敏度'),
+            const [('低', 0), ('中', 1), ('高', 2)],
             toggles.peakingLevel,
             (v) => onTogglesChanged(toggles.copyWith(peakingLevel: v))),
-        row('峰值颜色', const [('金', 0), ('白', 1), ('红', 2)],
+        row(
+            context.t('峰值颜色'),
+            const [('金', 0), ('白', 1), ('红', 2)],
             toggles.peakingColor,
             (v) => onTogglesChanged(toggles.copyWith(peakingColor: v))),
       ],
@@ -509,7 +518,9 @@ class CaptureSettingsPanel extends StatelessWidget {
             for (final option in options)
               _smallChip(
                 live: live,
-                label: option.$1,
+                // 选项文案经 t() 查目录,QVGA/VGA/XGA 等拉丁串未命中
+                // 原样回落。
+                label: context.t(option.$1),
                 selected: current == option.$2,
                 onTap: () => pick(option.$2),
               ),
@@ -521,21 +532,29 @@ class CaptureSettingsPanel extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        row('取景尺寸', const [
-          ('跟随', null),
-          ('QVGA', 1),
-          ('VGA', 2),
-          ('XGA', 3),
-        ], liveViewImageSize, (v) => onLiveViewQualityChanged(v, liveViewImageCompression)),
-        row('取景画质', const [
-          ('跟随', null),
-          ('Basic 尺寸', 0),
-          ('Basic 质量', 1),
-          ('Normal 尺寸', 2),
-          ('Normal 质量', 3),
-          ('Fine 尺寸', 4),
-          ('Fine 质量', 5),
-        ], liveViewImageCompression, (v) => onLiveViewQualityChanged(liveViewImageSize, v)),
+        row(
+            context.t('取景尺寸'),
+            const [
+              ('跟随', null),
+              ('QVGA', 1),
+              ('VGA', 2),
+              ('XGA', 3),
+            ],
+            liveViewImageSize,
+            (v) => onLiveViewQualityChanged(v, liveViewImageCompression)),
+        row(
+            context.t('取景画质'),
+            const [
+              ('跟随', null),
+              ('Basic 尺寸', 0),
+              ('Basic 质量', 1),
+              ('Normal 尺寸', 2),
+              ('Normal 质量', 3),
+              ('Fine 尺寸', 4),
+              ('Fine 质量', 5),
+            ],
+            liveViewImageCompression,
+            (v) => onLiveViewQualityChanged(liveViewImageSize, v)),
       ],
     );
   }
@@ -549,25 +568,25 @@ class CaptureSettingsPanel extends StatelessWidget {
       children: [
         _smallChip(
           live: LiveDesign.of(context),
-          label: '对焦后拍',
+          label: context.t('对焦后拍'),
           selected: controller.focusBeforeCapture,
-          onTap: () => controller.focusBeforeCapture =
-              !controller.focusBeforeCapture,
-          tooltip: '释放快门前先自动对焦(半按-全按;候选参数,待真机核对)',
+          onTap: () =>
+              controller.focusBeforeCapture = !controller.focusBeforeCapture,
+          tooltip: context.t('释放快门前先自动对焦(半按-全按;候选参数,待真机核对)'),
         ),
         _smallChip(
           live: LiveDesign.of(context),
-          label: 'SDRAM 直拍',
+          label: context.t('SDRAM 直拍'),
           selected: controller.sdramCapture,
           onTap: () => onSdramCaptureChanged(!controller.sdramCapture),
-          tooltip: 'AF+SDRAM 一体拍(0x90CB):对象不入卡,回传 APP 存图库',
+          tooltip: context.t('AF+SDRAM 一体拍(0x90CB):对象不入卡,回传 APP 存图库'),
         ),
         _smallChip(
           live: LiveDesign.of(context),
           label: 'AE-L',
           selected: controller.aeLocked,
           onTap: !controller.linkUp ? null : controller.toggleAELock,
-          tooltip: 'AE/AWB 锁定(0x9426):曝光随锁定时刻固定,再点解除',
+          tooltip: context.t('AE/AWB 锁定(0x9426):曝光随锁定时刻固定,再点解除'),
         ),
         _smallChip(
           live: LiveDesign.of(context),
@@ -575,29 +594,31 @@ class CaptureSettingsPanel extends StatelessWidget {
           selected: bleGpsInject,
           onTap: !bleReady ? null : () => onBleGpsInjectChanged(!bleGpsInject),
           tooltip: bleReady
-              ? 'BLE 定位注入(0x2007):拍进卡的照片原生带 EXIF 坐标'
-              : '未配对:设置页「BLE 配对 / GPS 注入」先配对相机',
+              ? context.t('BLE 定位注入(0x2007):拍进卡的照片原生带 EXIF 坐标')
+              : context.t('未配对:设置页「BLE 配对 / GPS 注入」先配对相机'),
         ),
         // Android 独有:异端不出行(iOS 不放行音量键、ohos 未做拦截)。
         if (volumeKeyShutterAvailable)
           _smallChip(
             live: LiveDesign.of(context),
-            label: '音量键快门',
+            label: context.t('音量键快门'),
             selected: volumeKeyShutter,
             onTap: () => onVolumeKeyShutterChanged(!volumeKeyShutter),
-            tooltip: '音量上/下键兼作快门(拍摄页存续期生效);'
-                '仅 Android —— iOS 系统不放行音量键给应用,ohos 未做拦截',
+            tooltip: context.t(
+              '音量上/下键兼作快门(拍摄页存续期生效);'
+              '仅 Android —— iOS 系统不放行音量键给应用,ohos 未做拦截',
+            ),
           ),
         Builder(
           // Builder 让 showMenu 锚到自拍芯片本身(而非整条浮层)。
           builder: (chipContext) => _smallChip(
             live: LiveDesign.of(chipContext),
             label: controller.selfTimerSeconds == 0
-                ? '自拍'
-                : '自拍 ${controller.selfTimerSeconds}s',
+                ? context.t('自拍')
+                : context.t('自拍 {s}s', {'s': '${controller.selfTimerSeconds}'}),
             selected: controller.selfTimerSeconds > 0,
             onTap: () => _pickSelfTimer(chipContext, controller),
-            tooltip: '自拍定时:关/2s/5s/10s 点选;倒计时中再点取消',
+            tooltip: context.t('自拍定时:关/2s/5s/10s 点选;倒计时中再点取消'),
           ),
         ),
         _takeoverChip(context,
@@ -622,9 +643,8 @@ Widget _smallChip({
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(10),
         side: BorderSide(
-            color: selected
-                ? live.accent.withValues(alpha: 0.5)
-                : live.hairline),
+            color:
+                selected ? live.accent.withValues(alpha: 0.5) : live.hairline),
       ),
       child: InkWell(
         onTap: onTap,
@@ -653,14 +673,14 @@ Widget _takeoverChip(BuildContext context,
   final active = controller.takeoverActive;
   return _smallChip(
     live: live,
-    label: active ? 'APP 接管中' : 'APP 接管',
+    label: active ? context.t('APP 接管中') : context.t('APP 接管'),
     selected: active,
     onTap: !controller.linkUp
         ? null
         : (active
             ? controller.releaseTakeover
             : () => onTakeoverRequest(context)),
-    tooltip: '拨盘级参数(快门/模式/ISO/光圈)需先接管才能遥控调整',
+    tooltip: context.t('拨盘级参数(快门/模式/ISO/光圈)需先接管才能遥控调整'),
   );
 }
 
@@ -675,9 +695,8 @@ Future<void> _pickSelfTimer(
   }
   final live = LiveDesign.of(chipContext);
   final box = chipContext.findRenderObject() as RenderBox?;
-  final overlay =
-      Navigator.of(chipContext).overlay?.context.findRenderObject()
-          as RenderBox?;
+  final overlay = Navigator.of(chipContext).overlay?.context.findRenderObject()
+      as RenderBox?;
   if (box == null || overlay == null) return;
   final value = await showMenu<int>(
     context: chipContext,
@@ -695,7 +714,10 @@ Future<void> _pickSelfTimer(
           value: s,
           child: Row(
             children: [
-              Text(s == 0 ? '关' : '$s 秒',
+              Text(
+                  s == 0
+                      ? chipContext.t('关')
+                      : chipContext.t('{s} 秒', {'s': '$s'}),
                   style: TextStyle(fontSize: 14, color: live.text)),
               if (s == controller.selfTimerSeconds) ...[
                 const Spacer(),

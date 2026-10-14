@@ -62,8 +62,7 @@ const Map<String, String> enCatalog = {
   '变形宽银幕镜头的水平挤压按倍率还原显示;当前 {v}×':
       'De-squeeze the horizontal squeeze of anamorphic lenses; currently {v}×',
   '传输质量': 'Transfer Quality',
-  '原图直传(压缩传输待后续版本)':
-      'Originals as-is (compressed transfer in a later version)',
+  '原图直传(压缩传输待后续版本)': 'Originals as-is (compressed transfer in a later version)',
   'BLE 配对 / GPS 注入': 'BLE Pairing / GPS Injection',
   '相机智能设备模式配对;拍进卡的照片原生带 EXIF 坐标':
       'Pair the camera in smart-device mode; photos shot to card get native EXIF coordinates',
@@ -102,8 +101,7 @@ const Map<String, String> enCatalog = {
   '读 0x2004': 'Read 0x2004',
   '断开': 'Disconnect',
   '(无名)': '(unnamed)',
-  '日志(长按可选中,或点右侧复制全部)':
-      'Log (long-press to select, or copy all on the right)',
+  '日志(长按可选中,或点右侧复制全部)': 'Log (long-press to select, or copy all on the right)',
   '复制全部日志': 'Copy all logs',
   '日志已复制': 'Log copied',
 
@@ -175,11 +173,11 @@ const Map<String, String> enCatalog = {
   '同一 Wi-Fi': 'Same Wi-Fi',
   '蓝牙': 'Bluetooth',
   '· 首次无线连接会请求配对确认(相机记录本设备,之后免配对);相机屏幕出现提示时请在机身上按 OK。\n'
-  '· 相机同一时间只允许一个客户端:若被 SnapBridge(尼享)抢先连上会遭拒,请先彻底关闭它。\n'
-  '· 首次连接若失败,请在系统弹窗中允许访问本地网络后重试;下载大文件期间请保持 App 在前台、屏幕点亮。':
+          '· 相机同一时间只允许一个客户端:若被 SnapBridge(尼享)抢先连上会遭拒,请先彻底关闭它。\n'
+          '· 首次连接若失败,请在系统弹窗中允许访问本地网络后重试;下载大文件期间请保持 App 在前台、屏幕点亮。':
       '· The first wireless connection asks for pairing confirmation on the camera (it remembers this device; no pairing needed afterwards); press OK on the camera when prompted.\n'
-      '· The camera allows only one client at a time: if SnapBridge got there first you will be rejected — close it completely first.\n'
-      '· If the first connection fails, allow local network access in the system dialog and retry; keep the app in the foreground with the screen on while downloading large files.',
+          '· The camera allows only one client at a time: if SnapBridge got there first you will be rejected — close it completely first.\n'
+          '· If the first connection fails, allow local network access in the system dialog and retry; keep the app in the foreground with the screen on while downloading large files.',
 
   // connection_page —— 蓝牙工具卡(「握手中…/重连中…/未配对/关闭」复用)
   '蓝牙连接(工具通道)': 'Bluetooth (Tools)',
@@ -195,8 +193,7 @@ const Map<String, String> enCatalog = {
   '唤醒相机 Wi-Fi': 'Wake Camera Wi-Fi',
   '已请求相机关闭 Wi-Fi': 'Requested the camera to turn off Wi-Fi',
   '读取 Wi-Fi 凭据(0x2004)': 'Read Wi-Fi Credentials (0x2004)',
-  '配对管理(日志/解除/后台定位授权)':
-      'Manage Pairing (log/unpair/background location)',
+  '配对管理(日志/解除/后台定位授权)': 'Manage Pairing (log/unpair/background location)',
   '唤醒失败:{e}': 'Wake failed: {e}',
   '未知': 'Unknown',
   '未下发': 'not sent',
@@ -222,8 +219,7 @@ const Map<String, String> enCatalog = {
       'Camera menu: Network → Connect to Smart Device → Wi-Fi Connection (hotspot mode). Join the camera hotspot in system Wi-Fi settings first, then come back to connect.',
   '相机 IP(默认 192.168.1.1)': 'Camera IP (default 192.168.1.1)',
   'AP 连接': 'AP Connect',
-  '相机热点凭据(蓝牙通道解出)':
-      'Camera Hotspot Credentials (decoded via Bluetooth)',
+  '相机热点凭据(蓝牙通道解出)': 'Camera Hotspot Credentials (decoded via Bluetooth)',
   '密码': 'Password',
   '安全:{s} · 加入热点后回此卡点「AP 连接」':
       'Security: {s} · join the hotspot, then tap "AP Connect" on this card',
@@ -238,8 +234,7 @@ const Map<String, String> enCatalog = {
   '扫描相机': 'Scan for Cameras',
   '未发现:相机须停留在「等待连接」画面才会广播(退出该画面即停止);若刚在相机上完成配对,先在相机上按 OK。也可在下方手填 IP 直连。':
       'Nothing found: the camera only broadcasts while on the "Waiting for connection" screen (leaving it stops broadcasting); if you just finished pairing on the camera, press OK on the camera first. You can also type the IP below to connect directly.',
-  '相机 IP(扫描不到时手填)':
-      'Camera IP (type manually if the scan finds nothing)',
+  '相机 IP(扫描不到时手填)': 'Camera IP (type manually if the scan finds nothing)',
   '如 192.168.1.4': 'e.g. 192.168.1.4',
   '连接': 'Connect',
   '上次:{name}': 'Last: {name}',
@@ -272,4 +267,114 @@ const Map<String, String> enCatalog = {
       'Pairing info sent: press "OK" on the camera screen to finish pairing; the app reconnects automatically (up to about 1 minute)',
   '正在配对(自动确认)': 'Pairing (auto-confirmed)',
   '正在自动重连…': 'Reconnecting automatically…',
+
+  // ── remote-pages(i18n-4)──
+  // remote_page(「相机相册」复用 connection_page 组)
+  '显示控制界面': 'Show Controls',
+
+  // remote_mode_strip(「视频」复用 settings 组)
+  '照片': 'Photo',
+
+  // remote_param_sheet —— 参数编辑底单(目录 label 与 displayParamValue
+  // 值文案的键存 shooting_param_catalog / remote_controller,显示点已包 t,
+  // 条目归那两个文件的波次;「APP 接管」区 remote_mode_sheet 同件共用)
+  '宽C1/C2 为横带/竖条区域:触屏移框仅上下/左右单轴生效':
+      'Wide C1/C2 are horizontal-band/vertical-strip areas: touch-dragging the frame moves only one axis',
+  '自动 ISO': 'Auto ISO',
+  '该属性的取值域未知,暂不可调(待真机核对)':
+      'Value range for this property is unknown; not adjustable yet (pending on-hardware check)',
+  '启用 APP 接管控制?': 'Enable APP Takeover?',
+  '该设置项受相机物理拨盘控制,启用接管后应用才能调整。'
+          '接管期间机身拨盘可能被锁定、机身屏幕可能熄灭;'
+          '点按「APP 接管中」或断开连接可解除。':
+      'This setting is controlled by the camera physical dial; the app can adjust it only after takeover is enabled. '
+          'While takeover is active, the body dial may be locked and the camera screen may go dark; '
+          'tap "APP Takeover Active" or disconnect to release.',
+  '启用': 'Enable',
+
+  // remote_settings_panel —— 分组标题/对焦控制/监看开关/画质行/辅助芯片
+  // (「监看」「关」复用既有键;「AE-L」「GPS」为拉丁串不译)
+  '拍摄参数': 'Shooting Params',
+  '对焦': 'Focus',
+  '辅助': 'Assist',
+  'MF 近': 'MF Near',
+  'MF 向近(步进)': 'MF toward near (stepped)',
+  'MF 远': 'MF Far',
+  'MF 向远(步进)': 'MF toward far (stepped)',
+  '主体追踪': 'Subject Tracking',
+  '启动后相机持续追焦所选主体(点取景画面选目标),再点停止':
+      'Once started, the camera keeps focusing on the selected subject (tap the viewfinder to pick a target); tap again to stop',
+  '拉焦轮': 'Focus Dial',
+  '机身对焦模式为 MF,远程对焦已停用': 'Camera focus mode is MF; remote focus is disabled',
+  '主体追踪:AF 区域切到「自动」后可用':
+      'Subject tracking: available after switching AF area to "Auto"',
+  '取景': 'Viewfinder',
+  '网格': 'Grids',
+  '斑马纹': 'Zebra',
+  '直方图': 'Histogram',
+  '水平仪': 'Level',
+  '伪色': 'False Color',
+  '峰值': 'Peaking',
+  '波形': 'Waveform',
+  '遮幅': 'Matte',
+  '遮幅 {v}': 'Matte {v}',
+  '构图遮幅:2.39/2.35/1.85 循环;画幅外压暗(变宽还原已计入)':
+      'Framing matte: cycles 2.39/2.35/1.85; the area outside the frame is dimmed (de-squeeze included)',
+  '安全框': 'Safe Area',
+  '中心标': 'Center Mark',
+  '实验性:强制关闭机背内屏(重连/重开后状态未知)':
+      'Experimental: force the camera rear screen off (state after reconnect/reopen unknown)',
+  '内屏': 'Rear Screen',
+  '监看套色(不写帧数据):选中即自动走高质量渲染管线,shader 不可用时无 LUT':
+      'Monitor LUT (frame data untouched): selecting it automatically switches to the high-quality render pipeline; no LUT when the shader is unavailable',
+  '监看 LUT': 'Monitor LUT',
+  // 监看 LUT 芯片标题(键存 edit/lut_presets.dart 的 builtinLuts,显示点
+  // remote_settings_panel 包 t;edit/ 波 i18n-8 复用)
+  '青橙': 'Teal & Orange',
+  '褪色胶片': 'Faded Film',
+  '冷调': 'Cool Matte',
+  'N-Log 还原': 'N-Log Conversion',
+  '峰值灵敏度': 'Peaking Sensitivity',
+  '低': 'Low',
+  '中': 'Medium',
+  '高': 'High',
+  '峰值颜色': 'Peaking Color',
+  '金': 'Gold',
+  '白': 'White',
+  '红': 'Red',
+  '取景尺寸': 'Viewfinder Size',
+  '跟随': 'Follow',
+  '取景画质': 'Viewfinder Quality',
+  'Basic 尺寸': 'Basic Size',
+  'Basic 质量': 'Basic Quality',
+  'Normal 尺寸': 'Normal Size',
+  'Normal 质量': 'Normal Quality',
+  'Fine 尺寸': 'Fine Size',
+  'Fine 质量': 'Fine Quality',
+  '对焦后拍': 'Focus Then Capture',
+  '释放快门前先自动对焦(半按-全按;候选参数,待真机核对)':
+      'Autofocus before releasing the shutter (half-press then full-press; candidate, pending on-hardware check)',
+  'SDRAM 直拍': 'SDRAM Capture',
+  'AF+SDRAM 一体拍(0x90CB):对象不入卡,回传 APP 存图库':
+      'AF+SDRAM one-shot capture (0x90CB): nothing is written to the card; the image is sent back to the app and saved to the gallery',
+  'AE/AWB 锁定(0x9426):曝光随锁定时刻固定,再点解除':
+      'AE/AWB lock (0x9426): exposure is frozen at the moment of locking; tap again to release',
+  'BLE 定位注入(0x2007):拍进卡的照片原生带 EXIF 坐标':
+      'BLE location injection (0x2007): photos shot to the card get native EXIF coordinates',
+  '未配对:设置页「BLE 配对 / GPS 注入」先配对相机':
+      'Not paired: pair the camera first in Settings "BLE Pairing / GPS Injection"',
+  '音量键快门': 'Volume Key Shutter',
+  '音量上/下键兼作快门(拍摄页存续期生效);'
+          '仅 Android —— iOS 系统不放行音量键给应用,ohos 未做拦截':
+      'Volume up/down keys double as the shutter (effective while the shooting page is open); '
+          'Android only — iOS does not pass volume keys to apps, and ohos has no native interception',
+  '自拍': 'Self-timer',
+  '自拍 {s}s': 'Self-timer {s}s',
+  '自拍定时:关/2s/5s/10s 点选;倒计时中再点取消':
+      'Self-timer: pick Off/2s/5s/10s; tap again during the countdown to cancel',
+  '{s} 秒': '{s}s',
+  'APP 接管中': 'APP Takeover Active',
+  'APP 接管': 'APP Takeover',
+  '拨盘级参数(快门/模式/ISO/光圈)需先接管才能遥控调整':
+      'Dial-level params (shutter/mode/ISO/aperture) require takeover before remote adjustment',
 };
