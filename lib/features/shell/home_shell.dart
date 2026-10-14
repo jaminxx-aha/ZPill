@@ -18,6 +18,7 @@ library;
 import 'package:flutter/material.dart';
 
 import '../../app_services.dart';
+import '../../l10n/l10n.dart';
 import '../connection/connection_page.dart';
 import '../library/local_library_page.dart';
 import '../remote/remote_controller.dart';
@@ -83,7 +84,7 @@ class _HomeShellState extends State<HomeShell> {
                     NavigationRailDestination(
                       icon: Icon(t.icon),
                       selectedIcon: Icon(t.selectedIcon),
-                      label: Text(t.label),
+                      label: Text(context.t(t.label)),
                     ),
                 ],
               ),
@@ -117,7 +118,7 @@ class _HomeShellState extends State<HomeShell> {
                   NavigationDestination(
                     icon: Icon(t.icon),
                     selectedIcon: Icon(t.selectedIcon),
-                    label: t.label,
+                    label: context.t(t.label),
                   ),
               ],
             ),

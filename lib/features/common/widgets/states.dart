@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../design/app_dimens.dart';
+import '../../../l10n/l10n.dart';
 
 /// 居中加载态:spinner + 说明文案。
 class LoadingState extends StatelessWidget {
@@ -21,7 +22,8 @@ class LoadingState extends StatelessWidget {
           ),
           if (message != null) ...[
             const SizedBox(height: AppSpacing.lg),
-            Text(message!, textAlign: TextAlign.center),
+            // 调用方给中文原文,显示端统一 t()(重复包裹无害,未命中原文直返)
+            Text(context.t(message!), textAlign: TextAlign.center),
           ],
         ],
       ),
@@ -56,14 +58,14 @@ class EmptyState extends StatelessWidget {
             Icon(icon, size: 44, color: scheme.onSurfaceVariant),
             const SizedBox(height: AppSpacing.md),
           ],
-          Text(message,
+          Text(context.t(message),
               textAlign: TextAlign.center, style:
                   TextStyle(color: scheme.onSurfaceVariant)),
           if (actionLabel != null && onAction != null) ...[
             const SizedBox(height: AppSpacing.lg),
             FilledButton.tonal(
               onPressed: onAction,
-              child: Text(actionLabel!),
+              child: Text(context.t(actionLabel!)),
             ),
           ],
         ],
@@ -91,9 +93,9 @@ class ErrorRetryPanel extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(message, textAlign: TextAlign.center),
+            Text(context.t(message), textAlign: TextAlign.center),
             const SizedBox(height: AppSpacing.lg),
-            FilledButton(onPressed: onRetry, child: const Text('重试')),
+            FilledButton(onPressed: onRetry, child: Text(context.t('重试'))),
           ],
         ),
       ),
@@ -136,7 +138,7 @@ class InlineHint extends StatelessWidget {
             const SizedBox(width: AppSpacing.sm),
           ],
           Expanded(
-            child: Text(message,
+            child: Text(context.t(message),
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(color: scheme.onErrorContainer)),
@@ -144,7 +146,7 @@ class InlineHint extends StatelessWidget {
           if (actionLabel != null && onAction != null)
             TextButton(
               onPressed: onAction,
-              child: Text(actionLabel!),
+              child: Text(context.t(actionLabel!)),
             ),
         ],
       ),

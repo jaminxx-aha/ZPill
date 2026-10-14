@@ -22,6 +22,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../../design/app_colors.dart';
+import '../../../l10n/l10n.dart';
 import '../../../platform/video_player.dart';
 
 /// 顺帧门槛:标称帧率高于此值才算高帧率素材(30 与 29.97 都不算)。
@@ -293,7 +294,9 @@ class _EmbeddedVideoPlayerState extends State<EmbeddedVideoPlayer> {
             _armHide(); // 松手重新计时
           },
           bottomRight: IconButton(
-            tooltip: widget.fullscreen ? '退出全屏' : '全屏播放',
+            tooltip: widget.fullscreen
+                ? context.t('退出全屏')
+                : context.t('全屏播放'),
             onPressed: widget.onToggleFullscreen,
             icon: Icon(
               widget.fullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
@@ -390,8 +393,9 @@ class _VideoControlsOverlay extends StatelessWidget {
                           child: FilterChip(
                             selected: conform,
                             label: Text(conform
-                                ? '顺帧 24fps · $percent%'
-                                : '24fps 顺帧'),
+                                ? context.t('顺帧 24fps · {p}%',
+                                    {'p': percent})
+                                : context.t('24fps 顺帧')),
                             onSelected: (_) => onToggleConform(),
                           ),
                         ),

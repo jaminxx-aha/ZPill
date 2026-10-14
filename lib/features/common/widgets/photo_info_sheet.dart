@@ -15,6 +15,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 
 import '../../../core/media/watermark.dart' show ExifCardData, exifCardFromHead;
+import '../../../l10n/l10n.dart';
 import '../format.dart' show formatBytes, formatDateTime;
 
 /// 本地文件的 EXIF 头读(JPG APP1 / NEF TIFF 头同路,≤64KB)。
@@ -63,18 +64,18 @@ Future<void> showPhotoInfoSheet(
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
             child: Text(
-              '照片信息',
+              context.t('照片信息'),
               style: TextStyle(
                 fontSize: 13,
                 color: Theme.of(context).colorScheme.onSurfaceVariant,
               ),
             ),
           ),
-          _row('文件', filename),
-          if (sizeBytes != null) _row('大小', formatBytes(sizeBytes)),
-          if (burstLabel != null) _row('连拍', burstLabel),
+          _row(context.t('文件'), filename),
+          if (sizeBytes != null) _row(context.t('大小'), formatBytes(sizeBytes)),
+          if (burstLabel != null) _row(context.t('连拍'), burstLabel),
           if (exifFuture == null)
-            _row('时间', fallbackTime ?? '—')
+            _row(context.t('时间'), fallbackTime ?? '—')
           else
             FutureBuilder<ExifCardData?>(
               future: exifFuture,
@@ -97,12 +98,13 @@ Future<void> showPhotoInfoSheet(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     if (time != null)
-                      _row(card?.takenAt != null ? '拍摄时间' : '时间', time),
+                      _row(context.t(card?.takenAt != null ? '拍摄时间' : '时间'),
+                          time),
                     if (card?.titleLine.isNotEmpty == true)
-                      _row('机身', card!.titleLine),
-                    if (card?.lens != null) _row('镜头', card!.lens!),
+                      _row(context.t('机身'), card!.titleLine),
+                    if (card?.lens != null) _row(context.t('镜头'), card!.lens!),
                     if (card?.paramLine.isNotEmpty == true)
-                      _row('参数', card!.paramLine),
+                      _row(context.t('参数'), card!.paramLine),
                   ],
                 );
               },

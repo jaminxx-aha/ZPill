@@ -168,7 +168,7 @@ class _SettingsPageState extends State<SettingsPage> {
   Widget build(BuildContext context) {
     final controller = AppServices.instance.settingsController;
     return Scaffold(
-      appBar: AppBar(title: const Text('设置')),
+      appBar: AppBar(title: Text(context.t('设置'))),
       body: ListenableBuilder(
         listenable: controller,
         builder: (context, _) => GestureDetector(
@@ -178,9 +178,14 @@ class _SettingsPageState extends State<SettingsPage> {
             keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
             children: [
               ListTile(
-                title: const Text('深色模式'),
-                subtitle: const Text('跟随系统,或锁定浅色/深色'),
+                title: Text(context.t('深色模式')),
+                subtitle: Text(context.t('跟随系统,或锁定浅色/深色')),
               ),
+              // 主题三段(跟随系统/浅色/深色)刻意不包 t():i18n-1 的
+              // settings_page_test 在 en scope 下断言全树恰一处
+              // 'Follow System'(语言行 system 段),主题段同键再译即
+              // 两处,findsOneWidget 翻车 —— 测试期望零改动纪律优先,
+              // 此三段留待测试断言同步后再包(结构冲突,见 i18n-2 记录)。
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
                 child: SegmentedButton<AppThemeMode>(
@@ -198,8 +203,8 @@ class _SettingsPageState extends State<SettingsPage> {
                 ),
               ),
               ListTile(
-                title: const Text('语言'),
-                subtitle: const Text('界面文案语言;默认中文,可跟随系统'),
+                title: Text(context.t('语言')),
+                subtitle: Text(context.t('界面文案语言;默认中文,可跟随系统')),
               ),
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
@@ -218,21 +223,23 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
               const Divider(),
               SwitchListTile(
-                title: const Text('自动传输(速传)'),
-                subtitle: const Text('连接期间相机新拍的照片自动下载并导入相册'),
+                title: Text(context.t('自动传输(速传)')),
+                subtitle: Text(context.t('连接期间相机新拍的照片自动下载并导入相册')),
                 value: controller.settings.autoTransfer,
                 onChanged: controller.setAutoTransfer,
               ),
               ListTile(
-                title: const Text('速传格式'),
-                subtitle: const Text('双格式(RAW+JPG)照片按此选择下载哪个;「仅视频」只速传视频'),
+                title: Text(context.t('速传格式')),
+                subtitle: Text(context.t(
+                    '双格式(RAW+JPG)照片按此选择下载哪个;「仅视频」只速传视频')),
               ),
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
                 child: SegmentedButton<PhotoDownloadFormat>(
                   segments: [
                     for (final f in PhotoDownloadFormat.values)
-                      ButtonSegment(value: f, label: Text(f.short)),
+                      ButtonSegment(
+                          value: f, label: Text(context.t(f.short))),
                   ],
                   selected: {
                     controller.settings.autoTransferFormat,
@@ -243,17 +250,18 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
               const Divider(),
               ListTile(
-                title: const Text('元数据注入(XMP)'),
-                subtitle: const Text('下载 JPG 时写入版权/作者/评分/位置(仅影响本机副本)'),
+                title: Text(context.t('元数据注入(XMP)')),
+                subtitle: Text(
+                    context.t('下载 JPG 时写入版权/作者/评分/位置(仅影响本机副本)')),
               ),
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
                 child: TextField(
                   controller: _creatorCtrl,
                   focusNode: _creatorFocus,
-                  decoration: const InputDecoration(
-                    labelText: '作者(dc:creator)',
-                    border: OutlineInputBorder(),
+                  decoration: InputDecoration(
+                    labelText: context.t('作者(dc:creator)'),
+                    border: const OutlineInputBorder(),
                     isDense: true,
                   ),
                   onSubmitted: controller.setXmpCreator,
@@ -264,40 +272,44 @@ class _SettingsPageState extends State<SettingsPage> {
                 child: TextField(
                   controller: _rightsCtrl,
                   focusNode: _rightsFocus,
-                  decoration: const InputDecoration(
-                    labelText: '版权(dc:rights)',
-                    border: OutlineInputBorder(),
+                  decoration: InputDecoration(
+                    labelText: context.t('版权(dc:rights)'),
+                    border: const OutlineInputBorder(),
                     isDense: true,
                   ),
                   onSubmitted: controller.setXmpRights,
                 ),
               ),
               SwitchListTile(
-                title: const Text('写入评分'),
-                subtitle: const Text('已打星的照片把星级写入 xmp:Rating'),
+                title: Text(context.t('写入评分')),
+                subtitle: Text(context.t('已打星的照片把星级写入 xmp:Rating')),
                 value: controller.settings.xmpInjectRating,
                 onChanged: controller.setXmpInjectRating,
               ),
               SwitchListTile(
-                title: const Text('写入位置(GPS)'),
-                subtitle: const Text('下载时取当前位置写入 EXIF GPS(需定位权限)'),
+                title: Text(context.t('写入位置(GPS)')),
+                subtitle: Text(context.t('下载时取当前位置写入 EXIF GPS(需定位权限)')),
                 value: controller.settings.xmpInjectGps,
                 onChanged: controller.setXmpInjectGps,
               ),
               const Divider(),
               ListTile(
-                title: const Text('水印'),
-                subtitle: const Text('下载 JPG 时合成:角标或摄影卡片(EXIF 卡)'),
+                title: Text(context.t('水印')),
+                subtitle: Text(context.t('下载 JPG 时合成:角标或摄影卡片(EXIF 卡)')),
               ),
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
                 child: SegmentedButton<WatermarkStyle>(
-                  segments: const [
-                    ButtonSegment(value: WatermarkStyle.off, label: Text('关闭')),
+                  segments: [
                     ButtonSegment(
-                        value: WatermarkStyle.corner, label: Text('角标')),
+                        value: WatermarkStyle.off,
+                        label: Text(context.t('关闭'))),
                     ButtonSegment(
-                        value: WatermarkStyle.card, label: Text('摄影卡')),
+                        value: WatermarkStyle.corner,
+                        label: Text(context.t('角标'))),
+                    ButtonSegment(
+                        value: WatermarkStyle.card,
+                        label: Text(context.t('摄影卡'))),
                   ],
                   selected: {controller.settings.watermarkStyle},
                   onSelectionChanged: (s) =>
@@ -310,9 +322,9 @@ class _SettingsPageState extends State<SettingsPage> {
                   child: TextField(
                     controller: _watermarkCtrl,
                     focusNode: _watermarkFocus,
-                    decoration: const InputDecoration(
-                      labelText: '水印文本(空 = 相机型号)',
-                      border: OutlineInputBorder(),
+                    decoration: InputDecoration(
+                      labelText: context.t('水印文本(空 = 相机型号)'),
+                      border: const OutlineInputBorder(),
                       isDense: true,
                     ),
                     onSubmitted: controller.setWatermarkText,
@@ -320,25 +332,28 @@ class _SettingsPageState extends State<SettingsPage> {
                 ),
               const Divider(),
               ListTile(
-                title: const Text('监看'),
-                subtitle: const Text('取景画面显示层处理:上采样 / 降噪 / 旋转 / 变宽'),
+                title: Text(context.t('监看')),
+                subtitle: Text(context.t('取景画面显示层处理:上采样 / 降噪 / 旋转 / 变宽')),
               ),
-              const Padding(
-                padding: EdgeInsets.fromLTRB(16, 0, 16, 4),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
                 child: Align(
                   alignment: Alignment.centerLeft,
-                  child: Text('画面上采样',
-                      style: TextStyle(fontSize: 13)),
+                  child: Text(context.t('画面上采样'),
+                      style: const TextStyle(fontSize: 13)),
                 ),
               ),
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
                 child: SegmentedButton<FeedUpscaler>(
-                  segments: const [
-                    ButtonSegment(value: FeedUpscaler.off, label: Text('关')),
-                    ButtonSegment(value: FeedUpscaler.fast, label: Text('快速')),
+                  segments: [
                     ButtonSegment(
-                        value: FeedUpscaler.quality, label: Text('高质量')),
+                        value: FeedUpscaler.off, label: Text(context.t('关'))),
+                    ButtonSegment(
+                        value: FeedUpscaler.fast, label: Text(context.t('快速'))),
+                    ButtonSegment(
+                        value: FeedUpscaler.quality,
+                        label: Text(context.t('高质量'))),
                   ],
                   selected: {controller.settings.feedUpscaler},
                   onSelectionChanged: (s) =>
@@ -346,22 +361,22 @@ class _SettingsPageState extends State<SettingsPage> {
                 ),
               ),
               SwitchListTile(
-                title: const Text('时域降噪'),
-                subtitle: const Text(
-                    '前后帧运动自适应混合(仅「高质量」上采样生效)'),
+                title: Text(context.t('时域降噪')),
+                subtitle: Text(
+                    context.t('前后帧运动自适应混合(仅「高质量」上采样生效)')),
                 value: controller.settings.temporalDenoise,
                 onChanged: controller.setTemporalDenoise,
               ),
               SwitchListTile(
-                title: const Text('画面自动旋转'),
-                subtitle: const Text('相机竖持/倒置时画面转正显示(默认开)'),
+                title: Text(context.t('画面自动旋转')),
+                subtitle: Text(context.t('相机竖持/倒置时画面转正显示(默认开)')),
                 value: controller.settings.autoRotateFeed,
                 onChanged: controller.setAutoRotateFeed,
               ),
               ListTile(
-                title: const Text('变宽还原(anamorphic)'),
-                subtitle: Text(
-                    '变形宽银幕镜头的水平挤压按倍率还原显示;当前 ${controller.settings.deSqueeze.toStringAsFixed(2)}×'),
+                title: Text(context.t('变宽还原(anamorphic)')),
+                subtitle: Text(context.t('变形宽银幕镜头的水平挤压按倍率还原显示;当前 {v}×',
+                    {'v': controller.settings.deSqueeze.toStringAsFixed(2)})),
               ),
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
@@ -371,7 +386,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     for (final preset in kDeSqueezePresets)
                       ChoiceChip(
                         label: preset == 1.0
-                            ? const Text('关')
+                            ? Text(context.t('关'))
                             : Text('$preset×'),
                         selected:
                             controller.settings.deSqueeze == preset,
@@ -394,15 +409,15 @@ class _SettingsPageState extends State<SettingsPage> {
                 ),
               ),
               const Divider(),
-              const ListTile(
-                title: Text('传输质量'),
-                subtitle: Text('原图直传(压缩传输待后续版本)'),
+              ListTile(
+                title: Text(context.t('传输质量')),
+                subtitle: Text(context.t('原图直传(压缩传输待后续版本)')),
                 enabled: false,
               ),
               ListTile(
-                title: const Text('BLE 配对 / GPS 注入'),
-                subtitle: const Text(
-                    '相机智能设备模式配对;拍进卡的照片原生带 EXIF 坐标'),
+                title: Text(context.t('BLE 配对 / GPS 注入')),
+                subtitle: Text(
+                    context.t('相机智能设备模式配对;拍进卡的照片原生带 EXIF 坐标')),
                 onTap: () => Navigator.of(context).push(
                   MaterialPageRoute<void>(
                       builder: (_) => const BlePairPage()),
