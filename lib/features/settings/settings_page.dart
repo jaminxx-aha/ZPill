@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import '../../app_services.dart';
 import '../../core/browser/photo_group.dart';
 import '../../data/settings_store.dart';
+import '../../l10n/l10n.dart';
 import 'ble_pair_page.dart';
 import 'snapshot_controller.dart' show buildSnapshotSection;
 
@@ -44,6 +45,10 @@ class SettingsController extends ChangeNotifier
 
   Future<void> setThemeMode(AppThemeMode value) =>
       _update(settings.copyWith(themeMode: value));
+
+  /// 界面语言(i18n 第一期):选中即存,app 根沿重建 L10nScope。
+  Future<void> setLanguage(AppLanguage value) =>
+      _update(settings.copyWith(language: value));
 
   Future<void> setAutoTransfer(bool value) =>
       _update(settings.copyWith(autoTransfer: value));
@@ -190,6 +195,25 @@ class _SettingsPageState extends State<SettingsPage> {
                   selected: {controller.settings.themeMode},
                   onSelectionChanged: (s) =>
                       controller.setThemeMode(s.first),
+                ),
+              ),
+              ListTile(
+                title: const Text('语言'),
+                subtitle: const Text('界面文案语言;默认中文,可跟随系统'),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                child: SegmentedButton<AppLanguage>(
+                  // 选项文案走 t():英文环境「跟随系统」→ Follow System
+                  // (「中文」「English」为专名不译)。第一期基建里语言行
+                  // 是唯一消费 enCatalog 的 UI,其余存量文案由后续抽取
+                  // agent 逐步包 t()(未命中键回落中文,不误翻)。
+                  segments: [
+                    for (final l in AppLanguage.values)
+                      ButtonSegment(value: l, label: Text(context.t(l.label))),
+                  ],
+                  selected: {controller.settings.language},
+                  onSelectionChanged: (s) => controller.setLanguage(s.first),
                 ),
               ),
               const Divider(),

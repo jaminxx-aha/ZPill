@@ -48,5 +48,6 @@ void main() {
     expect(find.text('设置'), findsWidgets); // AppBar + tab
     expect(find.text('自动传输(速传)'), findsOneWidget);
     expect(find.text('水印'), findsOneWidget);
+    expect(find.text('语言'), findsOneWidget); // i18n 第一期(2026-10-14)
   });
 }
