@@ -288,7 +288,10 @@ final class LiveViewEngine {
         if (run != _runId) return;
         _failures++;
         if (_failures >= _maxFailures) {
-          lastError = '取景中断:$e';
+          final ladder = session.connectLadder.join(' ');
+          lastError = ladder.isEmpty
+              ? '取景中断:$e'
+              : '取景中断:$e〔梯:$ladder〕';
           status.value = LiveViewStatus.failed;
           _runId++; // 废掉本循环
           return;

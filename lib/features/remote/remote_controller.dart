@@ -133,6 +133,7 @@ final class RemoteController extends ChangeNotifier {
     Future<void> Function(Duration)? delay,
     Future<void> Function(Duration)? aeDelay,
     bool Function()? setPropGate,
+    this.isApMode,
   })  : engine = engine ?? LiveViewEngine(session: session),
         _delay = delay ?? Future<void>.delayed,
         _aeDelay = aeDelay ?? delay ?? Future<void>.delayed,
@@ -191,6 +192,14 @@ final class RemoteController extends ChangeNotifier {
 
   final PtpSession session;
   final CameraConnection? connection;
+
+  /// 当前连接是否 AP 方式(装配沿接 ConnectionController.method;取景
+  /// 失败引导的门槛 —— AP 人设取景门随接管开,STA 门天然开不出此引导,
+  /// USB 另有因;测试注入可空 = 非 AP)。
+  final bool Function()? isApMode;
+
+  /// 便捷判定(装配缺失按非 AP)。
+  bool get apMode => isApMode?.call() ?? false;
   final LiveViewEngine engine;
 
   /// 图库导入通道(SDRAM 直拍收尾用):生产装配 [TransferEngineImpl],
@@ -538,6 +547,17 @@ final class RemoteController extends ChangeNotifier {
     } on Exception {
       // 尽力而为
     }
+  }
+
+  /// 无线取景失败占位的引导动作(2026-10-15 AP 三轮真机定案):开启
+  /// 接管(0x90C2(1) 持有)后自动重试取景 —— AP 人设的取景门随接管
+  /// 开(连接括号的 0x90C2(0) 退闩即关,未持有态 0x9201 回 OK 假成);
+  /// 持有态起景为真。接管态机身停「已连接到计算机」屏 + 拨盘锁定,
+  /// 解除即还(影控台同款);USB 不走此路(连接流已开闩,失败另有因)。
+  /// 重试仍失败落既有占位(取景开启失败带梯),不吞错。
+  Future<void> enableTakeoverAndRetryLiveView() async {
+    if (!await enableTakeover()) return;
+    await toggleLiveView();
   }
 
   bool _linkUp = true;

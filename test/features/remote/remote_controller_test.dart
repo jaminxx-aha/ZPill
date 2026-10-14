@@ -842,6 +842,32 @@ void main() {
           reason: '连接括号 [1][0] + 用户接管 [1]');
     });
 
+    test('AP 取景失败引导:enableTakeoverAndRetryLiveView = 接管持有 + '
+        '重发起景(2026-10-15 AP 三轮真机定案)', () async {
+      // 连接括号退闩即关 → 未持有态 0x9201 回 OK 假成、帧取 notLiveView;
+      // 引导动作 = 接管持有(用户显式同意锁盘/停连接屏)后重发起景,
+      // 持有态起景为真。重试仍失败落既有占位,不吞错。
+      transport.ok(); // 0x90C2 [1] 接管
+      transport.ok(); // 0x9201 起景(持有态为真)
+      transport.ok(); // 帧取/收尾 0x9202(时序二选一,均无断言依赖)
+      transport.ok(); // 另一笔
+      await controller.enableTakeoverAndRetryLiveView();
+      expect(controller.takeoverActive, isTrue);
+      expect(controller.session.remoteModeActive, isTrue,
+          reason: '接管持有(AP 人设:退即关,持有态起景才真)');
+      expect(
+          transport.requests
+              .where((r) => r.opcode == NikonOperationCode.changeCameraMode)
+              .map((r) => r.params),
+          [[1]],
+          reason: '引导只发接管那一发(连接括号在更早的连接流,不在本账)');
+      expect(controller.liveViewActive, isTrue, reason: '重发起景成功');
+      expect(controller.engine.remoteHeld, isTrue,
+          reason: '接管沿同步引擎旗标(自愈梯不再碰 0x90C2)');
+      await controller.toggleLiveView(); // 收尾停景
+      expect(controller.liveViewActive, isFalse);
+    });
+
     test('断链悬挂 + 新链括号退步被拒 → 静默对齐接管,不发防御性解除'
         '(不与括号退步重复)', () async {
       transport.ok(); // 启用接管

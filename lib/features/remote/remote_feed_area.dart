@@ -390,16 +390,41 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea> {
                     ],
                     if (status.value == LiveViewStatus.failed) ...[
                       const SizedBox(height: 10),
-                      TextButton.icon(
-                        onPressed: controller.toggleLiveView,
-                        style: TextButton.styleFrom(
-                          foregroundColor: live.bad,
-                          textStyle: const TextStyle(fontSize: 13),
+                      // AP 失败 + 接管未开:引导开启接管(2026-10-15 三轮
+                      // 真机 —— AP 人设取景门随接管开,连接括号退闩即关,
+                      // 未持有 0x9201 假成;STA 门天然开、USB 连接流已开
+                      // 闩,失败另有因,均不出此引导)。
+                      if (controller.apMode &&
+                          !controller.takeoverActive) ...[
+                        Text(
+                          context.t('无线拍摄需 APP 接管(机身拨盘锁定,'
+                              '退出拍摄自动解除)'),
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: live.faint, fontSize: 12),
                         ),
-                        icon: Icon(Icons.refresh,
-                            size: 16, color: live.bad),
-                        label: Text(context.t('重试取景')),
-                      ),
+                        const SizedBox(height: 6),
+                        FilledButton.tonalIcon(
+                          onPressed:
+                              controller.enableTakeoverAndRetryLiveView,
+                          style: FilledButton.styleFrom(
+                            foregroundColor: live.bad,
+                            textStyle: const TextStyle(fontSize: 13),
+                          ),
+                          icon: const Icon(Icons.screen_lock_portrait,
+                              size: 16),
+                          label: Text(context.t('开启 APP 接管并重试取景')),
+                        ),
+                      ] else
+                        TextButton.icon(
+                          onPressed: controller.toggleLiveView,
+                          style: TextButton.styleFrom(
+                            foregroundColor: live.bad,
+                            textStyle: const TextStyle(fontSize: 13),
+                          ),
+                          icon: Icon(Icons.refresh,
+                              size: 16, color: live.bad),
+                          label: Text(context.t('重试取景')),
+                        ),
                     ],
                   ],
                 ),

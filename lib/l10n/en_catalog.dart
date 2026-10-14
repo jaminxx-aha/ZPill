@@ -400,6 +400,9 @@ const Map<String, String> enCatalog = {
   '取景未开启\n点按画面可触控对焦': 'Viewfinder off\nTap the image to set the focus point',
   '未知错误': 'Unknown error',
   '重试取景': 'Retry Viewfinder',
+  '无线拍摄需 APP 接管(机身拨盘锁定,退出拍摄自动解除)':
+      'Wireless shooting needs App Takeover (camera dial locked; released automatically when you leave the shooting screen)',
+  '开启 APP 接管并重试取景': 'Enable App Takeover & Retry Viewfinder',
   '连接中断 —— 正在自动重连;画面为断开前的保持帧,非实时':
       'Connection lost — reconnecting automatically; the image is the frozen frame from before the drop, not live',
   '相机忙(写卡/下载中),取景画面保持':
