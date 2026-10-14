@@ -665,4 +665,38 @@ const Map<String, String> enCatalog = {
   '有什么下什么(缺哪个格式就只下另一个)':
       'Download whatever is there (if one format is missing, only the other downloads)',
   '只下视频,照片全部跳过': 'Videos only; all photos are skipped',
+
+  // ── library-transfers(i18n-7)──
+  // local_library_page(「图库」「刷新」「照片」「视频」「连拍」「删除」
+  // 「照片信息」「该平台暂不支持视频播放」复用既有键;筛选/排序/类型
+  // chips 的 label 存枚举原文即 t() 键,显示点包 t;「传输」键与下方
+  // transfers_page 的 AppBar 标题同键共用)
+  '全部': 'All',
+  '新→旧': 'Newest First',
+  '旧→新': 'Oldest First',
+  '应用内还没有文件\n(在相机相册里选择「下载到应用」)':
+      'No files in the app yet\n(choose "Download to App" in the camera album)',
+  '没有{label}格式的文件': 'No {label} files',
+  '没有符合条件的文件': 'No matching files',
+  '传输': 'Transfers',
+  '删除应用内文件?': 'Delete In-App File?',
+  '将删除「{name}」。\n此操作不可恢复(相机上的原件不受影响)。':
+      'This will delete "{name}".\nThis cannot be undone (the original on the camera is unaffected).',
+  '导入系统相册': 'Import to System Album',
+  '已导入系统相册(应用内文件保留)': 'Imported to the system album (the in-app file is kept)',
+  '未导入(已取消或失败)': 'Not imported (cancelled or failed)',
+  'RAW 解码失败(该平台可能不支持)': 'RAW decode failed (this platform may not support it)',
+
+  // transfers_page(「取消」「已取消」「未知错误」复用既有键;字节数/速度
+  // 为数字格式产物不抽;「失败:{e}…」模板的 {e} 运行期串经 t 未命中
+  // 原样回落,标题「传输」复用上方 local_library 组)
+  '清空历史': 'Clear History',
+  '暂无传输任务\n(在相机相册里多选或大图页单张下载)':
+      'No transfer tasks yet\n(select multiple in the camera album, or download single items from the photo viewer)',
+  '排队中': 'Queued',
+  '剩 {n}s': '{n}s left',
+  '已导入相册': 'Imported to the album',
+  '已完成 · 未导入(可重新下载再试)': 'Completed · not imported (download again to retry)',
+  '已保存到应用内': 'Saved to the app',
+  '失败:{e}(重试 {n} 次)': 'Failed: {e} (after {n} attempts)',
 };

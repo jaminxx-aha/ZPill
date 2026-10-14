@@ -16,6 +16,7 @@ import '../../app_services.dart';
 import '../../core/transfer/speed_estimator.dart';
 import '../../core/transfer/transfer_engine.dart';
 import '../../core/transfer/transfer_task.dart';
+import '../../l10n/l10n.dart';
 import '../../platform/gallery_saver.dart';
 import '../common/format.dart';
 import '../common/widgets/states.dart';
@@ -121,7 +122,8 @@ class TransfersPage extends StatefulWidget {
 
 class _TransfersPageState extends State<TransfersPage> {
   // 应用级共享实例;本页不持有、不 dispose。
-  TransfersController get _controller => AppServices.instance.transfersController;
+  TransfersController get _controller =>
+      AppServices.instance.transfersController;
 
   @override
   void initState() {
@@ -135,10 +137,10 @@ class _TransfersPageState extends State<TransfersPage> {
       listenable: _controller,
       builder: (context, _) => Scaffold(
         appBar: AppBar(
-          title: const Text('传输'),
+          title: Text(context.t('传输')),
           actions: [
             IconButton(
-              tooltip: '清空历史',
+              tooltip: context.t('清空历史'),
               onPressed: _controller.clearHistory,
               icon: const Icon(Icons.delete_sweep_outlined),
             ),
@@ -153,9 +155,10 @@ class _TransfersPageState extends State<TransfersPage> {
   Widget _body() {
     final tasks = _controller.tasks;
     if (tasks.isEmpty) {
-      return const EmptyState(
+      // EmptyState 显示端已包 t(),此处再包属双重包裹(无害,见 states.dart)
+      return EmptyState(
           icon: Icons.download_outlined,
-          message: '暂无传输任务\n(在相机相册里多选或大图页单张下载)');
+          message: context.t('暂无传输任务\n(在相机相册里多选或大图页单张下载)'));
     }
     return ListView.builder(
       padding: const EdgeInsets.only(bottom: 16),
@@ -182,7 +185,7 @@ class _TaskTile extends StatelessWidget {
     if (task.state == TransferState.queued ||
         task.state == TransferState.running) {
       trailing = IconButton(
-        tooltip: '取消',
+        tooltip: context.t('取消'),
         onPressed: () => controller.cancel(task.id),
         icon: const Icon(Icons.close),
       );
@@ -190,23 +193,28 @@ class _TaskTile extends StatelessWidget {
       trailing = const SizedBox(width: 40); // 占位对齐
     }
 
+    // 状态文案原文即 t() 键;字节量/速度为数字格式产物不抽,「剩 Ns」与
+    // 失败串走参数模板(中文拼回逐字一致);error 运行期串经 t 未命中
+    // 原样回落,「未知错误」为既有键可译。
     final subtitle = switch (task.state) {
-      TransferState.queued => '排队中',
+      TransferState.queued => context.t('排队中'),
       TransferState.running => [
           formatBytes(task.receivedBytes),
           if (task.totalBytes > 0) '/ ${formatBytes(task.totalBytes)}',
           if (speed != null) '${(speed / 1024 / 1024).toStringAsFixed(1)}MB/s',
-          if (eta != null)
-            '剩 ${(eta.inSeconds + 1)}s',
+          if (eta != null) context.t('剩 {n}s', {'n': eta.inSeconds + 1}),
         ].join(' · '),
       TransferState.completed => switch (task.destination) {
           TransferDestination.gallery => task.galleryUri != null
-              ? '已导入相册'
-              : '已完成 · 未导入(可重新下载再试)',
-          TransferDestination.app => '已保存到应用内',
+              ? context.t('已导入相册')
+              : context.t('已完成 · 未导入(可重新下载再试)'),
+          TransferDestination.app => context.t('已保存到应用内'),
         },
-      TransferState.failed => '失败:${task.error ?? '未知错误'}(重试 ${task.attempts} 次)',
-      TransferState.cancelled => '已取消',
+      TransferState.failed => context.t('失败:{e}(重试 {n} 次)', {
+          'e': context.t(task.error ?? '未知错误'),
+          'n': task.attempts,
+        }),
+      TransferState.cancelled => context.t('已取消'),
     };
 
     return ListTile(
@@ -221,7 +229,8 @@ class _TaskTile extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(subtitle,
-              maxLines: 2, overflow: TextOverflow.ellipsis,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
               style: TextStyle(
                 color: task.state == TransferState.failed
                     ? theme.colorScheme.error
