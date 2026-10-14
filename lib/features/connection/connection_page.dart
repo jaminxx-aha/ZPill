@@ -18,9 +18,11 @@ library;
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../app_services.dart';
 import '../../core/ble/ble_camera_session.dart';
+import '../../core/ble/wifi_credentials.dart';
 import '../../core/browser/album.dart';
 import '../../core/camera/camera_connection.dart';
 import '../../core/camera/camera_discovery.dart';
@@ -172,6 +174,19 @@ class ConnectionController extends ChangeNotifier {
   /// 关闭相机 WiFi(0x2005=0x80)。
   Future<bool> closeCameraWifi() async =>
       await bleSession?.closeCameraWifi() ?? false;
+
+  /// 相机 AP 凭据(0x2004 蓝牙通道解出;null = 未读/解密未中/未 ready)。
+  /// BLE→WiFi 二期:唤醒成功沿自动读取,AP 卡凭据块展示。
+  WifiCredentials? cameraApCredentials;
+
+  /// 读相机 AP 凭据(0x2004 读 + 解密;唤醒沿自动调,也可手动重读)。
+  /// 返回是否取得;失败原因看 [bleLastError]。
+  Future<bool> loadCameraApCredentials() async {
+    final creds = await bleSession?.readWifiCredentials();
+    cameraApCredentials = creds;
+    notifyListeners();
+    return creds != null;
+  }
 
   /// BLE 卡状态副文(未装配不显示卡;状态全映射)。
   String? get bleHint {
@@ -744,10 +759,7 @@ class _ConnectionPageState extends State<ConnectionPage>
                   icon: const Icon(Icons.wifi_tethering),
                   label: const Text('唤醒相机 Wi-Fi'),
                   onPressed: ready
-                      ? () => unawaited(_bleWifiAction(
-                          controller, controller.wakeCameraWifi,
-                          success: '相机 Wi-Fi 已唤醒:到系统 Wi-Fi 加入'
-                              '相机热点,再回「AP 热点」卡连接'))
+                      ? () => unawaited(_wakeWifiWithCredentials(controller))
                       : null,
                 ),
               ),
@@ -764,6 +776,12 @@ class _ConnectionPageState extends State<ConnectionPage>
               ),
             ]),
             TextButton(
+              onPressed: ready
+                  ? () => unawaited(_loadApCredentials(controller))
+                  : null,
+              child: const Text('读取 Wi-Fi 凭据(0x2004)'),
+            ),
+            TextButton(
               onPressed: () => _openBlePairPage(controller),
               child: const Text('配对管理(日志/解除/后台定位授权)'),
             ),
@@ -771,6 +789,47 @@ class _ConnectionPageState extends State<ConnectionPage>
         ),
       ),
     );
+  }
+
+  /// 唤醒相机 WiFi(BLE→WiFi 二期):0x2005 写成功沿自动读 0x2004,
+  /// 凭据解出即填「AP 热点」卡(SnackBar 带去向;未解出如实提示)。
+  Future<void> _wakeWifiWithCredentials(ConnectionController controller) async {
+    final ok = await controller.wakeCameraWifi();
+    if (!mounted) return;
+    if (!ok) {
+      _showHint(controller, '唤醒失败:${controller.bleLastError ?? '未知'}');
+      return;
+    }
+    final got = await controller.loadCameraApCredentials();
+    if (!mounted) return;
+    final creds = controller.cameraApCredentials;
+    _showHint(
+        controller,
+        got && creds != null
+            ? '相机 Wi-Fi 已唤醒:热点「${creds.ssid}」凭据已解出,'
+                '见「AP 热点」卡'
+            : '相机 Wi-Fi 已唤醒:到系统 Wi-Fi 加入相机热点'
+                '(凭据未解出:${controller.bleLastError ?? '未下发'}),'
+                '再回「AP 热点」卡连接');
+  }
+
+  /// 手动读凭据(唤醒早于配对/重试场景):结果如实回 SnackBar。
+  Future<void> _loadApCredentials(ConnectionController controller) async {
+    final got = await controller.loadCameraApCredentials();
+    if (!mounted) return;
+    final creds = controller.cameraApCredentials;
+    _showHint(
+        controller,
+        got && creds != null
+            ? '已解出热点「${creds.ssid}」,见「AP 热点」卡'
+            : '未取得凭据:${controller.bleLastError ?? '未知'}');
+  }
+
+  void _showHint(ConnectionController controller, String message) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(message),
+      duration: const Duration(seconds: 3),
+    ));
   }
 
   /// 配对页往返:返回沿重载身份(配对/解除后卡片状态即翻新)。
@@ -841,6 +900,7 @@ class _ConnectionPageState extends State<ConnectionPage>
             const SizedBox(height: 4),
             const Text('相机菜单:网络 → 连接至智能设备 → Wi-Fi 连接(热点模式)。'
                 '先在系统 Wi-Fi 设置里加入相机热点,再回来连接。'),
+            ..._apCredentialBlock(context, controller),
             const SizedBox(height: 12),
             TextField(
               controller: controller.ipController,
@@ -864,6 +924,57 @@ class _ConnectionPageState extends State<ConnectionPage>
           ],
         ),
       ),
+    );
+  }
+
+  /// AP 卡凭据块(蓝牙通道解出才显示):SSID/密码/安全 + 复制钮 ——
+  /// 系统设置加入热点用;密码空(开放网络)不渲染行。
+  List<Widget> _apCredentialBlock(
+    BuildContext context,
+    ConnectionController controller,
+  ) {
+    final creds = controller.cameraApCredentials;
+    if (creds == null) {
+      return const [];
+    }
+    return [
+      const SizedBox(height: 12),
+      Text('相机热点凭据(蓝牙通道解出)',
+          style: Theme.of(context).textTheme.labelMedium),
+      _credentialRow(context, 'SSID', creds.ssid),
+      if (creds.password.isNotEmpty)
+        _credentialRow(context, '密码', creds.password),
+      Text('安全:${creds.securityLabel} · 加入热点后回此卡点「AP 连接」',
+          style: Theme.of(context).textTheme.bodySmall),
+    ];
+  }
+
+  Widget _credentialRow(
+    BuildContext context,
+    String label,
+    String value,
+  ) {
+    return Row(
+      children: [
+        SizedBox(width: 44, child: Text(label)),
+        Expanded(
+          child: Text(value.isEmpty ? '(空)' : value,
+              style: const TextStyle(fontFamily: 'monospace')),
+        ),
+        IconButton(
+          icon: const Icon(Icons.copy, size: 18),
+          tooltip: '复制$label',
+          onPressed: () async {
+            await Clipboard.setData(ClipboardData(text: value));
+            if (context.mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                content: Text('已复制$label'),
+                duration: const Duration(seconds: 2),
+              ));
+            }
+          },
+        ),
+      ],
     );
   }
 
