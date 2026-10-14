@@ -2780,6 +2780,75 @@ void main() {
       expect(gallery.enqueued, isEmpty);
     });
 
+    test('SDRAM 直拍被拒(0x2005)→ 回落常规 0x9207 入卡 + notice 如实;'
+        '模型级拒绝记本连接不再重试', () async {
+      controller.sdramCapture = true;
+      transport
+        ..reply(PtpResponseCode.operationNotSupported) // 0x90CB 被拒
+        ..ok() // 0x9207 回落
+        ..ok() // deviceReady(settle)
+        ..ok() // 第二拍 0x9207 直发
+        ..ok(); // deviceReady
+      final c1 = controller.capture();
+      await pumpEventQueue();
+      delay.release();
+      await c1;
+      expect(transport.count(NikonOperationCode.afAndCaptureRecInSdram), 1);
+      expect(transport.count(NikonOperationCode.initiateCaptureRecInMedia), 1,
+          reason: '回退必须实发 0x9207 —— 照片入卡不丢');
+      expect(controller.notice, contains('已改常规拍摄入卡'),
+          reason: '照片去了卡而非 SDRAM,机制变更必须如实带出');
+      expect(controller.notice, contains('本连接不再重试'));
+      expect(controller.error, isNull);
+      expect(gallery.enqueued, isEmpty);
+      final c2 = controller.capture();
+      await pumpEventQueue();
+      delay.release();
+      await c2;
+      expect(transport.count(NikonOperationCode.afAndCaptureRecInSdram), 1,
+          reason: '0x2005 模型个性跨连接稳定,第二拍不再试 0x90CB');
+      expect(transport.count(NikonOperationCode.initiateCaptureRecInMedia), 2,
+          reason: '第二拍 0x9207 直发(会话缓存)');
+      expect(controller.error, isNull);
+    });
+
+    test('SDRAM 直拍状态类拒绝(0x200F)→ 回落但逐拍回试 0x90CB', () async {
+      controller.sdramCapture = true;
+      transport
+        ..reply(PtpResponseCode.accessDenied) // 第一拍 0x90CB(拨杆位)
+        ..ok() // 0x9207 回落
+        ..ok() // deviceReady
+        ..reply(PtpResponseCode.accessDenied) // 第二拍 0x90CB 仍回试
+        ..ok() // 0x9207
+        ..ok(); // deviceReady
+      final c1 = controller.capture();
+      await pumpEventQueue();
+      delay.release();
+      await c1;
+      final c2 = controller.capture();
+      await pumpEventQueue();
+      delay.release();
+      await c2;
+      expect(transport.count(NikonOperationCode.afAndCaptureRecInSdram), 2,
+          reason: '状态类拒绝(拨杆位)不是模型个性,逐拍回试');
+      expect(transport.count(NikonOperationCode.initiateCaptureRecInMedia), 2,
+          reason: '每次回退都要实发 0x9207 —— 照片必须入卡不丢');
+      expect(controller.notice, contains('已改常规拍摄入卡'));
+      expect(controller.error, isNull);
+    });
+
+    test('SDRAM 直拍忙(0x2019)不回落:照旧 error,不发票 0x9207', () async {
+      controller.sdramCapture = true;
+      transport
+        ..reply(PtpResponseCode.deviceBusy) // 0x90CB 忙
+        ..ok(data: _u32Bytes(0x0)); // 0xD102 序列错误位读(无位 → 原错误)
+      await controller.capture();
+      expect(controller.error, contains('快门释放失败'),
+          reason: '忙 = 相机没收下命令,回落重拍反而添乱');
+      expect(transport.count(NikonOperationCode.initiateCaptureRecInMedia), 0);
+      expect(gallery.enqueued, isEmpty);
+    });
+
     test('断链 → tracking/AE 锁旗标清零(会话级状态不跨会话)', () async {
       await startLiveView();
       controller.paramProps[PtpDevicePropCode.stillFocusMeteringMode] =

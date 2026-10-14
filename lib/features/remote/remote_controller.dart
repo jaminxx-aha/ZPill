@@ -575,6 +575,11 @@ final class RemoteController extends ChangeNotifier {
   /// 「后台保存中」提示,传输页可见)。同上,测试可拨小。
   Duration sdramTransferTimeout = const Duration(seconds: 120);
 
+  /// 本连接 0x90CB 已被 0x2005(操作不支持)拒过:模型个性跨连接稳定,
+  /// 不再逐拍重试,直发常规快门(同 [_captureOpPref] 会话记忆语义)。
+  /// 状态类拒绝(0x200F/0x2013)不记 —— 拨杆拨回、卡归位后直拍仍可用。
+  bool _sdramCaptureDropped = false;
+
   /// 最近取景帧尺寸(SOF 嗅探):触控对焦坐标映射 + 页面画幅计算用。
   final frameSize = ValueNotifier<({int width, int height})?>(null);
 
@@ -626,19 +631,36 @@ final class RemoteController extends ChangeNotifier {
   };
 
   /// 快门码选择:SDRAM 直拍开 = 0x90CB AF+SDRAM 一体(不入卡,收尾见
-  /// [_collectSdramObject]);否则首选码按相机 op 表(在册 0x9207 直用,
+  /// [_collectSdramObject]);被拒(码级)自动回落常规码入卡 —— 照片不因
+  /// 直拍拒而丢。返回 = (是否真发了 0x90CB, 回落提示):false 时拍照收尾
+  /// 走常规卡拍流程,提示由 capture() 落收口后(防被 ObjectAdded 的
+  /// 「已拍摄」冲掉)。否则首选码按相机 op 表(在册 0x9207 直用,
   /// OpenZCine 全系口径 —— Zf 在册;表拿不到退标准 0x100E)。0x9207 的
   /// CaptureSort 首参按 [_captureSortCandidates] 序换形(0x201D);被拒
   /// (码级)自动换另一码,成功后缓存。0x2013(存储不可用)转友好提示。
-  Future<void> _fireShutter() async {
-    if (sdramCapture) {
-      await session.afAndCaptureRecInSdram();
-      return;
+  Future<(bool, String?)> _fireShutter() async {
+    String? fallbackNotice;
+    if (sdramCapture && !_sdramCaptureDropped) {
+      try {
+        await session.afAndCaptureRecInSdram();
+        return (true, null);
+      } on PtpResponseException catch (e) {
+        if (!_captureFallbackFrom.contains(e.responseCode)) rethrow;
+        // 0x90CB 码级被拒:记回落提示后**贯穿**到常规拍摄链(照片必须
+        // 实拍入卡,这里只换机制)。模型级拒绝(0x2005)记本会话不再
+        // 重试;状态类(0x200F/0x2013)逐拍回试 —— 拨杆拨回、卡归位后
+        // 直拍仍可用。
+        final dropped = e.responseCode == PtpResponseCode.operationNotSupported;
+        if (dropped) _sdramCaptureDropped = true;
+        final code = '0x${e.responseCode.toRadixString(16).toUpperCase()}';
+        fallbackNotice = 'SDRAM 直拍被拒〔$code〕,已改常规拍摄入卡'
+            '${dropped ? ',本连接不再重试' : ''}';
+      }
     }
     final pref = _captureOpPref;
     if (pref == PtpOperationCode.initiateCapture) {
       await session.initiateCapture();
-      return;
+      return (false, null);
     }
     final info = session.cachedDeviceInfo;
     final mediaFirst = pref == NikonOperationCode.initiateCaptureRecInMedia ||
@@ -647,7 +669,7 @@ final class RemoteController extends ChangeNotifier {
     if (mediaFirst) {
       try {
         await _fireMedia();
-        return;
+        return (false, fallbackNotice);
       } on PtpResponseException catch (e) {
         if (pref != null || !_captureFallbackFrom.contains(e.responseCode)) {
           rethrow; // 已缓存码/参数域类错误:换码解决不了
@@ -655,7 +677,7 @@ final class RemoteController extends ChangeNotifier {
         // 首选 0x9207 被拒(码级):标准码一试
         await session.initiateCapture();
         _captureOpPref = PtpOperationCode.initiateCapture;
-        return;
+        return (false, fallbackNotice);
       }
     }
     try {
@@ -665,6 +687,7 @@ final class RemoteController extends ChangeNotifier {
       if (!_captureFallbackFrom.contains(e.responseCode)) rethrow;
       await _fireMedia();
     }
+    return (false, fallbackNotice);
   }
 
   /// 0x9207 落卡拍:CaptureSort 按候选序换形(0x201D 参数域拒时),
@@ -1722,7 +1745,8 @@ final class RemoteController extends ChangeNotifier {
   }
 
   /// 快门释放:op 表选码(在册 0x9207 直用,见 [_fireShutter]),被拒
-  /// 自动换码重试(成功码缓存,后续直发)。
+  /// 自动换码重试(成功码缓存,后续直发)。SDRAM 直拍被拒(码级)自动
+  /// 回落常规入卡拍并如实提示,照片不丢。
   ///
   /// 取景开着时挂起轮询,避免取帧事务挤占串行锁;完成信号 = 事件优先、
   /// DeviceReady 轮询兜底。0x2019 忙(半按对焦未就绪等)按失败提示。
@@ -1739,9 +1763,10 @@ final class RemoteController extends ChangeNotifier {
     notifyListeners();
     final wasLive = liveViewActive;
     if (wasLive) engine.pause();
+    (bool, String?) firedResult = (false, null);
     try {
       try {
-        await _fireShutter();
+        firedResult = await _fireShutter();
       } on PtpResponseException catch (e) {
         if (e.responseCode == PtpResponseCode.storeNotAvailable) {
           // 0x2013:标准义 = 存储不可用(无卡/卡错误);2026-10-11 真机
@@ -1791,10 +1816,17 @@ final class RemoteController extends ChangeNotifier {
         return;
       }
       _captureDone = Completer<void>();
-      if (sdramCapture) _sdramHandle = Completer<int>();
+      final (sdramFired, sdramFallback) = firedResult;
+      if (sdramFired) _sdramHandle = Completer<int>();
       await _awaitCaptureSettled();
-      if (sdramCapture && _linkUp) {
+      if (sdramFired && _linkUp) {
         await _collectSdramObject();
+      }
+      // 回落提示落收口后:常规卡拍的「已拍摄」(ObjectAdded)会先到,
+      // 这里盖上机制说明 —— 用户须知照片去了卡而非 SDRAM。
+      if (sdramFallback != null) {
+        notice = sdramFallback;
+        notifyListeners();
       }
     } finally {
       _captureDone = null;
