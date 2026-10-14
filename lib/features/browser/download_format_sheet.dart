@@ -8,6 +8,7 @@ library;
 import 'package:flutter/material.dart';
 
 import '../../core/browser/photo_group.dart';
+import '../../l10n/l10n.dart';
 
 /// 弹出格式选择;返回 null = 用户取消。
 Future<PhotoDownloadFormat?> showDownloadFormatSheet(BuildContext context,
@@ -25,7 +26,7 @@ Future<PhotoDownloadFormat?> showDownloadFormatSheet(BuildContext context,
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
             child: Align(
               alignment: Alignment.centerLeft,
-              child: Text('选择下载格式',
+              child: Text(context.t('选择下载格式'),
                   style: Theme.of(context).textTheme.titleMedium),
             ),
           ),
@@ -33,6 +34,7 @@ Future<PhotoDownloadFormat?> showDownloadFormatSheet(BuildContext context,
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
             child: Align(
               alignment: Alignment.centerLeft,
+              // subtitle 由调用方预翻译(context.t)后传入
               child: Text(subtitle,
                   style: Theme.of(context)
                       .textTheme
@@ -42,12 +44,17 @@ Future<PhotoDownloadFormat?> showDownloadFormatSheet(BuildContext context,
           ),
           for (final format in PhotoDownloadFormat.values)
             ListTile(
-              title: Text(format.label),
+              // label 的键存 core 的 PhotoDownloadFormat 枚举(本波不动
+              // 枚举),显示点包 t;「JPG + RAW」纯拉丁未命中原文直返
+              title: Text(context.t(format.label)),
               subtitle: switch (format) {
-                PhotoDownloadFormat.jpg => const Text('没有 JPG 的照片会跳过(视频照常)'),
-                PhotoDownloadFormat.raw => const Text('没有 RAW 的照片会跳过(视频照常)'),
-                PhotoDownloadFormat.both => const Text('有什么下什么(缺哪个格式就只下另一个)'),
-                PhotoDownloadFormat.video => const Text('只下视频,照片全部跳过'),
+                PhotoDownloadFormat.jpg =>
+                  Text(context.t('没有 JPG 的照片会跳过(视频照常)')),
+                PhotoDownloadFormat.raw =>
+                  Text(context.t('没有 RAW 的照片会跳过(视频照常)')),
+                PhotoDownloadFormat.both =>
+                  Text(context.t('有什么下什么(缺哪个格式就只下另一个)')),
+                PhotoDownloadFormat.video => Text(context.t('只下视频,照片全部跳过')),
               },
               onTap: () => Navigator.pop(context, format),
             ),

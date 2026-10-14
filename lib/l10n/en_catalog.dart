@@ -389,8 +389,7 @@ const Map<String, String> enCatalog = {
   // remote_feed_area(取景空态/横幅;lastError 为引擎运行期串,如实回落)
   '取景中…(等待首帧)': 'Viewfinder On… (waiting for first frame)',
   '取景失败({e})': 'Viewfinder failed ({e})',
-  '取景未开启\n点按画面可触控对焦':
-      'Viewfinder off\nTap the image to set the focus point',
+  '取景未开启\n点按画面可触控对焦': 'Viewfinder off\nTap the image to set the focus point',
   '未知错误': 'Unknown error',
   '重试取景': 'Retry Viewfinder',
   '连接中断 —— 正在自动重连;画面为断开前的保持帧,非实时':
@@ -413,8 +412,7 @@ const Map<String, String> enCatalog = {
   // remote_controller 共键)
   '未连接相机': 'Camera not connected',
   '{n} 张': '{n} shots',
-  '纯净监看(隐藏全部控制,只留画面)':
-      'Clean Monitoring (hide all controls, image only)',
+  '纯净监看(隐藏全部控制,只留画面)': 'Clean Monitoring (hide all controls, image only)',
 
   // remote_mode_sheet(门头标;接管区文案复用 remote_param_sheet 组)
   '拍摄模式': 'Shooting Mode',
@@ -549,8 +547,7 @@ const Map<String, String> enCatalog = {
       'Focus dial paused (repeated failures); it will resume automatically',
   '机身对焦模式为 MF —— 远程对焦不可用,请切回 AF-S/AF-C(「对焦模式」芯片可直接切换)':
       'Camera focus mode is MF — remote focus is unavailable; switch back to AF-S/AF-C (the "Focus Mode" chip switches directly)',
-  '暂无取景帧,无法定位对焦点':
-      'No viewfinder frame yet; cannot place the focus point',
+  '暂无取景帧,无法定位对焦点': 'No viewfinder frame yet; cannot place the focus point',
   '暂无取景帧,无法定位追踪目标':
       'No viewfinder frame yet; cannot locate the tracking target',
   '已取消对焦': 'Focus cancelled',
@@ -588,4 +585,84 @@ const Map<String, String> enCatalog = {
   '相机上报该属性为只读': 'The camera reports this property as read-only',
   '该值无法换算为机身写码(0x100),未发送':
       'This value cannot be converted to the camera write code (0x100); not sent',
+
+  // ── browser(i18n-6)──
+  // photo_grid_page(网格页;标题兜底「相机相册」/删除确认钮「删除」/横幅
+  // 「重试」复用既有键;controller.error 是运行期 $e 插值串无静态键,
+  // 消费点 states.dart 的 ErrorRetryPanel/InlineHint 显示端已包 t,英文
+  // 环境如实回落中文;日期分段头的日期段(sectionDateLabel,common/
+  // format)是日期格式产物不抽,同如实回落;typeLabel 角标(jpg/raw/
+  // jpg+raw/×N)为拉丁协议串不抽)
+  '{label} · {n} 张': '{label} · {n} Photos',
+  '未知日期': 'Undated',
+  '全部照片': 'All Photos',
+  '已选 {n} 项': 'Selected {n} Items',
+  '全选': 'Select All',
+  '取消选择': 'Clear Selection',
+  '刷新': 'Refresh',
+  '已选 {n} 项,其中 {m} 项为双格式': 'Selected {n} items, {m} of them dual-format',
+  '已选 {n} 项(照片与视频混选)': 'Selected {n} items (photos and videos mixed)',
+  '没有符合「{label}」的文件,未开始下载': 'No files matching "{label}"; download not started',
+  // 目的地片段键带介词「到…」:不立裸键「应用」—— edit 页的「应用」是
+  // Apply 动词(i18n-8 另议),裸键会撞义
+  '到相册': 'to the album',
+  '到应用': 'to the app',
+  ',跳过 {n} 项无 {s}': ', {n} items without {s} skipped',
+  '已开始下载 {i}/{g} 项 / {f} 个文件{tag} {where}{skip},进度见「图库」页':
+      'Download started: {i}/{g} items / {f} files{tag} {where}{skip}; see "Gallery" for progress',
+  '删除相机上的文件?': 'Delete Files on the Camera?',
+  '将删除 {n} 项(共 {f} 个文件)。\n此操作不可恢复。':
+      'This will delete {n} items ({f} files in total).\nThis cannot be undone.',
+  '已删除 {n} 个文件,{m} 个失败(相机拒绝或传输中断,条目保留)':
+      'Deleted {n} files, {m} failed (camera refused or transfer interrupted; items kept)',
+  '已删除 {n} 个文件': 'Deleted {n} files',
+  '正在连接相机读取对象…': 'Connecting to the camera to read objects…',
+  '正在读取相机对象 {a}/{b}…': 'Reading camera objects {a}/{b}…',
+  '相机里还没有照片\n(未连接时请先在「相机」页连接)':
+      'No photos on the camera yet\n(Connect from the "Camera" page first if not connected)',
+  '下载到相册': 'Download to Album',
+  '下载到应用': 'Download to App',
+
+  // photo_viewer_page(查看器;「照片信息/视频/取消」复用既有键;格式
+  // short 的「视频」走既有键,JPG/RAW/JPG+RAW 拉丁值未命中原文直返;
+  // _snack 是 await 后消费点的 t() 收口;transfers(i18n-7)的「已取消」
+  // 与 library 的「刷新/该平台暂不支持视频播放」复用本组键)
+  '相机内保护(锁定)': 'Protect in Camera (Lock)',
+  '解除相机内保护': 'Remove Camera Protection',
+  '已设为相机内保护(只读)': 'Protected in camera (read-only)',
+  '已解除相机内保护': 'Camera protection removed',
+  '保护标记失败:{e} —— 请确认相机连接与卡写保护状态':
+      'Protection toggle failed: {e} — check the camera connection and the card write-protect state',
+  '编辑': 'Edit',
+  '评分': 'Rating',
+  '清除评分': 'Clear Rating',
+  '连拍 ×{n}': 'Burst ×{n}',
+  '这张照片有 JPG 和 RAW 两份文件': 'This photo has both a JPG and a RAW file',
+  '已开始下载{where}{tag},进度见「图库」页':
+      'Download started {where} {tag}; see "Gallery" for progress',
+  '拉取原图…': 'Fetching Original…',
+  '拉取原图失败,请检查连接后重试':
+      'Failed to fetch the original; check the connection and retry',
+  '已取消': 'Cancelled',
+  '加载视频失败,请检查连接后重试': 'Failed to load the video; check the connection and retry',
+  '加载预览…': 'Loading preview…',
+  '点按播放键观看': 'Tap play to watch',
+  '预览不可用': 'Preview Unavailable',
+  '准备播放': 'Preparing to Play',
+  '该平台暂不支持视频播放': 'Video playback is not yet supported on this platform',
+
+  // download_format_sheet(格式 label/short 的键存 core 的
+  // PhotoDownloadFormat 枚举 —— 本波不动枚举,显示点包 t;
+  // 「JPG + RAW」label 纯拉丁未命中原文直返;subtitle 由调用方预翻译)
+  '选择下载格式': 'Choose Download Format',
+  '仅 JPG': 'JPG Only',
+  '仅 RAW': 'RAW Only',
+  '仅视频': 'Video Only',
+  '没有 JPG 的照片会跳过(视频照常)':
+      'Photos without a JPG are skipped (videos still download)',
+  '没有 RAW 的照片会跳过(视频照常)':
+      'Photos without a RAW are skipped (videos still download)',
+  '有什么下什么(缺哪个格式就只下另一个)':
+      'Download whatever is there (if one format is missing, only the other downloads)',
+  '只下视频,照片全部跳过': 'Videos only; all photos are skipped',
 };
