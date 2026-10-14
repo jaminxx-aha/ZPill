@@ -26,6 +26,7 @@ import 'package:nikon_pill/features/remote/remote_feed_area.dart';
 import 'package:nikon_pill/features/remote/remote_info_pill.dart';
 import 'package:nikon_pill/features/remote/remote_page.dart';
 import 'package:nikon_pill/features/remote/remote_settings_panel.dart';
+import 'package:nikon_pill/platform/volume_keys.dart';
 
 /// 按序回放假传输(同 remote_controller_test;脚本耗尽抛 StateError,
 /// 页面测试靠它兜住意外的多余请求)。
@@ -90,6 +91,20 @@ final class _FakeConnection implements CameraConnection {
 
   @override
   Future<void> disconnect() async {}
+}
+
+/// 音量键快门宿主假件:记录 setEnabled 推送,fire() 模拟原生 onKeyUp。
+final class _FakeVolumeKeys implements VolumeKeyHost {
+  final _ctrl = StreamController<VolumeKey>.broadcast();
+  final calls = <bool>[];
+
+  @override
+  Stream<VolumeKey> get keys => _ctrl.stream;
+
+  @override
+  Future<void> setEnabled(bool enabled) async => calls.add(enabled);
+
+  void fire() => _ctrl.add(VolumeKey.up);
 }
 
 /// PropDesc 数据集(u16 code + u16 type + u8 getSet + 当前值 + 出厂
@@ -2561,5 +2576,164 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('视频光圈'), findsNothing, reason: '照片档零视频噪声');
     expect(find.text('视频 ISO'), findsNothing);
+  });
+
+  testWidgets('音量键快门(2026-10-14 Android):平台门禁 —— 无宿主(异端)'
+      '不出行,宿主在出行', (tester) async {
+    _portrait(tester);
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = _directRemoteController(transport, conn: conn);
+    addTearDown(controller.dispose);
+    _scriptAutoStart(transport);
+    // 异端(测试宿主非 Android 且无注入):设置开着也不接线、行不出现
+    final settings = ValueNotifier(
+        const AppSettings().copyWith(volumeKeyShutter: true));
+    addTearDown(settings.dispose);
+    await tester.pumpWidget(MaterialApp(
+        home: RemotePage(
+            controller: controller, settingsListenable: settings)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
+    expect(find.text('音量键快门'), findsNothing,
+        reason: 'iOS/ohos(无宿主)不出行 —— 系统不放行音量键/未做拦截');
+    // 卸页再挂:同型 widget 复用 State(late final 宿主锁首值),换树
+    // 才走新 initState
+    await tester.pumpWidget(const MaterialApp(home: SizedBox()));
+    await tester.pump();
+
+    // 宿主在(Android / 单测注入):行出现(设置开着)
+    final transport2 = _ScriptTransport();
+    final conn2 = _FakeConnection();
+    final controller2 = _directRemoteController(transport2, conn: conn2);
+    addTearDown(controller2.dispose);
+    _scriptAutoStart(transport2);
+    final settings2 = ValueNotifier(
+        const AppSettings().copyWith(volumeKeyShutter: true));
+    addTearDown(settings2.dispose);
+    final keys = _FakeVolumeKeys();
+    await tester.pumpWidget(MaterialApp(
+        home: RemotePage(
+            controller: controller2,
+            settingsListenable: settings2,
+            volumeKeys: keys)));
+    await tester.pumpAndSettle();
+    expect(keys.calls, [true], reason: '开关开 + 宿主在 → 进页即 setEnabled(true)');
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
+    expect(find.text('音量键快门'), findsOneWidget, reason: 'Android 出行');
+  });
+
+  testWidgets('音量键快门:芯片点选写设置 + 原生开关沿(开→关),选中态'
+      '即时翻转', (tester) async {
+    _portrait(tester);
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = _directRemoteController(transport, conn: conn);
+    addTearDown(controller.dispose);
+    _scriptAutoStart(transport);
+    final settings = ValueNotifier(const AppSettings());
+    addTearDown(settings.dispose);
+    final keys = _FakeVolumeKeys();
+    await tester.pumpWidget(MaterialApp(
+        home: RemotePage(
+            controller: controller,
+            settingsListenable: settings,
+            volumeKeys: keys)));
+    await tester.pumpAndSettle();
+    expect(keys.calls, isEmpty, reason: '默认关:进页不推 setEnabled');
+
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
+    final colorBefore =
+        tester.widget<Text>(find.text('音量键快门')).style?.color;
+    await tester.ensureVisible(find.text('音量键快门'));
+    await tester.tap(find.text('音量键快门'));
+    await tester.pumpAndSettle();
+    expect(settings.value.volumeKeyShutter, isTrue, reason: '芯片写设置');
+    expect(keys.calls, [true], reason: '开沿 → 原生 setEnabled(true)');
+    expect(tester.widget<Text>(find.text('音量键快门')).style?.color,
+        isNot(colorBefore),
+        reason: '选中态即时翻转(设置镜像 setState)');
+
+    await tester.ensureVisible(find.text('音量键快门'));
+    await tester.tap(find.text('音量键快门'));
+    await tester.pumpAndSettle();
+    expect(settings.value.volumeKeyShutter, isFalse);
+    expect(keys.calls, [true, false], reason: '关沿 → setEnabled(false) 还系统');
+  });
+
+  testWidgets('音量键快门:按键命中走控制器 capture(0x9207,与屏上快门'
+      '同一守卫)', (tester) async {
+    _portrait(tester);
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = _directRemoteController(transport, conn: conn);
+    addTearDown(controller.dispose);
+    transport
+      ..ok() // 0x9201(进页自动起景)
+      ..ok(data: _realJpeg()) // 首帧
+      ..ok(); // 0x9207(音量键命中 → capture)
+    final settings = ValueNotifier(
+        const AppSettings().copyWith(volumeKeyShutter: true));
+    addTearDown(settings.dispose);
+    final keys = _FakeVolumeKeys();
+    await tester.pumpWidget(MaterialApp(
+        home: RemotePage(
+            controller: controller,
+            settingsListenable: settings,
+            volumeKeys: keys)));
+    await tester.pumpAndSettle();
+    expect(keys.calls, [true]);
+
+    keys.fire(); // 音量上键(上/下同效 = 快门)
+    // capturing 转圈永驻(落定等待走停摆 delay),定长 pump 让捕获链入队
+    await tester.pump();
+    await tester.pump();
+    expect(
+        transport.requests.where((r) =>
+            r.opcode == NikonOperationCode.initiateCaptureRecInMedia ||
+            r.opcode == PtpOperationCode.initiateCapture),
+        hasLength(1),
+        reason: '命中即快门,走 capture() 同一守卫同一错误横幅');
+  });
+
+  testWidgets('音量键快门:离页退订 + setEnabled(false) 还系统', (tester) async {
+    _portrait(tester);
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = _directRemoteController(transport, conn: conn);
+    addTearDown(controller.dispose);
+    transport
+      ..ok() // 0x9201(进页自动起景)
+      ..ok(data: _realJpeg()); // 首帧
+    final settings = ValueNotifier(
+        const AppSettings().copyWith(volumeKeyShutter: true));
+    addTearDown(settings.dispose);
+    final keys = _FakeVolumeKeys();
+    await tester.pumpWidget(MaterialApp(
+        home: RemotePage(
+            controller: controller,
+            settingsListenable: settings,
+            volumeKeys: keys)));
+    await tester.pumpAndSettle();
+    expect(keys.calls, [true]);
+
+    // 换树卸页 → dispose:退订 + 还音量键给系统
+    await tester.pumpWidget(const MaterialApp(home: SizedBox()));
+    await tester.pump();
+    expect(keys.calls, [true, false], reason: '离页即 setEnabled(false)');
+
+    // 退订后按键不再触发快门
+    keys.fire();
+    await tester.pump();
+    await tester.pump();
+    expect(
+        transport.requests.where((r) =>
+            r.opcode == NikonOperationCode.initiateCaptureRecInMedia ||
+            r.opcode == PtpOperationCode.initiateCapture),
+        isEmpty,
+        reason: '退订后音量键零快门请求');
   });
 }
