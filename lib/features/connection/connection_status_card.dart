@@ -9,6 +9,7 @@ import '../../core/browser/storage_info.dart';
 import '../../core/camera/camera_connection.dart';
 import '../../design/app_colors.dart';
 import '../../design/app_dimens.dart';
+import '../../l10n/l10n.dart';
 import '../common/format.dart';
 
 /// 连接状态卡:状态色一行 + 阶段文案;connecting/pairing/detecting
@@ -70,8 +71,9 @@ class ConnectionStatusCard extends StatelessWidget {
                 Icon(Icons.lan, color: color),
                 const SizedBox(width: AppSpacing.md),
                 Expanded(
+                  // label 即 t() 键(switch 内中文原文),显示点统一包 t()。
                   child: Text(
-                    label,
+                    context.t(label),
                     style: Theme.of(context)
                         .textTheme
                         .titleMedium
@@ -104,7 +106,7 @@ class ConnectionStatusCard extends StatelessWidget {
                 child: TextButton.icon(
                   onPressed: onRetry,
                   icon: const Icon(Icons.refresh, size: 18),
-                  label: const Text('重试'),
+                  label: Text(context.t('重试')),
                 ),
               ),
           ],
@@ -126,16 +128,19 @@ class _HintText extends StatelessWidget {
   Widget build(BuildContext context) {
     final style =
         TextStyle(color: color, fontSize: 13, height: 1.45);
-    final idx = text.indexOf(':');
+    // hint 原文即 t() 键:控制器/连接层无 BuildContext,中文直存,消费
+    // 点统一包 t()(未抽取的连接层 error 如实回落中文)。
+    final localized = context.t(text);
+    final idx = localized.indexOf(':');
     if (idx < 0) {
-      return Text(text, style: style);
+      return Text(localized, style: style);
     }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(text.substring(0, idx + 1),
+        Text(localized.substring(0, idx + 1),
             style: style.copyWith(fontWeight: FontWeight.w600)),
-        Text(text.substring(idx + 1), style: style),
+        Text(localized.substring(idx + 1), style: style),
       ],
     );
   }
@@ -219,8 +224,11 @@ class _StorageRow extends StatelessWidget {
         const SizedBox(width: AppSpacing.md),
         Text(
           storage.maxCapacityBytes > 0
-              ? '${formatBytes(storage.freeSpaceBytes)} 可用 / ${formatBytes(storage.maxCapacityBytes)}'
-              : '容量未知',
+              ? context.t('{free} 可用 / {total}', {
+                  'free': formatBytes(storage.freeSpaceBytes),
+                  'total': formatBytes(storage.maxCapacityBytes)
+                })
+              : context.t('容量未知'),
           style: Theme.of(context)
               .textTheme
               .bodySmall

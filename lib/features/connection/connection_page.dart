@@ -31,6 +31,7 @@ import '../../data/ble_identity_store.dart';
 import '../../data/client_identity_store.dart';
 import '../../data/paired_cameras_store.dart';
 import '../../design/app_dimens.dart';
+import '../../l10n/l10n.dart';
 import '../../platform/nsd_scanner.dart';
 import '../browser/photo_grid_page.dart';
 import '../common/widgets/confirm_dialog.dart';
@@ -234,6 +235,9 @@ class ConnectionController extends ChangeNotifier {
 
   /// 状态提示:失败原因(含插线/解锁/热点指引)、配对等待去向。
   /// 已连接不在此列 —— 已连接视图(信息卡组)自带全部信息。
+  /// 文案即 t() 键(测试断言中文原文,故控制器存中文不存消息记录),
+  /// 消费端 ConnectionStatusCard._HintText 统一包 t();连接层 error
+  /// 未抽取的如实回落中文。
   String? get hint {
     final c = connection;
     if (c == null) {
@@ -451,6 +455,8 @@ class ConnectionController extends ChangeNotifier {
 }
 
 /// 蓝牙工具卡状态文案(未配对/已配对未连/握手中/已连接/重连中)。
+/// 原文即 t() 键(与 ble_pair_page 共用「握手中…/重连中…/未配对」),
+/// 消费端 _bleCard 里包 t()。
 String bleStateLabel(ConnectionController c) => switch (c.bleState) {
       BleSessionState.pairing => '握手中…',
       BleSessionState.ready => '已连接',
@@ -551,7 +557,7 @@ class _ConnectionPageState extends State<ConnectionPage>
   Widget build(BuildContext context) {
     final controller = _controller;
     return Scaffold(
-      appBar: AppBar(title: const Text('相机')),
+      appBar: AppBar(title: Text(context.t('相机'))),
       body: ListenableBuilder(
         listenable: controller,
         builder: (context, _) {
@@ -603,8 +609,8 @@ class _ConnectionPageState extends State<ConnectionPage>
               child: OutlinedButton.icon(
                 icon: const Icon(Icons.close),
                 label: controller.state == CameraLinkState.reconnecting
-                    ? const Text('取消重连')
-                    : const Text('取消连接'),
+                    ? Text(context.t('取消重连'))
+                    : Text(context.t('取消连接')),
                 onPressed: controller.disconnect,
               ),
             ),
@@ -614,23 +620,23 @@ class _ConnectionPageState extends State<ConnectionPage>
           // 仅在 BLE 通道装配时出现(未装配平台不出)。
           SegmentedButton<ConnectionMethod>(
             segments: [
-              const ButtonSegment(
+              ButtonSegment(
                   value: ConnectionMethod.usb,
-                  icon: Icon(Icons.usb),
-                  label: Text('有线')),
-              const ButtonSegment(
+                  icon: const Icon(Icons.usb),
+                  label: Text(context.t('有线'))),
+              ButtonSegment(
                   value: ConnectionMethod.ap,
-                  icon: Icon(Icons.wifi_tethering),
-                  label: Text('AP 热点')),
-              const ButtonSegment(
+                  icon: const Icon(Icons.wifi_tethering),
+                  label: Text(context.t('AP 热点'))),
+              ButtonSegment(
                   value: ConnectionMethod.sta,
-                  icon: Icon(Icons.wifi),
-                  label: Text('同一 Wi-Fi')),
+                  icon: const Icon(Icons.wifi),
+                  label: Text(context.t('同一 Wi-Fi'))),
               if (controller.bleEnabled)
-                const ButtonSegment(
+                ButtonSegment(
                     value: ConnectionMethod.ble,
-                    icon: Icon(Icons.bluetooth),
-                    label: Text('蓝牙')),
+                    icon: const Icon(Icons.bluetooth),
+                    label: Text(context.t('蓝牙'))),
             ],
             selected: {controller.method},
             onSelectionChanged: busy
@@ -654,12 +660,14 @@ class _ConnectionPageState extends State<ConnectionPage>
                 borderRadius: BorderRadius.circular(AppRadius.sm),
               ),
               child: Text(
-                '· 首次无线连接会请求配对确认(相机记录本设备,之后免配对);'
-                '相机屏幕出现提示时请在机身上按 OK。\n'
-                '· 相机同一时间只允许一个客户端:若被 SnapBridge(尼享)抢先连上'
-                '会遭拒,请先彻底关闭它。\n'
-                '· 首次连接若失败,请在系统弹窗中允许访问本地网络后重试;'
-                '下载大文件期间请保持 App 在前台、屏幕点亮。',
+                context.t(
+                  '· 首次无线连接会请求配对确认(相机记录本设备,之后免配对);'
+                  '相机屏幕出现提示时请在机身上按 OK。\n'
+                  '· 相机同一时间只允许一个客户端:若被 SnapBridge(尼享)抢先连上'
+                  '会遭拒,请先彻底关闭它。\n'
+                  '· 首次连接若失败,请在系统弹窗中允许访问本地网络后重试;'
+                  '下载大文件期间请保持 App 在前台、屏幕点亮。',
+                ),
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
                     color: Theme.of(context).colorScheme.onSurfaceVariant),
               ),
@@ -691,14 +699,14 @@ class _ConnectionPageState extends State<ConnectionPage>
           children: [
             _methodTitle(context, Icons.bluetooth, '蓝牙连接(工具通道)'),
             const SizedBox(height: 4),
-            const Text('不建立相机连接(不传图/不遥控),只用于:'
+            Text(context.t('不建立相机连接(不传图/不遥控),只用于:'
                 '拍摄时注入 GPS 坐标(照片原生带 EXIF 定位)、唤醒相机 '
-                'Wi-Fi。首次使用先配对相机。'),
+                'Wi-Fi。首次使用先配对相机。')),
             const SizedBox(height: 8),
             Row(children: [
               Icon(Icons.circle, size: 10, color: stateColor),
               const SizedBox(width: 6),
-              Text(bleStateLabel(controller)),
+              Text(context.t(bleStateLabel(controller))),
               if (hasIdentity)
                 Text('  ·  ${controller.bleIdentity!.controllerName}',
                     style: theme.textTheme.bodySmall),
@@ -717,13 +725,13 @@ class _ConnectionPageState extends State<ConnectionPage>
               child: !hasIdentity
                   ? FilledButton.icon(
                       icon: const Icon(Icons.bluetooth_searching),
-                      label: const Text('配对相机'),
+                      label: Text(context.t('配对相机')),
                       onPressed: () => _openBlePairPage(controller),
                     )
                   : (ready
                       ? OutlinedButton(
                           onPressed: controller.bleDisconnect,
-                          child: const Text('断开蓝牙'),
+                          child: Text(context.t('断开蓝牙')),
                         )
                       : OutlinedButton(
                           onPressed: controller.bleState ==
@@ -732,8 +740,8 @@ class _ConnectionPageState extends State<ConnectionPage>
                               : () => unawaited(controller.bleReconnect()),
                           child: Text(
                               controller.bleState == BleSessionState.pairing
-                                  ? '握手中…'
-                                  : '重连'),
+                                  ? context.t('握手中…')
+                                  : context.t('重连')),
                         )),
             ),
             const SizedBox(height: 8),
@@ -747,9 +755,9 @@ class _ConnectionPageState extends State<ConnectionPage>
               onChanged: hasIdentity
                   ? (on) => unawaited(controller.setBleGpsInject(on))
                   : null,
-              title: const Text('GPS 位置注入'),
-              subtitle: const Text('拍摄时自动把手机定位写进相机,'
-                  '卡内照片原生带坐标'),
+              title: Text(context.t('GPS 位置注入')),
+              subtitle: Text(context.t('拍摄时自动把手机定位写进相机,'
+                  '卡内照片原生带坐标')),
             ),
             // WiFi 唤起(就绪才可用):写 0x2005,相机开热点后回 AP 卡
             // 走既定连接路;关闭 = 反义 op。
@@ -757,7 +765,7 @@ class _ConnectionPageState extends State<ConnectionPage>
               Expanded(
                 child: FilledButton.tonalIcon(
                   icon: const Icon(Icons.wifi_tethering),
-                  label: const Text('唤醒相机 Wi-Fi'),
+                  label: Text(context.t('唤醒相机 Wi-Fi')),
                   onPressed: ready
                       ? () => unawaited(_wakeWifiWithCredentials(controller))
                       : null,
@@ -769,9 +777,9 @@ class _ConnectionPageState extends State<ConnectionPage>
                   onPressed: ready
                       ? () => unawaited(_bleWifiAction(
                           controller, controller.closeCameraWifi,
-                          success: '已请求相机关闭 Wi-Fi'))
+                          success: context.t('已请求相机关闭 Wi-Fi')))
                       : null,
-                  child: const Text('关闭'),
+                  child: Text(context.t('关闭')),
                 ),
               ),
             ]),
@@ -779,11 +787,11 @@ class _ConnectionPageState extends State<ConnectionPage>
               onPressed: ready
                   ? () => unawaited(_loadApCredentials(controller))
                   : null,
-              child: const Text('读取 Wi-Fi 凭据(0x2004)'),
+              child: Text(context.t('读取 Wi-Fi 凭据(0x2004)')),
             ),
             TextButton(
               onPressed: () => _openBlePairPage(controller),
-              child: const Text('配对管理(日志/解除/后台定位授权)'),
+              child: Text(context.t('配对管理(日志/解除/后台定位授权)')),
             ),
           ],
         ),
@@ -797,7 +805,10 @@ class _ConnectionPageState extends State<ConnectionPage>
     final ok = await controller.wakeCameraWifi();
     if (!mounted) return;
     if (!ok) {
-      _showHint(controller, '唤醒失败:${controller.bleLastError ?? '未知'}');
+      _showHint(
+          controller,
+          context.t('唤醒失败:{e}',
+              {'e': controller.bleLastError ?? context.t('未知')}));
       return;
     }
     final got = await controller.loadCameraApCredentials();
@@ -806,11 +817,15 @@ class _ConnectionPageState extends State<ConnectionPage>
     _showHint(
         controller,
         got && creds != null
-            ? '相机 Wi-Fi 已唤醒:热点「${creds.ssid}」凭据已解出,'
-                '见「AP 热点」卡'
-            : '相机 Wi-Fi 已唤醒:到系统 Wi-Fi 加入相机热点'
-                '(凭据未解出:${controller.bleLastError ?? '未下发'}),'
-                '再回「AP 热点」卡连接');
+            ? context.t(
+                '相机 Wi-Fi 已唤醒:热点「{ssid}」凭据已解出,'
+                '见「AP 热点」卡',
+                {'ssid': creds.ssid})
+            : context.t(
+                '相机 Wi-Fi 已唤醒:到系统 Wi-Fi 加入相机热点'
+                '(凭据未解出:{e}),'
+                '再回「AP 热点」卡连接',
+                {'e': controller.bleLastError ?? context.t('未下发')}));
   }
 
   /// 手动读凭据(唤醒早于配对/重试场景):结果如实回 SnackBar。
@@ -821,8 +836,10 @@ class _ConnectionPageState extends State<ConnectionPage>
     _showHint(
         controller,
         got && creds != null
-            ? '已解出热点「${creds.ssid}」,见「AP 热点」卡'
-            : '未取得凭据:${controller.bleLastError ?? '未知'}');
+            ? context.t('已解出热点「{ssid}」,见「AP 热点」卡',
+                {'ssid': creds.ssid})
+            : context.t('未取得凭据:{e}',
+                {'e': controller.bleLastError ?? context.t('未知')}));
   }
 
   void _showHint(ConnectionController controller, String message) {
@@ -850,7 +867,10 @@ class _ConnectionPageState extends State<ConnectionPage>
     final ok = await action();
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(ok ? success : '操作失败:${controller.bleLastError ?? '未知'}'),
+      content: Text(ok
+          ? success
+          : context.t('操作失败:{e}',
+              {'e': controller.bleLastError ?? context.t('未知')})),
       duration: const Duration(seconds: 3),
     ));
   }
@@ -869,13 +889,13 @@ class _ConnectionPageState extends State<ConnectionPage>
           children: [
             _methodTitle(context, Icons.usb, '有线连接(USB)'),
             const SizedBox(height: 4),
-            const Text('用 C-to-C 数据线连接相机与手机,解锁相机后点「USB 连接」'),
+            Text(context.t('用 C-to-C 数据线连接相机与手机,解锁相机后点「USB 连接」')),
             const SizedBox(height: 12),
             SizedBox(
               width: double.infinity,
               child: FilledButton(
                 onPressed: busy ? null : controller.connect,
-                child: const Text('USB 连接'),
+                child: Text(context.t('USB 连接')),
               ),
             ),
           ],
@@ -898,18 +918,18 @@ class _ConnectionPageState extends State<ConnectionPage>
           children: [
             _methodTitle(context, Icons.wifi_tethering, 'AP 连接(相机当热点)'),
             const SizedBox(height: 4),
-            const Text('相机菜单:网络 → 连接至智能设备 → Wi-Fi 连接(热点模式)。'
-                '先在系统 Wi-Fi 设置里加入相机热点,再回来连接。'),
+            Text(context.t('相机菜单:网络 → 连接至智能设备 → Wi-Fi 连接(热点模式)。'
+                '先在系统 Wi-Fi 设置里加入相机热点,再回来连接。')),
             ..._apCredentialBlock(context, controller),
             const SizedBox(height: 12),
             TextField(
               controller: controller.ipController,
               keyboardType: TextInputType.url,
               enabled: !busy,
-              decoration: const InputDecoration(
-                labelText: '相机 IP(默认 192.168.1.1)',
+              decoration: InputDecoration(
+                labelText: context.t('相机 IP(默认 192.168.1.1)'),
                 hintText: kDefaultCameraIp,
-                border: OutlineInputBorder(),
+                border: const OutlineInputBorder(),
                 isDense: true,
               ),
             ),
@@ -918,7 +938,7 @@ class _ConnectionPageState extends State<ConnectionPage>
               width: double.infinity,
               child: FilledButton(
                 onPressed: busy ? null : controller.connectWireless,
-                child: const Text('AP 连接'),
+                child: Text(context.t('AP 连接')),
               ),
             ),
           ],
@@ -939,12 +959,14 @@ class _ConnectionPageState extends State<ConnectionPage>
     }
     return [
       const SizedBox(height: 12),
-      Text('相机热点凭据(蓝牙通道解出)',
+      Text(context.t('相机热点凭据(蓝牙通道解出)'),
           style: Theme.of(context).textTheme.labelMedium),
       _credentialRow(context, 'SSID', creds.ssid),
       if (creds.password.isNotEmpty)
         _credentialRow(context, '密码', creds.password),
-      Text('安全:${creds.securityLabel} · 加入热点后回此卡点「AP 连接」',
+      Text(
+          context.t('安全:{s} · 加入热点后回此卡点「AP 连接」',
+              {'s': creds.securityLabel}),
           style: Theme.of(context).textTheme.bodySmall),
     ];
   }
@@ -954,21 +976,25 @@ class _ConnectionPageState extends State<ConnectionPage>
     String label,
     String value,
   ) {
+    // label 原文即键(SSID 非中文,未命中原文直返);tooltip/SnackBar
+    // 以 {label} 参数复用同一模板。
+    final localizedLabel = context.t(label);
     return Row(
       children: [
-        SizedBox(width: 44, child: Text(label)),
+        SizedBox(width: 44, child: Text(localizedLabel)),
         Expanded(
-          child: Text(value.isEmpty ? '(空)' : value,
+          child: Text(value.isEmpty ? context.t('(空)') : value,
               style: const TextStyle(fontFamily: 'monospace')),
         ),
         IconButton(
           icon: const Icon(Icons.copy, size: 18),
-          tooltip: '复制$label',
+          tooltip: context.t('复制{label}', {'label': localizedLabel}),
           onPressed: () async {
             await Clipboard.setData(ClipboardData(text: value));
             if (context.mounted) {
               ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                content: Text('已复制$label'),
+                content: Text(context.t('已复制{label}',
+                    {'label': localizedLabel})),
                 duration: const Duration(seconds: 2),
               ));
             }
@@ -992,8 +1018,8 @@ class _ConnectionPageState extends State<ConnectionPage>
           children: [
             _methodTitle(context, Icons.wifi, 'STA 连接(同一 Wi-Fi)'),
             const SizedBox(height: 4),
-            const Text('相机与手机加入同一个 Wi-Fi(相机菜单同上,选择连接到'
-                '路由器网络),扫描发现相机后点选连接。'),
+            Text(context.t('相机与手机加入同一个 Wi-Fi(相机菜单同上,选择连接到'
+                '路由器网络),扫描发现相机后点选连接。')),
             const SizedBox(height: 12),
             SizedBox(
               width: double.infinity,
@@ -1007,7 +1033,9 @@ class _ConnectionPageState extends State<ConnectionPage>
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
                     : const Icon(Icons.wifi_find),
-                label: Text(controller.scanning ? '扫描中…(点按停止)' : '扫描相机'),
+                label: Text(controller.scanning
+                    ? context.t('扫描中…(点按停止)')
+                    : context.t('扫描相机')),
                 onPressed: busy
                     ? null
                     : (controller.scanning
@@ -1022,9 +1050,9 @@ class _ConnectionPageState extends State<ConnectionPage>
               Padding(
                 padding: const EdgeInsets.only(top: 8),
                 child: Text(
-                  '未发现:相机须停留在「等待连接」画面才会广播(退出该'
-                  '画面即停止);若刚在相机上完成配对,先在相机上按 OK。'
-                  '也可在下方手填 IP 直连。',
+                  context.t('未发现:相机须停留在「等待连接」画面才会广播(退出该'
+                      '画面即停止);若刚在相机上完成配对,先在相机上按 OK。'
+                      '也可在下方手填 IP 直连。'),
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
               ),
@@ -1049,10 +1077,10 @@ class _ConnectionPageState extends State<ConnectionPage>
                     controller: controller.manualIpController,
                     keyboardType: TextInputType.url,
                     enabled: !busy,
-                    decoration: const InputDecoration(
-                      labelText: '相机 IP(扫描不到时手填)',
-                      hintText: '如 192.168.1.4',
-                      border: OutlineInputBorder(),
+                    decoration: InputDecoration(
+                      labelText: context.t('相机 IP(扫描不到时手填)'),
+                      hintText: context.t('如 192.168.1.4'),
+                      border: const OutlineInputBorder(),
                       isDense: true,
                     ),
                   ),
@@ -1060,7 +1088,7 @@ class _ConnectionPageState extends State<ConnectionPage>
                 const SizedBox(width: 8),
                 FilledButton(
                   onPressed: busy ? null : controller.connectManualIp,
-                  child: const Text('连接'),
+                  child: Text(context.t('连接')),
                 ),
               ],
             ),
@@ -1070,7 +1098,7 @@ class _ConnectionPageState extends State<ConnectionPage>
                   dense: true,
                   contentPadding: EdgeInsets.zero,
                   leading: const Icon(Icons.history),
-                  title: Text('上次:${saved.name}'),
+                  title: Text(context.t('上次:{name}', {'name': saved.name})),
                   subtitle: Text(saved.lastIp ?? ''),
                   trailing: Row(
                     mainAxisSize: MainAxisSize.min,
@@ -1079,7 +1107,7 @@ class _ConnectionPageState extends State<ConnectionPage>
                       // 客户端身份,下次连接走全新配对(无感)。
                       IconButton(
                         icon: const Icon(Icons.delete_outline),
-                        tooltip: '忘记这台相机',
+                        tooltip: context.t('忘记这台相机'),
                         onPressed: busy
                             ? null
                             : () => _confirmRemoveSaved(context, controller, saved),
@@ -1103,10 +1131,12 @@ class _ConnectionPageState extends State<ConnectionPage>
   ) async {
     final confirmed = await showConfirmDialog(
       context,
-      title: '忘记这台相机?',
-      content: '删除「${saved.name}」的连接记录。已配对的相机会同时换新配对身份,'
+      title: context.t('忘记这台相机?'),
+      content: context.t(
+          '删除「{name}」的连接记录。已配对的相机会同时换新配对身份,'
           '下次连接重新配对(自动确认,无需操作)。',
-      confirmLabel: '删除',
+          {'name': saved.name}),
+      confirmLabel: context.t('删除'),
       destructive: true,
     );
     if (confirmed) {
@@ -1119,7 +1149,8 @@ class _ConnectionPageState extends State<ConnectionPage>
       children: [
         Icon(icon),
         const SizedBox(width: 8),
-        Text(text, style: Theme.of(context).textTheme.titleMedium),
+        // 四处调用全传中文原文(即键),就地统一包 t()。
+        Text(context.t(text), style: Theme.of(context).textTheme.titleMedium),
       ],
     );
   }
@@ -1142,7 +1173,7 @@ class _ConnectionPageState extends State<ConnectionPage>
             child: FilledButton.icon(
               onPressed: _openRemote,
               icon: const Icon(Icons.camera),
-              label: const Text('进入拍摄'),
+              label: Text(context.t('进入拍摄')),
             ),
           ),
           const SizedBox(height: AppSpacing.md),
@@ -1159,7 +1190,7 @@ class _ConnectionPageState extends State<ConnectionPage>
             child: FilledButton.tonalIcon(
               onPressed: _openAlbum,
               icon: const Icon(Icons.photo_library_outlined),
-              label: const Text('相册'),
+              label: Text(context.t('相册')),
             ),
           ),
           const SizedBox(height: 8),
@@ -1167,7 +1198,7 @@ class _ConnectionPageState extends State<ConnectionPage>
             height: 48,
             child: OutlinedButton(
               onPressed: controller.disconnect,
-              child: const Text('断开连接'),
+              child: Text(context.t('断开连接')),
             ),
           ),
         ],
@@ -1183,7 +1214,7 @@ class _ConnectionPageState extends State<ConnectionPage>
         ? (controller.activeIp == null
             ? 'Wi-Fi'
             : 'Wi-Fi(${controller.activeIp})')
-        : 'USB 数据线';
+        : context.t('USB 数据线');
     return Card(
       child: Column(
         children: [
@@ -1269,15 +1300,17 @@ class _ConnectionPageState extends State<ConnectionPage>
           const SizedBox(width: 12),
           // 定宽标签列 + 左对齐值列:各卡所有行同 x 起点成表格状
           //(2026-10-09 真机反馈「数据歪歪扭扭」修 —— 原右对齐值列
-          // 左缘参差)。
+          // 左缘参差)。label/值都可能传 UI 中文(连接方式/USB 数据线/
+          // 读取中…),就地统一包 t();相机上报值未命中目录原样直返。
           SizedBox(
             width: 68,
-            child: Text(label, style: theme.textTheme.bodyMedium),
+            child: Text(context.t(label),
+                style: theme.textTheme.bodyMedium),
           ),
           const SizedBox(width: 12),
           Expanded(
             child: Text(
-              value,
+              context.t(value),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: theme.textTheme.bodyMedium
@@ -1305,7 +1338,7 @@ class _ConnectionPageState extends State<ConnectionPage>
         builder: (_) => PhotoGridPage(
           controller: AppServices.instance.browserController,
           folderHandle: CameraAlbum.allPhotosHandle,
-          fallbackName: '相机相册',
+          fallbackName: context.t('相机相册'),
         ),
       ),
     );
