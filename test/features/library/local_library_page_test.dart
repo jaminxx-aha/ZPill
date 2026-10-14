@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:nikon_pill/core/browser/object_entry.dart';
+import 'package:nikon_pill/core/browser/photo_group.dart' show baseNameOf;
 import 'package:nikon_pill/core/ptpip/object_format.dart';
 import 'package:nikon_pill/core/transfer/transfer_engine.dart';
 import 'package:nikon_pill/core/transfer/transfer_task.dart';
@@ -963,5 +964,185 @@ void main() {
     await tester.tap(find.byType(Image).first);
     await tester.pumpAndSettle();
     expect(find.text('c.jpg'), findsWidgets);
+  });
+
+  // ── 连拍聚合(2026-10-14:相邻拍摄时刻成段合为一格,与相机相册
+  // buildPhotoGroups 第三遍同参;mtime = 拍摄时刻由下载引擎回写)──
+
+  test('连拍聚合:散时刻全单段(每文件独立)', () {
+    final files = [
+      writeFile('a.jpg', modified: DateTime(2026, 10, 1, 10, 0, 0)),
+      writeFile('b.jpg', modified: DateTime(2026, 10, 1, 10, 5, 0)),
+      writeFile('c.jpg', modified: DateTime(2026, 10, 1, 10, 40, 0)),
+    ];
+    expect(groupLocalBurstRuns(files), [
+      [files[0]],
+      [files[1]],
+      [files[2]],
+    ]);
+  });
+
+  test('连拍聚合:3 张 100ms 间隔聚为一段', () {
+    final base = DateTime(2026, 10, 1, 10, 0, 0);
+    final files = [
+      writeFile('a.jpg', modified: base),
+      writeFile('b.jpg',
+          modified: base.add(const Duration(milliseconds: 100))),
+      writeFile('c.jpg',
+          modified: base.add(const Duration(milliseconds: 200))),
+    ];
+    expect(groupLocalBurstRuns(files), [files]);
+  });
+
+  test('连拍聚合:相邻差 600ms 超窗断段,窗内段照聚', () {
+    final base = DateTime(2026, 10, 1, 10, 0, 0);
+    final a = writeFile('a.jpg', modified: base);
+    final b = writeFile('b.jpg',
+        modified: base.add(const Duration(milliseconds: 600)));
+    final c = writeFile('c.jpg',
+        modified: base.add(const Duration(milliseconds: 700)));
+    final d = writeFile('d.jpg',
+        modified: base.add(const Duration(milliseconds: 800)));
+    // a |600ms 超窗| b,c,d(各 100ms)→ a 单段 + bcd 一段
+    expect(groupLocalBurstRuns([a, b, c, d]), [
+      [a],
+      [b, c, d],
+    ]);
+  });
+
+  test('连拍聚合:同基名 JPG+NEF 孪生同刻不聚(1 基名)', () {
+    final t = DateTime(2026, 10, 1, 10, 0, 0);
+    final jpg = writeFile('DSC_0001.JPG', modified: t);
+    final nef = writeFile('DSC_0001.NEF', modified: t);
+    expect(groupLocalBurstRuns([jpg, nef]), [
+      [jpg],
+      [nef],
+    ]);
+  });
+
+  test('连拍聚合:3 张 × 双格式 6 文件聚一段(不同基名数 = 3)', () {
+    final base = DateTime(2026, 10, 1, 10, 0, 0);
+    final files = <File>[];
+    var i = 0;
+    for (final name in ['DSC_0001', 'DSC_0002', 'DSC_0003']) {
+      final t = base.add(Duration(milliseconds: 150 * i++));
+      files.add(writeFile('$name.JPG', modified: t));
+      files.add(writeFile('$name.NEF', modified: t));
+    }
+    final runs = groupLocalBurstRuns(files);
+    expect(runs, hasLength(1));
+    expect(runs.single, hasLength(6));
+    expect(
+        runs.single
+            .map((f) => baseNameOf(f.uri.pathSegments.last))
+            .toSet(),
+        hasLength(3));
+  });
+
+  test('连拍聚合:段内 2 基名不足成段(边界不聚)', () {
+    final t = DateTime(2026, 10, 1, 10, 0, 0);
+    final aj = writeFile('a.jpg', modified: t);
+    final an = writeFile('a.nef', modified: t);
+    final bj = writeFile('b.jpg', modified: t);
+    final bn = writeFile('b.nef', modified: t);
+    expect(groupLocalBurstRuns([aj, an, bj, bn]), [
+      [aj],
+      [an],
+      [bj],
+      [bn],
+    ]);
+  });
+
+  test('连拍聚合:升序输入同样生效(对方向不敏感)', () {
+    final base = DateTime(2026, 10, 1, 10, 0, 0);
+    final old =
+        writeFile('z.jpg', modified: base.subtract(const Duration(hours: 1)));
+    final c = writeFile('c.jpg', modified: base);
+    final b = writeFile('b.jpg',
+        modified: base.add(const Duration(milliseconds: 100)));
+    final a = writeFile('a.jpg',
+        modified: base.add(const Duration(milliseconds: 200)));
+    // 旧→新输入:old 单段 + c,b,a(倒着相邻差 100ms)聚一段
+    expect(groupLocalBurstRuns([old, c, b, a]), [
+      [old],
+      [c, b, a],
+    ]);
+  });
+
+  testWidgets('连拍 chip:成段合为一格带 ×N 角标,点开段内翻张,关掉恢复平铺',
+      (tester) async {
+    final base = DateTime(2026, 10, 1, 10, 0, 0);
+    // 三连拍(mtime = 拍摄时刻)+ 一张散拍
+    writeFile('b1.jpg', modified: base);
+    writeFile('b2.jpg', modified: base.add(const Duration(milliseconds: 100)));
+    writeFile('b3.jpg', modified: base.add(const Duration(milliseconds: 200)));
+    writeFile('solo.jpg',
+        modified: base.subtract(const Duration(minutes: 10)));
+    final gallery = _FakeGallery(dir);
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    await tester.pumpWidget(host(gallery, controller));
+    await tester.pumpAndSettle();
+
+    // 默认平铺:4 格,无角标
+    expect(find.byType(Image), findsNWidgets(4));
+    expect(find.text('×3'), findsNothing);
+
+    // 开连拍:倒序 [b3,b2,b1] 聚一段(封面 b3)+ solo 独立格 → 2 格
+    await tester.tap(libChip('连拍'));
+    await tester.pumpAndSettle();
+    expect(find.byType(Image), findsNWidgets(2));
+    expect(find.text('×3'), findsOneWidget);
+
+    // 点连拍格:查看器初始页 = 封面,peers = 段内 3 张可翻张
+    await tester.tap(find.byKey(const ValueKey('b3.jpg')));
+    await tester.pumpAndSettle();
+    expect(find.text('b3.jpg'), findsWidgets);
+    await dragLikeFinger(
+        tester, find.byType(PageView), const Offset(-600, 0));
+    expect(find.text('b2.jpg'), findsWidgets);
+    // 段外文件(solo)不在查看器翻页集里
+    expect(find.text('solo.jpg'), findsNothing);
+
+    // 关连拍:恢复平铺 4 格
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    await tester.tap(libChip('连拍'));
+    await tester.pumpAndSettle();
+    expect(find.byType(Image), findsNWidgets(4));
+    expect(find.text('×3'), findsNothing);
+  });
+
+  testWidgets('连拍格长按删除:保持单文件语义(按封面把关),删后段重聚',
+      (tester) async {
+    final base = DateTime(2026, 10, 1, 10, 0, 0);
+    writeFile('b1.jpg', modified: base);
+    writeFile('b2.jpg', modified: base.add(const Duration(milliseconds: 100)));
+    writeFile('b3.jpg', modified: base.add(const Duration(milliseconds: 200)));
+    final gallery = _FakeGallery(dir);
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    await tester.pumpWidget(host(gallery, controller));
+    await tester.pumpAndSettle();
+    await tester.tap(libChip('连拍'));
+    await tester.pumpAndSettle();
+    expect(find.text('×3'), findsOneWidget);
+
+    // 长按连拍格:确认对话框按封面文件名把关(不是删整段)
+    await tester.longPress(find.byKey(const ValueKey('b3.jpg')));
+    await tester.pumpAndSettle();
+    expect(find.text('删除应用内文件?'), findsOneWidget);
+    expect(find.textContaining('b3.jpg'), findsOneWidget);
+    await tester.tap(find.text('删除'));
+    await tester.pumpAndSettle();
+    await tester
+        .runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+    await tester.pumpAndSettle();
+
+    // 只删了封面:剩 2 基名不成段 → 平铺 2 格,角标消失
+    expect(File('${dir.path}/b3.jpg').existsSync(), isFalse);
+    expect(File('${dir.path}/b1.jpg').existsSync(), isTrue);
+    expect(find.byType(Image), findsNWidgets(2));
+    expect(find.text('×3'), findsNothing);
   });
 }

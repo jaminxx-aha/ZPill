@@ -4,8 +4,10 @@
 ///
 /// 网格默认按修改时间倒序(新下载在前,排序可翻「旧→新」);顶栏下
 /// 格式过滤 chips(全部/RAW/JPG/视频,按文件名扩展名,与相机侧判定同
-/// 源)再叠一行类型/排序 chips(全部/照片/视频 × 新→旧/旧→新,内存
-/// 态不落库)。Flutter 可解码的图片
+/// 源)再叠一行类型/排序/连拍 chips(全部/照片/视频 × 新→旧/旧→新
+/// × 连拍聚合开关,内存态不落库)。「连拍」开时相邻拍摄时刻的同段
+/// 文件合为一格(×N 角标,与相机相册连拍簇同参,见 [groupLocalBurstRuns];
+/// mtime = 拍摄时刻由下载引擎落盘回写)。Flutter 可解码的图片
 /// 直接铺格(cacheWidth 限内存);NEF 走原生解码、MOV 走原生抽帧出
 /// 网格缩略(iOS ImageIO / AVAssetImageGenerator,≤512px 同一管线
 /// 落盘缓存,MOV 格内叠摄像机角标;无解码器/无抽帧/失败回落图标格)。
@@ -100,6 +102,52 @@ bool _isViewableName(String name) =>
 
 String _nameOf(File file) => file.uri.pathSegments.last;
 
+/// 本地图库连拍聚合(公开纯函数,测试直入):把**已按当前排序排好序**
+/// 的文件列表按相邻修改时刻分段。
+///
+/// 与相机相册侧 buildPhotoGroups 第三遍连拍并组同参([kBurstShotGap]/
+/// [kBurstMinShots] 直接复用,别处另造常量会两边口径不一):相邻文件
+/// (列表序,间隔取差的绝对值 → 对排序方向不敏感)修改时刻差 ≤ 窗归
+/// 同段;段内**不同基名数**(RAW+JPG 孪生同基名算一张,见 [baseNameOf])
+/// ≥ 成段最少张数才算连拍段 —— 「一张照片的 JPG+NEF 两文件」永不
+/// 误聚,「3 张连拍 × 双格式 6 文件」聚为一段 ×3。返回覆盖全部输入的
+/// 段列表(未成段的每文件独立单元素段),顺序保持输入序。前提是
+/// mtime = 拍摄时刻(下载引擎落盘回写,见 TransferEngine._run)。
+List<List<File>> groupLocalBurstRuns(List<File> files) {
+  final out = <List<File>>[];
+  var start = 0;
+  for (var i = 1; i <= files.length; i++) {
+    final inGap = i < files.length &&
+        files[i]
+                .statSync()
+                .modified
+                .difference(files[i - 1].statSync().modified)
+                .abs() <=
+            kBurstShotGap;
+    if (!inGap) {
+      final run = files.sublist(start, i);
+      final shots = run.map((f) => baseNameOf(_nameOf(f))).toSet().length;
+      if (shots >= kBurstMinShots) {
+        out.add(run);
+      } else {
+        // 不足成段(散拍/双格式孪生):逐文件独立段,平铺格照常
+        for (final f in run) {
+          out.add([f]);
+        }
+      }
+      start = i;
+    }
+  }
+  return out;
+}
+
+/// 网格布局(4 列,紧凑间距)。
+const _gridDelegate = SliverGridDelegateWithFixedCrossAxisCount(
+  crossAxisCount: 4,
+  mainAxisSpacing: 2,
+  crossAxisSpacing: 2,
+);
+
 class LocalLibraryPage extends StatefulWidget {
   const LocalLibraryPage({
     super.key,
@@ -145,6 +193,10 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   _LibFilter _filter = _LibFilter.all;
   _LibType _type = _LibType.all;
   _LibSort _sort = _LibSort.newestFirst;
+
+  /// 连拍聚合开关(内存级,不落 AppSettings —— 与类型/排序 chips 同
+  /// 先例):开时网格条目 = [groupLocalBurstRuns] 的段,成段合为一格。
+  bool _burstGrouped = false;
 
   /// NEF/MOV 网格缩略:原生解码/抽帧一次(≤512px)落盘复用。会话内
   /// future 合并(滚动反复 build 不重复解码);解码串行(整档 RAW 解码
@@ -274,6 +326,14 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
                               selected: _sort == s,
                               onSelected: (_) => setState(() => _sort = s),
                             ),
+                          // 连拍聚合:相邻拍摄时刻的成段文件合为一格
+                          //(×N 角标,点开段内翻张),关掉恢复平铺。
+                          ChoiceChip(
+                            label: const Text('连拍'),
+                            selected: _burstGrouped,
+                            onSelected: (on) =>
+                                setState(() => _burstGrouped = on),
+                          ),
                         ],
                       ),
                     ),
@@ -285,18 +345,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
                                   style: TextStyle(
                                       color: Theme.of(context).hintColor)),
                             )
-                          : GridView.builder(
-                              padding: const EdgeInsets.all(2),
-                              gridDelegate:
-                                  const SliverGridDelegateWithFixedCrossAxisCount(
-                                crossAxisCount: 4,
-                                mainAxisSpacing: 2,
-                                crossAxisSpacing: 2,
-                              ),
-                              itemCount: filtered.length,
-                              itemBuilder: (_, i) =>
-                                  _cell(context, filtered[i], filtered),
-                            ),
+                          : _grid(context, filtered),
                     ),
                   ],
                 ),
@@ -310,6 +359,86 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
       .where((f) =>
           _filter.allows(_nameOf(f)) && _type.allows(_nameOf(f)))
       .toList(growable: false);
+
+  /// 网格主体:平铺(现状)或连拍聚合。「连拍」开时条目 =
+  /// [groupLocalBurstRuns] 的段 —— 成段合为一格(封面 + ×N 角标),
+  /// 单文件段保持现状平铺格。聚合在 filtered(已排序已筛选)列表上做,
+  /// 排序/筛选与聚合的叠加不用特判:两向排序、格式/类型筛选天然生效
+  ///(筛 RAW 时连拍段只剩 NEF 成员,如实显示)。
+  Widget _grid(BuildContext context, List<File> filtered) {
+    if (!_burstGrouped) {
+      return GridView.builder(
+        padding: const EdgeInsets.all(2),
+        gridDelegate: _gridDelegate,
+        itemCount: filtered.length,
+        itemBuilder: (_, i) => _cell(context, filtered[i], filtered),
+      );
+    }
+    final runs = groupLocalBurstRuns(filtered);
+    return GridView.builder(
+      padding: const EdgeInsets.all(2),
+      gridDelegate: _gridDelegate,
+      itemCount: runs.length,
+      itemBuilder: (_, i) {
+        final run = runs[i];
+        return _isBurstRun(run)
+            ? _burstCell(context, run)
+            : _cell(context, run.single, filtered);
+      },
+    );
+  }
+
+  /// 连拍段判定(显示层):段内文件数 ≥ 2 或不同基名 ≥ 2(即非全单
+  /// 文件段)→ 合为一格展示。
+  bool _isBurstRun(List<File> run) =>
+      run.length >= 2 ||
+      run.map((f) => baseNameOf(_nameOf(f))).toSet().length >= 2;
+
+  /// 连拍段格:封面 = 段内首个 JPG(无 JPG 用段首文件,与相机侧
+  /// primary = jpg ?? first 同语义);左下 ×N 角标(N = 段内不同基名
+  /// 数,即张数)。点开查看器 peers = 段内全部文件(可翻张),初始页
+  /// = 封面;长按删除保持单文件语义(确认对话框按封面文件名把关,
+  /// 不改成删段)。
+  Widget _burstCell(BuildContext context, List<File> run) {
+    final cover = run.firstWhere((f) => isJpgFilename(_nameOf(f)),
+        orElse: () => run.first);
+    final shots = run.map((f) => baseNameOf(_nameOf(f))).toSet().length;
+    return GestureDetector(
+      key: ValueKey(_nameOf(cover)), // 测试/定位锚:格 = 封面文件名
+      onTap: _openable(cover) ? () => _openViewer(cover, run) : null,
+      onLongPress: () => _confirmDelete(cover),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          _cellBody(context, cover),
+          // ×N 角标(左下,半透明黑底白字小胶囊 —— 与相机相册网格
+          // typeLabel 角标、本页视频格 videocam 角标同一写法)。
+          Align(
+            alignment: Alignment.bottomLeft,
+            child: Padding(
+              padding: const EdgeInsets.all(4),
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.55),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text(
+                  '×$shots',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 9,
+                    height: 1.3,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
   /// 空筛选文案:单格式筛子沿用原文案(既有认知/用例不动);类型筛子
   /// 在场(单独或与格式叠加)说不清哪把筛子拦的,退泛化一行。
@@ -353,65 +482,77 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     );
   }
 
+  /// 可点进查看器:Flutter 可解码图片 / NEF 原生解码 / MOV 原生抽帧。
+  bool _openable(File file) {
+    final name = _nameOf(file);
+    return _isViewableName(name) ||
+        isRawFilename(name) ||
+        isVideoFilename(name);
+  }
+
+  /// 单文件格:手势(点开查看器/长按删除)包内容(见 [_cellBody])。
   Widget _cell(BuildContext context, File file, List<File> peers) {
+    return GestureDetector(
+      key: ValueKey(_nameOf(file)), // 测试/定位锚:格 = 文件名
+      onTap: _openable(file) ? () => _openViewer(file, peers) : null,
+      onLongPress: () => _confirmDelete(file),
+      child: _cellBody(context, file),
+    );
+  }
+
+  /// 格内容(可解码图片铺格 / NEF·MOV 原生缩略 / 图标格)。
+  Widget _cellBody(BuildContext context, File file) {
     final viewable = _isViewable(file);
     final name = _nameOf(file);
     final raw = !viewable && isRawFilename(name);
     final video = !viewable && isVideoFilename(name);
-    final openable =
-        viewable || raw || video; // NEF/MOV 可点进查看器
-    return GestureDetector(
-      key: ValueKey(name), // 测试/定位锚:格 = 文件名
-      onTap: openable ? () => _openViewer(file, peers) : null,
-      onLongPress: () => _confirmDelete(file),
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          if (viewable)
-            Image.file(
-              file,
-              fit: BoxFit.cover,
-              cacheWidth: 300,
-              errorBuilder: (context, error, stackTrace) => ColoredBox(
-                color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                child: const Center(
-                    child: Icon(Icons.broken_image_outlined)),
-              ),
-            )
-          else if (raw || video)
-            // NEF/MOV:原生解码/抽帧缩略(缓存命中/解码完成后铺图);
-            // 无解码器/失败 → 图标格。视频格叠摄像机角标(与相机相册
-            // 网格同款)。
-            FutureBuilder<String?>(
-              future: _thumbFor(file),
-              builder: (context, snap) => snap.hasData && snap.data != null
-                  ? Stack(
-                      fit: StackFit.expand,
-                      children: [
-                        Image.file(
-                          File(snap.data!),
-                          fit: BoxFit.cover,
-                          cacheWidth: 300,
-                          errorBuilder: (context, error, stackTrace) =>
-                              _iconCell(context, name),
-                        ),
-                        if (video)
-                          const Align(
-                            alignment: Alignment.bottomRight,
-                            child: Padding(
-                              padding: EdgeInsets.all(4),
-                              child: Icon(Icons.videocam,
-                                  size: 16, color: Colors.white),
-                            ),
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        if (viewable)
+          Image.file(
+            file,
+            fit: BoxFit.cover,
+            cacheWidth: 300,
+            errorBuilder: (context, error, stackTrace) => ColoredBox(
+              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+              child: const Center(
+                  child: Icon(Icons.broken_image_outlined)),
+            ),
+          )
+        else if (raw || video)
+          // NEF/MOV:原生解码/抽帧缩略(缓存命中/解码完成后铺图);
+          // 无解码器/失败 → 图标格。视频格叠摄像机角标(与相机相册
+          // 网格同款)。
+          FutureBuilder<String?>(
+            future: _thumbFor(file),
+            builder: (context, snap) => snap.hasData && snap.data != null
+                ? Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      Image.file(
+                        File(snap.data!),
+                        fit: BoxFit.cover,
+                        cacheWidth: 300,
+                        errorBuilder: (context, error, stackTrace) =>
+                            _iconCell(context, name),
+                      ),
+                      if (video)
+                        const Align(
+                          alignment: Alignment.bottomRight,
+                          child: Padding(
+                            padding: EdgeInsets.all(4),
+                            child: Icon(Icons.videocam,
+                                size: 16, color: Colors.white),
                           ),
-                      ],
-                    )
-                  : _iconCell(context, name),
-            )
-          else
-            _iconCell(context, name),
-        ],
-      ),
+                        ),
+                    ],
+                  )
+                : _iconCell(context, name),
+          )
+        else
+          _iconCell(context, name),
+      ],
     );
   }
 

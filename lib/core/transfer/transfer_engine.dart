@@ -203,6 +203,19 @@ final class TransferEngineImpl implements TransferEngine {
       await _splitMotionPhoto(job, dl); // 先拆(水印重编码会毁内嵌视频段)
       await _applyWatermark(job, dl.path); // 先水印(重编码丢段,XMP 后补)
       await _injectMetadata(job, dl.path);
+      // 全部落盘链路(拆分/水印/XMP)收尾后,把 mtime 回写为拍摄时刻
+      //(仅 app 目的地):mtime 原为落盘时刻(下载序 ≠ 拍摄序),回写后
+      // 本地图库排序/连拍聚合/信息底单都以拍摄时刻为准;gallery 目的地
+      // 是临时文件导入系统相册后即删,不必写。best-effort:失败静默。
+      try {
+        final capturedAt = _entryOf(job).capturedAt;
+        if (job.task.destination == TransferDestination.app &&
+            capturedAt != null) {
+          await File(dl.path).setLastModified(capturedAt);
+        }
+      } on Exception {
+        // 部分文件系统拒绝改 mtime:排序/聚合回落落盘时刻,不挡传输
+      }
       job.task =
           job.task.copyWith(state: TransferState.completed, receivedBytes: dl.bytes);
     } on DownloadCancelledException {
