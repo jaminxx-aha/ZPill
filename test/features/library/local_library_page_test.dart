@@ -230,6 +230,13 @@ Uint8List _jpgExifBytes() {
   ]);
 }
 
+/// 格式行文案定位:类型行 chips 与格式行重名(「全部」「视频」),
+/// 格式行在列首,先序遍历第一处即它(类型行另有 ChoiceChip 可定位)。
+Finder fmtText(String label) => find.text(label).first;
+
+/// 类型/排序行芯片定位(页面唯一的 ChoiceChip 组)。
+Finder libChip(String label) => find.widgetWithText(ChoiceChip, label);
+
 void main() {
   late Directory dir;
 
@@ -320,25 +327,25 @@ void main() {
     expect(find.text('NEF'), findsOneWidget);
     expect(find.byIcon(Icons.videocam_outlined), findsOneWidget);
 
-    await tester.tap(find.text('RAW'));
+    await tester.tap(fmtText('RAW'));
     await tester.pumpAndSettle();
     expect(find.text('NEF'), findsOneWidget);
     expect(find.byType(Image), findsNothing);
     expect(find.byIcon(Icons.videocam_outlined), findsNothing);
 
-    await tester.tap(find.text('视频'));
+    await tester.tap(fmtText('视频'));
     await tester.pumpAndSettle();
     expect(find.byIcon(Icons.videocam_outlined), findsOneWidget);
     expect(find.text('NEF'), findsNothing);
     expect(find.byType(Image), findsNothing);
 
-    await tester.tap(find.text('JPG'));
+    await tester.tap(fmtText('JPG'));
     await tester.pumpAndSettle();
     expect(find.byType(Image), findsOneWidget);
     expect(find.text('NEF'), findsNothing);
     expect(find.byIcon(Icons.videocam_outlined), findsNothing);
 
-    await tester.tap(find.text('全部'));
+    await tester.tap(fmtText('全部'));
     await tester.pumpAndSettle();
     expect(find.byType(Image), findsOneWidget);
     expect(find.text('NEF'), findsOneWidget);
@@ -353,12 +360,12 @@ void main() {
     await tester.pumpWidget(host(gallery, controller));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('视频'));
+    await tester.tap(fmtText('视频'));
     await tester.pumpAndSettle();
     expect(find.text('没有视频格式的文件'), findsOneWidget);
     expect(find.byType(Image), findsNothing);
 
-    await tester.tap(find.text('全部'));
+    await tester.tap(fmtText('全部'));
     await tester.pumpAndSettle();
     expect(find.byType(Image), findsOneWidget);
   });
@@ -851,5 +858,110 @@ void main() {
     expect(File('${dir.path}/a.jpg').existsSync(), isFalse);
     expect(find.text('b.jpg'), findsWidgets); // 尾页删除后落回 b
     expect(find.byType(PageView), findsOneWidget); // 查看器还在
+  });
+
+  // ── 类型筛选/排序(2026-10-14:照片/视频大类 + 时间两向)──
+
+  testWidgets('类型筛选:照片/视频 chips 大类收窄(非视频归照片)', (tester) async {
+    writeFile('a.jpg', modified: DateTime(2026, 10, 1));
+    writeFile('b.nef', modified: DateTime(2026, 10, 2));
+    writeFile('c.mov', modified: DateTime(2026, 10, 3));
+    final gallery = _FakeGallery(dir);
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    await tester.pumpWidget(host(gallery, controller));
+    await tester.pumpAndSettle();
+
+    // 全部:a.jpg 铺格 + NEF 图标格 + MOV 摄像机图标格
+    expect(find.byType(Image), findsOneWidget);
+    expect(find.text('NEF'), findsOneWidget);
+    expect(find.byIcon(Icons.videocam_outlined), findsOneWidget);
+
+    // 照片:JPG 与 RAW 都是大类「照片」,MOV 出局
+    await tester.tap(libChip('照片'));
+    await tester.pumpAndSettle();
+    expect(find.byType(Image), findsOneWidget);
+    expect(find.text('NEF'), findsOneWidget);
+    expect(find.byIcon(Icons.videocam_outlined), findsNothing);
+
+    // 视频:只剩 MOV(与格式行「视频」同集)
+    await tester.tap(libChip('视频'));
+    await tester.pumpAndSettle();
+    expect(find.byIcon(Icons.videocam_outlined), findsOneWidget);
+    expect(find.byType(Image), findsNothing);
+    expect(find.text('NEF'), findsNothing);
+
+    // 回全部
+    await tester.tap(libChip('全部'));
+    await tester.pumpAndSettle();
+    expect(find.byType(Image), findsOneWidget);
+    expect(find.text('NEF'), findsOneWidget);
+    expect(find.byIcon(Icons.videocam_outlined), findsOneWidget);
+  });
+
+  testWidgets('类型与格式叠筛:交集生效;类型在场走泛化空文案',
+      (tester) async {
+    writeFile('a.jpg', modified: DateTime(2026, 10, 1));
+    writeFile('c.mov', modified: DateTime(2026, 10, 3));
+    final gallery = _FakeGallery(dir);
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    await tester.pumpWidget(host(gallery, controller));
+    await tester.pumpAndSettle();
+
+    // 格式 RAW × 类型照片:a.jpg 被格式拦、c.mov 被类型拦 → 交集空
+    await tester.tap(fmtText('RAW'));
+    await tester.pumpAndSettle();
+    await tester.tap(libChip('照片'));
+    await tester.pumpAndSettle();
+    expect(find.text('没有符合条件的文件'), findsOneWidget);
+
+    // 类型回全部后只剩格式筛子:回格式行文案
+    await tester.tap(libChip('全部'));
+    await tester.pumpAndSettle();
+    expect(find.text('没有RAW格式的文件'), findsOneWidget);
+
+    // 两把筛子都回全部:网格恢复
+    await tester.tap(fmtText('全部'));
+    await tester.pumpAndSettle();
+    expect(find.byType(Image), findsOneWidget);
+    expect(find.byIcon(Icons.videocam_outlined), findsOneWidget);
+  });
+
+  testWidgets('排序:默认新→旧不动;「旧→新」翻向,查看器随排序翻页',
+      (tester) async {
+    writeFile('a.jpg', modified: DateTime(2026, 10, 1));
+    writeFile('b.jpg', modified: DateTime(2026, 10, 2));
+    writeFile('c.jpg', modified: DateTime(2026, 10, 3));
+    final gallery = _FakeGallery(dir);
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    await tester.pumpWidget(host(gallery, controller));
+    await tester.pumpAndSettle();
+
+    // 默认新→旧:首格 c(既有默认,行为不变)
+    await tester.tap(find.byType(Image).first);
+    await tester.pumpAndSettle();
+    expect(find.text('c.jpg'), findsWidgets);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+
+    // 旧→新:首格 a,翻页序随排序(a → b)
+    await tester.tap(libChip('旧→新'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byType(Image).first);
+    await tester.pumpAndSettle();
+    expect(find.text('a.jpg'), findsWidgets);
+    await dragLikeFinger(tester, find.byType(PageView), const Offset(-600, 0));
+    expect(find.text('b.jpg'), findsWidgets);
+
+    // 回新→旧:首格回到 c
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    await tester.tap(libChip('新→旧'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byType(Image).first);
+    await tester.pumpAndSettle();
+    expect(find.text('c.jpg'), findsWidgets);
   });
 }
