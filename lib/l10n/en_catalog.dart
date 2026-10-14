@@ -699,4 +699,57 @@ const Map<String, String> enCatalog = {
   '已完成 · 未导入(可重新下载再试)': 'Completed · not imported (download again to retry)',
   '已保存到应用内': 'Saved to the app',
   '失败:{e}(重试 {n} 次)': 'Failed: {e} (after {n} attempts)',
+
+  // ── edit(i18n-8)──
+  // edit_page(「取消」「无」复用既有键;LUT 芯片标题键存 edit/lut_presets
+  // 的 builtinLuts —— 4 条已在 i18n-4(remote-pages 段)入表,remote_
+  // settings_panel 与本页 _lutPanel 两个显示点同键包 t;剪贴板导入的
+  // .cube TITLE 通常为拉丁串,未命中原样回落。「应用」是 Apply 动词
+  // —— i18n-6 预留的决定在此落地:browser 段的「到应用/下载到应用」
+  // 是名词性介词片段,不同键不撞义。toast 走 _toast 消费点收口,
+  // 带参模板在调用点先 t+填充(二次 t 不命中键原样回落,无害))
+  '重置': 'Reset',
+  '保存到相册': 'Save to Album',
+  '无法编辑此文件(仅支持 JPEG)': 'Cannot edit this file (JPEG only)',
+  '旋转': 'Rotate',
+  '裁剪': 'Crop',
+  '调节': 'Adjust',
+  '左转 90°': 'Rotate Left 90°',
+  '右转 90°': 'Rotate Right 90°',
+  '选择裁剪区域': 'Select Crop Area',
+  '自由': 'Free',
+  '原比例': 'Original',
+  '应用': 'Apply',
+  '亮度': 'Brightness',
+  '对比': 'Contrast',
+  '饱和': 'Saturation',
+  '暖调': 'Warmth',
+  '从剪贴板导入 .cube': 'Import .cube from Clipboard',
+  '导入': 'Imported',
+  '已保存到相册': 'Saved to the album',
+  '未保存(已取消)': 'Not saved (cancelled)',
+  '保存失败,请重试': 'Save failed; please retry',
+  '剪贴板没有文本': 'No text in the clipboard',
+  '未命名': 'Untitled',
+  '已导入「{title}」({size}³)': 'Imported "{title}" ({size}³)',
+  '导入失败:{e}': 'Import failed: {e}',
+
+  // connection 层静态错误兜底(i18n-8 终检补包):键存 core/camera/
+  // camera_connection 与 app_services(无 BuildContext,中文直存),消费
+  // 点 connection_status_card 的 _HintText 已包 t(i18n-3),静态键本波
+  // 补齐;带 $e/$ip/$reason 插值的运行期串无静态键,如实回落中文
+  '未发现尼康相机:请插好 USB 数据线并解锁相机后重试':
+      'No Nikon camera found: plug in the USB cable, unlock the camera, then try again',
+  '相机处于受限连接状态(数据操作被禁用):请关闭相机电源,重新开机后再连接':
+      'The camera is in a restricted connection state (data operations disabled): turn the camera off and back on, then reconnect',
+  '连接在短时间内反复中断,自动重连已暂停:'
+          '请检查相机状态(电量/过热)与 Wi-Fi 链路,稍后手动重连':
+      'The connection dropped repeatedly within a short time; auto-reconnect is paused: '
+          'check the camera (battery / overheating) and the Wi-Fi link, then reconnect manually later',
+  '相机被占用(可能被 SnapBridge/尼享连接),每 5 秒慢速重试,可点「取消」':
+      'The camera is busy (possibly held by SnapBridge); retrying slowly every 5 s — tap "Cancel"',
+  '正在等待相机重新接入 USB(重新插好数据线后自动续连)':
+      'Waiting for the camera to come back over USB (plug the cable in again to resume automatically)',
+  '取景流多次重启未恢复':
+      'The viewfinder stream failed to recover after repeated restarts',
 };
