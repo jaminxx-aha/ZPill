@@ -19,6 +19,22 @@ enum WatermarkStyle { off, corner, card }
 /// 的 ThemeMode 枚举 —— data 层不依赖 Flutter,app 根再做映射。
 enum AppThemeMode { system, light, dark }
 
+/// 界面语言(2026-10-14 i18n 第一期):默认中文(「可跟随系统,默认为
+/// 中文」),可锁 English。独立于 Material 的 Locale —— t() 的语言来源
+/// 是 app 根装配的 L10nScope(见 l10n/l10n.dart),框架组件内置文案另
+/// 走 flutter_localizations,app 根再做两条映射。
+enum AppLanguage {
+  system, zh, en;
+
+  /// 设置页选择器文案。「中文」是语言专名,英文环境也不译(enCatalog
+  /// 同款映射)。
+  String get label => switch (this) {
+        system => '跟随系统',
+        zh => '中文',
+        en => 'English',
+      };
+}
+
 /// 取景画面上采样档(OpenZCine FeedUpscaler 口径,AI 档未引 ——
 /// 无 CoreML 接线,不虚设):off = 现状(低质采样);fast = Flutter
 /// 内建 cubic(FilterQuality.high,零额外开销);quality = 片元着色器
@@ -65,6 +81,7 @@ final class AppSettings {
     this.batterySaver = false,
     this.customSavePath,
     this.themeMode = AppThemeMode.system,
+    this.language = AppLanguage.zh,
     this.xmpCreator,
     this.xmpRights,
     this.xmpInjectRating = false,
@@ -108,6 +125,10 @@ final class AppSettings {
 
   /// 深浅模式:默认跟随系统,设置页可锁定。
   final AppThemeMode themeMode;
+
+  /// 界面语言:默认中文(可跟随系统);消费在 app 根(L10nScope +
+  /// MaterialApp locale 映射,见 app.dart)。
+  final AppLanguage language;
 
   /// XMP 元数据注入(TODO §四):作者(dc:creator),空 = 不写该字段。
   final String? xmpCreator;
@@ -213,6 +234,7 @@ final class AppSettings {
     bool? batterySaver,
     String? customSavePath,
     AppThemeMode? themeMode,
+    AppLanguage? language,
     String? xmpCreator,
     String? xmpRights,
     bool? xmpInjectRating,
@@ -251,6 +273,7 @@ final class AppSettings {
         batterySaver: batterySaver ?? this.batterySaver,
         customSavePath: customSavePath ?? this.customSavePath,
         themeMode: themeMode ?? this.themeMode,
+        language: language ?? this.language,
         xmpCreator: xmpCreator ?? this.xmpCreator,
         xmpRights: xmpRights ?? this.xmpRights,
         xmpInjectRating: xmpInjectRating ?? this.xmpInjectRating,
@@ -296,6 +319,7 @@ final class AppSettings {
       other.batterySaver == batterySaver &&
       other.customSavePath == customSavePath &&
       other.themeMode == themeMode &&
+      other.language == language &&
       other.xmpCreator == xmpCreator &&
       other.xmpRights == xmpRights &&
       other.xmpInjectRating == xmpInjectRating &&
@@ -328,10 +352,10 @@ final class AppSettings {
       other.volumeKeyShutter == volumeKeyShutter;
 
   @override
-  // Object.hash 位置参上限 20,字段 27 个 → hashAll(列表序即上面 == 序)。
+  // Object.hash 位置参上限 20,字段 37 个 → hashAll(列表序即上面 == 序)。
   int get hashCode => Object.hashAll([
         autoTransfer, autoTransferFormat, quality, batterySaver, customSavePath,
-        themeMode, xmpCreator, xmpRights, xmpInjectRating, xmpInjectGps,
+        themeMode, language, xmpCreator, xmpRights, xmpInjectRating, xmpInjectGps,
         watermarkStyle, watermarkText, feedUpscaler, temporalDenoise,
         autoRotateFeed, deSqueeze,
         monitorGrid, monitorZebra, monitorHistogram, monitorLevel,
@@ -350,6 +374,7 @@ final class AppSettings {
         'batterySaver': batterySaver,
         if (customSavePath != null) 'customSavePath': customSavePath,
         'themeMode': themeMode.name,
+        'language': language.name,
         if (xmpCreator != null) 'xmpCreator': xmpCreator,
         if (xmpRights != null) 'xmpRights': xmpRights,
         'xmpInjectRating': xmpInjectRating,
@@ -397,6 +422,9 @@ final class AppSettings {
         themeMode:
             _enumByName(AppThemeMode.values, json['themeMode']) ??
                 AppThemeMode.system,
+        // 旧档缺键/表外值回落中文(默认档,同 themeMode 口径)。
+        language: _enumByName(AppLanguage.values, json['language']) ??
+            AppLanguage.zh,
         xmpCreator: json['xmpCreator'] as String?,
         xmpRights: json['xmpRights'] as String?,
         xmpInjectRating: json['xmpInjectRating'] == true,

@@ -239,4 +239,44 @@ void main() {
       expect((await reloaded.current()).volumeKeyShutter, isTrue);
     });
   });
+
+  group('界面语言持久化(i18n 第一期,2026-10-14)', () {
+    test('默认中文(非跟随系统);copyWith/JSON 往返(en/system)', () {
+      expect(const AppSettings().language, AppLanguage.zh,
+          reason: '「可跟随系统,默认为中文」—— 默认档是 zh 不是 system');
+
+      final en = const AppSettings().copyWith(language: AppLanguage.en);
+      expect(en.language, AppLanguage.en);
+      expect(AppSettings.fromJson(en.toJson()).language, AppLanguage.en);
+
+      final sys = const AppSettings().copyWith(language: AppLanguage.system);
+      expect(sys.language, AppLanguage.system);
+      expect(AppSettings.fromJson(sys.toJson()).language, AppLanguage.system);
+    });
+
+    test('旧档缺键/表外值回落中文', () {
+      expect(AppSettings.fromJson({'autoTransfer': true}).language,
+          AppLanguage.zh,
+          reason: '旧版本文件无此键 → 默认中文');
+      expect(AppSettings.fromJson({'language': 'fr'}).language,
+          AppLanguage.zh,
+          reason: '表外值(手改文件)回落中文');
+    });
+
+    test('label:三档文案(跟随系统/中文/English)', () {
+      expect(AppLanguage.system.label, '跟随系统');
+      expect(AppLanguage.zh.label, '中文');
+      expect(AppLanguage.en.label, 'English');
+    });
+
+    test('文件落盘往返(FileSettingsStore)', () async {
+      final dir = await Directory.systemTemp.createTemp('np_settings_lang');
+      addTearDown(() => dir.delete(recursive: true));
+      final store = FileSettingsStore(dataDir: () async => dir.path);
+      await store.update(
+          const AppSettings().copyWith(language: AppLanguage.en));
+      final reloaded = FileSettingsStore(dataDir: () async => dir.path);
+      expect((await reloaded.current()).language, AppLanguage.en);
+    });
+  });
 }

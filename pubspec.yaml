@@ -12,6 +12,10 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  # 框架自带组件(菜单/日期选择等)内置文案的本地化(i18n 第一期);
+  # intl 由它传递自带,不显式加依赖/钉版本。
+  flutter_localizations:
+    sdk: flutter
   cupertino_icons: ^1.0.8
   # 图像解码/编码(纯 Dart):监看辅助直方图/斑马纹(WP6)、水印与
   # XMP 注入的 JPEG 重编码(WP9/10)、图库编辑滤镜(WP11)。
