@@ -237,6 +237,8 @@ final class AppServices {
     remoteController = RemoteController(
       session: session,
       connection: connection,
+      // AP 取景失败占位的接管引导门槛(STA 门天然开,USB 另有因)。
+      isApMode: () => connectionController.method == ConnectionMethod.ap,
       engine: lvEngine,
       // SDRAM 直拍收尾的图库通道(0xC101 对象 → 图库目的地全链)。
       transferEngine: transferEngine,
