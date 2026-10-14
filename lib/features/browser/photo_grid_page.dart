@@ -26,6 +26,7 @@ import '../../core/browser/photo_group.dart';
 import '../../core/browser/thumbnail_cache.dart';
 import '../../core/transfer/transfer_engine.dart';
 import '../../core/transfer/transfer_task.dart';
+import '../../l10n/l10n.dart';
 import '../common/format.dart';
 import '../common/widgets/confirm_dialog.dart';
 import '../common/widgets/states.dart';
@@ -149,7 +150,11 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
   /// 段头:日期 + 张数;多选模式下点按整日选择/取消,右侧显示该日
   /// 是否已全选。
   Widget _sectionHeader(_DateSection section, List<PhotoGroup> items) {
-    final label = section.day == null ? '未知日期' : sectionDateLabel(section.day!);
+    // 日期段(sectionDateLabel)是日期格式产物不抽,英文环境如实回落;
+    // 「未知日期」与「· N 张」尾段走 t()。
+    final label = section.day == null
+        ? context.t('未知日期')
+        : sectionDateLabel(section.day!);
     final daySelected =
         _selecting && section.items.every((g) => _selected.contains(g.key));
     return InkWell(
@@ -160,7 +165,8 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
           children: [
             Expanded(
               child: Text(
-                '$label · ${section.items.length} 张',
+                context.t('{label} · {n} 张',
+                    {'label': label, 'n': section.items.length}),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
@@ -249,8 +255,9 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
     if (pairCount > 0 || mixedPhotoVideo) {
       format = await showDownloadFormatSheet(context,
           subtitle: pairCount > 0
-              ? '已选 ${groups.length} 项,其中 $pairCount 项为双格式'
-              : '已选 ${groups.length} 项(照片与视频混选)');
+              ? context.t(
+                  '已选 {n} 项,其中 {m} 项为双格式', {'n': groups.length, 'm': pairCount})
+              : context.t('已选 {n} 项(照片与视频混选)', {'n': groups.length}));
       if (format == null) {
         return;
       }
@@ -277,8 +284,9 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
       }
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
-        ..showSnackBar(
-            SnackBar(content: Text('没有符合「${format!.label}」的文件,未开始下载')));
+        ..showSnackBar(SnackBar(
+            content: Text(context.t('没有符合「{label}」的文件,未开始下载',
+                {'label': context.t(format!.label)}))));
       return;
     }
     await _engine.enqueue(entries, destination: destination);
@@ -286,15 +294,29 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
     if (!mounted) {
       return;
     }
-    final where = destination == TransferDestination.gallery ? '相册' : '应用';
     final skipped = groups.length - included;
-    final tag = format == null ? '' : '(${format.short})';
-    final skipNote = skipped > 0 ? ',跳过 $skipped 项无 ${format!.short}' : '';
+    // 目的地片段键「到相册/到应用」带介词(不立裸键「应用」—— edit 页的
+    // 「应用」是 Apply 动词,撞义);格式 short 拉丁值未命中原文直返。
+    final where = destination == TransferDestination.gallery
+        ? context.t('到相册')
+        : context.t('到应用');
+    final tag = format == null ? '' : '(${context.t(format.short)})';
+    final skipNote = skipped > 0
+        ? context
+            .t(',跳过 {n} 项无 {s}', {'n': skipped, 's': context.t(format!.short)})
+        : '';
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(
-          content: Text(
-              '已开始下载 $included/${groups.length} 项 / ${entries.length} 个文件$tag 到$where$skipNote,进度见「图库」页')));
+          content: Text(context
+              .t('已开始下载 {i}/{g} 项 / {f} 个文件{tag} {where}{skip},进度见「图库」页', {
+        'i': included,
+        'g': groups.length,
+        'f': entries.length,
+        'tag': tag,
+        'where': where,
+        'skip': skipNote,
+      }))));
   }
 
   /// 批量删除(相机侧,不可逆):确认对话框点明项数与文件数;逐成员
@@ -309,9 +331,10 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
     final fileCount = groups.fold<int>(0, (n, g) => n + g.members.length);
     final confirmed = await showConfirmDialog(
       context,
-      title: '删除相机上的文件?',
-      content: '将删除 ${groups.length} 项(共 $fileCount 个文件)。\n此操作不可恢复。',
-      confirmLabel: '删除',
+      title: context.t('删除相机上的文件?'),
+      content: context.t('将删除 {n} 项(共 {f} 个文件)。\n此操作不可恢复。',
+          {'n': groups.length, 'f': fileCount}),
+      confirmLabel: context.t('删除'),
       destructive: true,
     );
     if (!confirmed) {
@@ -328,12 +351,12 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
     final messenger = ScaffoldMessenger.of(context)..hideCurrentSnackBar();
     if (result.failed > 0) {
       messenger.showSnackBar(SnackBar(
-        content: Text(
-            '已删除 ${result.deleted} 个文件,${result.failed} 个失败(相机拒绝或传输中断,条目保留)'),
+        content: Text(context.t('已删除 {n} 个文件,{m} 个失败(相机拒绝或传输中断,条目保留)',
+            {'n': result.deleted, 'm': result.failed})),
       ));
     } else {
-      messenger
-          .showSnackBar(SnackBar(content: Text('已删除 ${result.deleted} 个文件')));
+      messenger.showSnackBar(SnackBar(
+          content: Text(context.t('已删除 {n} 个文件', {'n': result.deleted}))));
     }
   }
 
@@ -377,23 +400,24 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
         return Scaffold(
           appBar: AppBar(
             title: Text(_selecting
-                ? '已选 ${_selected.length} 项'
-                : (widget.fallbackName ?? '相机相册')),
+                ? context.t('已选 {n} 项', {'n': _selected.length})
+                // fallbackName 由入口页预翻译(context.t)传入
+                : (widget.fallbackName ?? context.t('相机相册'))),
             actions: [
               if (_selecting) ...[
                 IconButton(
-                  tooltip: '全选',
+                  tooltip: context.t('全选'),
                   onPressed: () => _selectAll(items),
                   icon: const Icon(Icons.select_all),
                 ),
                 IconButton(
-                  tooltip: '取消选择',
+                  tooltip: context.t('取消选择'),
                   onPressed: _clearSelection,
                   icon: const Icon(Icons.close),
                 ),
               ] else ...[
                 IconButton(
-                  tooltip: '刷新',
+                  tooltip: context.t('刷新'),
                   onPressed: controller.syncing ? null : controller.reload,
                   icon: const Icon(Icons.refresh),
                 ),
@@ -434,10 +458,10 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
         final p = controller.progress;
         return LoadingState(
             message: p == null
-                ? '正在连接相机读取对象…'
-                : '正在读取相机对象 ${p.$1}/${p.$2}…');
+                ? context.t('正在连接相机读取对象…')
+                : context.t('正在读取相机对象 {a}/{b}…', {'a': p.$1, 'b': p.$2}));
       }
-      return EmptyState(message: '相机里还没有照片\n(未连接时请先在「相机」页连接)');
+      return EmptyState(message: context.t('相机里还没有照片\n(未连接时请先在「相机」页连接)'));
     }
     return Column(
       children: [
@@ -487,8 +511,10 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
   /// 同步中断横幅:内容已显示,重试只补缺失对象(断点续传)。
   Widget _syncErrorBanner(BrowserController controller) {
     return InlineHint(
+      // message 是控制器产出的运行期 $e 插值串,无静态键 —— 显示端
+      // (InlineHint)已包 t,英文环境如实回落中文
       message: controller.error!,
-      actionLabel: '重试',
+      actionLabel: context.t('重试'),
       onAction: controller.load,
     );
   }
@@ -510,7 +536,9 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
           itemBuilder: (context, i) {
             final album = albums[i];
             return ChoiceChip(
-              label: Text(album.name),
+              // 相册名 = 相机上报文件夹名(Latin,未命中原文直传)+
+              // 汇总相册「全部照片」(core 常量,命中即译)
+              label: Text(context.t(album.name)),
               selected: _filterHandle == album.folderHandle,
               onSelected: (_) => _switchFilter(album.folderHandle),
             );
@@ -552,8 +580,7 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
               if (path == null || snap.hasError) {
                 return ColoredBox(
                   color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                  child: const Center(
-                      child: Icon(Icons.broken_image_outlined)),
+                  child: const Center(child: Icon(Icons.broken_image_outlined)),
                 );
               }
               return Image.file(
@@ -561,8 +588,7 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
                 fit: BoxFit.cover,
                 errorBuilder: (context, error, stackTrace) => ColoredBox(
                   color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                  child: const Center(
-                      child: Icon(Icons.broken_image_outlined)),
+                  child: const Center(child: Icon(Icons.broken_image_outlined)),
                 ),
               );
             },
@@ -670,7 +696,7 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
                 onPressed: () =>
                     _downloadSelected(items, TransferDestination.gallery),
                 icon: const Icon(Icons.photo_library_outlined),
-                label: const Text('下载到相册'),
+                label: Text(context.t('下载到相册')),
               ),
             ),
             const SizedBox(width: 8),
@@ -679,12 +705,12 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
                 onPressed: () =>
                     _downloadSelected(items, TransferDestination.app),
                 icon: const Icon(Icons.folder_outlined),
-                label: const Text('下载到应用'),
+                label: Text(context.t('下载到应用')),
               ),
             ),
             const SizedBox(width: 8),
             IconButton(
-              tooltip: '删除',
+              tooltip: context.t('删除'),
               onPressed: () => _deleteSelected(items),
               icon: const Icon(Icons.delete_outline),
             ),

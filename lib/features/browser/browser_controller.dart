@@ -80,9 +80,10 @@ final class BrowserController extends ChangeNotifier {
       }
     } on Exception catch (e) {
       if (!_linkUp) return; // 断连引发的失败:_invalidate 已清态,不报错
-      error = albums.isEmpty
-          ? '加载失败:$e'
-          : '部分对象同步中断:$e(已显示内容可继续浏览)';
+      // 面向显示(无 BuildContext,中文原样存):消费点 states.dart 的
+      // ErrorRetryPanel / InlineHint 显示端统一包 t;含 $e 的运行期插值串
+      // 无静态键,英文环境如实回落中文
+      error = albums.isEmpty ? '加载失败:$e' : '部分对象同步中断:$e(已显示内容可继续浏览)';
     } finally {
       syncing = false;
       notifyListeners();
