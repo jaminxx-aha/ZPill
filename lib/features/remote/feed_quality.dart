@@ -1,6 +1,7 @@
-/// 取景「高质量」画面档(fragment shader 路线):引擎侧解码帧 →
-/// ui.Image 双采样(当前/前帧)→ Catmull-Rom 上采样 + 运动自适应
-/// 时域降噪 + 细节增强(见 shaders/feed_quality.frag)。
+/// 取景「高质量」画面档(fragment shader 路线):引擎侧解码帧(按
+/// 显示分辨率降采样,解码开销随屏幕走不随源帧走)→ ui.Image 双采样
+/// (当前/前帧)→ Catmull-Rom 上采样 + 运动自适应时域降噪 + 细节
+/// 增强(见 shaders/feed_quality.frag)。
 ///
 /// 采样坐标不依赖绘制矩形的位置:shader 收 CTM 逆映射的边向量/
 /// 原点(canvas.getTransform 回算),外层 FeedTransform 的 contain/
@@ -13,6 +14,7 @@
 library;
 
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
@@ -23,6 +25,44 @@ import '../../core/media/cube_lut.dart';
 /// 单例加载(pubspec `flutter: shaders` 注册的预编译产物);
 /// null = 加载失败(整 app 会话内回落,不再重试)。
 Future<ui.FragmentProgram?>? _programFuture;
+
+/// 解码目标长边上限(物理像素)。防「显示远大于源」的极端布局(平板
+/// 全屏高 DPR、双指放大到 8 倍)把目标反推到源帧之上 —— 取景显示
+/// 永远吃不满那么大,2048 已盖过任何取景档的单边。
+const int _decodeTargetLongEdgeCap = 2048;
+
+/// 「视作满分辨率」容差:目标长边达到源长边九成即不降。留 10% 是为
+/// 防盒尺寸在临界值附近抖动,解码分辨率逐帧来回跳(画质呼吸感)。
+const double _decodeFullResTolerance = 0.9;
+
+/// 取景帧解码目标宽(喂 [ui.ImageDescriptor.instantiateCodec] 的
+/// targetWidth;null = 全分辨率)。
+///
+/// 为什么:解码开销随源尺寸走而与显示无关 —— 取景档 XGA(1024×768)
+/// 在手机竖屏上的实际显示长边往往只有几百物理像素,全分辨率解码纯属
+/// 白费;按显示盒实尺(逻辑 × DPR = 物理)降采样,开销随屏幕走。
+/// 降下来的帧对 shader 透明:纹理尺寸 uniform 每帧带解码后实值,
+/// uv 采样天然与分辨率无关。规则:只降不升(目标 ≥ 源 × 容差 →
+/// null 保源);长边落在源宽轴直接给长边,落在竖轴(竖幅帧)按源
+/// 宽高比折算到宽 —— instantiateCodec 单传 targetWidth 高由引擎保比。
+int? feedDecodeTargetWidth({
+  required int sourceWidth,
+  required int sourceHeight,
+  required Size displayBox,
+  required double devicePixelRatio,
+}) {
+  if (sourceWidth < 1 || sourceHeight < 1) return null;
+  final sourceLong = math.max(sourceWidth, sourceHeight);
+  // 目标长边(物理)= 盒长边 × DPR;极端小盒钳 1,大屏封顶。
+  final rawLong =
+      math.max(displayBox.width, displayBox.height) * devicePixelRatio;
+  final targetLong =
+      rawLong.clamp(1.0, _decodeTargetLongEdgeCap.toDouble()).round();
+  if (targetLong >= sourceLong * _decodeFullResTolerance) return null;
+  final double widthScale =
+      sourceWidth >= sourceHeight ? 1.0 : sourceWidth / sourceHeight;
+  return math.max(1, (targetLong * widthScale).round());
+}
 
 class ShaderFeed extends StatefulWidget {
   const ShaderFeed({
@@ -66,6 +106,14 @@ class _ShaderFeedState extends State<ShaderFeed> {
   bool _decoding = false;
   Uint8List? _pending;
 
+  /// 最近一次绘制的显示盒(逻辑尺寸;painter 从画布 CTM 实测回填,
+  /// 适配/旋转/变宽/双指缩放/DPR 全数计入)。null = 首帧未测得,
+  /// 解码走全分辨率兜底。
+  Size? _displayBox;
+
+  /// 显示盒逻辑/物理折算用(painter 实测回传的是物理边长)。
+  double _devicePixelRatio = 1.0;
+
   /// 监看 LUT 纹理(异步构建;构建沿 = [CubeLut] 实例变化)。
   ui.Image? _lutImage;
   CubeLut? _lutBuilding;
@@ -96,6 +144,23 @@ class _ShaderFeedState extends State<ShaderFeed> {
     }
     _decode(widget.frame);
     _syncLut();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // maybeOf:裸树(无 MediaQuery)也不断言,取不到维持 1.0。
+    _devicePixelRatio =
+        MediaQuery.maybeDevicePixelRatioOf(context) ?? _devicePixelRatio;
+  }
+
+  /// painter 实测回填显示盒(物理 ÷ DPR = 逻辑)。刻意不 setState:
+  /// 显示尺寸只喂下一帧的解码目标,不参与 build —— 盒尺寸变化不触发
+  /// 重解码,下一帧自然按新尺解码,同帧内也就没有多余 rebuild。
+  void _handlePaintedExtent(Size physicalExtent) {
+    final dpr = _devicePixelRatio;
+    _displayBox =
+        Size(physicalExtent.width / dpr, physicalExtent.height / dpr);
   }
 
   @override
@@ -168,7 +233,19 @@ class _ShaderFeedState extends State<ShaderFeed> {
     try {
       final buffer = await ui.ImmutableBuffer.fromUint8List(bytes);
       final descriptor = await ui.ImageDescriptor.encoded(buffer);
-      final codec = await descriptor.instantiateCodec();
+      // 按显示分辨率降采样:descriptor 宽高是头信息(不解码即可读);
+      // 盒未实测(首帧)→ null 全分辨率兜底。帧代数跳旧不动 —— 目标
+      // 只随盒走,解码中盒再变也是下一帧的事。
+      final displayBox = _displayBox;
+      final targetWidth = displayBox == null
+          ? null
+          : feedDecodeTargetWidth(
+              sourceWidth: descriptor.width,
+              sourceHeight: descriptor.height,
+              displayBox: displayBox,
+              devicePixelRatio: _devicePixelRatio);
+      final codec =
+          await descriptor.instantiateCodec(targetWidth: targetWidth);
       final frame = await codec.getNextFrame();
       codec.dispose();
       descriptor.dispose();
@@ -217,6 +294,7 @@ class _ShaderFeedState extends State<ShaderFeed> {
         sharpen: 0.3,
         lutImage: _lutImage,
         lutSize: _lutImage != null ? _lutBuilding!.size : 0,
+        onPaintedExtent: _handlePaintedExtent,
       ),
     );
   }
@@ -231,6 +309,7 @@ class _ShaderFeedPainter extends CustomPainter {
     required this.sharpen,
     required this.lutImage,
     required this.lutSize,
+    required this.onPaintedExtent,
   });
 
   final ui.FragmentProgram program;
@@ -244,6 +323,13 @@ class _ShaderFeedPainter extends CustomPainter {
 
   /// LUT 每轴格点 N(纹理宽 = N²;与 [lutImage] 成对)。
   final int lutSize;
+
+  /// 绘制盒的屏幕物理占用量测回传(ex/ey 边向量长度)。为什么不走
+  /// LayoutBuilder:本件住在图像坐标系(父级 SizedBox 定的是源帧
+  /// 尺寸,外层 Transform 才缩放到屏幕),布局量出来的恒是源尺寸;
+  /// 只有画布 CTM 把适配/旋转/变宽/双指缩放/DPR 全数折进,才是真实
+  /// 的显示占用 —— 降采样解码目标只能从这取。
+  final void Function(Size physicalExtent) onPaintedExtent;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -262,6 +348,10 @@ class _ShaderFeedPainter extends CustomPainter {
     final o = apply(Offset.zero);
     final ex = apply(Offset(size.width, 0)) - o;
     final ey = apply(Offset(0, size.height)) - o;
+    // 显示盒实测:整幅画面的屏幕物理占用(盒两轴边向量的长度),
+    // 喂下一帧的解码目标(本帧已解完,不回头重解)。
+    final extent = Size(ex.distance, ey.distance);
+    if (extent.width > 0 && extent.height > 0) onPaintedExtent(extent);
     fs.setFloat(0, ex.dx);
     fs.setFloat(1, ex.dy);
     fs.setFloat(2, ey.dx);
