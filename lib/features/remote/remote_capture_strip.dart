@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/ptp/operation_codes.dart';
+import '../../l10n/l10n.dart';
 import 'live_design.dart';
 import 'remote_controller.dart';
 import 'shooting_param_catalog.dart';
@@ -134,8 +135,10 @@ class CaptureParamTile extends StatelessWidget {
               Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  // 目录 label(shooting_param_catalog 产出)原文即
+                  // t() 键,显示点包 t()。
                   Text(
-                    param.label,
+                    context.t(param.label),
                     style: TextStyle(
                       fontSize: 9,
                       fontWeight: FontWeight.w600,
@@ -151,8 +154,10 @@ class CaptureParamTile extends StatelessWidget {
                 ],
               ),
               const SizedBox(height: 2),
+              // 值文本(displayValue 经控制器路由 displayParamValue 产出)
+              // 原文即 t() 键,显示点包 t();「(自动)」后缀同查目录。
               Text(
-                '$value${auto ? '(自动)' : ''}',
+                '${context.t(value)}${auto ? context.t('(自动)') : ''}',
                 maxLines: 1,
                 style: TextStyle(
                   fontSize: 15,

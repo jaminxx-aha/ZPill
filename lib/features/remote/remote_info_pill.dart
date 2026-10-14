@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../l10n/l10n.dart';
 import 'live_design.dart';
 import 'remote_controller.dart';
 
@@ -90,21 +91,25 @@ class RemoteInfoPill extends StatelessWidget {
           compact && !wide
               ? Flexible(
                   child: Text(
-                    linked ? (name ?? '已连接') : '未连接相机',
+                    linked
+                        ? (name ?? context.t('已连接'))
+                        : context.t('未连接相机'),
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(fontSize: 12, color: live.text),
                   ),
                 )
               : Expanded(
                   child: Text(
-                    linked ? (name ?? '已连接') : '未连接相机',
+                    linked
+                        ? (name ?? context.t('已连接'))
+                        : context.t('未连接相机'),
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(fontSize: 12, color: live.text),
                   ),
                 ),
           if (linked && controller.shotsRemaining != null) ...[
             const SizedBox(width: 10),
-            Text('${controller.shotsRemaining} 张',
+            Text(context.t('{n} 张', {'n': controller.shotsRemaining!}),
                 style: TextStyle(
                     fontSize: 12,
                     color: live.muted,
@@ -127,12 +132,12 @@ class RemoteInfoPill extends StatelessWidget {
           if (controller.takeoverActive) ...[
             Icon(Icons.lock, size: 13, color: live.accent),
             const SizedBox(width: 4),
-            Text('APP 接管中',
+            Text(context.t('APP 接管中'),
                 style: TextStyle(fontSize: 12, color: live.accent)),
             const SizedBox(width: 6),
           ],
           if (onHideChrome != null) ...[
-            _hideButton(live),
+            _hideButton(context, live),
             const SizedBox(width: 2),
           ],
         ],
@@ -158,9 +163,9 @@ class RemoteInfoPill extends StatelessWidget {
   /// 纯净监看隐藏钮(行尾,竖屏排版):眼睛划线图标,隐去全部控制
   /// 浮层;与返回钮同款胶囊内嵌 InkWell(34×30 触达、9 圆角)。恢复
   /// 钮由页面在隐藏后的右上角同位摆出(ChromeIconButton)。
-  Widget _hideButton(LivePalette live) {
+  Widget _hideButton(BuildContext context, LivePalette live) {
     return Tooltip(
-      message: '纯净监看(隐藏全部控制,只留画面)',
+      message: context.t('纯净监看(隐藏全部控制,只留画面)'),
       child: InkWell(
         onTap: onHideChrome,
         customBorder:

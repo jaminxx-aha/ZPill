@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../l10n/l10n.dart';
 import 'live_design.dart';
 
 /// 取景区底边横幅(OpenZCine「坐在画面下沿」口径):玻璃底 + 语义色
@@ -95,13 +96,16 @@ class _LiveBannerHostState extends State<LiveBannerHost> {
 
   @override
   Widget build(BuildContext context) {
+    // message 原文即 t() 键(RemoteController 的 error/notice 在无
+    // BuildContext 处产中文,插值类运行期串无静态键,如实回落中文),
+    // 消费点包 t()。
     if (widget.autoDismiss) {
       return AnimatedOpacity(
         opacity: _hidden ? 0 : 1,
         duration: const Duration(milliseconds: 300),
         child: IgnorePointer(
           ignoring: _hidden,
-          child: LiveBanner(widget.message, widget.color,
+          child: LiveBanner(context.t(widget.message), widget.color,
               bottomInset: widget.bottomInset),
         ),
       );
@@ -123,7 +127,7 @@ class _LiveBannerHostState extends State<LiveBannerHost> {
         ),
       );
     }
-    return LiveBanner(widget.message, widget.color,
+    return LiveBanner(context.t(widget.message), widget.color,
         bottomInset: widget.bottomInset);
   }
 }

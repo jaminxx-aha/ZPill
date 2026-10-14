@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../l10n/l10n.dart';
 import 'live_design.dart';
 import 'remote_controller.dart';
 
@@ -38,11 +39,11 @@ class CaptureControlRow extends StatelessWidget {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          _focusButton(live, controller),
+          _focusButton(context, live, controller),
           _shutterButton(live, controller, mode: mode),
           CaptureCircleButton(
             icon: Icons.tune,
-            tooltip: '拍摄设置(参数 / 网格斑马纹 / 辅助)',
+            tooltip: context.t('拍摄设置(参数 / 网格斑马纹 / 辅助)'),
             onTap: onOpenSettings,
           ),
         ],
@@ -103,13 +104,13 @@ class CaptureShutterColumn extends StatelessWidget {
         const SizedBox(height: 8),
         CaptureCircleButton(
           icon: Icons.tune,
-          tooltip: '拍摄设置(参数 / 网格斑马纹 / 辅助)',
+          tooltip: context.t('拍摄设置(参数 / 网格斑马纹 / 辅助)'),
           onTap: onOpenSettings,
         ),
         const SizedBox(height: 8),
         _shutterButton(live, controller, mode: mode),
         const SizedBox(height: 8),
-        _focusButton(live, controller),
+        _focusButton(context, live, controller),
         const SizedBox(height: 8),
         AlbumThumbButton(controller: controller, onTap: onOpenAlbum),
       ],
@@ -222,12 +223,12 @@ class CaptureCircleButton extends StatelessWidget {
 /// [RemoteController.afDriveNow];2026-10-12 用户定案 —— 原对焦浮层的
 /// MF 步进/拉焦轮移拍摄设置浮层)。对焦中转圈禁点(防重入);未连接/
 /// 未开取景/机身 MF 档灰化(控制器拦截是第二道,这里先不给出可点姿态)。
-Widget _focusButton(LivePalette live, RemoteController controller) {
+Widget _focusButton(BuildContext context, LivePalette live, RemoteController controller) {
   final usable = controller.linkUp &&
       controller.liveViewActive &&
       !controller.focusModeIsMf;
   return Tooltip(
-    message: '自动对焦',
+    message: context.t('自动对焦'),
     child: SizedBox(
       width: 54,
       height: 54,
@@ -374,7 +375,7 @@ class AlbumThumbButton extends StatelessWidget {
     final live = LiveDesign.of(context);
     final thumb = controller.reviewThumb;
     return Tooltip(
-      message: '相机相册',
+      message: context.t('相机相册'),
       child: SizedBox(
         width: 54,
         height: 54,

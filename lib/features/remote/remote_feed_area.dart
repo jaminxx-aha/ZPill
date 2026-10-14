@@ -36,6 +36,7 @@ import '../../core/remote/frame_analysis.dart';
 import '../../core/remote/live_view_engine.dart';
 import '../../core/remote/live_view_header.dart';
 import '../../data/settings_store.dart';
+import '../../l10n/l10n.dart';
 import '../../platform/motion_host.dart';
 import 'feed_quality.dart';
 import 'feed_transform.dart';
@@ -369,10 +370,13 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea> {
                     ],
                     Text(
                       status.value == LiveViewStatus.running
-                          ? '取景中…(等待首帧)'
+                          ? context.t('取景中…(等待首帧)')
                           : status.value == LiveViewStatus.failed
-                              ? '取景失败(${controller.engine.lastError ?? "未知错误"})'
-                              : '取景未开启\n点按画面可触控对焦',
+                              ? context.t('取景失败({e})', {
+                                  'e': controller.engine.lastError ??
+                                      context.t('未知错误')
+                                })
+                              : context.t('取景未开启\n点按画面可触控对焦'),
                       textAlign: TextAlign.center,
                       style: TextStyle(color: live.faint),
                     ),
@@ -394,7 +398,7 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea> {
                         ),
                         icon: Icon(Icons.refresh,
                             size: 16, color: live.bad),
-                        label: const Text('重试取景'),
+                        label: Text(context.t('重试取景')),
                       ),
                     ],
                   ],
@@ -533,21 +537,21 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea> {
               Align(
                 alignment: Alignment.bottomCenter,
                 child: LiveBanner(
-                    '连接中断 —— 正在自动重连;画面为断开前的保持帧,非实时',
+                    context.t('连接中断 —— 正在自动重连;画面为断开前的保持帧,非实时'),
                     LiveDesign.dark.accent,
                     bottomInset: widget.bottomInset),
               )
             else if (controller.liveViewBusyHold)
               Align(
                 alignment: Alignment.bottomCenter,
-                child: LiveBanner('相机忙(写卡/下载中),取景画面保持',
+                child: LiveBanner(context.t('相机忙(写卡/下载中),取景画面保持'),
                     LiveDesign.dark.accent,
                     bottomInset: widget.bottomInset),
               )
             else if (!controller.linkUp)
               Align(
                 alignment: Alignment.bottomCenter,
-                child: LiveBanner('未连接相机 —— 请先在「相机」页建立连接',
+                child: LiveBanner(context.t('未连接相机 —— 请先在「相机」页建立连接'),
                     LiveDesign.dark.accent,
                     bottomInset: widget.bottomInset),
               )
