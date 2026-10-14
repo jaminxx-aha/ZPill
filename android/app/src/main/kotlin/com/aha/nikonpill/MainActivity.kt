@@ -1,6 +1,7 @@
 package com.aha.nikonpill
 
 import com.aha.nikonpill.bg.BgPlugin
+import com.aha.nikonpill.ble.BlePlugin
 import com.aha.nikonpill.gallery.GalleryPlugin
 import com.aha.nikonpill.location.LocationPlugin
 import com.aha.nikonpill.motion.MotionPlugin
@@ -20,6 +21,7 @@ class MainActivity : FlutterActivity() {
         flutterEngine.plugins.add(NsdPlugin())
         flutterEngine.plugins.add(MotionPlugin())
         flutterEngine.plugins.add(LocationPlugin())
+        flutterEngine.plugins.add(BlePlugin())
         flutterEngine.plugins.add(BgPlugin())
         flutterEngine.plugins.add(VideoPlugin())
     }

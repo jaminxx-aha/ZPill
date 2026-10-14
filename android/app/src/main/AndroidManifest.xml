@@ -9,6 +9,21 @@
     <!-- 照片 GPS:仅 FINE 算有效(粗定位误差公里级,写进元数据错比缺糟) -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+    <!-- GPS 注入后台续跑(Android 10+ 必须「始终」授权才后台拿定位) -->
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION"/>
+    <!-- BLE 配对/GPS 注入(API 31+ 运行时授予;SCAN 标 neverForLocation
+         —— 只扫尼康广播不做定位推导,免连锁要求定位服务全开) -->
+    <uses-permission
+        android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation"/>
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"/>
+    <!-- API 29/30 蓝牙扫描兜底(31+ 由 BLUETOOTH_* 接管,30 及以下生效) -->
+    <uses-permission
+        android:name="android.permission.BLUETOOTH"
+        android:maxSdkVersion="30"/>
+    <uses-permission
+        android:name="android.permission.BLUETOOTH_ADMIN"
+        android:maxSdkVersion="30"/>
     <!-- USB 相机:required=false,无 USB 的设备上无线功能照常 -->
     <uses-feature
         android:name="android.hardware.usb.host"
