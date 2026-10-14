@@ -578,6 +578,14 @@ const Map<String, String> enCatalog = {
       'The camera does not allow photos right now — switch the top "photo/video" lever back to photo and retry (use the record button on the shooting page for video)',
   '拍摄完成,但未收到相机回传对象(SDRAM 对象未到,可稍后在相机相册确认)':
       'Capture finished, but no object came back from the camera (SDRAM object not received; check the camera album later)',
+  'B 门收门失败:相机持续忙(已重试 3 次),曝光可能仍在进行,请再点一次快门收门或查看相机':
+      'Bulb close failed: the camera stayed busy (retried 3 times); the exposure may still be running — tap the shutter once more to close it, or check the camera',
+  '定时 B 门自动收门失败:相机持续忙(已重试 3 次),曝光可能仍在进行,请再点一次快门收门或查看相机':
+      'Timed-bulb auto-close failed: the camera stayed busy (retried 3 times); the exposure may still be running — tap the shutter once more to close it, or check the camera',
+  '曝光已结束,但快门值未能自动恢复,请在快门面板手动改回':
+      'The exposure has ended, but the shutter value could not be restored automatically; set it back from the shutter panel',
+  '快门在 B 门/Time 档:请用屏上快门钮按住曝光,或开启自拍定时组合为定时 B 门':
+      'Shutter is in Bulb/Time: hold the on-screen shutter button to expose, or enable the self-timer to combine it into a timed Bulb exposure',
   '已拍摄(SDRAM,不入卡):未接图库通道,对象未保存':
       'Captured (SDRAM, not to card): no gallery channel attached; object not saved',
   '已拍摄并保存到图库(SDRAM,不入卡)':

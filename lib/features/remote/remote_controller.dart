@@ -64,6 +64,7 @@ import '../../core/remote/frame_analyzer.dart';
 import '../../core/remote/live_view_engine.dart';
 import '../../core/transfer/transfer_engine.dart';
 import '../../core/transfer/transfer_task.dart';
+import 'bulb_close_policy.dart';
 import 'shooting_param_catalog.dart';
 
 /// 曝光三要素(只读快照;null = 该属性读取失败/未读)。
@@ -763,14 +764,22 @@ final class RemoteController extends ChangeNotifier {
   bool get _driveContinuous => _continuousDriveValues
       .contains(paramProps[PtpDevicePropCode.stillCaptureMode]?.value);
 
+  /// 0xD100 开门哨兵(Bulb 0xFFFFFFFF / Time 0xFFFFFFFD;X 同步
+  /// 0xFFFFFFFE 非按住曝光态不列)。与 [_shutterIsOpenShutter] 同源。
+  static bool _isOpenShutterSentinel(int v) =>
+      v == 0xFFFFFFFF || v == 0xFFFFFFFD;
+
   /// 快门当前值是否 Bulb/Time(0xD100 哨兵):**按住 = 开曝光,抬起
   /// 结束**(0x920C;OpenZCine pendingStillTerminate 同款语义)。
-  bool get _shutterIsOpenShutter =>
-      paramProps[PtpDevicePropCode.exposureTime]?.value == 0xFFFFFFFF ||
-      paramProps[PtpDevicePropCode.exposureTime]?.value == 0xFFFFFFFD;
+  bool get _shutterIsOpenShutter {
+    final v = paramProps[PtpDevicePropCode.exposureTime]?.value;
+    return v != null && _isOpenShutterSentinel(v);
+  }
 
   /// 快门按钮**按下**(页面 onTapDown):
-  /// - Bulb/Time:开曝光(按住中),[captureReleased] 抬起结束;
+  /// - Bulb/Time:开曝光(按住中),[captureReleased] 抬起结束;自拍
+  ///   档 > 0 时组合成**定时 B 门**(倒计时到点开门 → 同时长曝光倒计时
+  ///   → 到点自动收门,见 [_openShutterPress]);
   /// - 连续释放档:连拍括持(0x90C2 remote + burstNumber 65535 —— 不
   ///   括持每次释放都会弹回单张,OpenZCine 同款)后释放,按住期间随
   ///   DeviceReady 就绪链发(上限 30 帧),抬起终止;
@@ -781,8 +790,21 @@ final class RemoteController extends ChangeNotifier {
       notifyListeners();
       return;
     }
+    if (_bulbCloseFailed) {
+      // 上次 B 门收门预算耗尽(曝光可能仍开着):这次按下不另开曝光,
+      // 直接再试收门链 —— 「再点一次快门收门」的恢复路径。
+      error = null;
+      notice = null;
+      notifyListeners();
+      await _closeBulbExposure();
+      return;
+    }
     if (_shutterIsOpenShutter) {
-      await _openShutterPress();
+      if (selfTimerSeconds > 0) {
+        await _runSelfTimerThen(() => _openShutterPress(timed: true));
+      } else {
+        await _openShutterPress();
+      }
       return;
     }
     if (!_driveContinuous) {
@@ -846,11 +868,32 @@ final class RemoteController extends ChangeNotifier {
 
   bool _openShutterHeld = false;
 
+  /// 开拍(0x9207)在途:抬起若先于开拍落地,立即 0x920C 会扑空 ——
+  /// 记 [_bulbClosePending],开拍任务落地后自行收门。
+  bool _bulbOpening = false;
+  bool _bulbClosePending = false;
+
+  /// 上次收门预算耗尽(曝光可能仍开着):下一次按下转为收门重试。
+  bool _bulbCloseFailed = false;
+
+  /// 应用写过 Bulb/Time 哨兵前的快门值(收门链还原步;setParam 记录;
+  /// 写前值本身是哨兵时保留更早记录 —— 还原目标永远是最后一个非哨兵值)。
+  int? _bulbShutterRestore;
+
+  /// 定时 B 门曝光剩余秒(null = 未在定时曝光)。
+  int? get bulbExposureCountdown => _bulbExposureLeft;
+  int? _bulbExposureLeft;
+
   /// Bulb/Time 按下:开曝光(0x9207 直发,不等待落地 —— 曝光持续到
-  /// 抬起)。取景挂起防事务挤占。
-  Future<void> _openShutterPress() async {
+  /// 抬起/定时到点)。[timed] = 定时 B 门(自拍定时 × B 门组合,
+  /// 2026-10-15):开拍后同时长曝光倒计时,到点自动收门 —— 快拍一下
+  /// = 延时 N 秒 + 定时 N 秒曝光,全程免按住;曝光中再点抬起 = 立即
+  /// 手动收门。时长暂用自拍档位值(2/5/10s),更长档待后续。取景挂起
+  /// 防事务挤占。
+  Future<void> _openShutterPress({bool timed = false}) async {
     if (capturing || _openShutterHeld) return;
     _openShutterHeld = true;
+    _bulbOpening = true;
     capturing = true;
     error = null;
     notice = null;
@@ -859,38 +902,149 @@ final class RemoteController extends ChangeNotifier {
     if (wasLive) engine.pause();
     try {
       await _fireShutter();
-      // 按住中:等抬起(不轮询 settle —— 曝光开着,DeviceReady 恒忙)
-      while (_openShutterHeld) {
-        await _delay(const Duration(seconds: 1));
+      _bulbOpening = false;
+      if (_bulbClosePending) {
+        // 抬起先于开拍落地(极速点按):落地即收门,曝光开了就关。
+        _bulbClosePending = false;
+        await _closeBulbExposure();
+        return;
+      }
+      if (timed) {
+        _bulbExposureLeft = selfTimerSeconds;
+        notifyListeners();
+        while (_openShutterHeld && (_bulbExposureLeft ?? 0) > 0) {
+          await _delay(_selfTimerTick);
+          if (!_openShutterHeld) break; // 抬起已收门
+          _bulbExposureLeft = _bulbExposureLeft! - 1;
+          notifyListeners();
+        }
+        if (_openShutterHeld) {
+          // 定时到点自动收门(检查-置位同步执行,与 captureReleased
+          // 互斥,不会双收门)。
+          _openShutterHeld = false;
+          _bulbExposureLeft = null;
+          notifyListeners();
+          await _closeBulbExposure(autoClose: true);
+        }
+      } else {
+        // 按住中:等抬起(不轮询 settle —— 曝光开着,DeviceReady 恒忙)
+        while (_openShutterHeld) {
+          await _delay(const Duration(seconds: 1));
+        }
       }
     } on Exception catch (e) {
       error = '快门释放失败:$e';
     } finally {
+      // 开拍失败也解锁:原实现失败路径漏置 false,后续按下被静默吞
+      //(2026-10-15 收门鲁棒性收口)。
+      _openShutterHeld = false;
+      _bulbOpening = false;
+      _bulbClosePending = false;
+      _bulbExposureLeft = null;
       if (wasLive && _viewerVisible) engine.resume();
       capturing = false;
       notifyListeners();
     }
   }
 
-  /// 快门按钮**抬起**:B 门结束曝光 / 终止进行中的连拍(0x920C,已拍
-  /// 帧保留;运行已自行结束时相机会拒绝,容忍)。普通档点按无副作用。
+  /// 快门按钮**抬起**:B 门结束曝光(收门链 [_closeBulbExposure]:
+  /// 恢复原快门值 → 0x920C → 忙等码有界重试,2026-10-15)/ 终止进行
+  /// 中的连拍(0x920C,已拍帧保留;运行已自行结束时相机会拒绝,容忍)。
+  /// 普通档点按无副作用。
   Future<void> captureReleased() async {
     if (_openShutterHeld) {
-      _openShutterHeld = false; // _openShutterPress 的等待环收口
-      try {
-        await session.terminateCapture();
-      } on Exception {
-        // 曝光已自行结束:预期内
+      _openShutterHeld = false; // 等待环/倒计时环收口
+      _bulbExposureLeft = null;
+      notifyListeners();
+      if (_bulbOpening) {
+        // 开拍(0x9207)尚未落地:立刻 0x920C 会扑空 —— 记收门请求,
+        // 开拍任务落地后立即收门。
+        _bulbClosePending = true;
+      } else {
+        await _closeBulbExposure();
       }
       return;
     }
     if (!_burstLatched) return;
     _burstLatched = false;
     _burstRun++; // 打断链发循环
+    await _terminateCaptureWithRetry(); // 忙等码有界重试;终态容忍(原口径)
+  }
+
+  /// B 门收门链(结构借 N-link BulbPolicy 步序,不采纳其与本仓已证
+  /// 事实冲突的步骤,详见 [BulbClosePolicy] 头注):
+  /// ① 恢复原快门值([_bulbShutterRestore] 有记录且当前仍是哨兵):
+  ///    曝光中写被拒不阻断②,关门后相机闲态补试一次;
+  /// ② 0x920C TerminateCapture(已证收门路径,官方 §2.8.4 步 6);
+  /// ③ 忙等码(0x2019/0xA200/0xA201)按 [BulbClosePolicy] 短退避有界
+  ///    重试,预算耗尽如实上报([autoClose] = 定时到点自动收门,文案
+  ///    区分);失败后下一次按下转为收门重试([_bulbCloseFailed])。
+  Future<void> _closeBulbExposure({bool autoClose = false}) async {
+    if (!_linkUp) return;
+    final restore = _bulbShutterRestore;
+    if (restore != null && _shutterIsOpenShutter) {
+      if (await _tryRestoreShutter(restore)) _bulbShutterRestore = null;
+    }
+    final closed = await _terminateCaptureWithRetry();
+    _bulbCloseFailed = !closed;
+    if (!closed) {
+      error = autoClose
+          ? '定时 B 门自动收门失败:相机持续忙(已重试 3 次),曝光可能'
+              '仍在进行,请再点一次快门收门或查看相机'
+          : 'B 门收门失败:相机持续忙(已重试 3 次),曝光可能仍在进行,'
+              '请再点一次快门收门或查看相机';
+      notifyListeners();
+      return;
+    }
+    if (_bulbShutterRestore != null && _shutterIsOpenShutter) {
+      // ① 中途失败(曝光中写被拒)的补试:曝光已终止,相机闲态写最稳。
+      if (await _tryRestoreShutter(_bulbShutterRestore!)) {
+        _bulbShutterRestore = null;
+      } else {
+        notice = '曝光已结束,但快门值未能自动恢复,请在快门面板手动改回';
+        notifyListeners();
+      }
+    }
+  }
+
+  /// 恢复快门值(0xD100 写,路由同 setParam):成功后乐观对表(该写
+  /// 路径已证「面板值即写值」;0x4006 事件再校),失败返回 false 由
+  /// 调用方决定补试。
+  Future<bool> _tryRestoreShutter(int value) async {
     try {
-      await session.terminateCapture();
+      final param = shootingParamByCode[PtpDevicePropCode.exposureTime]!;
+      await session.setDevicePropValue(PtpDevicePropValue(
+          code: param.writeCode ?? PtpDevicePropCode.exposureTime,
+          dataType: param.writeType ?? PtpDataType.uint32,
+          value: value));
+      paramProps[PtpDevicePropCode.exposureTime] = PropState(
+          desc: paramProps[PtpDevicePropCode.exposureTime]?.desc,
+          value: value);
+      notifyListeners();
+      return true;
     } on Exception {
-      // 运行已自行结束:预期内(OpenZCine 同款容忍)
+      return false; // 曝光中写被拒(0x200F 等)等形态:不阻断收门
+    }
+  }
+
+  /// 0x920C 终止(B 门收门/连拍终止共用):忙等码(0x2019/0xA200/
+  /// 0xA201)按 [BulbClosePolicy] 有界退避重试;非忙码 = 运行已自行
+  /// 结束的预期形态,容忍收口;链路级异常命令命运未知,交给断连路径。
+  /// 返回是否真正终止成功(预算耗尽 = false)。
+  Future<bool> _terminateCaptureWithRetry() async {
+    final policy = BulbClosePolicy();
+    for (;;) {
+      try {
+        await session.terminateCapture();
+        return true;
+      } on PtpResponseException catch (e) {
+        if (!BulbClosePolicy.isBusyCode(e.responseCode)) return true;
+        final d = policy.nextBusyDelay();
+        if (d == null) return false; // 预算耗尽:如实上报由调用方
+        await _delay(d);
+      } on Exception {
+        return true; // 链路级:命令命运未知,断连路径接管
+      }
     }
   }
 
@@ -1777,6 +1931,15 @@ final class RemoteController extends ChangeNotifier {
       notifyListeners();
       return;
     }
+    if (_shutterIsOpenShutter) {
+      // B 门/Time 经不起「点按即走」:曝光开了没人收门(音量键快门等
+      // capture() 直呼路径)—— 本地拒绝零流量并指路;按住曝光走屏上
+      // 快门钮([capturePressed]),或开自拍定时组合成定时 B 门。
+      notice = '快门在 B 门/Time 档:请用屏上快门钮按住曝光,'
+          '或开启自拍定时组合为定时 B 门';
+      notifyListeners();
+      return;
+    }
     capturing = true;
     error = null;
     notice = null;
@@ -2159,6 +2322,12 @@ final class RemoteController extends ChangeNotifier {
     error = null;
     notice = null; // 新写动作清旧提示(上一写的横幅已属过去时)
     notifyListeners();
+    // B 门/Time 哨兵写入:记写前值作收门还原目标(_closeBulbExposure
+    // 步①,2026-10-15;官方 §2.8.4 收门序无还原步 —— N-link 模型的
+    // 应用侧收口:相机不应被留在 Bulb 档)。
+    final prevShutter = paramProps[propCode]?.value;
+    final wroteOpenShutter = propCode == PtpDevicePropCode.exposureTime &&
+        _isOpenShutterSentinel(writeValue);
     try {
       // 色温只在 WB=色温档(0x8012)生效:写入前自动切档(真机
       // 「改了没效果」根因 —— 机身语义,K 值跟随 WB 模式)。
@@ -2172,6 +2341,12 @@ final class RemoteController extends ChangeNotifier {
       await session.setDevicePropValue(PtpDevicePropValue(
           code: writeCode, dataType: dataType, value: writeValue));
       lockedProps.remove(propCode); // 写通:解除该参数的锁标
+      if (wroteOpenShutter &&
+          prevShutter != null &&
+          !_isOpenShutterSentinel(prevShutter)) {
+        // 写前值本身是哨兵(Bulb→Time)时保留更早记录。
+        _bulbShutterRestore = prevShutter;
+      }
       await _refreshProp(propCode);
       // 视频参数写后复读守卫(2026-10-13 USB 探针定案:Zf 视频曝光
       // 写 = 五态全试「0x2001 收下但弹回拨盘值」—— 协议成功 ≠ 生效,
@@ -2320,6 +2495,13 @@ final class RemoteController extends ChangeNotifier {
     _burstRun++;
     _burstBracketHeld = false;
     _openShutterHeld = false;
+    // B 门会话态随链路消亡(收门重试/还原目标不跨连接:下次连接重读
+    // 参数才是真相)。
+    _bulbOpening = false;
+    _bulbClosePending = false;
+    _bulbCloseFailed = false;
+    _bulbShutterRestore = null;
+    _bulbExposureLeft = null;
     _cancelSelfTimer();
     _dialGen++;
     _dialAccum = 0;

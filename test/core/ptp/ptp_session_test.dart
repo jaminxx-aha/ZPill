@@ -1119,6 +1119,20 @@ void main() {
       expect(await session.deviceReady(), isFalse);
     });
 
+    test('deviceReady:0xA200/0xA201(Bulb/Silent_Release_Busy,官方'
+        ' §2.8.4 步 5 / §6.3.2.15-16)→ false 继续等,不抛', () async {
+      // B 门曝光进行中 DeviceReady 即回 0xA200(官方 B 门序列步 5);
+      // 0xA201 静音快门同族 —— 收门/落定等待据此继续等。
+      final bulb = FakePtpTransport()
+        ..reply(
+            const PtpResult(responseCode: NikonResponseCode.bulbReleaseBusy));
+      expect(await PtpSession(transport: bulb).deviceReady(), isFalse);
+      final silent = FakePtpTransport()
+        ..reply(const PtpResult(
+            responseCode: NikonResponseCode.silentReleaseBusy));
+      expect(await PtpSession(transport: silent).deviceReady(), isFalse);
+    });
+
     test('getPictureControlName:0x90CC params=[槽位,0],name=数据[3..23) NUL 截断'
         '(digiCamControl 布局)', () async {
       final data = Uint8List(40); // [3..23) 名区,余 NUL 填充

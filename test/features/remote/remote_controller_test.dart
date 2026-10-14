@@ -1543,9 +1543,9 @@ void main() {
   });
 
   group('B 门/Time:按住开曝光', () {
-    test('快门值 Bulb(0xFFFFFFFF):按下释放不等待,抬起 0x920C 结束', () async {
-      // connected 沿串链自动起景(引擎轮询驻停):换 parked 引擎,不与
-      // B 门按住等待环抢门控 delay 的放行。
+    /// 门控 delay 专属的替换控制器(引擎 parked,拍摄页不可见):B 门
+    /// 按住等待环/退避重试独占门控放行。
+    RemoteController bulbController() {
       controller.dispose();
       controller = RemoteController(
         session: PtpSession(transport: transport),
@@ -1556,6 +1556,11 @@ void main() {
       );
       controller.setViewerVisible(false); // 拍摄页不在前台口径:AE 轮询
       // 不启,门控 delay 放行全部留给连拍/快门流程
+      return controller;
+    }
+
+    test('快门值 Bulb(0xFFFFFFFF):按下释放不等待,抬起 0x920C 结束', () async {
+      bulbController();
       _scriptParams(transport);
       _emitConnected(transport, conn);
       await pumpEventQueue();
@@ -1574,6 +1579,219 @@ void main() {
       await press;
       expect(controller.capturing, isFalse);
       expect(transport.count(NikonOperationCode.terminateCapture), 1);
+      expect(controller.error, isNull);
+    });
+
+    test('收门链:面板写过 Bulb 哨兵 → 抬起先恢复原快门值再 0x920C', () async {
+      bulbController();
+      _scriptParams(transport); // 快门读回 1/100s 打包(1<<16|100)
+      _emitConnected(transport, conn);
+      await pumpEventQueue();
+      // 面板选 Bulb:0x1016 写 0xD100 哨兵 + 复读(相机回 Bulb)
+      transport
+        ..ok()
+        ..ok(data: _u32Bytes(0xFFFFFFFF));
+      await controller.setParam(PtpDevicePropCode.exposureTime, 0xFFFFFFFF);
+      expect(controller.paramProps[PtpDevicePropCode.exposureTime]?.value,
+          0xFFFFFFFF);
+
+      transport
+        ..ok() // 0x9207(Bulb 开)
+        ..ok() // 收门步①:0xD100 恢复 1/100s
+        ..ok(); // 收门步②:0x920C
+      final press = controller.capturePressed();
+      await pumpEventQueue();
+      await controller.captureReleased();
+      delay.release(); // 按住等待环收口
+      await press;
+      final writes = transport.requests
+          .where((r) => r.opcode == PtpOperationCode.setDevicePropValue)
+          .toList();
+      expect(writes.map((w) => w.params).toList(), [
+        [PtpDevicePropCode.stillShutterSpeed],
+        [PtpDevicePropCode.stillShutterSpeed],
+      ], reason: '面板写 Bulb + 收门恢复,都走 0xD100');
+      expect(writes[0].dataOut, _u32Bytes(0xFFFFFFFF));
+      expect(writes[1].dataOut, _u32Bytes(1 << 16 | 100),
+          reason: '收门恢复 = 写前快门值(1/100s 打包)');
+      expect(transport.count(NikonOperationCode.terminateCapture), 1);
+      expect(controller.paramProps[PtpDevicePropCode.exposureTime]?.value,
+          1 << 16 | 100,
+          reason: '收门后快门对表回 1/100s(乐观更新)');
+      expect(controller.error, isNull);
+    });
+
+    test('收门忙等:0x920C 撞 0xA200 ×2 → 500/1000ms 退避重试后收门', () async {
+      bulbController();
+      _scriptParams(transport);
+      _emitConnected(transport, conn);
+      await pumpEventQueue();
+      controller.paramProps[PtpDevicePropCode.exposureTime] =
+          const PropState(value: 0xFFFFFFFF);
+
+      transport
+        ..ok() // 0x9207(Bulb 开)
+        ..reply(NikonResponseCode.bulbReleaseBusy) // 0x920C #1:B 门进行中
+        ..reply(NikonResponseCode.bulbReleaseBusy) // #2:仍忙
+        ..ok(); // #3:收门成功
+      final press = controller.capturePressed();
+      await pumpEventQueue();
+      final released = controller.captureReleased();
+      await pumpEventQueue(); // #1 忙 → 排 500ms 退避门
+      delay.release(); // 按住等待环(先入队的门)收口 press 任务
+      await pumpEventQueue();
+      delay.release(); // 500ms 退避到点 → #2 忙 → 排 1000ms 退避门
+      await pumpEventQueue();
+      expect(transport.count(NikonOperationCode.terminateCapture), 2);
+      delay.release(); // 1000ms 退避到点 → #3 成功
+      await pumpEventQueue();
+      await released;
+      await press;
+      expect(transport.count(NikonOperationCode.terminateCapture), 3,
+          reason: '首发 + 2 次忙退避重试');
+      expect(controller.error, isNull);
+      expect(controller.capturing, isFalse);
+    });
+
+    test('收门预算耗尽:0x920C 恒 0xA200 → 1+3 次后如实报错;再点一次'
+        '快门转为收门重试并成功', () async {
+      bulbController();
+      _scriptParams(transport);
+      _emitConnected(transport, conn);
+      await pumpEventQueue();
+      controller.paramProps[PtpDevicePropCode.exposureTime] =
+          const PropState(value: 0xFFFFFFFF);
+
+      transport
+        ..ok() // 0x9207(Bulb 开)
+        ..reply(NikonResponseCode.bulbReleaseBusy) // ×4 全忙(1 + 3 重试)
+        ..reply(NikonResponseCode.bulbReleaseBusy)
+        ..reply(NikonResponseCode.bulbReleaseBusy)
+        ..reply(NikonResponseCode.bulbReleaseBusy);
+      final press = controller.capturePressed();
+      await pumpEventQueue();
+      final released = controller.captureReleased();
+      await pumpEventQueue(); // #1 忙 → 500ms 门
+      delay.release(); // 按住等待环收口
+      await pumpEventQueue();
+      delay.release(); // 500ms → #2 忙 → 1000ms 门
+      await pumpEventQueue();
+      delay.release(); // 1000ms → #3 忙 → 2000ms 门
+      await pumpEventQueue();
+      delay.release(); // 2000ms → #4 忙 → 预算耗尽
+      await pumpEventQueue();
+      await released;
+      await press;
+      expect(transport.count(NikonOperationCode.terminateCapture), 4,
+          reason: '首发 + 3 次指数退避重试后停手');
+      expect(controller.error, contains('B 门收门失败'));
+      expect(controller.capturing, isFalse);
+
+      // 再点一次快门:不另开曝光,直接再试收门链(恢复路径)
+      transport.ok(); // 0x920C 这次成功
+      await controller.capturePressed();
+      expect(transport.count(NikonOperationCode.terminateCapture), 5);
+      expect(
+          transport.count(NikonOperationCode.initiateCaptureRecInMedia), 1,
+          reason: '重试收门不另开曝光(0x9207 只有开拍那一次)');
+      expect(controller.error, isNull, reason: '收门成功清错');
+    });
+
+    test('定时 B 门(自拍 × Bulb):倒计时到点开门 → 曝光同时长倒计时 → '
+        '到点自动收门', () async {
+      bulbController();
+      _scriptParams(transport);
+      _emitConnected(transport, conn);
+      await pumpEventQueue();
+      controller.paramProps[PtpDevicePropCode.exposureTime] =
+          const PropState(value: 0xFFFFFFFF);
+      controller.setSelfTimer(2);
+
+      transport
+        ..ok() // 0x9207(自拍倒计时到点 → 开门)
+        ..ok(); // 0x920C(曝光倒计时到点 → 自动收门)
+      final press = controller.capturePressed();
+      await pumpEventQueue();
+      expect(controller.selfTimerCountdown, 2);
+      delay.release(); // 自拍第 1 秒
+      await pumpEventQueue();
+      expect(controller.selfTimerCountdown, 1);
+      delay.release(); // 自拍第 2 秒 → 开门,曝光倒计时起步
+      await pumpEventQueue();
+      expect(controller.selfTimerCountdown, isNull);
+      expect(controller.capturing, isTrue, reason: '曝光开着');
+      expect(controller.bulbExposureCountdown, 2);
+      delay.release(); // 曝光第 1 秒
+      await pumpEventQueue();
+      expect(controller.bulbExposureCountdown, 1);
+      delay.release(); // 曝光第 2 秒 → 到点自动收门
+      await pumpEventQueue();
+      await press;
+      expect(controller.bulbExposureCountdown, isNull);
+      expect(controller.capturing, isFalse);
+      expect(transport.count(NikonOperationCode.terminateCapture), 1,
+          reason: '自动收门 = 0x920C');
+      expect(controller.error, isNull);
+    });
+
+    test('定时 B 门:曝光倒计时中抬起 → 立即手动收门(不等定时)', () async {
+      bulbController();
+      _scriptParams(transport);
+      _emitConnected(transport, conn);
+      await pumpEventQueue();
+      controller.paramProps[PtpDevicePropCode.exposureTime] =
+          const PropState(value: 0xFFFFFFFF);
+      controller.setSelfTimer(2);
+
+      transport
+        ..ok() // 0x9207
+        ..ok(); // 0x920C(手动收门)
+      final press = controller.capturePressed();
+      await pumpEventQueue();
+      delay.release(); // 自拍第 1 秒
+      await pumpEventQueue();
+      delay.release(); // 自拍第 2 秒 → 开门
+      await pumpEventQueue();
+      expect(controller.bulbExposureCountdown, 2);
+      await controller.captureReleased(); // 抬起:立即收门
+      delay.release(); // 曝光倒计时挂起的 tick 收口(环退出)
+      await press;
+      expect(transport.count(NikonOperationCode.terminateCapture), 1);
+      expect(controller.bulbExposureCountdown, isNull);
+      expect(controller.capturing, isFalse);
+      expect(controller.error, isNull);
+    });
+
+    test('capture() 直呼(音量键快门路径)遇 Bulb 档:本地拒绝指路,'
+        '零流量不开无人收门的曝光', () async {
+      controller.paramProps[PtpDevicePropCode.exposureTime] =
+          const PropState(value: 0xFFFFFFFF);
+      await controller.capture();
+      expect(controller.notice, contains('B 门/Time'));
+      expect(controller.error, isNull);
+      expect(
+          transport.requests.where((r) =>
+              r.opcode == NikonOperationCode.initiateCaptureRecInMedia),
+          isEmpty,
+          reason: '不发票:点按即走的曝光开了没人收门');
+      expect(controller.capturing, isFalse);
+    });
+
+    test('capture 落定等待:DeviceReady 回 0xA200(B 门曝光中)→ 忙继续等'
+        '而非异常收口', () async {
+      // 引擎未启动(无连接串链),门控 delay 独占给落定轮询
+      transport
+        ..ok() // 0x9207
+        ..reply(NikonResponseCode.bulbReleaseBusy) // DeviceReady #1:B 门忙
+        ..ok(); // DeviceReady #2:就绪
+      final capture = controller.capture();
+      await pumpEventQueue();
+      delay.release(); // 第 1 轮 300ms → 0xA200 → false 继续等
+      await pumpEventQueue();
+      delay.release(); // 第 2 轮 → true 收口
+      await capture;
+      expect(transport.count(NikonOperationCode.deviceReady), 2,
+          reason: '0xA200 视为忙继续等(旧口径异常即收口,只查 1 次)');
       expect(controller.error, isNull);
     });
   });

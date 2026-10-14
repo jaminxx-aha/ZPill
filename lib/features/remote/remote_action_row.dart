@@ -261,8 +261,10 @@ Widget _focusButton(BuildContext context, LivePalette live, RemoteController con
 /// 拍照/录像合并):亮圈 + 亮芯,按下变半透明(拍照中)。深色 = 白圈
 /// 白芯(现状);浅色 = 墨圈 + 统一黄芯。**照片模式**:按下即拍 +
 /// 按住连拍(连续释放档按住 = 连拍括持链发、抬起终止;B 门/Time 按住
-/// = 开闩曝光;普通档点按 = 自拍倒计时后单张)—— onTapDown/Up 语义
-/// 全不变。**视频模式**(iPhone 语义):红芯(进入即红,非仅录制中),
+/// = 开闩曝光,自拍定时组合 = 定时 B 门:倒计时到点开门 → 曝光倒计时
+/// → 到点自动收门;普通档点按 = 自拍倒计时后单张)—— onTapDown/Up
+/// 语义全不变。钮芯倒计时三态:自拍延时 / 定时 B 门曝光剩余 / 拍照
+/// spinner。**视频模式**(iPhone 语义):红芯(进入即红,非仅录制中),
 /// 整段点按起/停录像(onTap,不挂按下/抬起);录制中芯上叠白色停止
 /// 方块且保持全不透明(停录要醒目)。取景开启是录像前置(toggleRecord
 /// 的门,提前到视觉层降透明)。尺寸两向同 78(2026-10-12 用户定案
@@ -331,14 +333,21 @@ Widget _shutterButton(LivePalette live, RemoteController controller,
                                 fontSize: size >= 72 ? 24 : 20,
                                 fontWeight: FontWeight.bold,
                                 color: live.onAccent))
-                        : controller.capturing
-                            ? SizedBox(
-                                width: 22,
-                                height: 22,
-                                child: CircularProgressIndicator(
-                                    strokeWidth: 2.4, color: live.onAccent),
-                              )
-                            : null)
+                        : controller.bulbExposureCountdown != null
+                            ? Text('${controller.bulbExposureCountdown}',
+                                style: TextStyle(
+                                    fontSize: size >= 72 ? 24 : 20,
+                                    fontWeight: FontWeight.bold,
+                                    color: live.onAccent))
+                            : controller.capturing
+                                ? SizedBox(
+                                    width: 22,
+                                    height: 22,
+                                    child: CircularProgressIndicator(
+                                        strokeWidth: 2.4,
+                                        color: live.onAccent),
+                                  )
+                                : null)
                     : (rec
                         ? Container(
                             width: 20,

@@ -1051,13 +1051,20 @@ final class PtpSession {
   }
 
   /// Nikon DeviceReady(0x90C8):拍照后的忙等探针。
-  /// **0x2019 DeviceBusy 是语义不是错误**(返回 false);其余响应码照常
-  /// 抛 [PtpResponseException],链路级异常自然传播(调用方据此判死链)。
+  /// **忙等码是语义不是错误**(返回 false):0x2019 DeviceBusy(标准);
+  /// 0xA200 Bulb_Release_Busy / 0xA201 Silent_Release_Busy(官方
+  /// §6.3.2.15/16 定名;§2.8.4 B 门序列步 5 实证 —— B 门曝光进行中
+  /// DeviceReady 即回 0xA200,收门/落定等待据此继续等,2026-10-15)。
+  /// 其余响应码照常抛 [PtpResponseException],链路级异常自然传播
+  /// (调用方据此判死链)。
   Future<bool> deviceReady() async {
     final result = await _serialized(() => transport.execute(
           const PtpRequest(opcode: NikonOperationCode.deviceReady),
         ));
-    if (result.responseCode == PtpResponseCode.deviceBusy) {
+    final rc = result.responseCode;
+    if (rc == PtpResponseCode.deviceBusy ||
+        rc == NikonResponseCode.bulbReleaseBusy ||
+        rc == NikonResponseCode.silentReleaseBusy) {
       return false;
     }
     _ensureOk(result, NikonOperationCode.deviceReady);
