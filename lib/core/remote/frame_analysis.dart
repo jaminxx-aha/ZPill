@@ -22,6 +22,8 @@ final class FrameAnalysis {
     required this.peakingMask,
     required this.peakingCols,
     required this.peakingRows,
+    required this.waveform,
+    required this.waveformCols,
   });
 
   final int width;
@@ -48,6 +50,17 @@ final class FrameAnalysis {
   final Uint8List peakingMask;
   final int peakingCols;
   final int peakingRows;
+
+  /// 波形示波器数据:waveformCols × 直方图桶数(列外/桶内行主序),
+  /// 值 = 该列该亮度桶的采样像素数 —— x = 画面列、y = 亮度的密度图
+  /// (上白下黑),过曝亮脊/欠曝底脊一眼可读。
+  final Uint32List waveform;
+
+  /// 波形列数(与画面等宽分列;0 = 无波形数据)。
+  final int waveformCols;
+
+  /// 波形亮度桶数(与直方图同一分桶,采样环共用一次 bin 计算)。
+  int get waveformBins => lumaHistogram.length;
 
   /// 峰值判定的相邻格亮度梯度阈值(0-255)。
   static const int peakingGradientThreshold = 40;
@@ -132,6 +145,7 @@ FrameAnalysis? analyzeJpegFrame(
   int lumaThreshold = 250,
   int peakingCols = 64,
   int peakingRows = 48,
+  int waveformCols = 64,
 }) {
   // 解码器对畸形/截断字节可能抛 Error(image 包格式嗅探的越界读,
   // 实测 4B 垃圾触发 RangeError)—— 任何失败一律 null,不上抛。
@@ -145,6 +159,7 @@ FrameAnalysis? analyzeJpegFrame(
   if (image == null || image.width <= 0 || image.height <= 0) return null;
 
   final histogram = List<int>.filled(histogramBins, 0);
+  final waveform = Uint32List(waveformCols * histogramBins);
   final mask = Uint8List(maskCols * maskRows);
   // 伪色:格内 luma 累加(采样数不定,最后取均值)
   final lumaSums = List<int>.filled(maskCols * maskRows, 0);
@@ -156,6 +171,7 @@ FrameAnalysis? analyzeJpegFrame(
   final cellH = image.height / maskRows;
   final peakCellW = image.width / peakingCols;
   final peakCellH = image.height / peakingRows;
+  final waveCellW = image.width / waveformCols;
   // 采样步长取两网格较细者:峰值网格(64×48)比斑马纹(32×24)细时,
   // 按粗网格采样会在峰值格间留空(空格不参与梯度 → 边缘漏检)。
   final stepX =
@@ -168,7 +184,11 @@ FrameAnalysis? analyzeJpegFrame(
     for (var x = 0; x < image.width; x += stepX) {
       final p = image.getPixel(x, y);
       final luma = (0.299 * p.r + 0.587 * p.g + 0.114 * p.b).round().clamp(0, 255);
-      histogram[(luma * binScale).floor().clamp(0, histogramBins - 1)]++;
+      final bin = (luma * binScale).floor().clamp(0, histogramBins - 1);
+      histogram[bin]++;
+      // 波形:列-亮度桶计数(bin 与直方图同一次计算,零额外遍历)。
+      final wcol = (x / waveCellW).floor().clamp(0, waveformCols - 1);
+      waveform[wcol * histogramBins + bin]++;
       final col = (x / cellW).floor().clamp(0, maskCols - 1);
       final row = (y / cellH).floor().clamp(0, maskRows - 1);
       final cell = row * maskCols + col;
@@ -231,5 +251,7 @@ FrameAnalysis? analyzeJpegFrame(
     peakingMask: peaking,
     peakingCols: peakingCols,
     peakingRows: peakingRows,
+    waveform: waveform,
+    waveformCols: waveformCols,
   );
 }

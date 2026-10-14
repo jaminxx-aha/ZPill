@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../data/settings_store.dart';
+import '../edit/lut_presets.dart';
 import 'live_design.dart';
 import 'monitor_toggles.dart';
 import 'remote_capture_strip.dart';
@@ -327,7 +329,7 @@ class CaptureSettingsPanel extends StatelessWidget {
       );
     }
 
-    return Wrap(
+    final chips = Wrap(
       spacing: 2,
       runSpacing: 4,
       children: [
@@ -349,6 +351,25 @@ class CaptureSettingsPanel extends StatelessWidget {
             (v) => onTogglesChanged(toggles.copyWith(falseColor: v))),
         toggle(Icons.blur_on, '峰值', toggles.peaking,
             (v) => onTogglesChanged(toggles.copyWith(peaking: v))),
+        // 波形示波器(帧分析路:开关落定由页面同步分析器启停)。
+        toggle(Icons.stacked_line_chart, '波形', toggles.waveform,
+            (v) => onTogglesChanged(toggles.copyWith(waveform: v))),
+        // 构图框三件(纯显示层,不占分析器):遮幅循环芯片 + 安全框 +
+        // 中心标。
+        _smallChip(
+          live: live,
+          label: toggles.framingAspect == FramingAspect.off
+              ? '遮幅'
+              : '遮幅 ${toggles.framingAspect.label}',
+          selected: toggles.framingAspect != FramingAspect.off,
+          onTap: () => onTogglesChanged(toggles.copyWith(
+              framingAspect: toggles.framingAspect.next)),
+          tooltip: '构图遮幅:2.39/2.35/1.85 循环;画幅外压暗(变宽还原已计入)',
+        ),
+        toggle(Icons.crop_free, '安全框', toggles.framingSafeArea,
+            (v) => onTogglesChanged(toggles.copyWith(framingSafeArea: v))),
+        toggle(Icons.center_focus_weak, '中心标', toggles.framingCenterMark,
+            (v) => onTogglesChanged(toggles.copyWith(framingCenterMark: v))),
         // 内屏强关(0x9422,B 组线上未验):乐观态会话级,tooltip 标
         // 实验性(副作用未知,断流由看门狗兜底)。
         Tooltip(
@@ -357,6 +378,50 @@ class CaptureSettingsPanel extends StatelessWidget {
               (_) => controller.toggleMonitorOff(),
               enabled: controller.linkUp),
         ),
+      ],
+    );
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        chips,
+        const SizedBox(height: 4),
+        _monitorLutRow(context),
+      ],
+    );
+  }
+
+  /// 监看 LUT 芯片行(内置风格表,纯显示层调色;选中即走高质量渲染
+  /// 管线 —— 查表只在 shader 路径,设备不支持时无 LUT 画面照常)。
+  Widget _monitorLutRow(BuildContext context) {
+    final live = LiveDesign.of(context);
+    return Wrap(
+      spacing: 2,
+      runSpacing: 2,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        Tooltip(
+          message:
+              '监看套色(不写帧数据):选中即自动走高质量渲染管线,shader 不可用时无 LUT',
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            child: Text('监看 LUT',
+                style: TextStyle(fontSize: 11, color: live.faint)),
+          ),
+        ),
+        _smallChip(
+          live: live,
+          label: '关',
+          selected: toggles.lutIndex < 0,
+          onTap: () => onTogglesChanged(toggles.copyWith(lutIndex: -1)),
+        ),
+        for (var i = 0; i < builtinLuts.length; i++)
+          _smallChip(
+            live: live,
+            label: builtinLuts[i].title,
+            selected: toggles.lutIndex == i,
+            onTap: () => onTogglesChanged(toggles.copyWith(lutIndex: i)),
+          ),
       ],
     );
   }

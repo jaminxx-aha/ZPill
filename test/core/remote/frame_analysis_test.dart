@@ -126,6 +126,57 @@ void main() {
           analyzeJpegFrame(_gradientJpeg(), maskCols: 8, maskRows: 6);
       expect(gradient!.hasPeaking, isFalse);
     });
+
+    group('波形(列-亮度桶密度,2026-10-14 监看差集)', () {
+      test('白角帧:右上列顶桶命中、左下暗列不见白;各列采样总数相等', () {
+        final a = analyzeJpegFrame(_whiteCornerJpeg(), waveformCols: 8);
+        expect(a!.waveformCols, 8);
+        expect(a.waveformBins, a.lumaHistogram.length);
+        final bins = a.waveformBins;
+        int colTotal(int col) {
+          var t = 0;
+          for (var b = 0; b < bins; b++) {
+            t += a.waveform[col * bins + b];
+          }
+          return t;
+        }
+
+        // 顶桶带(bins-4..bins-1)只允许亮列命中(JPEG 压缩可能把
+        // 255 压掉一两档,不给单桶精确值)。
+        int topBand(int col) {
+          var t = 0;
+          for (var b = bins - 4; b < bins; b++) {
+            t += a.waveform[col * bins + b];
+          }
+          return t;
+        }
+
+        expect(topBand(6), greaterThan(0), reason: '右上白角列顶桶带命中');
+        expect(topBand(0), 0, reason: '左下暗列(luma≈20)不见白');
+        // 等宽分列:每列源像素数相同 → 采样总数相同。
+        expect(colTotal(0), colTotal(7));
+        expect(colTotal(0), greaterThan(0));
+      });
+
+      test('渐变帧:右列主桶显著高于左列(列分布随亮度单调上移)', () {
+        final a = analyzeJpegFrame(_gradientJpeg(), waveformCols: 8);
+        int peakBin(int col) {
+          final bins = a!.waveformBins;
+          var best = 0, bestV = 0;
+          for (var b = 0; b < bins; b++) {
+            final v = a.waveform[col * bins + b];
+            if (v > bestV) {
+              bestV = v;
+              best = b;
+            }
+          }
+          return best;
+        }
+
+        expect(peakBin(7) - peakBin(0), greaterThan(16),
+            reason: '0..248 渐变两端主桶差应远超 16 桶');
+      });
+    });
   });
 
   group('FrameAnalyzer', () {

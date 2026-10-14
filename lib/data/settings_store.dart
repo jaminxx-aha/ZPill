@@ -25,6 +25,34 @@ enum AppThemeMode { system, light, dark }
 /// (Catmull-Rom 上采样 + 锐化,可叠时域降噪)。
 enum FeedUpscaler { off, fast, quality }
 
+/// 构图框遮幅画幅(OpenZCine FramingGuides 口径):off 关闭;其余 =
+/// 目标画幅比,门框外压暗。变宽还原拉伸发生在显示层,遮幅门在图像系
+/// 按 ratio/deSqueeze 预缩 —— 屏上观感即目标画幅(见
+/// live_view_overlays.dart 的 FramingOverlay)。
+enum FramingAspect {
+  off, a239, a235, a185;
+
+  /// 目标画幅比(null = off,不画遮幅)。
+  double? get ratio => switch (this) {
+        off => null,
+        a239 => 2.39,
+        a235 => 2.35,
+        a185 => 1.85,
+      };
+
+  /// 芯片文案(「2.39」等;off 空)。
+  String get label => switch (this) {
+        off => '',
+        a239 => '2.39',
+        a235 => '2.35',
+        a185 => '1.85',
+      };
+
+  /// 芯片点按循环下一档(off → 2.39 → 2.35 → 1.85 → off)。
+  FramingAspect get next =>
+      FramingAspect.values[(index + 1) % FramingAspect.values.length];
+}
+
 /// 变宽还原(anamorphic de-squeeze)倍率预设:1.0 = 关。OpenZCine
 /// 口径 1.6× 为常用预设;自定义 1.00–2.00(0.01 步进)在设置页滑杆。
 const kDeSqueezePresets = [1.0, 1.3, 1.5, 1.6, 2.0];
@@ -54,6 +82,11 @@ final class AppSettings {
     this.monitorFalseColor = false,
     this.monitorPeaking = false,
     this.monitorFocusDial = false,
+    this.framingAspect = FramingAspect.off,
+    this.framingSafeArea = false,
+    this.framingCenterMark = false,
+    this.monitorWaveform = false,
+    this.monitorLutIndex = -1,
     this.liveViewOn = true,
     this.liveViewImageSize = 3,
     this.liveViewImageCompression = 5,
@@ -116,6 +149,20 @@ final class AppSettings {
   final bool monitorPeaking;
   final bool monitorFocusDial;
 
+  /// 构图框(OpenZCine 差集):遮幅画幅 + 安全框 + 中心标;门框数学
+  /// 与绘制见 live_view_overlays.dart 的 FramingOverlay。
+  final FramingAspect framingAspect;
+  final bool framingSafeArea;
+  final bool framingCenterMark;
+
+  /// 波形示波器(按列-亮度桶密度;共享帧分析,页面侧同步分析器启停)。
+  final bool monitorWaveform;
+
+  /// 监看 LUT 索引(-1 = 关;0..n = 内置风格表序)。越界值按关消费
+  /// (见 features/remote/monitor_toggles.dart 的 monitorLutOf),
+  /// data 层不依赖 features,不做范围钳制。
+  final int monitorLutIndex;
+
   /// 取景总开关(十二轮「取景器关闭的开关」):默认开 = 「取景默认
   /// 打开」原定案;持久关 = 进页/回台/连接沿都不自动起景,拍摄设置
   /// 浮层「取景」钮再开。
@@ -166,6 +213,11 @@ final class AppSettings {
     bool? monitorFalseColor,
     bool? monitorPeaking,
     bool? monitorFocusDial,
+    FramingAspect? framingAspect,
+    bool? framingSafeArea,
+    bool? framingCenterMark,
+    bool? monitorWaveform,
+    int? monitorLutIndex,
     bool? liveViewOn,
     Object? liveViewImageSize = _unset,
     Object? liveViewImageCompression = _unset,
@@ -196,6 +248,11 @@ final class AppSettings {
         monitorFalseColor: monitorFalseColor ?? this.monitorFalseColor,
         monitorPeaking: monitorPeaking ?? this.monitorPeaking,
         monitorFocusDial: monitorFocusDial ?? this.monitorFocusDial,
+        framingAspect: framingAspect ?? this.framingAspect,
+        framingSafeArea: framingSafeArea ?? this.framingSafeArea,
+        framingCenterMark: framingCenterMark ?? this.framingCenterMark,
+        monitorWaveform: monitorWaveform ?? this.monitorWaveform,
+        monitorLutIndex: monitorLutIndex ?? this.monitorLutIndex,
         liveViewOn: liveViewOn ?? this.liveViewOn,
         liveViewImageSize: liveViewImageSize == _unset
             ? this.liveViewImageSize
@@ -233,6 +290,11 @@ final class AppSettings {
       other.monitorFalseColor == monitorFalseColor &&
       other.monitorPeaking == monitorPeaking &&
       other.monitorFocusDial == monitorFocusDial &&
+      other.framingAspect == framingAspect &&
+      other.framingSafeArea == framingSafeArea &&
+      other.framingCenterMark == framingCenterMark &&
+      other.monitorWaveform == monitorWaveform &&
+      other.monitorLutIndex == monitorLutIndex &&
       other.liveViewOn == liveViewOn &&
       other.liveViewImageSize == liveViewImageSize &&
       other.liveViewImageCompression == liveViewImageCompression &&
@@ -247,7 +309,9 @@ final class AppSettings {
         watermarkStyle, watermarkText, feedUpscaler, temporalDenoise,
         autoRotateFeed, deSqueeze,
         monitorGrid, monitorZebra, monitorHistogram, monitorLevel,
-        monitorFalseColor, monitorPeaking, monitorFocusDial, liveViewOn,
+        monitorFalseColor, monitorPeaking, monitorFocusDial,
+        framingAspect, framingSafeArea, framingCenterMark,
+        monitorWaveform, monitorLutIndex, liveViewOn,
         liveViewImageSize, liveViewImageCompression, sdramCapture,
         bleGpsInject,
       ]);
@@ -276,6 +340,11 @@ final class AppSettings {
         'monitorFalseColor': monitorFalseColor,
         'monitorPeaking': monitorPeaking,
         'monitorFocusDial': monitorFocusDial,
+        'framingAspect': framingAspect.name,
+        'framingSafeArea': framingSafeArea,
+        'framingCenterMark': framingCenterMark,
+        'monitorWaveform': monitorWaveform,
+        'monitorLutIndex': monitorLutIndex,
         'liveViewOn': liveViewOn,
         if (liveViewImageSize != null)
           'liveViewImageSize': liveViewImageSize,
@@ -320,6 +389,15 @@ final class AppSettings {
         monitorFalseColor: json['monitorFalseColor'] == true,
         monitorPeaking: json['monitorPeaking'] == true,
         monitorFocusDial: json['monitorFocusDial'] == true,
+        framingAspect: _enumByName(FramingAspect.values, json['framingAspect']) ??
+            FramingAspect.off,
+        framingSafeArea: json['framingSafeArea'] == true,
+        framingCenterMark: json['framingCenterMark'] == true,
+        monitorWaveform: json['monitorWaveform'] == true,
+        // 表外值(负数/手改)不做范围钳制,消费侧按关(LUT 表外 = null)。
+        monitorLutIndex: json['monitorLutIndex'] is int
+            ? json['monitorLutIndex'] as int
+            : -1,
         // 旧档缺省 = 开(保持「取景默认打开」原定案)。
         liveViewOn: json['liveViewOn'] == null || json['liveViewOn'] == true,
         liveViewImageSize: _pickLiveViewValue(json['liveViewImageSize'],

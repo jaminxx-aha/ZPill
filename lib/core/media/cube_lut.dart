@@ -188,4 +188,22 @@ final class CubeLut {
     final t = ((v - lo) / (hi - lo)).clamp(0.0, 1.0);
     return t * (size - 1);
   }
+
+  /// 监看 shader 查表纹理(RGBA8 扁平化):宽 = N²、高 = N,像素按
+  /// 行主序展开,纹理坐标 (x = r + g·N, y = b) —— 与 [apply] 的表序
+  /// (b 最慢/r 最快)一致,shader 侧按同布局做三线性查表。
+  ///
+  /// 仅对 0..1 域语义正确(内置风格表即此;带 DOMAIN 偏移的外来表
+  /// 纹理化后输入映射会偏移,调用方避免用于非 0..1 域)。
+  Uint8List textureRgba() {
+    final out = Uint8List(_table.length ~/ 3 * 4);
+    var j = 0;
+    for (var i = 0; i < _table.length; i += 3) {
+      out[j++] = (_table[i] * 255).round().clamp(0, 255);
+      out[j++] = (_table[i + 1] * 255).round().clamp(0, 255);
+      out[j++] = (_table[i + 2] * 255).round().clamp(0, 255);
+      out[j++] = 255;
+    }
+    return out;
+  }
 }

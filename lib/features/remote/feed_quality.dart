@@ -18,6 +18,8 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
+import '../../core/media/cube_lut.dart';
+
 /// 单例加载(pubspec `flutter: shaders` 注册的预编译产物);
 /// null = 加载失败(整 app 会话内回落,不再重试)。
 Future<ui.FragmentProgram?>? _programFuture;
@@ -27,6 +29,7 @@ class ShaderFeed extends StatefulWidget {
     super.key,
     required this.frame,
     required this.temporalDenoise,
+    this.lut,
     this.fallbackQuality = FilterQuality.high,
     this.programLoader,
   });
@@ -36,6 +39,10 @@ class ShaderFeed extends StatefulWidget {
 
   /// 时域降噪(混合强度;false = 0 不混合)。
   final bool temporalDenoise;
+
+  /// 监看 LUT(shader 末段三线性查表,纯显示层调色);null = 直通。
+  /// 纹理构建失败(LUT 非法/GPU 不可)静默不套色,画面照常。
+  final CubeLut? lut;
 
   /// shader 不可用时的回落档(「高质量」回落 fast = FilterQuality.high)。
   final FilterQuality fallbackQuality;
@@ -58,6 +65,10 @@ class _ShaderFeedState extends State<ShaderFeed> {
   Uint8List? _displayedBytes;
   bool _decoding = false;
   Uint8List? _pending;
+
+  /// 监看 LUT 纹理(异步构建;构建沿 = [CubeLut] 实例变化)。
+  ui.Image? _lutImage;
+  CubeLut? _lutBuilding;
 
   @override
   void initState() {
@@ -84,19 +95,64 @@ class _ShaderFeedState extends State<ShaderFeed> {
       }));
     }
     _decode(widget.frame);
+    _syncLut();
   }
 
   @override
   void didUpdateWidget(ShaderFeed old) {
     super.didUpdateWidget(old);
     if (!identical(widget.frame, old.frame)) _decode(widget.frame);
+    if (!identical(widget.lut, old.lut)) _syncLut();
   }
 
   @override
   void dispose() {
     _image?.dispose();
     _prev?.dispose();
+    _lutImage?.dispose();
     super.dispose();
+  }
+
+  /// LUT 沿:实例变化即重建纹理(异步;迟到结果按最新实例丢弃)。
+  /// 同步路径不 setState —— didUpdateWidget/initState 后框架本就
+  /// 会重建,异步完成沿才需要。
+  void _syncLut() {
+    final lut = widget.lut;
+    if (identical(lut, _lutBuilding)) return;
+    _lutBuilding = lut;
+    if (lut == null) {
+      _lutImage?.dispose();
+      _lutImage = null;
+      return;
+    }
+    unawaited(_buildLutTexture(lut));
+  }
+
+  Future<void> _buildLutTexture(CubeLut lut) async {
+    try {
+      final buffer =
+          await ui.ImmutableBuffer.fromUint8List(lut.textureRgba());
+      final descriptor = ui.ImageDescriptor.raw(
+        buffer,
+        width: lut.size * lut.size,
+        height: lut.size,
+        pixelFormat: ui.PixelFormat.rgba8888,
+      );
+      final codec = await descriptor.instantiateCodec();
+      final frame = await codec.getNextFrame();
+      codec.dispose();
+      descriptor.dispose();
+      if (!mounted || !identical(lut, _lutBuilding)) {
+        frame.image.dispose();
+        return;
+      }
+      setState(() {
+        _lutImage?.dispose();
+        _lutImage = frame.image;
+      });
+    } on Object {
+      // 纹理构建失败:LUT 静默不生效(画面照常,不阻塞取景)。
+    }
   }
 
   void _decode(Uint8List bytes) {
@@ -159,6 +215,8 @@ class _ShaderFeedState extends State<ShaderFeed> {
         prev: widget.temporalDenoise && _prev != null ? _prev! : image,
         motion: widget.temporalDenoise ? 0.6 : 0.0,
         sharpen: 0.3,
+        lutImage: _lutImage,
+        lutSize: _lutImage != null ? _lutBuilding!.size : 0,
       ),
     );
   }
@@ -171,6 +229,8 @@ class _ShaderFeedPainter extends CustomPainter {
     required this.prev,
     required this.motion,
     required this.sharpen,
+    required this.lutImage,
+    required this.lutSize,
   });
 
   final ui.FragmentProgram program;
@@ -179,12 +239,19 @@ class _ShaderFeedPainter extends CustomPainter {
   final double motion;
   final double sharpen;
 
+  /// 监看 LUT 纹理(null = 直通,sampler 槽 2 挂当前帧占位不采样)。
+  final ui.Image? lutImage;
+
+  /// LUT 每轴格点 N(纹理宽 = N²;与 [lutImage] 成对)。
+  final int lutSize;
+
   @override
   void paint(Canvas canvas, Size size) {
     if (size.isEmpty) return;
     final fs = program.fragmentShader();
     fs.setImageSampler(0, image);
     fs.setImageSampler(1, prev);
+    fs.setImageSampler(2, lutImage ?? image);
     // CTM 逆映射基(图像坐标 → 层空间):两条边向量 + 原点。绘制
     // 盒在图像坐标系原点,Transform 的缩放/旋转/变宽全在其中。
     // getTransform 回 Float64List(列主序:x' = m0x+m4y+m12)。
@@ -205,6 +272,8 @@ class _ShaderFeedPainter extends CustomPainter {
     fs.setFloat(7, image.height.toDouble());
     fs.setFloat(8, motion);
     fs.setFloat(9, sharpen);
+    fs.setFloat(10, lutImage != null ? 1.0 : 0.0);
+    fs.setFloat(11, lutSize.toDouble());
     canvas.drawRect(
       Offset.zero & size,
       Paint()
@@ -217,6 +286,7 @@ class _ShaderFeedPainter extends CustomPainter {
   bool shouldRepaint(_ShaderFeedPainter old) =>
       !identical(image, old.image) ||
       !identical(prev, old.prev) ||
+      !identical(lutImage, old.lutImage) ||
       motion != old.motion ||
       sharpen != old.sharpen;
 }

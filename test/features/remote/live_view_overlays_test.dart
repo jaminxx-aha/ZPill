@@ -1,6 +1,9 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:nikon_pill/core/remote/frame_analysis.dart';
 import 'package:nikon_pill/core/remote/live_view_header.dart';
 import 'package:nikon_pill/features/remote/live_design.dart';
 import 'package:nikon_pill/features/remote/live_view_overlays.dart';
@@ -269,6 +272,50 @@ void main() {
       // 静音(0/0):全隐,不亮零段标
       expect(audioSegmentColor(0, current: 0, peak: 0),
           Colors.white.withValues(alpha: 0.12));
+    });
+  });
+
+  group('监看差集叠层(2026-10-14:波形/构图框)', () {
+    FrameAnalysis buildAnalysis() {
+      final waveform = Uint32List(8 * 64);
+      waveform[4 * 64 + 40] = 7; // 中列中上桶有点密度
+      return FrameAnalysis(
+        width: 32,
+        height: 24,
+        lumaHistogram: List<int>.filled(64, 1),
+        overexposedMask: Uint8List(8 * 6),
+        maskCols: 8,
+        maskRows: 6,
+        lumaThreshold: 250,
+        falseColorCells: Uint8List(8 * 6),
+        peakingMask: Uint8List(16 * 12),
+        peakingCols: 16,
+        peakingRows: 12,
+        waveform: waveform,
+        waveformCols: 8,
+      );
+    }
+
+    testWidgets('波形:分析在册上屏不炸;无分析也留小盒(等首帧数据)', (tester) async {
+      await tester.pumpWidget(const MaterialApp(
+          home: Scaffold(body: WaveformView(analysis: null))));
+      expect(find.byType(WaveformView), findsOneWidget);
+      await tester.pumpWidget(MaterialApp(
+          home: Scaffold(body: WaveformView(analysis: buildAnalysis()))));
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('构图框:遮幅+安全框+中心标上屏不炸;无遮幅仅画安全框',
+        (tester) async {
+      await tester.pumpWidget(const MaterialApp(
+          home: Scaffold(
+              body: FramingOverlay(
+                  aspect: 2.39, safeArea: true, centerMark: true))));
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const MaterialApp(
+          home: Scaffold(body: FramingOverlay(aspect: null))));
+      expect(tester.takeException(), isNull,
+          reason: 'aspect null = 不遮幅,安全框/中心标照画(默认关则空层)');
     });
   });
 }
