@@ -25,6 +25,7 @@ import 'geo_payload.dart';
 import 'pairing_engine.dart';
 import 'pairing_message.dart';
 import 'time_payload.dart';
+import 'wifi_credentials.dart';
 
 /// 会话状态:idle(未连)/pairing(握手中)/ready(可注入)/
 /// reconnecting(断连退避中)。
@@ -308,6 +309,36 @@ final class BleCameraSession {
 
   /// 关闭相机 WiFi(0x2005 写 0x80,同款反义 op)。
   Future<bool> closeCameraWifi() => _writeEstablishment(0x80, '关闭 WiFi');
+
+  /// 读 0x2004 相机 AP 凭据并解密(BLE→WiFi 二期)。特征面是会话激活
+  /// 的(会话外读恒为零),须 ready 态;失败返回 null 原因落 lastError,
+  /// blob 落 trace 供候选密钥增补。
+  Future<WifiCredentials?> readWifiCredentials() async {
+    if (_state != BleSessionState.ready) {
+      lastError = 'BLE 未连接,无法读 AP 凭据';
+      return null;
+    }
+    try {
+      final blob = await _host.read(kNikonCharConfig);
+      _trace('0x2004 ← ${blob == null ? 'null' : '${blob.length}B ${hex(blob)}'}');
+      if (blob == null || blob.isEmpty) {
+        lastError = '相机未下发 AP 凭据(0x2004 空)';
+        return null;
+      }
+      if (blob.length < 97) {
+        lastError = 'AP 凭据长度异常(${blob.length}B,应为 97B)';
+        return null;
+      }
+      final creds = decodeWifiCredentials(blob);
+      if (creds == null) {
+        lastError = 'AP 凭据解密未中(候选密钥全试未命中,blob 已落诊断日志)';
+      }
+      return creds;
+    } on Exception catch (e) {
+      lastError = '读 AP 凭据失败:$e';
+      return null;
+    }
+  }
 
   Future<bool> _writeEstablishment(int value, String label) async {
     if (_state != BleSessionState.ready) {

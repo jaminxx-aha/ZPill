@@ -27,5 +27,29 @@ void main() {
       final hasher = BlowfishHasher();
       expect(() => hasher.hash(<int>[1, 2, 3]), throwsArgumentError);
     });
+
+    test('decryptBlock 逆标准向量:4EF99745/6198DD78 → 全零块', () {
+      final hasher = BlowfishHasher(key: List<int>.filled(8, 0));
+      final (l, r) = hasher.decryptBlock(0x4EF99745, 0x6198DD78);
+      expect(l, 0);
+      expect(r, 0);
+    });
+
+    test('encryptBlock/decryptBlock 往返自证(定键 + 零键)', () {
+      for (final key in const [
+        <int>[0xFF, 0xFF, 0xAA, 0x55, 0x11, 0x22, 0x33, 0x00],
+        <int>[0, 0, 0, 0, 0, 0, 0, 0],
+      ]) {
+        final hasher = BlowfishHasher(key: key);
+        for (final (l, r) in const [
+          (0x00000000, 0x00000000),
+          (0x01234567, 0x89ABCDEF),
+          (0xDEADBEEF, 0x13579BDF),
+        ]) {
+          final (cl, cr) = hasher.encryptBlock(l, r);
+          expect(hasher.decryptBlock(cl, cr), (l, r));
+        }
+      }
+    });
   });
 }

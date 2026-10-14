@@ -30,6 +30,7 @@ import 'package:nikon_pill/platform/nsd_scanner.dart';
 
 import '../../core/ble/ble_camera_session_test.dart'
     show FakeBleHost, buildStage2, buildStage4;
+import '../../core/ble/wifi_credentials_test.dart' show craftBlob;
 
 /// 内存设置库(落账 update;流直推)—— 蓝牙 GPS 注入开关落库断言用。
 class _FakeSettingsStore implements SettingsStore {
@@ -985,6 +986,49 @@ void main() {
       expect(await session.wakeCameraWifi(), isFalse);
       expect(host.writes, isEmpty);
       expect(session.lastError, contains('BLE 未连接'));
+    });
+
+    testWidgets('唤醒沿自动读凭据:0x2004 解出 → AP 卡凭据块照实显示', (tester) async {
+      final f = (await tester.runAsync(readyFixture))!;
+      f.host.reads[kNikonCharConfig] =
+          craftBlob('Zf_80114411', 'wpa2pass99', 0x02, cbc: false);
+      await tester.pumpWidget(
+          MaterialApp(home: ConnectionPage(controller: f.controller)));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('蓝牙'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('唤醒相机 Wi-Fi'));
+      await tester.pumpAndSettle();
+      expect(f.host.lastWrite(kNikonCharWifi), Uint8List.fromList([0x01]));
+      expect(f.controller.cameraApCredentials, isNotNull);
+      expect(f.controller.cameraApCredentials!.ssid, 'Zf_80114411');
+
+      await tester.tap(find.text('AP 热点'));
+      await tester.pumpAndSettle();
+      expect(find.text('相机热点凭据(蓝牙通道解出)'), findsOneWidget);
+      expect(find.text('wpa2pass99'), findsOneWidget);
+      expect(find.text('SSID'), findsOneWidget);
+      expect(find.textContaining('WPA2'), findsOneWidget);
+    });
+
+    testWidgets('唤醒但凭据未解出:AP 卡不出凭据块,提示如实', (tester) async {
+      final f = (await tester.runAsync(readyFixture))!;
+      await tester.pumpWidget(
+          MaterialApp(home: ConnectionPage(controller: f.controller)));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('蓝牙'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('唤醒相机 Wi-Fi'));
+      await tester.pumpAndSettle();
+      expect(f.controller.cameraApCredentials, isNull);
+      expect(find.byType(SnackBar), findsOneWidget);
+      expect(find.textContaining('凭据未解出'), findsOneWidget);
+
+      await tester.tap(find.text('AP 热点'));
+      await tester.pumpAndSettle();
+      expect(find.text('相机热点凭据(蓝牙通道解出)'), findsNothing);
     });
   });
 }

@@ -56,6 +56,30 @@ class BlowfishHasher {
     return (xL & _mask, xR & _mask);
   }
 
+  /// ECB 加密一个 64 位块,返回 (L, R)。0x2004 凭据解密与向量测试用
+  /// (协议 hash 走 [hash],块密码本体在此)。
+  (int, int) encryptBlock(int l, int r) => _encryptBlock(l, r);
+
+  /// ECB 解密一个 64 位块,返回 (L, R):Feistel 结构对称,轮密钥逆序
+  /// (P[17]→P[2])走同形轮,末轮外异或 P[1]/P[0]。
+  (int, int) decryptBlock(int l, int r) {
+    var xL = l & _mask;
+    var xR = r & _mask;
+    for (var i = 17; i >= 2; i--) {
+      xL ^= _p[i];
+      xR = (xR ^ _f(xL)) & _mask;
+      final t = xL;
+      xL = xR;
+      xR = t;
+    }
+    final t = xL;
+    xL = xR;
+    xR = t;
+    xR ^= _p[1];
+    xL ^= _p[0];
+    return (xL & _mask, xR & _mask);
+  }
+
   void _expandKey(List<int> key) {
     var k = 0;
     for (var i = 0; i < 18; i++) {

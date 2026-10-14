@@ -10,12 +10,16 @@ import 'package:nikon_pill/core/ble/pairing_engine.dart';
 import 'package:nikon_pill/core/ble/pairing_message.dart';
 import 'package:nikon_pill/platform/ble_scanner.dart';
 
+import 'wifi_credentials_test.dart' show craftBlob;
+
 /// BleHost 假体:写序记录 + 事件注入 + 可编程失败。
 final class FakeBleHost implements BleHost {
   final eventCtrl = StreamController<BleEvent>.broadcast();
   final writes = <(String, Uint8List)>[];
   final notifies = <String>[];
+  final reads = <String, Uint8List?>{};
   Object? writeError;
+  Object? readError;
   int? reconnectDeviceId;
 
   void emit(BleEvent event) => eventCtrl.add(event);
@@ -57,7 +61,13 @@ final class FakeBleHost implements BleHost {
   }
 
   @override
-  Future<Uint8List?> read(String characteristicUuid) async => null;
+  Future<Uint8List?> read(String characteristicUuid) async {
+    final error = readError;
+    if (error != null) {
+      throw error;
+    }
+    return reads[characteristicUuid];
+  }
 
   @override
   Future<void> write(String characteristicUuid, Uint8List data,
@@ -364,5 +374,49 @@ void main() {
     expect(host.countWrite(kNikonCharGeo), geoBefore + 1);
     await session.tick();
     expect(host.countWrite(kNikonCharTime), timeBefore + 1);
+  });
+
+  group('readWifiCredentials(0x2004,BLE→WiFi 二期)', () {
+    test('ready 态读 0x2004 → 解密出凭据;blob 落 trace', () async {
+      await runHandshake();
+      final traces = <String>[];
+      session.onTrace = traces.add;
+      host.reads[kNikonCharConfig] =
+          craftBlob('Zf_80114411', 'wpa2pass99', 0x02, cbc: false);
+      final creds = await session.readWifiCredentials();
+      expect(creds, isNotNull);
+      expect(creds!.ssid, 'Zf_80114411');
+      expect(creds.password, 'wpa2pass99');
+      expect(creds.security, 0x02);
+      expect(session.lastError, isNull);
+      expect(traces.where((l) => l.startsWith('0x2004 ←')), isNotEmpty);
+    });
+
+    test('未 ready 拒读;空/短 blob 与解密未中如实带原因', () async {
+      expect(await session.readWifiCredentials(), isNull);
+      expect(session.lastError, contains('BLE 未连接'));
+
+      await runHandshake();
+      host.reads[kNikonCharConfig] = Uint8List(0);
+      expect(await session.readWifiCredentials(), isNull);
+      expect(session.lastError, contains('未下发'));
+
+      host.reads[kNikonCharConfig] =
+          Uint8List.fromList(List<int>.generate(96, (i) => (i * 7 + 3) & 0xFF));
+      expect(await session.readWifiCredentials(), isNull);
+      expect(session.lastError, contains('长度异常'));
+
+      host.reads[kNikonCharConfig] =
+          Uint8List.fromList(List<int>.generate(97, (i) => (i * 7 + 3) & 0xFF));
+      expect(await session.readWifiCredentials(), isNull);
+      expect(session.lastError, contains('解密未中'));
+    });
+
+    test('读失败(特征不在/断链)→ null 带原因', () async {
+      await runHandshake();
+      host.readError = Exception('GATT 读失败');
+      expect(await session.readWifiCredentials(), isNull);
+      expect(session.lastError, contains('读 AP 凭据失败'));
+    });
   });
 }
