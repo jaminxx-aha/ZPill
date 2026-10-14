@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:nikon_pill/core/media/cube_lut.dart';
@@ -38,6 +40,26 @@ void main() {
     // 非对称点:各通道独立插值(x=0.25 在 0..0.5 之间的一半)
     final q = lut.apply(0.25, 0.5, 0.75);
     expect(q, closeTo3(0.25, 0.5, 0.75));
+  });
+
+  test('三线性插值:2³ 已知表手工对账(含 rg 交叉项)', () {
+    // 8 角值取自多线性函数(三线性对多线性精确),G 通道带 rg 交叉项;
+    // 行序红最快:(0,0,0)(1,0,0)(0,1,0)(1,1,0)(0,0,1)(1,0,1)(0,1,1)(1,1,1)。
+    const cube = 'TITLE "hand"\nLUT_3D_SIZE 2\n'
+        '0.10 0.20 0.30\n'
+        '0.30 0.25 0.35\n'
+        '0.14 0.60 0.34\n'
+        '0.34 0.75 0.39\n'
+        '0.11 0.22 0.70\n'
+        '0.31 0.27 0.75\n'
+        '0.15 0.62 0.74\n'
+        '0.35 0.77 0.79\n';
+    final lut = CubeLut.parse(cube);
+    // (r,g,b)=(.25,.5,.75) 手工三线性:
+    // R = .1+.2×.25+.04×.5+.01×.75 = .1775
+    // G = .2+.05×.25+.4×.5+.02×.75+.1×(.25×.5) = .44
+    // B = .3+.05×.25+.04×.5+.4×.75 = .6325
+    expect(lut.apply(0.25, 0.5, 0.75), closeTo3(0.1775, 0.44, 0.6325));
   });
 
   test('容错:注释/空行/关键字大小写/无引号 TITLE', () {
@@ -122,6 +144,49 @@ Lut_3d_Size 2
     expect(tex.sublist(4, 8), orderedEquals([255, 0, 0, 255]));
     expect(tex.sublist(8, 12), orderedEquals([0, 255, 0, 255]));
     expect(tex.sublist(28, 32), orderedEquals([255, 255, 255, 255]));
+  });
+
+  test('GPU 语义一致:非端点插值落在 8 角纹素值域内(±1 LSB)', () {
+    // 非单调表(正弦/余弦,值域收在 0..1 内),8 角值域非平凡才验得出
+    // 「被界定」。
+    final lut = CubeLut.fromFunction('wavy', 4, (r, g, b) => [
+          0.45 + 0.4 * math.sin(3 * r + g),
+          0.5 + 0.45 * math.cos(2 * g + b),
+          0.5 + 0.4 * math.sin(4 * b - r),
+        ]);
+    final tex = lut.textureRgba();
+    final n = lut.size;
+    // shader lutFetch 同布局取纹素:x = r+g·N、y = b。
+    double texel(int r, int g, int b, int ch) =>
+        tex[((b * n + g) * n + r) * 4 + ch] / 255;
+    for (final (r, g, b) in [
+      (0.3, 0.6, 0.8),
+      (0.1, 0.9, 0.4),
+      (0.75, 0.25, 0.55),
+      (0.5, 0.5, 0.5),
+    ]) {
+      final out = lut.apply(r, g, b);
+      // CPU apply 与 GPU lutLookup 都是对同 8 个格点做凸组合(权重和
+      // 为 1),结果必被 8 角纹素值界定;±1 LSB 容 RGBA8 量化差。
+      final gr = (r * (n - 1)).floor(),
+          gg = (g * (n - 1)).floor(),
+          gb = (b * (n - 1)).floor();
+      for (var ch = 0; ch < 3; ch++) {
+        var lo = 1.0, hi = 0.0;
+        for (var dr = 0; dr <= 1; dr++) {
+          for (var dg = 0; dg <= 1; dg++) {
+            for (var db = 0; db <= 1; db++) {
+              final v = texel((gr + dr).clamp(0, n - 1),
+                  (gg + dg).clamp(0, n - 1), (gb + db).clamp(0, n - 1), ch);
+              lo = math.min(lo, v);
+              hi = math.max(hi, v);
+            }
+          }
+        }
+        expect(out[ch], greaterThanOrEqualTo(lo - 1 / 255));
+        expect(out[ch], lessThanOrEqualTo(hi + 1 / 255));
+      }
+    }
   });
 }
 

@@ -15,6 +15,7 @@ final class FakeGallerySaver implements GallerySaver {
 
   final Directory root;
   final List<List<GalleryImportRequest>> importCalls = [];
+  final List<Uint8List> importedBytes = [];
   List<Uri> importResult = const [];
 
   @override
@@ -35,6 +36,9 @@ final class FakeGallerySaver implements GallerySaver {
   @override
   Future<List<Uri>> importFiles(List<GalleryImportRequest> requests) async {
     importCalls.add(List.of(requests));
+    // 临时文件在导入返回后即被页面删除,断言输出内容须当场抓字节。
+    importedBytes
+        .addAll([for (final r in requests) File(r.path).readAsBytesSync()]);
     return importResult;
   }
 
@@ -52,6 +56,17 @@ Uint8List _jpeg({int w = 80, int h = 60}) {
   for (var y = 0; y < h; y++) {
     for (var x = 0; x < w; x++) {
       image.setPixelRgba(x, y, x * 255 ~/ (w - 1), y * 255 ~/ (h - 1), 128, 255);
+    }
+  }
+  return Uint8List.fromList(img.encodeJpg(image));
+}
+
+/// 纯色图:保存产物走 JPEG 往返,纯色压缩噪声最小、期望值可手算。
+Uint8List _solidJpeg(int w, int h, int r, int g, int b) {
+  final image = img.Image(width: w, height: h);
+  for (var y = 0; y < h; y++) {
+    for (var x = 0; x < w; x++) {
+      image.setPixelRgba(x, y, r, g, b, 255);
     }
   }
   return Uint8List.fromList(img.encodeJpg(image));
@@ -249,5 +264,39 @@ void main() {
 
     expect(gallery.importCalls.length, 1);
     expect(find.text('未保存(已取消)'), findsOneWidget);
+  });
+
+  testWidgets('保存:所选 LUT 烘焙进输出文件(剪贴板导入反色表)', (tester) async {
+    final gallery = FakeGallerySaver()
+      ..importResult = [Uri.parse('file:///saved/1.jpg')];
+    // 纯色 (200,100,50) → 反色 (55,155,205)。
+    await _pumpPage(tester,
+        gallery: gallery, jpeg: _solidJpeg(80, 60, 200, 100, 50));
+
+    await tester.tap(find.byTooltip('LUT'));
+    await tester.pump();
+    const invCube = 'TITLE "inv"\nLUT_3D_SIZE 2\n'
+        '1 1 1\n0 1 1\n1 0 1\n0 0 1\n1 1 0\n0 1 0\n1 0 0\n0 0 0\n';
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async =>
+          call.method == 'Clipboard.getData' ? {'text': invCube} : null,
+    );
+    await tester.tap(find.text('从剪贴板导入 .cube'));
+    await tester.pump();
+    expect(_saveEnabled(tester), isTrue); // 导入即选中
+
+    await tester.tap(find.byTooltip('保存到相册'));
+    await tester.pump();
+    await _drainSave(tester, gallery);
+
+    expect(gallery.importCalls.length, 1);
+    final decoded = img.decodeJpg(gallery.importedBytes.single)!;
+    expect(decoded.width, 80); // 原分辨率保存(预览档是缩小图)
+    expect(decoded.height, 60);
+    final p = decoded.getPixel(0, 0);
+    expect(p.r, inInclusiveRange(40, 70));
+    expect(p.g, inInclusiveRange(140, 170));
+    expect(p.b, inInclusiveRange(190, 220));
   });
 }

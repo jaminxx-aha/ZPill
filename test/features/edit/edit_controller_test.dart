@@ -18,6 +18,17 @@ Uint8List _jpeg(int w, int h) {
   return Uint8List.fromList(img.encodeJpg(image));
 }
 
+/// 纯色图:LUT 断言走 JPEG 往返,纯色压缩噪声最小、期望值可手算。
+Uint8List _solidJpeg(int w, int h, int r, int g, int b) {
+  final image = img.Image(width: w, height: h);
+  for (var y = 0; y < h; y++) {
+    for (var x = 0; x < w; x++) {
+      image.setPixelRgba(x, y, r, g, b, 255);
+    }
+  }
+  return Uint8List.fromList(img.encodeJpg(image));
+}
+
 void main() {
   test('初始化:预览渲染就绪、参数中性', () {
     final c = EditController(jpeg: _jpeg(100, 80));
@@ -66,6 +77,22 @@ void main() {
     final decoded = img.decodeJpg(out)!;
     expect(decoded.width, 60);
     expect(decoded.height, 80);
+  });
+
+  test('renderFull:LUT 烘焙进原分辨率输出(反色)', () {
+    // 纯色 (200,100,50) → 反色 (55,155,205);走两轮 JPEG 往返,
+    // 区间放宽容压缩噪声,但远区别于无 LUT 的原值。
+    final c = EditController(
+        jpeg: _solidJpeg(80, 60, 200, 100, 50), maxPreviewEdge: 40);
+    c.setLut(
+        CubeLut.fromFunction('inv', 3, (r, g, b) => [1 - r, 1 - g, 1 - b]));
+    final decoded = img.decodeJpg(c.renderFull())!;
+    expect(decoded.width, 80); // 原分辨率(预览档是 40×30)
+    expect(decoded.height, 60);
+    final p = decoded.getPixel(0, 0);
+    expect(p.r, inInclusiveRange(40, 70));
+    expect(p.g, inInclusiveRange(140, 170));
+    expect(p.b, inInclusiveRange(190, 220));
   });
 
   test('中性时 renderFull 原字节直返', () {

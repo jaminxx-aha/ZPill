@@ -159,6 +159,24 @@ void main() {
     expect(out.getPixel(1, 0).r, greaterThan(240));
   });
 
+  test('LUT 恒等表:烘焙链逐像素字节相等(零改动语义)', () {
+    // 保存链经 applyEditToImage 逐像素查表;恒等表必须原样往返,
+    // 锁死「LUT 为 null 时零改动」之外的第二层零改动语义。
+    final identity = CubeLut.fromFunction('identity', 2, (r, g, b) => [r, g, b]);
+    final src = _gradient(64, 32);
+    final out = applyEditToImage(src, PhotoEdit(lut: identity));
+    expect(out.width, 64);
+    expect(out.height, 32);
+    var diff = 0;
+    for (var y = 0; y < src.height; y++) {
+      for (var x = 0; x < src.width; x++) {
+        final s = src.getPixel(x, y), d = out.getPixel(x, y);
+        if (s.r != d.r || s.g != d.g || s.b != d.b) diff++;
+      }
+    }
+    expect(diff, 0);
+  });
+
   test('管线顺序:先裁剪后调色(裁剪尺寸决定,调节不改尺寸)', () {
     final out = applyEditToImage(
       _gradient(80, 40),
