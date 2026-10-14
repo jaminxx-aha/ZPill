@@ -33,8 +33,11 @@ class CaptureSettingsPanel extends StatelessWidget {
     required this.onLiveViewQualityChanged,
     required this.onSdramCaptureChanged,
     required this.onBleGpsInjectChanged,
+    required this.onVolumeKeyShutterChanged,
     this.bleGpsInject = false,
     this.bleReady = false,
+    this.volumeKeyShutter = false,
+    this.volumeKeyShutterAvailable = false,
     this.liveViewImageSize,
     this.liveViewImageCompression,
     this.maxHeight,
@@ -68,6 +71,14 @@ class CaptureSettingsPanel extends StatelessWidget {
   final void Function(bool value) onBleGpsInjectChanged;
   final bool bleGpsInject;
   final bool bleReady;
+
+  /// 音量键快门落定(Android 独有行):只写设置;原生开关沿
+  /// (setEnabled 推/撤)由页面侧在接线沿收口。[volumeKeyShutterAvailable]
+  /// = 平台门禁(Android 才 true;iOS 系统不放行音量键到应用、ohos 未做
+  /// 原生拦截,行不出现)。
+  final void Function(bool value) onVolumeKeyShutterChanged;
+  final bool volumeKeyShutter;
+  final bool volumeKeyShutterAvailable;
 
   /// 当前画质档(持久化设置镜像;null = 跟随相机)。
   final int? liveViewImageSize;
@@ -567,6 +578,16 @@ class CaptureSettingsPanel extends StatelessWidget {
               ? 'BLE 定位注入(0x2007):拍进卡的照片原生带 EXIF 坐标'
               : '未配对:设置页「BLE 配对 / GPS 注入」先配对相机',
         ),
+        // Android 独有:异端不出行(iOS 不放行音量键、ohos 未做拦截)。
+        if (volumeKeyShutterAvailable)
+          _smallChip(
+            live: LiveDesign.of(context),
+            label: '音量键快门',
+            selected: volumeKeyShutter,
+            onTap: () => onVolumeKeyShutterChanged(!volumeKeyShutter),
+            tooltip: '音量上/下键兼作快门(拍摄页存续期生效);'
+                '仅 Android —— iOS 系统不放行音量键给应用,ohos 未做拦截',
+          ),
         Builder(
           // Builder 让 showMenu 锚到自拍芯片本身(而非整条浮层)。
           builder: (chipContext) => _smallChip(

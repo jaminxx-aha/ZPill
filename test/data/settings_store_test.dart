@@ -218,4 +218,25 @@ void main() {
           FramingAspect.off);
     });
   });
+
+  group('音量键快门开关持久化(2026-10-14 Android)', () {
+    test('默认关;JSON 往返;旧档缺省回落关', () {
+      expect(const AppSettings().volumeKeyShutter, isFalse);
+      final on = const AppSettings().copyWith(volumeKeyShutter: true);
+      final back = AppSettings.fromJson(on.toJson());
+      expect(back.volumeKeyShutter, isTrue);
+      // 旧版本文件无此键 → 关
+      expect(AppSettings.fromJson({'autoTransfer': true}).volumeKeyShutter,
+          isFalse);
+    });
+
+    test('文件落盘往返(FileSettingsStore)', () async {
+      final dir = await Directory.systemTemp.createTemp('np_settings_volkey');
+      addTearDown(() => dir.delete(recursive: true));
+      final store = FileSettingsStore(dataDir: () async => dir.path);
+      await store.update(const AppSettings().copyWith(volumeKeyShutter: true));
+      final reloaded = FileSettingsStore(dataDir: () async => dir.path);
+      expect((await reloaded.current()).volumeKeyShutter, isTrue);
+    });
+  });
 }

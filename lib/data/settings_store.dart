@@ -94,6 +94,7 @@ final class AppSettings {
     this.liveViewImageCompression = 5,
     this.sdramCapture = false,
     this.bleGpsInject = false,
+    this.volumeKeyShutter = false,
   });
 
   final bool autoTransfer;
@@ -196,6 +197,11 @@ final class AppSettings {
   /// 配对入口在设置页。
   final bool bleGpsInject;
 
+  /// Android 音量键快门:开 = 拍摄页存续期原生拦音量键转快门(上/下
+  /// 同效,命中走 RemoteController.capture 同一守卫);关/异端 = 音量键
+  /// 归系统。Android 独有(iOS 不放行音量键给应用,ohos 未做原生拦截)。
+  final bool volumeKeyShutter;
+
   /// copyWith 的「未传」哨兵:画质两字段要能把 null(跟随相机)写回,
   /// `??` 模式做不到 —— 传值(含显式 null)即覆盖,不传保持原值。
   static const Object _unset = Object();
@@ -236,6 +242,7 @@ final class AppSettings {
     Object? liveViewImageCompression = _unset,
     bool? sdramCapture,
     bool? bleGpsInject,
+    bool? volumeKeyShutter,
   }) =>
       AppSettings(
         autoTransfer: autoTransfer ?? this.autoTransfer,
@@ -277,6 +284,7 @@ final class AppSettings {
             : liveViewImageCompression as int?,
         sdramCapture: sdramCapture ?? this.sdramCapture,
         bleGpsInject: bleGpsInject ?? this.bleGpsInject,
+        volumeKeyShutter: volumeKeyShutter ?? this.volumeKeyShutter,
       );
 
   @override
@@ -316,10 +324,11 @@ final class AppSettings {
       other.liveViewImageSize == liveViewImageSize &&
       other.liveViewImageCompression == liveViewImageCompression &&
       other.sdramCapture == sdramCapture &&
-      other.bleGpsInject == bleGpsInject;
+      other.bleGpsInject == bleGpsInject &&
+      other.volumeKeyShutter == volumeKeyShutter;
 
   @override
-  // Object.hash 位置参上限 20,字段 26 个 → hashAll(列表序即上面 == 序)。
+  // Object.hash 位置参上限 20,字段 27 个 → hashAll(列表序即上面 == 序)。
   int get hashCode => Object.hashAll([
         autoTransfer, autoTransferFormat, quality, batterySaver, customSavePath,
         themeMode, xmpCreator, xmpRights, xmpInjectRating, xmpInjectGps,
@@ -331,7 +340,7 @@ final class AppSettings {
         framingAspect, framingSafeArea, framingCenterMark,
         monitorWaveform, monitorLutIndex, liveViewOn,
         liveViewImageSize, liveViewImageCompression, sdramCapture,
-        bleGpsInject,
+        bleGpsInject, volumeKeyShutter,
       ]);
 
   Map<String, Object?> toJson() => {
@@ -372,6 +381,7 @@ final class AppSettings {
           'liveViewImageCompression': liveViewImageCompression,
         'sdramCapture': sdramCapture,
         'bleGpsInject': bleGpsInject,
+        'volumeKeyShutter': volumeKeyShutter,
       };
 
   static AppSettings fromJson(Map<String, Object?> json) => AppSettings(
@@ -432,6 +442,7 @@ final class AppSettings {
         sdramCapture: json['sdramCapture'] == true,
         // 旧档无键回落 false(「跟随相机」同款语义:无键不覆写)。
         bleGpsInject: json['bleGpsInject'] == true,
+        volumeKeyShutter: json['volumeKeyShutter'] == true,
       );
 
   /// 取景画质档反序列化:表外值(旧版本/手改文件)回落「跟随相机」。
