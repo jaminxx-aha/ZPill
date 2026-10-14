@@ -152,4 +152,124 @@ const Map<String, String> enCatalog = {
   '全屏播放': 'Play Fullscreen',
   '顺帧 24fps · {p}%': 'Conforming 24fps · {p}%',
   '24fps 顺帧': 'Conform to 24fps',
+
+  // ── connection(i18n-3)──
+  // connection_status_card(状态 label 经变量在显示点包 t;hint 由控制
+  // 器/连接层产出中文键,_HintText 消费点包 t;「重试」复用 states 组)
+  '未连接': 'Not Connected',
+  '检测相机 WiFi…': 'Detecting camera Wi-Fi…',
+  '等待相机上确认配对…': 'Waiting for camera to confirm pairing…',
+  '连接中…': 'Connecting…',
+  '等待配对确认…': 'Waiting for pairing confirmation…',
+  '已连接': 'Connected',
+  '正在重连…': 'Reconnecting…',
+  '连接失败': 'Connection Failed',
+  '{free} 可用 / {total}': '{free} free / {total}',
+  '容量未知': 'Capacity Unknown',
+
+  // connection_page —— 分段/取消/通用提示(AppBar「相机」复用 home_shell)
+  '取消重连': 'Cancel Reconnect',
+  '取消连接': 'Cancel Connection',
+  '有线': 'Wired',
+  'AP 热点': 'AP Hotspot',
+  '同一 Wi-Fi': 'Same Wi-Fi',
+  '蓝牙': 'Bluetooth',
+  '· 首次无线连接会请求配对确认(相机记录本设备,之后免配对);相机屏幕出现提示时请在机身上按 OK。\n'
+  '· 相机同一时间只允许一个客户端:若被 SnapBridge(尼享)抢先连上会遭拒,请先彻底关闭它。\n'
+  '· 首次连接若失败,请在系统弹窗中允许访问本地网络后重试;下载大文件期间请保持 App 在前台、屏幕点亮。':
+      '· The first wireless connection asks for pairing confirmation on the camera (it remembers this device; no pairing needed afterwards); press OK on the camera when prompted.\n'
+      '· The camera allows only one client at a time: if SnapBridge got there first you will be rejected — close it completely first.\n'
+      '· If the first connection fails, allow local network access in the system dialog and retry; keep the app in the foreground with the screen on while downloading large files.',
+
+  // connection_page —— 蓝牙工具卡(「握手中…/重连中…/未配对/关闭」复用)
+  '蓝牙连接(工具通道)': 'Bluetooth (Tools)',
+  '不建立相机连接(不传图/不遥控),只用于:拍摄时注入 GPS 坐标(照片原生带 EXIF 定位)、唤醒相机 Wi-Fi。首次使用先配对相机。':
+      'No camera connection (no transfer, no remote control); only for injecting GPS coordinates while shooting (photos get native EXIF location) and waking the camera Wi-Fi. Pair the camera before first use.',
+  '已配对,未连接': 'Paired, Not Connected',
+  '配对相机': 'Pair Camera',
+  '断开蓝牙': 'Disconnect Bluetooth',
+  '重连': 'Reconnect',
+  'GPS 位置注入': 'GPS Injection',
+  '拍摄时自动把手机定位写进相机,卡内照片原生带坐标':
+      'Automatically write the phone location into the camera while shooting; photos on the card get native coordinates',
+  '唤醒相机 Wi-Fi': 'Wake Camera Wi-Fi',
+  '已请求相机关闭 Wi-Fi': 'Requested the camera to turn off Wi-Fi',
+  '读取 Wi-Fi 凭据(0x2004)': 'Read Wi-Fi Credentials (0x2004)',
+  '配对管理(日志/解除/后台定位授权)':
+      'Manage Pairing (log/unpair/background location)',
+  '唤醒失败:{e}': 'Wake failed: {e}',
+  '未知': 'Unknown',
+  '未下发': 'not sent',
+  '相机 Wi-Fi 已唤醒:热点「{ssid}」凭据已解出,见「AP 热点」卡':
+      'Camera Wi-Fi is awake: hotspot "{ssid}" credentials decoded; see the "AP Hotspot" card',
+  '相机 Wi-Fi 已唤醒:到系统 Wi-Fi 加入相机热点(凭据未解出:{e}),再回「AP 热点」卡连接':
+      'Camera Wi-Fi is awake: join the camera hotspot in system Wi-Fi settings (credentials not decoded: {e}), then return to the "AP Hotspot" card to connect',
+  '已解出热点「{ssid}」,见「AP 热点」卡':
+      'Hotspot "{ssid}" credentials decoded; see the "AP Hotspot" card',
+  '未取得凭据:{e}': 'Credentials not retrieved: {e}',
+  '操作失败:{e}': 'Operation failed: {e}',
+
+  // connection_page —— 方式卡标题(_methodTitle 就地包 t)
+  '有线连接(USB)': 'Wired (USB)',
+  'AP 连接(相机当热点)': 'AP (Camera as Hotspot)',
+  'STA 连接(同一 Wi-Fi)': 'STA (Same Wi-Fi)',
+
+  // connection_page —— USB / AP 卡
+  '用 C-to-C 数据线连接相机与手机,解锁相机后点「USB 连接」':
+      'Connect the camera and phone with a C-to-C cable, unlock the camera, then tap "USB Connect"',
+  'USB 连接': 'USB Connect',
+  '相机菜单:网络 → 连接至智能设备 → Wi-Fi 连接(热点模式)。先在系统 Wi-Fi 设置里加入相机热点,再回来连接。':
+      'Camera menu: Network → Connect to Smart Device → Wi-Fi Connection (hotspot mode). Join the camera hotspot in system Wi-Fi settings first, then come back to connect.',
+  '相机 IP(默认 192.168.1.1)': 'Camera IP (default 192.168.1.1)',
+  'AP 连接': 'AP Connect',
+  '相机热点凭据(蓝牙通道解出)':
+      'Camera Hotspot Credentials (decoded via Bluetooth)',
+  '密码': 'Password',
+  '安全:{s} · 加入热点后回此卡点「AP 连接」':
+      'Security: {s} · join the hotspot, then tap "AP Connect" on this card',
+  '(空)': '(empty)',
+  '复制{label}': 'Copy {label}',
+  '已复制{label}': '{label} copied',
+
+  // connection_page —— STA 卡
+  '相机与手机加入同一个 Wi-Fi(相机菜单同上,选择连接到路由器网络),扫描发现相机后点选连接。':
+      'Camera and phone join the same Wi-Fi (same camera menu as above, choosing the router network); scan to find the camera, then tap it to connect.',
+  '扫描中…(点按停止)': 'Scanning… (tap to stop)',
+  '扫描相机': 'Scan for Cameras',
+  '未发现:相机须停留在「等待连接」画面才会广播(退出该画面即停止);若刚在相机上完成配对,先在相机上按 OK。也可在下方手填 IP 直连。':
+      'Nothing found: the camera only broadcasts while on the "Waiting for connection" screen (leaving it stops broadcasting); if you just finished pairing on the camera, press OK on the camera first. You can also type the IP below to connect directly.',
+  '相机 IP(扫描不到时手填)':
+      'Camera IP (type manually if the scan finds nothing)',
+  '如 192.168.1.4': 'e.g. 192.168.1.4',
+  '连接': 'Connect',
+  '上次:{name}': 'Last: {name}',
+  '忘记这台相机': 'Forget This Camera',
+  '忘记这台相机?': 'Forget This Camera?',
+  '删除「{name}」的连接记录。已配对的相机会同时换新配对身份,下次连接重新配对(自动确认,无需操作)。':
+      'Delete the connection record for "{name}". Paired cameras also get a new pairing identity, so the next connection pairs again (auto-confirmed, no action needed).',
+
+  // connection_page —— 已连接视图(「删除」复用 snapshot_controller 组)
+  '进入拍摄': 'Remote Shooting',
+  '相册': 'Gallery',
+  '断开连接': 'Disconnect',
+  'USB 数据线': 'USB Cable',
+  '相机相册': 'Camera Album',
+
+  // connection_page —— 信息卡行(_infoRow 就地包 t;值列相机上报串未命中原样)
+  '连接方式': 'Link',
+  '设备': 'Device',
+  '型号': 'Model',
+  '读取中…': 'Loading…',
+  '固件版本': 'Firmware',
+  '序列号': 'Serial No.',
+  '电池': 'Battery',
+  '镜头型号': 'Lens',
+  '焦距': 'Focal Length',
+  '光圈': 'Aperture',
+
+  // connection_page —— 控制器 hint(键存控制器,消费点 _HintText 包 t)
+  '配对信息已发送:请在相机屏幕上按「OK」完成配对,应用将自动重连(最长约 1 分钟)':
+      'Pairing info sent: press "OK" on the camera screen to finish pairing; the app reconnects automatically (up to about 1 minute)',
+  '正在配对(自动确认)': 'Pairing (auto-confirmed)',
+  '正在自动重连…': 'Reconnecting automatically…',
 };
