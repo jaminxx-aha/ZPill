@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../l10n/l10n.dart';
 import 'live_design.dart';
 import 'remote_controller.dart';
 
@@ -61,9 +62,8 @@ class CaptureModeStrip extends StatelessWidget {
               style: TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.w600,
-                color: selected
-                    ? live.accent
-                    : (dimmed ? live.faint : live.muted),
+                color:
+                    selected ? live.accent : (dimmed ? live.faint : live.muted),
               ),
             ),
           ),
@@ -86,8 +86,8 @@ class CaptureModeStrip extends StatelessWidget {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              segment(CaptureMode.photo, '照片'),
-              segment(CaptureMode.video, '视频'),
+              segment(CaptureMode.photo, context.t('照片')),
+              segment(CaptureMode.video, context.t('视频')),
             ],
           ),
         ),

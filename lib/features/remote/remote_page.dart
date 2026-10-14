@@ -87,6 +87,7 @@ import '../../app_services.dart';
 import '../../core/ble/ble_camera_session.dart';
 import '../../core/browser/album.dart';
 import '../../data/settings_store.dart';
+import '../../l10n/l10n.dart';
 import '../../platform/motion_host.dart';
 import '../../platform/services.dart';
 import '../../platform/volume_keys.dart';
@@ -562,8 +563,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     controller.orientationLock.value = OrientationLock.portrait;
     unawaited(
       SystemChrome.setPreferredOrientations(
-              const [DeviceOrientation.portraitUp])
-          .catchError((Object _) {}),
+          const [DeviceOrientation.portraitUp]).catchError((Object _) {}),
     );
   }
 
@@ -784,7 +784,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
             right: kScreenEdgePadding,
             child: ChromeIconButton(
               icon: Icons.visibility,
-              tooltip: '显示控制界面',
+              tooltip: context.t('显示控制界面'),
               onTap: () => setState(() => _chromeHidden = false),
             ),
           ),
@@ -801,7 +801,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         builder: (_) => PhotoGridPage(
           controller: AppServices.instance.browserController,
           folderHandle: CameraAlbum.allPhotosHandle,
-          fallbackName: '相机相册',
+          fallbackName: context.t('相机相册'),
         ),
       ),
     );
@@ -1022,7 +1022,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
               child: Center(
                 child: ChromeIconButton(
                   icon: Icons.visibility,
-                  tooltip: '显示控制界面',
+                  tooltip: context.t('显示控制界面'),
                   onTap: () => setState(() => _chromeHidden = false),
                 ),
               ),
@@ -1047,9 +1047,8 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     final next = switch (current) {
       OrientationLock.landscape => OrientationLock.portrait,
       OrientationLock.portrait => OrientationLock.landscape,
-      OrientationLock.auto => screenLandscape
-          ? OrientationLock.portrait
-          : OrientationLock.landscape,
+      OrientationLock.auto =>
+        screenLandscape ? OrientationLock.portrait : OrientationLock.landscape,
     };
     controller.orientationLock.value = next;
     _applyOrientationLock(next);
@@ -1068,8 +1067,8 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         ],
       OrientationLock.portrait => const [DeviceOrientation.portraitUp],
     };
-    unawaited(
-        SystemChrome.setPreferredOrientations(orientations).catchError((Object _) {}));
+    unawaited(SystemChrome.setPreferredOrientations(orientations)
+        .catchError((Object _) {}));
   }
 
   // ── 触控对焦 ───────────────────────────────────────────────────

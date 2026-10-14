@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../core/ptp/operation_codes.dart';
+import '../../l10n/l10n.dart';
 import '../common/widgets/confirm_dialog.dart';
 import 'live_design.dart';
 import 'remote_controller.dart';
@@ -24,17 +25,16 @@ Future<void> showParamEditSheet(
   final desc = state?.desc;
   // 取值域:相机 PropDesc 枚举优先(权威),拒答/无 FORM 时目录
   // pickValues 直供(快门/对焦模式/图像区域等厂商码场景)。
-  final enums =
-      desc?.enumValues?.whereType<int>().toList(growable: false) ??
-          p.pickValues;
+  final enums = desc?.enumValues?.whereType<int>().toList(growable: false) ??
+      p.pickValues;
   final rangeMin = desc?.rangeMin as int?;
   final rangeMax = desc?.rangeMax as int?;
   final rangeStep = desc?.rangeStep as int? ?? 1;
   // 定位:当前值在列表中的序号(ISO 面板有置顶的「自动 ISO」条目,+1)
-  final hasIsoAutoTile = p.code == PtpDevicePropCode.exposureIndex &&
-      controller.isoAuto != null;
-  final currentIndex = (enums?.indexOf(state?.value ?? -1) ?? -1) +
-      (hasIsoAutoTile ? 1 : 0);
+  final hasIsoAutoTile =
+      p.code == PtpDevicePropCode.exposureIndex && controller.isoAuto != null;
+  final currentIndex =
+      (enums?.indexOf(state?.value ?? -1) ?? -1) + (hasIsoAutoTile ? 1 : 0);
   final listCtrl = ScrollController();
   var centered = false;
   var enabling = false;
@@ -71,7 +71,9 @@ Future<void> showParamEditSheet(
             children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
-                child: Text(p.label,
+                // 目录 label(shooting_param_catalog 产出)原文即 t() 键,
+                // 显示点包 t()。
+                child: Text(context.t(p.label),
                     style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w600,
@@ -138,7 +140,7 @@ Widget _valueSection({
     // AF 区域(0xD05D)的宽C1/C2 是横带/竖条饱和区:触屏移框饱和轴
     // 不动属相机行为 —— 面板常驻一行说明(切换沿另有 notice)。
     final afAreaHint = p.code == PtpDevicePropCode.stillFocusMeteringMode
-        ? '宽C1/C2 为横带/竖条区域:触屏移框仅上下/左右单轴生效'
+        ? sheetContext.t('宽C1/C2 为横带/竖条区域:触屏移框仅上下/左右单轴生效')
         : null;
     final list = ListView(
       key: key,
@@ -150,7 +152,8 @@ Widget _valueSection({
         // 开关只在这里显式控制)。
         if (hasIsoAutoTile)
           ListTile(
-            title: Text('自动 ISO', style: TextStyle(color: live.text)),
+            title: Text(sheetContext.t('自动 ISO'),
+                style: TextStyle(color: live.text)),
             trailing: controller.isoAuto == true
                 ? Icon(Icons.check, color: live.accent)
                 : null,
@@ -165,11 +168,12 @@ Widget _valueSection({
           ListTile(
             // 槽位真名(0x90CC)优先:优化校准自定义/云组
             // 静态表只有「自定义 N」「云 N」占位。
-            title: Text(controller.displayParamValue(p.code, v),
+            // 值文案(displayParamValue,目录/控制器产出)原文即 t() 键,
+            // 显示点包 t()。
+            title: Text(sheetContext.t(controller.displayParamValue(p.code, v)),
                 style: TextStyle(color: live.text)),
-            trailing: v == current
-                ? Icon(Icons.check, color: live.accent)
-                : null,
+            trailing:
+                v == current ? Icon(Icons.check, color: live.accent) : null,
             onTap: writing
                 ? null
                 : () {
@@ -194,25 +198,25 @@ Widget _valueSection({
       ],
     );
   }
-  if (rangeMin != null && rangeMax != null && rangeMax > rangeMin &&
+  if (rangeMin != null &&
+      rangeMax != null &&
+      rangeMax > rangeMin &&
       current is int) {
     return Padding(
       key: key,
       padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
       child: Column(
         children: [
-          Text(controller.displayParamValue(p.code, current),
+          Text(sheetContext.t(controller.displayParamValue(p.code, current)),
               style: TextStyle(
-                  fontSize: 30,
-                  fontWeight: FontWeight.w500,
-                  color: live.text)),
+                  fontSize: 30, fontWeight: FontWeight.w500, color: live.text)),
           Slider(
             value: (current.clamp(rangeMin, rangeMax)).toDouble(),
             min: rangeMin.toDouble(),
             max: rangeMax.toDouble(),
-            divisions:
-                ((rangeMax - rangeMin) ~/ rangeStep).clamp(1, 1 << 20),
-            label: controller.displayParamValue(p.code, current),
+            divisions: ((rangeMax - rangeMin) ~/ rangeStep).clamp(1, 1 << 20),
+            label:
+                sheetContext.t(controller.displayParamValue(p.code, current)),
             activeColor: live.accent,
             onChanged: writing ? null : (_) {},
             onChangeEnd: (v) => controller.setParam(p.code, v.round()),
@@ -224,7 +228,7 @@ Widget _valueSection({
   return Padding(
     key: key,
     padding: const EdgeInsets.all(24),
-    child: Text('该属性的取值域未知,暂不可调(待真机核对)',
+    child: Text(sheetContext.t('该属性的取值域未知,暂不可调(待真机核对)'),
         style: TextStyle(color: live.muted)),
   );
 }
@@ -251,18 +255,17 @@ class TakeoverSection extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('启用 APP 接管控制?',
+          Text(context.t('启用 APP 接管控制?'),
               style: TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w600,
-                  color: live.text)),
+                  fontSize: 15, fontWeight: FontWeight.w600, color: live.text)),
           const SizedBox(height: 10),
           Text(
-            '该设置项受相机物理拨盘控制,启用接管后应用才能调整。'
-            '接管期间机身拨盘可能被锁定、机身屏幕可能熄灭;'
-            '点按「APP 接管中」或断开连接可解除。',
-            style: TextStyle(
-                fontSize: 13, height: 1.5, color: live.muted),
+            context.t(
+              '该设置项受相机物理拨盘控制,启用接管后应用才能调整。'
+              '接管期间机身拨盘可能被锁定、机身屏幕可能熄灭;'
+              '点按「APP 接管中」或断开连接可解除。',
+            ),
+            style: TextStyle(fontSize: 13, height: 1.5, color: live.muted),
           ),
           const SizedBox(height: 16),
           SizedBox(
@@ -281,10 +284,9 @@ class TakeoverSection extends StatelessWidget {
                             width: 18,
                             height: 18,
                             child: CircularProgressIndicator(
-                                strokeWidth: 2.2,
-                                color: live.onAccent),
+                                strokeWidth: 2.2, color: live.onAccent),
                           )
-                        : Text('启用',
+                        : Text(context.t('启用'),
                             style: TextStyle(
                                 fontSize: 14,
                                 fontWeight: FontWeight.w600,
@@ -308,11 +310,13 @@ Future<bool> confirmTakeover(
   if (controller.takeoverActive) return true;
   final confirmed = await showConfirmDialog(
     context,
-    title: '启用 APP 接管控制?',
-    content: '该设置项受相机物理拨盘控制,启用接管后应用才能调整。'
-        '接管期间机身拨盘可能被锁定、机身屏幕可能熄灭;'
-        '点按「APP 接管中」或断开连接可解除。',
-    confirmLabel: '启用',
+    title: context.t('启用 APP 接管控制?'),
+    content: context.t(
+      '该设置项受相机物理拨盘控制,启用接管后应用才能调整。'
+      '接管期间机身拨盘可能被锁定、机身屏幕可能熄灭;'
+      '点按「APP 接管中」或断开连接可解除。',
+    ),
+    confirmLabel: context.t('启用'),
   );
   if (!confirmed) return false;
   return controller.enableTakeover();
