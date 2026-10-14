@@ -32,6 +32,7 @@ import '../../app_services.dart';
 import '../../core/browser/photo_group.dart';
 import '../../core/ptpip/object_format.dart';
 import '../../design/app_colors.dart';
+import '../../l10n/l10n.dart';
 import '../../platform/gallery_saver.dart';
 import '../../platform/raw_decoder.dart';
 import '../../platform/services.dart';
@@ -45,6 +46,7 @@ import '../common/widgets/states.dart';
 import '../transfers/transfers_page.dart';
 
 /// 图库格式过滤:按扩展名分流,与相机侧条目判定同源。
+/// label 原文即 t() 键(RAW/JPG 拉丁串未命中直返),显示点包 t()。
 enum _LibFilter {
   all('全部'),
   raw('RAW'),
@@ -66,6 +68,7 @@ enum _LibFilter {
 /// 图库类型过滤:照片/视频大类。视频集与格式过滤「视频」同源同集
 /// (两处「视频」永远同口径,分叉会对不上);其余一律归照片 —— 相机
 /// 下载物(RAW/JPG/其他图像)没有第三类去处,「非视频即照片」。
+/// label 原文即 t() 键,显示点包 t()。
 enum _LibType {
   all('全部'),
   photo('照片'),
@@ -85,6 +88,7 @@ enum _LibType {
 /// 图库排序:时间两向(新→旧 = 既有默认,下载的新货在前)。评分档
 /// 不做 —— 本地评分键挂相机侧照片组(基名+组总字节),应用内文件
 /// 没有现成评分数据源,不发明。
+/// label 原文即 t() 键,显示点包 t()。
 enum _LibSort {
   newestFirst('新→旧'),
   oldestFirst('旧→新');
@@ -269,12 +273,12 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
         final filtered = _filtered(files);
         return Scaffold(
           appBar: AppBar(
-            title: const Text('图库'),
+            title: Text(context.t('图库')),
             actions: [
               // 传输徽标:进行中任务数角标,点击进传输页看任务列表。
               _transfersBadge(context, activeCount),
               IconButton(
-                tooltip: '刷新',
+                tooltip: context.t('刷新'),
                 onPressed: _controller.refreshAppFiles,
                 icon: const Icon(Icons.refresh),
               ),
@@ -282,9 +286,10 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
             ],
           ),
           body: files.isEmpty
-              ? const EmptyState(
+              ? EmptyState(
                   icon: Icons.download_outlined,
-                  message: '应用内还没有文件\n(在相机相册里选择「下载到应用」)',
+                  // EmptyState 显示端已包 t(),此处再包属双重包裹(无害)
+                  message: context.t('应用内还没有文件\n(在相机相册里选择「下载到应用」)'),
                 )
               : Column(
                   children: [
@@ -294,7 +299,8 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
                       child: SegmentedButton<_LibFilter>(
                         segments: [
                           for (final f in _LibFilter.values)
-                            ButtonSegment(value: f, label: Text(f.label)),
+                            ButtonSegment(
+                                value: f, label: Text(context.t(f.label))),
                         ],
                         selected: {_filter},
                         onSelectionChanged: (s) =>
@@ -311,25 +317,26 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
                         runSpacing: 4,
                         crossAxisAlignment: WrapCrossAlignment.center,
                         children: [
-                          for (final t in _LibType.values)
+                          // 循环变量避开单字母 t(与 context.t 扩展撞观感)
+                          for (final ty in _LibType.values)
                             ChoiceChip(
-                              label: Text(t.label),
-                              selected: _type == t,
-                              onSelected: (_) => setState(() => _type = t),
+                              label: Text(context.t(ty.label)),
+                              selected: _type == ty,
+                              onSelected: (_) => setState(() => _type = ty),
                             ),
                           // 分组视觉分隔:后两组是排序,不与类型混读。
                           Icon(Icons.sort,
                               size: 18, color: Theme.of(context).hintColor),
                           for (final s in _LibSort.values)
                             ChoiceChip(
-                              label: Text(s.label),
+                              label: Text(context.t(s.label)),
                               selected: _sort == s,
                               onSelected: (_) => setState(() => _sort = s),
                             ),
                           // 连拍聚合:相邻拍摄时刻的成段文件合为一格
                           //(×N 角标,点开段内翻张),关掉恢复平铺。
                           ChoiceChip(
-                            label: const Text('连拍'),
+                            label: Text(context.t('连拍')),
                             selected: _burstGrouped,
                             onSelected: (on) =>
                                 setState(() => _burstGrouped = on),
@@ -356,8 +363,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
 
   // 格式与类型两把筛子都过(格式管扩展名细分,类型管照片/视频大类)。
   List<File> _filtered(List<File> files) => files
-      .where((f) =>
-          _filter.allows(_nameOf(f)) && _type.allows(_nameOf(f)))
+      .where((f) => _filter.allows(_nameOf(f)) && _type.allows(_nameOf(f)))
       .toList(growable: false);
 
   /// 网格主体:平铺(现状)或连拍聚合。「连拍」开时条目 =
@@ -418,8 +424,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
             child: Padding(
               padding: const EdgeInsets.all(4),
               child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
                 decoration: BoxDecoration(
                   color: Colors.black.withValues(alpha: 0.55),
                   borderRadius: BorderRadius.circular(4),
@@ -442,16 +447,17 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
 
   /// 空筛选文案:单格式筛子沿用原文案(既有认知/用例不动);类型筛子
   /// 在场(单独或与格式叠加)说不清哪把筛子拦的,退泛化一行。
+  /// 格式名片段经 t() 内嵌(模板中文拼回与原串逐字一致)。
   String get _emptyMessage => _type == _LibType.all
-      ? '没有${_filter.label}格式的文件'
-      : '没有符合条件的文件';
+      ? context.t('没有{label}格式的文件', {'label': context.t(_filter.label)})
+      : context.t('没有符合条件的文件');
 
   Widget _transfersBadge(BuildContext context, int activeCount) {
     return Stack(
       alignment: Alignment.center,
       children: [
         IconButton(
-          tooltip: '传输',
+          tooltip: context.t('传输'),
           onPressed: () => Navigator.of(context).push(
               MaterialPageRoute<void>(builder: (_) => const TransfersPage())),
           icon: const Icon(Icons.swap_vert),
@@ -516,8 +522,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
             cacheWidth: 300,
             errorBuilder: (context, error, stackTrace) => ColoredBox(
               color: Theme.of(context).colorScheme.surfaceContainerHighest,
-              child: const Center(
-                  child: Icon(Icons.broken_image_outlined)),
+              child: const Center(child: Icon(Icons.broken_image_outlined)),
             ),
           )
         else if (raw || video)
@@ -560,10 +565,9 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   /// 其余原生格式用文件图标 + 扩展名。
   Widget _iconCell(BuildContext context, String name) {
     return ColoredBox(
-      color:
-          Theme.of(context).colorScheme.surfaceContainerHighest.withValues(
-                alpha: 0.5,
-              ),
+      color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(
+            alpha: 0.5,
+          ),
       child: Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -610,13 +614,14 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   }
 
   /// 长按格 / 查看器删除:确认对话框把关(应用内文件,删了要重下)。
+  /// 对话框显示端(confirm_dialog)已包 t(),此处再包属双重包裹(无害)。
   Future<void> _confirmDelete(File file) async {
     final name = _nameOf(file);
     final confirmed = await showConfirmDialog(
       context,
-      title: '删除应用内文件?',
-      content: '将删除「$name」。\n此操作不可恢复(相机上的原件不受影响)。',
-      confirmLabel: '删除',
+      title: context.t('删除应用内文件?'),
+      content: context.t('将删除「{name}」。\n此操作不可恢复(相机上的原件不受影响)。', {'name': name}),
+      confirmLabel: context.t('删除'),
       destructive: true,
     );
     if (confirmed) {
@@ -735,17 +740,17 @@ class _LibraryViewerState extends State<_LibraryViewer> {
                   maxLines: 1, overflow: TextOverflow.ellipsis),
               actions: [
                 IconButton(
-                  tooltip: '照片信息',
+                  tooltip: context.t('照片信息'),
                   onPressed: () => _showInfo(_current),
                   icon: const Icon(Icons.info_outline),
                 ),
                 IconButton(
-                  tooltip: '导入系统相册',
+                  tooltip: context.t('导入系统相册'),
                   onPressed: _importToGallery,
                   icon: const Icon(Icons.photo_library_outlined),
                 ),
                 IconButton(
-                  tooltip: '删除',
+                  tooltip: context.t('删除'),
                   onPressed: _delete,
                   icon: const Icon(Icons.delete_outline),
                 ),
@@ -774,8 +779,7 @@ class _LibraryViewerState extends State<_LibraryViewer> {
               path: file.path,
               active: active,
               player: widget.videoPlayer,
-              viewBuilder:
-                  widget.embeddedVideoView ?? embeddedVideoViewBuilder,
+              viewBuilder: widget.embeddedVideoView ?? embeddedVideoViewBuilder,
               fullscreen: _fullscreen,
               onToggleFullscreen: () => _setFullscreen(!_fullscreen),
             )
@@ -802,7 +806,8 @@ class _LibraryViewerState extends State<_LibraryViewer> {
               color: AppMedia.onMediaSubtle, size: 48),
           const SizedBox(height: 8),
           Text(name,
-              style: const TextStyle(color: AppMedia.onMediaMuted, fontSize: 12)),
+              style:
+                  const TextStyle(color: AppMedia.onMediaMuted, fontSize: 12)),
         ],
       ),
     );
@@ -837,7 +842,7 @@ class _LibraryViewerState extends State<_LibraryViewer> {
             return Padding(
               padding: const EdgeInsets.all(24),
               child: Text(
-                'RAW 解码失败(该平台可能不支持)',
+                context.t('RAW 解码失败(该平台可能不支持)'),
                 textAlign: TextAlign.center,
                 style: TextStyle(color: AppMedia.onMediaSubtle),
               ),
@@ -856,8 +861,7 @@ class _LibraryViewerState extends State<_LibraryViewer> {
       filename: name,
       sizeBytes: file.lengthSync(),
       fallbackTime: formatDateTime(file.lastModifiedSync()),
-      loadExif:
-          isVideoFilename(name) ? null : () => readExifCardFromFile(file),
+      loadExif: isVideoFilename(name) ? null : () => readExifCardFromFile(file),
     );
   }
 
@@ -868,9 +872,9 @@ class _LibraryViewerState extends State<_LibraryViewer> {
     final name = _nameOf(file);
     final confirmed = await showConfirmDialog(
       context,
-      title: '删除应用内文件?',
-      content: '将删除「$name」。\n此操作不可恢复(相机上的原件不受影响)。',
-      confirmLabel: '删除',
+      title: context.t('删除应用内文件?'),
+      content: context.t('将删除「{name}」。\n此操作不可恢复(相机上的原件不受影响)。', {'name': name}),
+      confirmLabel: context.t('删除'),
       destructive: true,
     );
     if (!confirmed || !mounted) {
@@ -919,7 +923,9 @@ class _LibraryViewerState extends State<_LibraryViewer> {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(
-          content: Text(imported ? '已导入系统相册(应用内文件保留)' : '未导入(已取消或失败)')));
+          content: Text(imported
+              ? context.t('已导入系统相册(应用内文件保留)')
+              : context.t('未导入(已取消或失败)'))));
   }
 }
 
@@ -956,8 +962,8 @@ class _VideoFallbackPage extends StatelessWidget {
               const Icon(Icons.movie_outlined,
                   color: AppMedia.onMediaSubtle, size: 48),
               const SizedBox(height: 8),
-              const Text('该平台暂不支持视频播放',
-                  style: TextStyle(color: AppMedia.onMediaMuted)),
+              Text(context.t('该平台暂不支持视频播放'),
+                  style: const TextStyle(color: AppMedia.onMediaMuted)),
             ],
           ),
         ),
