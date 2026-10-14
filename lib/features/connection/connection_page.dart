@@ -1,10 +1,11 @@
 /// 相机页(底部导航首 tab):连接入口 + 已连接相机信息总览。
 ///
-/// 未连接:连接方式分段切换(有线 USB / AP 热点 / 同一 Wi-Fi)——
-/// 切到哪种方式,下方只出该方式的连接卡;已连接:信息卡组(连接/
-/// 机身/镜头/存储卡)+「进入拍摄」(主操作,全屏 push 遥控监看页 ——
-/// 2026-10-08 拍摄页从底栏 tab 改制,置状态卡正下方不滚动即可见)
-/// +「相册」入口 +「断开连接」。
+/// 未连接:连接方式分段切换(有线 USB / AP 热点 / 同一 Wi-Fi / 蓝牙)
+/// —— 切到哪种方式,下方只出该方式的连接卡;蓝牙是**工具通道**(不建
+/// 立相机 PTP 连接,不传图不遥控),只承载 GPS 注入与唤醒相机 WiFi
+/// (2026-10-14)。已连接:信息卡组(连接/机身/镜头/存储卡)+「进入
+/// 拍摄」(主操作,全屏 push 遥控监看页 —— 2026-10-08 拍摄页从底栏
+/// tab 改制,置状态卡正下方不滚动即可见)+「相册」入口 +「断开连接」。
 ///
 /// Controller = ViewModel(ChangeNotifier);**所有按钮必须绑定到
 /// Controller 方法**,禁止 UI 层直连协议层(TODO.md §三 注意事项)。
@@ -14,13 +15,17 @@
 /// 配对直连。AP 模式保留手动 IP 兜底(默认 192.168.1.1)。
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../app_services.dart';
+import '../../core/ble/ble_camera_session.dart';
 import '../../core/browser/album.dart';
 import '../../core/camera/camera_connection.dart';
 import '../../core/camera/camera_discovery.dart';
 import '../../core/camera/camera_info.dart';
+import '../../data/ble_identity_store.dart';
 import '../../data/client_identity_store.dart';
 import '../../data/paired_cameras_store.dart';
 import '../../design/app_dimens.dart';
@@ -29,24 +34,36 @@ import '../browser/photo_grid_page.dart';
 import '../common/widgets/confirm_dialog.dart';
 import '../remote/remote_controller.dart';
 import '../remote/remote_page.dart';
+import '../settings/ble_pair_page.dart';
+import '../settings/settings_page.dart';
 import 'camera_overview_controller.dart';
 import 'connection_status_card.dart';
 
 /// 连接方式(未连接视图的分段选择;切到哪种出哪种卡)。
-enum ConnectionMethod { usb, ap, sta }
+enum ConnectionMethod { usb, ap, sta, ble }
 
 class ConnectionController extends ChangeNotifier {
   /// 注入应用级连接(全局单例状态,经 AppServices 收口)+ 扫描器与
-  /// 配对档案(均可空:测试/未装配平台降级)。
+  /// 配对档案(均可空:测试/未装配平台降级)。BLE 三件 + 设置控制器
+  /// 同样可空 —— 蓝牙工具通道在未装配平台整体降级为「未启用」。
   ConnectionController({
     this.connection,
     this.scanner,
     this.pairedCameras,
     this.identityStore,
+    this.bleSession,
+    this.bleIdentityStore,
+    this.settingsController,
+    this.onBleInjectChanged,
   }) {
     connection?.states.listen(_onState);
     // 常驻订阅:浏览期间增删相机,未浏览时静默无流。
     scanner?.events.listen(_onNsdEvent, onError: (Object _) {});
+    bleSession?.states.listen((s) {
+      bleState = s;
+      notifyListeners();
+    });
+    unawaited(loadBleIdentity());
   }
 
   final CameraConnection? connection;
@@ -55,6 +72,15 @@ class ConnectionController extends ChangeNotifier {
 
   /// 客户端身份(删除已配对相机时换新,触发全新配对;见 [removeSaved])。
   final ClientIdentityStore? identityStore;
+
+  /// 蓝牙工具通道(GPS 注入 / 唤醒 WiFi;不参与相机 PTP 连接状态)。
+  final BleCameraSession? bleSession;
+  final BleIdentityStore? bleIdentityStore;
+  final SettingsController? settingsController;
+
+  /// BLE 注入开关落库后的刷新钩子(装配沿接 AppServices.refreshBle
+  /// Injection,驱动按开关起停;测试注入可空)。
+  final void Function()? onBleInjectChanged;
 
   final ipController = TextEditingController(text: kDefaultCameraIp);
 
@@ -83,6 +109,87 @@ class ConnectionController extends ChangeNotifier {
 
   /// 本次连接的无线 IP(已连接视图的「连接方式」行;USB 连接为 null)。
   String? activeIp;
+
+  // ── 蓝牙工具通道(GPS 注入 / 唤醒 WiFi;独立于 PTP 链路) ─────────
+
+  /// BLE 会话状态镜像(bleSession.states 回放;未装配恒 idle)。
+  BleSessionState bleState = BleSessionState.idle;
+
+  /// 已配对身份(身份存储镜像;配对页落档后经 [loadBleIdentity] 刷新)。
+  BlePairedIdentity? bleIdentity;
+
+  /// BLE 注入开关镜像(settingsController 变更即跟;未装配恒 false)。
+  bool get bleGpsInject => settingsController?.value.bleGpsInject ?? false;
+
+  /// BLE 就绪 = 会话 ready(GPS 开关/唤醒 WiFi 的门禁)。
+  bool get bleReady => bleState == BleSessionState.ready;
+
+  /// BLE 通道是否装配(未装配平台不出蓝牙分段)。
+  bool get bleEnabled =>
+      bleSession != null && bleIdentityStore != null;
+
+  /// 重载已配对身份(页面进沿/配对页返回沿调用;身份落档后卡片即从
+  /// 「未配对」翻到「已配对」)。
+  Future<void> loadBleIdentity() async {
+    final saved = await bleIdentityStore?.load();
+    if (bleIdentity != saved) {
+      bleIdentity = saved;
+      notifyListeners();
+    }
+  }
+
+  /// BLE 手动重连一次(复用身份;失败原因看会话 lastError,UI 读
+  /// [bleHint])。自动重连由注入驱动承担(开关开着时),此钮覆盖「只
+  /// 想唤醒 WiFi 不开注入」的场景。
+  Future<void> bleReconnect() async {
+    final session = bleSession;
+    if (session == null ||
+        session.identity == null ||
+        (bleState != BleSessionState.idle &&
+            bleState != BleSessionState.reconnecting)) {
+      return;
+    }
+    await session.retryReconnect();
+  }
+
+  /// BLE 断开(身份保留)。
+  Future<void> bleDisconnect() async {
+    await bleSession?.disconnect();
+  }
+
+  /// GPS 注入开关(连接页/拍摄浮层芯片双入口,同一条设置路);落库
+  /// 后经钩子刷新注入驱动。
+  Future<void> setBleGpsInject(bool on) async {
+    await settingsController?.setBleGpsInject(on);
+    onBleInjectChanged?.call();
+  }
+
+  /// 唤醒相机 WiFi(0x2005=0x01):相机热点开启后到系统 Wi-Fi 加入,
+  /// 走 AP 方式连相机传图(见 AP 卡)。返回是否成功;失败看 [bleHint]。
+  Future<bool> wakeCameraWifi() async =>
+      await bleSession?.wakeCameraWifi() ?? false;
+
+  /// 关闭相机 WiFi(0x2005=0x80)。
+  Future<bool> closeCameraWifi() async =>
+      await bleSession?.closeCameraWifi() ?? false;
+
+  /// BLE 卡状态副文(未装配不显示卡;状态全映射)。
+  String? get bleHint {
+    final session = bleSession;
+    if (session == null) {
+      return null;
+    }
+    if (bleState == BleSessionState.reconnecting ||
+        (bleState == BleSessionState.idle &&
+            session.lastError != null)) {
+      return session.lastError;
+    }
+    return null;
+  }
+
+  /// 最近一次会话错误(WiFi 动作失败的 SnackBar 用;bleHint 只在
+  /// 重连/断开态回错误,ready 态写失败也能如实带出原因)。
+  String? get bleLastError => bleSession?.lastError;
 
   /// 扫描到的相机(按实例名去重;解析失败无 IP 的不上榜)。
   final Map<String, DiscoveredIpCamera> _cameras = {};
@@ -328,6 +435,15 @@ class ConnectionController extends ChangeNotifier {
   }
 }
 
+/// 蓝牙工具卡状态文案(未配对/已配对未连/握手中/已连接/重连中)。
+String bleStateLabel(ConnectionController c) => switch (c.bleState) {
+      BleSessionState.pairing => '握手中…',
+      BleSessionState.ready => '已连接',
+      BleSessionState.reconnecting => '重连中…',
+      BleSessionState.idle =>
+        c.bleIdentity == null ? '未配对' : '已配对,未连接',
+    };
+
 class ConnectionPage extends StatefulWidget {
   const ConnectionPage({
     super.key,
@@ -452,18 +568,21 @@ class _ConnectionPageState extends State<ConnectionPage>
           // 状态着色:disconnected 灰 / connecting 红 / pairing 金 /
           // connected 绿 / failed 红;busy 态尾槽 spinner;失败原因并入
           // 副文(首句加粗)+ 重试钮。配对后的机身确认等待窗显示专属
-          // 文案(不闪失败)。
-          ConnectionStatusCard(
-            state: controller.state,
-            waitingConfirm: controller.awaitingCameraConfirm,
-            hint: controller.hint,
-            onRetry: controller.retry,
-          ),
+          // 文案(不闪失败)。蓝牙分段下不出 PTP 状态卡(蓝牙不建
+          // 立相机连接,PTP 链路态与本卡无关,防误导)。
+          if (controller.method != ConnectionMethod.ble)
+            ConnectionStatusCard(
+              state: controller.state,
+              waitingConfirm: controller.awaitingCameraConfirm,
+              hint: controller.hint,
+              onRetry: controller.retry,
+            ),
           // connecting/reconnecting 逃生口:输入框/按钮全禁用期间(死 IP
           // 的 TCP 超时最长 ~3s,建链/开会话/切模式另有 10s 总预算;自动
           // 重连的退避可拖到分钟级),用户得有取消手段,否则像「卡死」。
-          if (controller.state == CameraLinkState.connecting ||
-              controller.state == CameraLinkState.reconnecting)
+          if (controller.method != ConnectionMethod.ble &&
+              (controller.state == CameraLinkState.connecting ||
+                  controller.state == CameraLinkState.reconnecting))
             Padding(
               padding: const EdgeInsets.only(top: 8),
               child: OutlinedButton.icon(
@@ -476,21 +595,27 @@ class _ConnectionPageState extends State<ConnectionPage>
             ),
           const SizedBox(height: 16),
 
-          // 分段切换:切到哪种方式,下方只出该方式的连接卡。
+          // 分段切换:切到哪种方式,下方只出该方式的连接卡。蓝牙分段
+          // 仅在 BLE 通道装配时出现(未装配平台不出)。
           SegmentedButton<ConnectionMethod>(
-            segments: const [
-              ButtonSegment(
+            segments: [
+              const ButtonSegment(
                   value: ConnectionMethod.usb,
                   icon: Icon(Icons.usb),
                   label: Text('有线')),
-              ButtonSegment(
+              const ButtonSegment(
                   value: ConnectionMethod.ap,
                   icon: Icon(Icons.wifi_tethering),
                   label: Text('AP 热点')),
-              ButtonSegment(
+              const ButtonSegment(
                   value: ConnectionMethod.sta,
                   icon: Icon(Icons.wifi),
                   label: Text('同一 Wi-Fi')),
+              if (controller.bleEnabled)
+                const ButtonSegment(
+                    value: ConnectionMethod.ble,
+                    icon: Icon(Icons.bluetooth),
+                    label: Text('蓝牙')),
             ],
             selected: {controller.method},
             onSelectionChanged: busy
@@ -503,28 +628,172 @@ class _ConnectionPageState extends State<ConnectionPage>
             ConnectionMethod.usb => _usbCard(context, controller, busy: busy),
             ConnectionMethod.ap => _apCard(context, controller, busy: busy),
             ConnectionMethod.sta => _staCard(context, controller, busy: busy),
+            ConnectionMethod.ble => _bleCard(context, controller),
           },
-          const SizedBox(height: AppSpacing.md),
-          Container(
-            padding: const EdgeInsets.all(AppSpacing.md),
-            decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.surfaceContainerLow,
-              borderRadius: BorderRadius.circular(AppRadius.sm),
+          if (controller.method != ConnectionMethod.ble) ...[
+            const SizedBox(height: AppSpacing.md),
+            Container(
+              padding: const EdgeInsets.all(AppSpacing.md),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.surfaceContainerLow,
+                borderRadius: BorderRadius.circular(AppRadius.sm),
+              ),
+              child: Text(
+                '· 首次无线连接会请求配对确认(相机记录本设备,之后免配对);'
+                '相机屏幕出现提示时请在机身上按 OK。\n'
+                '· 相机同一时间只允许一个客户端:若被 SnapBridge(尼享)抢先连上'
+                '会遭拒,请先彻底关闭它。\n'
+                '· 首次连接若失败,请在系统弹窗中允许访问本地网络后重试;'
+                '下载大文件期间请保持 App 在前台、屏幕点亮。',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant),
+              ),
             ),
-            child: Text(
-              '· 首次无线连接会请求配对确认(相机记录本设备,之后免配对);'
-              '相机屏幕出现提示时请在机身上按 OK。\n'
-              '· 相机同一时间只允许一个客户端:若被 SnapBridge(尼享)抢先连上'
-              '会遭拒,请先彻底关闭它。\n'
-              '· 首次连接若失败,请在系统弹窗中允许访问本地网络后重试;'
-              '下载大文件期间请保持 App 在前台、屏幕点亮。',
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant),
-            ),
-          ),
+          ],
         ],
       ),
     );
+  }
+
+  /// 蓝牙工具卡:连接(配对/重连/断开)+ GPS 注入开关 + 唤醒/关闭
+  /// 相机 WiFi。蓝牙**不建立相机连接**(不传图不遥控)—— PTP 链路
+  /// 状态卡在本分段下隐藏,防把工具通道误读成已连接。
+  Widget _bleCard(BuildContext context, ConnectionController controller) {
+    final theme = Theme.of(context);
+    final ready = controller.bleReady;
+    final hasIdentity = controller.bleIdentity != null;
+    final stateColor = switch (controller.bleState) {
+      BleSessionState.ready => Colors.green,
+      BleSessionState.pairing || BleSessionState.reconnecting => Colors.orange,
+      BleSessionState.idle =>
+        hasIdentity ? theme.colorScheme.outline : Colors.grey,
+    };
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _methodTitle(context, Icons.bluetooth, '蓝牙连接(工具通道)'),
+            const SizedBox(height: 4),
+            const Text('不建立相机连接(不传图/不遥控),只用于:'
+                '拍摄时注入 GPS 坐标(照片原生带 EXIF 定位)、唤醒相机 '
+                'Wi-Fi。首次使用先配对相机。'),
+            const SizedBox(height: 8),
+            Row(children: [
+              Icon(Icons.circle, size: 10, color: stateColor),
+              const SizedBox(width: 6),
+              Text(bleStateLabel(controller)),
+              if (hasIdentity)
+                Text('  ·  ${controller.bleIdentity!.controllerName}',
+                    style: theme.textTheme.bodySmall),
+            ]),
+            if (controller.bleHint != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(controller.bleHint!,
+                    style: theme.textTheme.bodySmall
+                        ?.copyWith(color: theme.colorScheme.error)),
+              ),
+            const SizedBox(height: 12),
+            // 状态动作行:未配对 → 配对;已配对未连 → 重连;就绪 → 断开。
+            SizedBox(
+              width: double.infinity,
+              child: !hasIdentity
+                  ? FilledButton.icon(
+                      icon: const Icon(Icons.bluetooth_searching),
+                      label: const Text('配对相机'),
+                      onPressed: () => _openBlePairPage(controller),
+                    )
+                  : (ready
+                      ? OutlinedButton(
+                          onPressed: controller.bleDisconnect,
+                          child: const Text('断开蓝牙'),
+                        )
+                      : OutlinedButton(
+                          onPressed: controller.bleState ==
+                                  BleSessionState.pairing
+                              ? null
+                              : () => unawaited(controller.bleReconnect()),
+                          child: Text(
+                              controller.bleState == BleSessionState.pairing
+                                  ? '握手中…'
+                                  : '重连'),
+                        )),
+            ),
+            const SizedBox(height: 8),
+            // GPS 注入开关(就绪才可用;开着时驱动自动维持重连与注入)。
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              dense: true,
+              value: controller.bleGpsInject,
+              // 门禁:已配对即可开 —— 开关注入驱动自己会连(重连退避),
+              // 不必先手动重连成功(与拍摄浮层「GPS」芯片同语义)。
+              onChanged: hasIdentity
+                  ? (on) => unawaited(controller.setBleGpsInject(on))
+                  : null,
+              title: const Text('GPS 位置注入'),
+              subtitle: const Text('拍摄时自动把手机定位写进相机,'
+                  '卡内照片原生带坐标'),
+            ),
+            // WiFi 唤起(就绪才可用):写 0x2005,相机开热点后回 AP 卡
+            // 走既定连接路;关闭 = 反义 op。
+            Row(children: [
+              Expanded(
+                child: FilledButton.tonalIcon(
+                  icon: const Icon(Icons.wifi_tethering),
+                  label: const Text('唤醒相机 Wi-Fi'),
+                  onPressed: ready
+                      ? () => unawaited(_bleWifiAction(
+                          controller, controller.wakeCameraWifi,
+                          success: '相机 Wi-Fi 已唤醒:到系统 Wi-Fi 加入'
+                              '相机热点,再回「AP 热点」卡连接'))
+                      : null,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: ready
+                      ? () => unawaited(_bleWifiAction(
+                          controller, controller.closeCameraWifi,
+                          success: '已请求相机关闭 Wi-Fi'))
+                      : null,
+                  child: const Text('关闭'),
+                ),
+              ),
+            ]),
+            TextButton(
+              onPressed: () => _openBlePairPage(controller),
+              child: const Text('配对管理(日志/解除/后台定位授权)'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 配对页往返:返回沿重载身份(配对/解除后卡片状态即翻新)。
+  Future<void> _openBlePairPage(ConnectionController controller) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(builder: (_) => const BlePairPage()),
+    );
+    await controller.loadBleIdentity();
+  }
+
+  /// WiFi 唤起/关闭动作收口:失败 SnackBar 如实(含原因),成功提示
+  /// 下一步去向(到系统 Wi-Fi 加入热点)。
+  Future<void> _bleWifiAction(
+    ConnectionController controller,
+    Future<bool> Function() action, {
+    required String success,
+  }) async {
+    final ok = await action();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(ok ? success : '操作失败:${controller.bleLastError ?? '未知'}'),
+      duration: const Duration(seconds: 3),
+    ));
   }
 
   /// 方式一:有线(USB C-to-C 数据线直连)。

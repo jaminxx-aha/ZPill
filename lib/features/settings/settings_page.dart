@@ -85,6 +85,10 @@ class SettingsController extends ChangeNotifier
   /// 后从这里走 —— 与散装 setter 同一条 _update 路,存储失败仅吞)。
   Future<void> apply(AppSettings next) => _update(next);
 
+  /// BLE GPS 注入总开关(连接页/拍摄浮层芯片双入口,同一条路)。
+  Future<void> setBleGpsInject(bool value) =>
+      _update(settings.copyWith(bleGpsInject: value));
+
   Future<void> _update(AppSettings next) async {
     settings = next;
     notifyListeners();

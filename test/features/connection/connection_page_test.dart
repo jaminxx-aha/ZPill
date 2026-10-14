@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:collection';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -11,14 +12,44 @@ import 'package:nikon_pill/core/camera/camera_info.dart';
 import 'package:nikon_pill/core/ptp/operation_codes.dart';
 import 'package:nikon_pill/core/ptp/ptp_session.dart';
 import 'package:nikon_pill/core/ptp/ptp_transport.dart';
+import 'package:nikon_pill/core/ble/ble_camera_session.dart';
+import 'package:nikon_pill/core/ble/gatt_uuids.dart';
+import 'package:nikon_pill/core/ble/pairing_message.dart';
 import 'package:nikon_pill/core/remote/live_view_engine.dart';
 import 'package:nikon_pill/core/utils/byte_writer.dart';
+import 'package:nikon_pill/data/ble_identity_store.dart';
 import 'package:nikon_pill/data/paired_cameras_store.dart';
+import 'package:nikon_pill/data/settings_store.dart';
 import 'package:nikon_pill/features/connection/camera_overview_controller.dart';
 import 'package:nikon_pill/features/connection/connection_page.dart';
 import 'package:nikon_pill/features/remote/remote_controller.dart';
 import 'package:nikon_pill/features/remote/remote_page.dart';
+import 'package:nikon_pill/features/settings/settings_page.dart';
+import 'package:nikon_pill/platform/ble_scanner.dart';
 import 'package:nikon_pill/platform/nsd_scanner.dart';
+
+import '../../core/ble/ble_camera_session_test.dart'
+    show FakeBleHost, buildStage2, buildStage4;
+
+/// 内存设置库(落账 update;流直推)—— 蓝牙 GPS 注入开关落库断言用。
+class _FakeSettingsStore implements SettingsStore {
+  final ctrl = StreamController<AppSettings>.broadcast();
+  AppSettings value = const AppSettings();
+  int updateCalls = 0;
+
+  @override
+  Stream<AppSettings> get settings => ctrl.stream;
+
+  @override
+  Future<AppSettings> current() async => value;
+
+  @override
+  Future<void> update(AppSettings settings) async {
+    value = settings;
+    updateCalls++;
+    ctrl.add(settings);
+  }
+}
 
 /// 记账假连接:connect/disconnect/配对确认落账,states 流由测试驱动。
 final class _FakeConnection implements CameraConnection {
@@ -795,6 +826,165 @@ void main() {
       await tester.tap(find.text('断开连接'));
       await tester.pump();
       expect(conn.disconnectCalls, 1);
+    });
+  });
+
+  group('ConnectionPage 蓝牙工具通道:', () {
+    Future<BleIdentityStore> tempIdentityStore() async {
+      final dir = await Directory.systemTemp.createTemp('nikonpill_ble_test');
+      return BleIdentityStore(dataDir: () async => dir.path);
+    }
+
+    Future<void> pumpEvents() async {
+      for (var i = 0; i < 6; i++) {
+        await Future<void>.delayed(Duration.zero);
+      }
+    }
+
+    /// 完整就绪夹具:host + session + 身份存储 + 设置控制器 + 刷新计数。
+    Future<({
+      FakeBleHost host,
+      BleCameraSession session,
+      BleIdentityStore identityStore,
+      SettingsController settings,
+      _FakeSettingsStore settingsStore,
+      ConnectionController controller,
+    })> readyFixture() async {
+      final host = FakeBleHost();
+      final session = BleCameraSession(host: host);
+      final identityStore = await tempIdentityStore();
+      final settingsStore = _FakeSettingsStore();
+      final settings = SettingsController(store: settingsStore);
+      var refreshCalls = 0;
+      final controller = ConnectionController(
+        bleSession: session,
+        bleIdentityStore: identityStore,
+        settingsController: settings,
+        onBleInjectChanged: () => refreshCalls++,
+      );
+      // 预存身份(卡片「已配对」态;设备侧无关紧要,真身在新配对沿写)。
+      await identityStore.save(BlePairedIdentity(
+        peripheralUuid: 'P1',
+        deviceId: 0x11223344,
+        nonce: 0x55667788,
+        serial: '1641397',
+        controllerName: 'NikonPill',
+        pairedAt: DateTime(2026, 10, 14),
+      ));
+      await controller.loadBleIdentity();
+      // 驱动握手到 ready(连接 → stage1 → stage2 → stage4)。
+      final done = session.pair(const BleDevice(
+          name: 'Z f_8014411', uuid: 'P1', rssi: -50));
+      await pumpEvents();
+      host.emit(const BleConnected(
+          uuid: 'P1', characteristics: {}, writeWithoutResponseMtu: 20));
+      await pumpEvents();
+      final stage1 =
+          PairingMessage.decode(host.lastWrite(kNikonCharPairing));
+      host.emit(BleNotified(
+          uuid: kNikonCharPairing, data: buildStage2(stage1).encode()));
+      await pumpEvents();
+      host.emit(BleNotified(
+          uuid: kNikonCharPairing, data: buildStage4().encode()));
+      await pumpEvents();
+      await done;
+      return (
+        host: host,
+        session: session,
+        identityStore: identityStore,
+        settings: settings,
+        settingsStore: settingsStore,
+        controller: controller,
+      );
+    }
+
+    testWidgets('未装配 BLE:不出蓝牙分段,默认有线卡照常', (tester) async {
+      final conn = _FakeConnection();
+      await tester.pumpWidget(
+          MaterialApp(home: ConnectionPage(controller: ConnectionController(connection: conn))));
+      await tester.pump();
+      expect(find.text('蓝牙'), findsNothing);
+      expect(find.text('USB 连接'), findsOneWidget);
+    });
+
+    testWidgets('已配对未连(idle):重连钮在场,WiFi 钮禁用;'
+        'PTP 状态卡不出(工具通道不混链路态)', (tester) async {
+      // 夹具有真文件 IO(临时目录/身份存档),testWidgets 的
+      // fake-async zone 吃不到 —— 必须 runAsync 放行。此态只建夹具不
+      // 驱动握手(会话停在 idle)。
+      final f = (await tester.runAsync(() async {
+        final host = FakeBleHost();
+        final session = BleCameraSession(host: host);
+        final identityStore = await tempIdentityStore();
+        final settingsStore = _FakeSettingsStore();
+        final settings = SettingsController(store: settingsStore);
+        final controller = ConnectionController(
+          bleSession: session,
+          bleIdentityStore: identityStore,
+          settingsController: settings,
+        );
+        await identityStore.save(BlePairedIdentity(
+          peripheralUuid: 'P1',
+          deviceId: 0x11223344,
+          nonce: 0x55667788,
+          serial: '1641397',
+          controllerName: 'NikonPill',
+          pairedAt: DateTime(2026, 10, 14),
+        ));
+        await controller.loadBleIdentity();
+        return (host: host, controller: controller);
+      }))!;
+      await tester.pumpWidget(
+          MaterialApp(home: ConnectionPage(controller: f.controller)));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('蓝牙'));
+      await tester.pump();
+      expect(find.text('蓝牙连接(工具通道)'), findsOneWidget);
+      expect(find.text('未连接'), findsNothing, reason: 'PTP 状态卡在蓝牙分段下隐藏');
+      expect(find.text('已配对,未连接'), findsOneWidget);
+      expect(find.text('重连'), findsOneWidget);
+      final wake = tester.widget<FilledButton>(find.ancestor(
+          of: find.text('唤醒相机 Wi-Fi'), matching: find.byType(FilledButton)));
+      expect(wake.onPressed, isNull, reason: 'WiFi 动作门禁 = 会话就绪');
+      final switchTile =
+          tester.widget<SwitchListTile>(find.byType(SwitchListTile));
+      expect(switchTile.onChanged, isNotNull,
+          reason: 'GPS 开关门禁 = 已配对(开关注入驱动自己会连)');
+    });
+
+    testWidgets('ready 后:GPS 开关拨通落库 + 刷新钩子;唤醒/关闭写 0x2005',
+        (tester) async {
+      // 夹具有真文件 IO(临时目录/身份存档),testWidgets 的
+      // fake-async zone 吃不到 —— 必须 runAsync 放行。
+      final f = (await tester.runAsync(readyFixture))!;
+      await tester.pumpWidget(
+          MaterialApp(home: ConnectionPage(controller: f.controller)));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('蓝牙'));
+      await tester.pumpAndSettle();
+      expect(find.text('已连接'), findsOneWidget);
+
+      await tester.tap(find.byType(SwitchListTile));
+      await tester.pumpAndSettle();
+      expect(f.settingsStore.value.bleGpsInject, isTrue);
+      expect(f.controller.bleGpsInject, isTrue);
+
+      await tester.tap(find.text('唤醒相机 Wi-Fi'));
+      await tester.pumpAndSettle();
+      expect(f.host.lastWrite(kNikonCharWifi), Uint8List.fromList([0x01]));
+      expect(find.byType(SnackBar), findsOneWidget);
+
+      await tester.tap(find.text('关闭'));
+      await tester.pumpAndSettle();
+      expect(f.host.lastWrite(kNikonCharWifi), Uint8List.fromList([0x80]));
+    });
+
+    testWidgets('未就绪时 WiFi 动作如实失败(controller 门禁)', (tester) async {
+      final host = FakeBleHost();
+      final session = BleCameraSession(host: host);
+      expect(await session.wakeCameraWifi(), isFalse);
+      expect(host.writes, isEmpty);
+      expect(session.lastError, contains('BLE 未连接'));
     });
   });
 }

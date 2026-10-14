@@ -301,6 +301,29 @@ final class BleCameraSession {
     _setState(BleSessionState.idle);
   }
 
+  /// 唤起相机 WiFi(0x2005 CONNECTION_ESTABLISHMENT 写 0x01;M7 独立
+  /// 按钮 —— 相机热点开启后到系统 Wi-Fi 加入走 AP 传图)。仅 ready 态
+  /// 可发;失败落 lastError 返回 false。
+  Future<bool> wakeCameraWifi() => _writeEstablishment(0x01, '唤起 WiFi');
+
+  /// 关闭相机 WiFi(0x2005 写 0x80,同款反义 op)。
+  Future<bool> closeCameraWifi() => _writeEstablishment(0x80, '关闭 WiFi');
+
+  Future<bool> _writeEstablishment(int value, String label) async {
+    if (_state != BleSessionState.ready) {
+      lastError = 'BLE 未连接,无法$label';
+      return false;
+    }
+    try {
+      await _host.write(kNikonCharWifi, Uint8List.fromList([value]));
+      _trace('$label → 0x2005=0x${value.toRadixString(16)}');
+      return true;
+    } on Exception catch (e) {
+      lastError = '$label 失败:$e';
+      return false;
+    }
+  }
+
   void dispose() {
     _sub.cancel();
     _stateCtrl.close();
