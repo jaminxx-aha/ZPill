@@ -222,8 +222,10 @@ Future<void> scriptCompletePairing(FakePtpIpChannel command) async {
   await pumpEventQueue(); // 泵到 0x935A 应答送达、配对后续(落账/重连)启动
 }
 
-/// 脚本化 0x9435 切应用模式应答(连接转正前的最后一步)并断言请求
-/// 形态(p1=1)。配对相走完后的直连路径同样会发它。
+/// 脚本化 0x9435 切应用模式应答 + 0x90C2 遥控闩括号(1→0)应答(连接
+/// 转正前的最后一步)并断言请求形态。2026-10-15 起无线连接流与 USB
+/// 同款:0x9435 无论成败都直取 0x90C2(1) 开闩 + (0) 还身(AP 真机:
+/// 0x9435 OK 也是假钥匙,不发闩则取景/对焦全坏)。
 Future<void> scriptAppMode(FakePtpIpChannel command) async {
   await pumpEventQueue();
   final req = _codec.decode(command.sent.last) as OperationRequestPacket;
@@ -232,6 +234,16 @@ Future<void> scriptAppMode(FakePtpIpChannel command) async {
   command.emit(_frameOf(OperationResponsePacket(
       responseCode: PtpResponseCode.ok, transactionId: req.transactionId)));
   await pumpEventQueue();
+  for (final latch in const [1, 0]) {
+    final latchReq =
+        _codec.decode(command.sent.last) as OperationRequestPacket;
+    expect(latchReq.opcode, NikonOperationCode.changeCameraMode);
+    expect(latchReq.params, [latch], reason: '0x90C2($latch) 括号');
+    command.emit(_frameOf(OperationResponsePacket(
+        responseCode: PtpResponseCode.ok,
+        transactionId: latchReq.transactionId)));
+    await pumpEventQueue();
+  }
 }
 
 /// 配对测试装配:每次无线连接新建传输实例(同生产语义),通道从池里
@@ -955,6 +967,8 @@ void main() {
         PtpOperationCode.getDeviceInfo,
         PtpOperationCode.openSession,
         NikonOperationCode.changeApplicationMode,
+        NikonOperationCode.changeCameraMode, // 0x90C2(1) 开闩
+        NikonOperationCode.changeCameraMode, // 0x90C2(0) 还身(连接括号)
       ]);
     });
 
@@ -1035,6 +1049,8 @@ void main() {
         PtpOperationCode.openSession,
         NikonOperationCode.getPtpIpPairingCode,
         NikonOperationCode.changeApplicationMode,
+        NikonOperationCode.changeCameraMode, // 0x90C2(1) 开闩
+        NikonOperationCode.changeCameraMode, // 0x90C2(0) 还身(连接括号)
       ]);
     });
 

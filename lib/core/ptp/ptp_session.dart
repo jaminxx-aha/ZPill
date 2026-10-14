@@ -684,17 +684,20 @@ final class PtpSession {
   /// 连接后切「应用模式」(Z 系真机口径,OpenZCine 实测:不切则相机对
   /// 遥控写回 0x200F AccessDenied)。链路对齐 OpenZCine 连接脚本:
   /// ① 0x9435 ChangeApplicationMode p1=1(无线/二代+直通);②
-  /// [usbRemoteFallback](USB 连接流专用)→ **0x90C2 ChangeCameraMode(1)
+  /// [remoteLatch](连接流两路同款,USB/无线)→ **0x90C2 ChangeCameraMode(1)
   /// 进 remote 模式**。2026-10-07 归因梯(macOS-IC 真机,即 iPhone 代理
   /// 链)定案:0x9435 在 IC 人设下**回 OK 但是假钥匙** —— 0x9201 仍被
   /// 0xA004 拒;唯一实证解锁 = 0x90C2(1)(接受即 0x9201 通、取到 84KB
-  /// 帧;机身 remote + 取景运行 = 及时取景)。故 USB 连接流**无论
-  /// 0x9435 成败都直取 remote 模式**(OpenZCine「0x9435 失败才兜底
-  /// 0x90C2」的分支在 IC 人设下永远走不到);0x90C2 未成而 0x9435 已
-  /// OK 仍按旧语义算成;③ 双双未成 → 回退写 ApplicationMode 属性
-  /// 0xD1F0=1(u8,一代 op 缺席口径)。remote 的镜像收尾在连接层
-  /// (CloseSession 前 0x90C2(0)):不退则机身停「已连接到计算机」屏
-  /// (2026-10-07 真机:remote 态跨拔插保持,半按快门才退)。
+  /// 帧;机身 remote + 取景运行 = 及时取景)。**无线/AP 同病(2026-10-15
+  /// 真机)**:AP 进拍摄取景/对焦全坏 —— 0x9435 在无线上同样回 OK 假
+  /// 钥匙,旧无线流只发 0x9435 即返回,0x90C2 全程没拉过;故连接流
+  /// **无论传输介质、无论 0x9435 成败都直取 remote 模式**(OpenZCine
+  /// 「0x9435 失败才兜底 0x90C2」的分支在人设下永远走不到);0x90C2
+  /// 未成而 0x9435 已 OK 仍按旧语义算成;③ 双双未成 → 回退写
+  /// ApplicationMode 属性 0xD1F0=1(u8,一代 op 缺席口径)。remote 的
+  /// 镜像收尾在连接层(CloseSession 前 0x90C2(0)):不退则机身停
+  /// 「已连接到计算机」屏(2026-10-07 真机:remote 态跨拔插保持,半按
+  /// 快门才退)。
   /// **不写 0xD406 initiator 身份**:OpenZCine 全程不写,而身份写会让
   /// 机身把主机按新身份归类(op 表 119→124 变化)—— 2026-10-07 真机
   /// 复报:写身份 + remote 模式 = 机身停「已连接到计算机」屏不进取景;
@@ -704,7 +707,7 @@ final class PtpSession {
   /// **不走 [kSetPropEnabled] 门禁** —— 它是连接模式控制而非拍摄参数
   /// 写,且发生在任何参数面板之前;连双失败也只返回 false 不抛(尽力
   /// 而为,拍照/读参数不依赖它,真机核对)。
-  Future<bool> enableAppControl({bool usbRemoteFallback = false}) async {
+  Future<bool> enableAppControl({bool remoteLatch = false}) async {
     var rc = PtpResponseCode.operationNotSupported;
     try {
       final result = await _serialized(() => transport.execute(PtpRequest(
@@ -718,11 +721,12 @@ final class PtpSession {
       // 尽力而为步骤,on Object 兜底 —— 它失败不得影响连接主流程。
       noteLadder('9435:ERR');
     }
-    if (rc == PtpResponseCode.ok && !usbRemoteFallback) return true;
-    if (usbRemoteFallback) {
+    if (rc == PtpResponseCode.ok && !remoteLatch) return true;
+    if (remoteLatch) {
       // 2026-10-07 归因梯定案(macOS-IC 真机):0x9435 在 IC 人设下回
       // OK 但是假钥匙(0x9201 仍 0xA004),唯一实证解锁 = 0x90C2(1)。
-      // 故 USB 连接流无论 0x9435 成败都直取 remote 模式。
+      // 2026-10-15 真机:无线/AP 同病(0x9435 同样 OK 假钥匙)。故连接
+      // 流无论介质、无论 0x9435 成败都直取 remote 模式。
       try {
         await changeCameraMode(1);
         noteLadder('90C2:OK');

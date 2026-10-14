@@ -353,13 +353,16 @@ final class CameraConnectionImpl implements CameraConnection {
             return; // 外部 disconnect / 断链已收口状态
         }
       }
-      // 切应用模式(同 USB 路径;SnapBridge 方言握手本就含此步,
-      // 我们补齐 —— OpenZCine 无线握手序列在 OpenSession 后必发)。
-      // 同计总预算:相机收下 Init/开完会话却对 op 死寂的半哑态,旧路径
-      // 0x9435 挂满 15s 看门狗后还会带毒转 connected(链路已毒、状态机
-      // 报连上,真机 2026-10-08「上次」连接很久的场景之一)—— 预算内
-      // 收不掉就按「连接超时」failed 收口。
-      await _session.enableAppControl().timeout(_wirelessConnectBudget);
+      // 切应用模式 + 进 remote 闩(与 USB 路径同款)。2026-10-15 真机:
+      // AP 进拍摄取景/对焦全坏 —— 0x9435 在无线上回 OK 但是假钥匙
+      // (0x9201 仍被 0xA004 拒),旧无线流只发 0x9435 即返回、0x90C2
+      // 全程没拉过;USB 路 2026-10-07 归因梯早已定案唯一解锁 = 0x90C2(1)
+      // (开闩即还身 1→0 括号)。同计总预算:相机收下 Init/开完会话却
+      // 对 op 死寂的半哑态,旧路径 0x9435 挂满 15s 看门狗后还会带毒转
+      // connected(链路已毒、状态机报连上,真机 2026-10-08「上次」连接
+      // 很久的场景之一)—— 预算内收不掉就按「连接超时」failed 收口。
+      await _session.enableAppControl(remoteLatch: true)
+          .timeout(_wirelessConnectBudget);
       // 连接档案落账(不管相机侧配对是否完成):扫描出的 IP/展示名进
       // 快速重连列表 —— STA「连接至计算机」模式相机不答 0x952B,旧
       // 逻辑只配对成功才落账 → 该模式永远存不下来(2026-10-06 真机
@@ -534,12 +537,12 @@ final class CameraConnectionImpl implements CameraConnection {
     }
     await _session.open();
     // 切应用模式 + 进 remote(Z 系真机口径:不切则遥控写被 0x200F
-    // AccessDenied 拒)。USB 一律进 remote 模式:2026-10-07 归因梯
+    // AccessDenied 拒)。连接流一律进 remote 模式:2026-10-07 归因梯
     // (macOS-IC 真机)定案 —— 0x9435 回 OK 也是假钥匙,唯一实证解锁
     // 取景门 = 0x90C2(1);remote + 连接即取景 = 机身及时取景
     // (OpenZCine 效果)。尽力而为,失败不拦连接(梯记入
     // session.connectLadder,取景失败时浮出)。
-    await _session.enableAppControl(usbRemoteFallback: true);
+    await _session.enableAppControl(remoteLatch: true);
     // 迟到续体守卫:拨号在途被外部收口(disconnect/断链)时,不得把
     // 已收口的状态覆盖成 connected。pairing 态合法(配对流程经此转正),
     // 只挡 disconnected/failed。
