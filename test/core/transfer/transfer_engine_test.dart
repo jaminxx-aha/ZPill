@@ -32,6 +32,10 @@ final class FakeGallerySaver implements GallerySaver {
   /// 每次 importFiles 的请求快照。
   final List<List<GalleryImportRequest>> importCalls = [];
 
+  /// 导入时刻各请求文件的 mtime 快照(gallery 不回写拍摄时刻的用例:
+  /// 临时文件收尾即删,mtime 断言只能落在导入时刻)。
+  final List<List<DateTime>> importMtimes = [];
+
   /// 导入时刻各请求的 (path 字节, videoPath 字节) 快照;[captureBytes]
   /// 开启时取样 —— 收尾后临时文件即删,断言只能落在导入时刻。
   final List<List<(Uint8List?, Uint8List?)>> importSnapshots = [];
@@ -58,6 +62,9 @@ final class FakeGallerySaver implements GallerySaver {
   @override
   Future<List<Uri>> importFiles(List<GalleryImportRequest> requests) async {
     importCalls.add(List.of(requests));
+    importMtimes.add([
+      for (final r in requests) File(r.path).statSync().modified,
+    ]);
     if (captureBytes) {
       importSnapshots.add([
         for (final r in requests)
@@ -83,8 +90,13 @@ final class FakeGallerySaver implements GallerySaver {
 }
 
 ObjectEntry _entry(int handle, String name, int size,
-        {ObjectKind kind = ObjectKind.image}) =>
-    ObjectEntry(handle: handle, name: name, sizeInBytes: size, kind: kind);
+        {ObjectKind kind = ObjectKind.image, DateTime? capturedAt}) =>
+    ObjectEntry(
+        handle: handle,
+        name: name,
+        sizeInBytes: size,
+        kind: kind,
+        capturedAt: capturedAt);
 
 PtpResult _okData(Uint8List data) =>
     PtpResult(responseCode: PtpResponseCode.ok, data: data);
@@ -628,5 +640,66 @@ void main() {
     expect(img.decodeJpg(stillBytes!)!.width, 60);
     // 视频段先拆出来了,不受重编码影响
     expect(videoBytes, mp4);
+  });
+
+  // ── 落盘回写拍摄时刻(本地图库连拍聚合的前提)──
+
+  test('app 目的地:entry 带拍摄时刻 → 落盘 mtime 回写为拍摄时刻', () async {
+    final (engine, fake, gallery) = _engine();
+    fake.reply(_okBytes(12));
+    final capturedAt = DateTime(2026, 10, 1, 9, 30, 5);
+
+    final done = waitUntil(
+        engine, (ts) => ts.length == 1 && ts.single.isTerminal);
+    await engine.enqueue([_entry(1, 'A.NEF', 12, capturedAt: capturedAt)],
+        destination: TransferDestination.app);
+    final tasks = await done;
+
+    expect(tasks.single.state, TransferState.completed);
+    // mtime ≈ 拍摄时刻(setLastModified 异步落盘,文件系统精度不一,
+    // 容差 ±2s,不写死毫秒级相等)
+    final mtime =
+        File('${gallery.root.path}/downloads/A.NEF').statSync().modified;
+    expect(mtime.difference(capturedAt).abs(),
+        lessThan(const Duration(seconds: 2)));
+  });
+
+  test('app 目的地:entry 无拍摄时刻 → mtime 保持落盘时刻不回写', () async {
+    final (engine, fake, gallery) = _engine();
+    fake.reply(_okBytes(12));
+
+    final done = waitUntil(
+        engine, (ts) => ts.length == 1 && ts.single.isTerminal);
+    await engine.enqueue([_entry(1, 'A.NEF', 12)],
+        destination: TransferDestination.app);
+    await done;
+
+    // 无 capturedAt:不回写,mtime = 落盘时刻(≈ 现在)
+    final mtime =
+        File('${gallery.root.path}/downloads/A.NEF').statSync().modified;
+    expect(mtime.difference(DateTime.now()).abs(),
+        lessThan(const Duration(seconds: 2)));
+  });
+
+  test('gallery 目的地:不回写拍摄时刻(临时文件导入后即删)', () async {
+    final (engine, fake, gallery) = _engine();
+    fake.reply(_okBytes(12));
+    gallery.importResult = [Uri.parse('content://media/1')];
+    // 拍摄时刻取远离落盘时刻的旧值:若被误写,导入时刻快照即穿帮
+    final capturedAt = DateTime(2020, 1, 1);
+
+    final done = waitUntil(engine, (ts) =>
+        ts.length == 1 &&
+        ts.single.state == TransferState.completed &&
+        ts.single.galleryUri != null);
+    await engine.enqueue([_entry(1, 'A.JPG', 12, capturedAt: capturedAt)],
+        destination: TransferDestination.gallery);
+    await done;
+
+    // 导入时刻临时文件 mtime 仍是落盘时刻(≈ 现在),未被拍摄时刻覆写
+    expect(gallery.importMtimes, hasLength(1));
+    final mtime = gallery.importMtimes.single.single;
+    expect(mtime.difference(DateTime.now()).abs(),
+        lessThan(const Duration(seconds: 2)));
   });
 }
