@@ -35,7 +35,8 @@ abstract interface class TransferEngine {
       {required TransferDestination destination});
 
   /// 取消单个任务:queued 直接标 cancelled;running 置标志
-  /// (downloader 停止写盘、排空数据流、删半成品)。
+  /// (downloader 对在途块发 Cancel-Drain、删半成品;链路不支持时
+  /// 等当前块完成 —— 旗标在块间兜底)。
   Future<void> cancel(String taskId);
 
   /// 清空历史(仅已完成/已取消/已失败)。

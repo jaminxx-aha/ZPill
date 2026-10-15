@@ -52,6 +52,43 @@ final class PtpEvent {
   final List<int> params;
 }
 
+/// 在途事务被本端主动取消(Cancel-Drain 协议收口)。
+///
+/// 语义:发起方对在途事务发 PTP/IP Cancel 包(type 11)后,把该事务的
+/// 数据相位**吸干**(只记账不交付)、一直读到它的 OperationResponse 才
+/// 收场 —— 会话不脱同步,连接照常复用。execute 的 future 以本异常完成
+/// = 干净取消,不是链路故障;上层(下载引擎)据此落「已取消」而非
+/// 重试/失败。真机表现(相机是否提前掐数据相)待验证,见 transport 注释。
+///
+/// implements Exception 是硬约束(与 [PtpLinkException] 同款):上层清理
+/// 路径全部 `on Exception` catch,StateError/Error 会逃逸卡死 UI。
+final class PtpCancelledException implements Exception {
+  const PtpCancelledException(this.transactionId);
+
+  /// 被取消的事务号(诊断用)。
+  final int transactionId;
+
+  @override
+  String toString() => 'PtpCancelledException: 事务 $transactionId 已取消';
+}
+
+/// 可选传输层能力:取消当前在途事务(PTP-IP Cancel-Drain)。
+///
+/// 只有 PTP-IP 实现了(USB 线零改动,不实现本接口 → 调用方按 false
+/// 降级);[PtpLinkRouter] 也实现,负责向内层转发。调用方(PtpSession /
+/// 下载管线)一律先 `is PtpCancelCapable` 探测,不支持 = 走「等当前
+/// 事务自然完成」的旧路径。
+abstract interface class PtpCancelCapable {
+  /// 请求取消全部在途事务:发 Cancel 包并进入排水(吸干数据相直到该
+  /// 事务的 OperationResponse,在途 execute 以 [PtpCancelledException]
+  /// 完成)。
+  ///
+  /// 返回是否有事务**新进入**取消(无在途事务 / 已在排水 / 链路不支持
+  /// = false,均为无害 no-op);返回不等排水结束 —— 排水由 dispatcher
+  /// 异步收口。链路死亡(发送失败等)按既有断链路径处理。
+  Future<bool> cancelInFlight();
+}
+
 /// PTP 传输层契约。
 abstract interface class PtpTransport {
   /// 执行一次操作:发出命令(及可选数据出相位),收取数据入相位与响应。

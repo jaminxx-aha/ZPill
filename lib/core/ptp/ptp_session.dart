@@ -176,6 +176,29 @@ final class PtpSession {
   bool _remoteModeActive = false;
   bool get remoteModeActive => _remoteModeActive;
 
+  /// 请求取消当前在途事务(PTP-IP Cancel-Drain)。
+  ///
+  /// **必须绕过 [_serialized]**:调用窗口正是互斥锁被在途事务持有的
+  /// 时候,排队等锁 = 等在途事务自己完成,取消就失去意义(死等退化)。
+  /// 链路不支持(USB / 路由器未挂内层 / 未连接)或无在途事务 → false,
+  /// 无害 no-op;调用方继续走「置旗标、等当前事务自然完成」的优雅降级。
+  ///
+  /// 返回 true = Cancel 已发出,在途 execute 随后以
+  /// [PtpCancelledException] 完成(排水收口由传输层 dispatcher 异步驱动,
+  /// 本方法不等它)。取消通道自身异常同样按 false 落回旧路径。
+  Future<bool> cancelInFlight() async {
+    // 能力探测必须用 if-case 模式绑定:is 检查对「与声明类型无关的
+    // 接口」不做类型提升(Dart 流分析只向下提升),裸 is 后调用会编译错。
+    if (transport case final PtpCancelCapable capable) {
+      try {
+        return await capable.cancelInFlight();
+      } on Exception {
+        return false; // 排水通道异常:不放大成取消失败,旧路径兜底
+      }
+    }
+    return false;
+  }
+
   /// 连接梯诊断(2026-10-07 iPhone-USB 回归定案用):enableAppControl
   /// 与 LiveViewEngine 0xA004 自愈把每步「op:结果」记入;取景失败时随
   /// lastError 一并浮出到拍摄页,真机一眼读出哪一级被拒。open() 清零

@@ -7,22 +7,32 @@
 /// 两条取数路线(2026-10-09 真机教训定案):
 /// - 整档 GetObject 流式([partialChunkBytes] = null,缺省):单事务,
 ///   数据相位流式分块;取消时停止写盘但继续收块**排空数据流**
-///   (保持 USB/PTP 事务状态机干净),排空完毕删除半成品。
+///   (保持 USB/PTP 事务状态机干净),排空完毕删除半成品。此路线不挂
+///   Cancel-Drain —— 整档排水量不可预估(数百 MB MOV),墙钟阀只会
+///   误杀慢链,维持排空即删的旧语义。
 /// - GetPartialObject 分块([partialChunkBytes] > 0):每块一个完整
-///   事务,块间响应取消/进度,无排空义务。**iOS IC 通道必须走这条**:
-///   ImageCaptureCore 把整个数据相位塞进一次 requestSendPTPCommand
-///   回调,多 MB 大档(NEF 24MB / MOV 数百 MB)一次回调不可控 ——
-///   真机触发读超时 → 看门狗判链路死亡,整 app 断连(缩略图/点击
-///   全挂)。64KB 分块与镜头头读同款(IC 链已验证粒度);ohos/Android
-///   通道内部本就 1MB 流块,保持 GetObject 不降速。
+///   事务,块间响应取消/进度。取消双保险:块间旗标停发新块(旧路径,
+///   链路不支持时兜底)+ **块在途期间轮询旗标对在途块发 Cancel-Drain**
+///   (PTP-IP,私有轮询周期默认 50ms)—— 用户取消即时生效,不必等
+///   在途块自然跑完;在途块以 [PtpCancelledException] 收口,本类映射为
+///   [DownloadCancelledException](取消成功,不是传输失败)。
+///   **iOS IC 通道必须走分块路线**:ImageCaptureCore 把整个数据相位
+///   塞进一次 requestSendPTPCommand 回调,多 MB 大档(NEF 24MB / MOV
+///   数百 MB)一次回调不可控 —— 真机触发读超时 → 看门狗判链路死亡,
+///   整 app 断连(缩略图/点击全挂)。64KB 分块与镜头头读同款(IC 链
+///   已验证粒度);ohos/Android 通道内部本就 1MB 流块,保持 GetObject
+///   不降速。
 library;
 
+import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:typed_data';
 
 import '../browser/object_entry.dart';
 import '../ptp/operation_codes.dart';
 import '../ptp/ptp_session.dart';
+import '../ptp/ptp_transport.dart';
 
 /// 下载被取消:半成品已删,数据流已排空。
 final class DownloadCancelledException implements Exception {
@@ -52,14 +62,27 @@ final class ObjectDownload {
 /// 非 final + 依赖字段私有:widget 测试可 implements(仅 download,
 /// 注入假路径,避开真机事务;与 PtpSession/ThumbnailCache 同款纪律)。
 class ObjectDownloader {
-  ObjectDownloader({required PtpSession session, this.partialChunkBytes})
-      : _session = session;
+  ObjectDownloader({
+    required PtpSession session,
+    this.partialChunkBytes,
+    Duration? cancelPollInterval,
+  })  : _cancelPollInterval =
+            cancelPollInterval ?? const Duration(milliseconds: 50),
+        _session = session;
 
   final PtpSession _session;
 
   /// GetPartialObject 单块字节;null = 整档 GetObject 流式(见库注释)。
   /// 相机 op 表无 0x101B 时忽略本参数,回落 GetObject。
   final int? partialChunkBytes;
+
+  /// 分块路线的取消轮询周期:块在途期间盯 [download] 的 isCancelled
+  /// 旗标,翻真即对在途块发 Cancel-Drain(PTP-IP;链路不支持为 no-op)。
+  /// 触发延迟 ≤ 本值;50ms 相对块 RTT(≥100ms)不可感。
+  ///
+  /// 私有字段是刻意的:公共成员会进 `implements ObjectDownloader` 的
+  /// 测试假件接口(widget 测试「仅 download」契约,见类注)。
+  final Duration _cancelPollInterval;
 
   /// 流式下载 [entry] 到 [targetDir](不存在则创建),文件名冲突自动
   /// 加 ` (n)` 序号。[onProgress] 回调累计字节数(整档路线块大小对齐
@@ -83,24 +106,46 @@ class ObjectDownloader {
     try {
       chunked = partialChunkBytes != null && await _partialReadable();
       if (chunked) {
-        // 分块路线:块间查取消;每块是完整事务,取消/失败即停,
-        // 不再发新命令(无 GetObject 的排空义务)。
+        // 分块路线:每块是完整事务,取消/失败即停,不再发新命令。
+        // 取消双保险:块间旗标(旧路径兜底)+ 块在途轮询旗标对在途块
+        // 发 Cancel-Drain(即时生效,不必等在途块跑完)。
         var offset = 0;
-        while (offset < entry.sizeInBytes) {
-          if (isCancelled != null && isCancelled()) {
-            cancelled = true;
-            break;
+        var chunkInFlight = false;
+        var cancelFired = false;
+        Timer? cancelPoller;
+        if (isCancelled != null) {
+          final check = isCancelled;
+          cancelPoller = Timer.periodic(_cancelPollInterval, (_) {
+            if (!chunkInFlight || cancelFired || !check()) return;
+            cancelFired = true; // 一块只发一次 Cancel
+            unawaited(_cancelInFlightQuietly());
+          });
+        }
+        try {
+          while (offset < entry.sizeInBytes) {
+            if (isCancelled != null && isCancelled()) {
+              cancelled = true;
+              break;
+            }
+            final want =
+                math.min(partialChunkBytes!, entry.sizeInBytes - offset);
+            chunkInFlight = true;
+            final Uint8List chunk;
+            try {
+              chunk =
+                  await _session.getPartialObject(entry.handle, offset, want);
+            } finally {
+              chunkInFlight = false;
+            }
+            if (chunk.isEmpty) break; // 相机提前收尾
+            sink.add(chunk);
+            received += chunk.length;
+            onProgress?.call(received);
+            offset += chunk.length;
+            if (chunk.length < want) break; // 短读 = EOF
           }
-          final want =
-              math.min(partialChunkBytes!, entry.sizeInBytes - offset);
-          final chunk =
-              await _session.getPartialObject(entry.handle, offset, want);
-          if (chunk.isEmpty) break; // 相机提前收尾
-          sink.add(chunk);
-          received += chunk.length;
-          onProgress?.call(received);
-          offset += chunk.length;
-          if (chunk.length < want) break; // 短读 = EOF
+        } finally {
+          cancelPoller?.cancel();
         }
       } else {
         await _session.getObject(entry.handle, onData: (chunk) {
@@ -116,6 +161,16 @@ class ObjectDownloader {
       }
       await sink.flush();
       await sink.close();
+    } on PtpCancelledException {
+      // 在途块被本端 Cancel-Drain 收口:按「取消成功」收场(不得当
+      // 传输失败重试)。半成品照删,异常换成下载管线的取消语义。
+      try {
+        await sink.close();
+      } on Exception {
+        // 关闭失败不掩盖取消语义
+      }
+      await _deleteQuietly(file);
+      throw const DownloadCancelledException();
     } on Exception {
       try {
         await sink.close();
@@ -144,6 +199,16 @@ class ObjectDownloader {
       elapsed: watch.elapsed,
       averageBytesPerSecond: received / watch.elapsed.inMicroseconds * 1e6,
     );
+  }
+
+  /// 对在途块事务发 Cancel-Drain;取消通道自身异常一律静默 ——
+  /// 旧路径(块间旗标停发)已在兜底,取消不该因通道抖动变失败。
+  Future<void> _cancelInFlightQuietly() async {
+    try {
+      await _session.cancelInFlight();
+    } on Exception {
+      // 静默:见上
+    }
   }
 
   /// 0x101B 能力门禁(op 表在册才走分块;取能力失败也回落整档)。

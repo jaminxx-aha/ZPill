@@ -91,6 +91,7 @@ void main() {
   Future<(PtpIpTransport, FakePtpIpChannel, FakePtpIpChannel)>
       connectTransport({
     Duration timeout = const Duration(milliseconds: 300),
+    Duration? drainLimit,
   }) async {
     final command = FakePtpIpChannel();
     final event = FakePtpIpChannel();
@@ -98,6 +99,7 @@ void main() {
     final transport = PtpIpTransport(
       createChannel: () => channels.removeAt(0),
       transactionTimeout: timeout,
+      drainTimeout: drainLimit,
     );
     final connecting = transport.connect('192.168.1.1');
     await pumpEventQueue();
@@ -515,6 +517,189 @@ void main() {
       await expectLater(future, throwsA(isA<PtpLinkException>()));
       await pumpEventQueue();
       expect(broke.single, contains('错位'));
+    });
+  });
+
+  group('取消-排水(Cancel-Drain)', () {
+    /// 已发出请求数里 Cancel 包的个数。
+    int cancelPackets(List<PtpIpFrame> sent) => sent
+        .where((f) => f.type == PtpIpPacketType.cancel)
+        .length;
+
+    test('数据相中途取消:发 Cancel 包、吸干到响应、PtpCancelledException、'
+        '会话不脱同步', () async {
+      final (t, command, _) = await connectTransport();
+      final broke = <String>[];
+      t.breakages.listen(broke.add);
+      final chunks = <Uint8List>[];
+      final future = t.execute(
+        const PtpRequest(
+            opcode: PtpOperationCode.getPartialObject, params: [42, 0, 10]),
+        onData: chunks.add,
+      );
+      await pumpEventQueue();
+      final req = codec.decode(command.sent.last) as OperationRequestPacket;
+      final tid = req.transactionId;
+
+      // 数据相中途:StartData(10B) + Data(4B) 已到,取消前正常交付
+      command.emit(frameOf(StartDataPacket(transactionId: tid, totalLength: 10)));
+      command.emit(frameOf(
+          DataPacket(transactionId: tid, payload: Uint8List.fromList([1, 2, 3, 4]))));
+      await pumpEventQueue();
+      expect(chunks, hasLength(1));
+
+      // 取消:Cancel 包带在途 tid;重复调用幂等(不重复发、不重置墙钟)
+      expect(await t.cancelInFlight(), isTrue);
+      expect(cancelPackets(command.sent), 1);
+      expect((codec.decode(command.sent.last) as CancelPacket).transactionId,
+          tid);
+      expect(await t.cancelInFlight(), isFalse);
+      expect(cancelPackets(command.sent), 1);
+
+      // 相机不理 Cancel 继续吐:吸干只记账,不再交付
+      command.emit(frameOf(DataPacket(
+          transactionId: tid,
+          payload: Uint8List.fromList([5, 6, 7, 8, 9, 10]))));
+      await pumpEventQueue();
+      expect(chunks, hasLength(1));
+
+      // OperationResponse 一到:以 PtpCancelledException 干净收口
+      // (不对账、不毒化、通道不关)
+      command.emit(frameOf(OperationResponsePacket(
+          responseCode: PtpResponseCode.ok, transactionId: tid)));
+      await expectLater(future, throwsA(isA<PtpCancelledException>()));
+      await pumpEventQueue();
+      expect(broke, isEmpty);
+      expect(command.closed, isFalse);
+
+      // 会话不脱同步:下一事务照常(tid 递增、正常收发)
+      final (req2, _) = await replyOk(
+          command,
+          t.execute(
+              const PtpRequest(opcode: PtpOperationCode.getDeviceInfo)));
+      expect(req2.transactionId, tid + 1);
+    });
+
+    test('空闲取消:no-op(false),无包发出,不毒化', () async {
+      final (t, command, _) = await connectTransport();
+      final broke = <String>[];
+      t.breakages.listen(broke.add);
+      expect(await t.cancelInFlight(), isFalse);
+      expect(command.sent, isEmpty);
+      final (req, _) = await replyOk(
+          command,
+          t.execute(
+              const PtpRequest(opcode: PtpOperationCode.getDeviceInfo)));
+      expect(req.transactionId, 0);
+      expect(broke, isEmpty);
+    });
+
+    test('响应先到竞态:execute 正常完成,迟到的 Cancel 变 no-op 不悬挂',
+        () async {
+      final (t, command, _) = await connectTransport();
+      final payload = Uint8List.fromList([1, 2, 3]);
+      final future = t.execute(const PtpRequest(
+          opcode: PtpOperationCode.getPartialObject, params: [42, 0, 3]));
+      await pumpEventQueue();
+      final tid =
+          (codec.decode(command.sent.last) as OperationRequestPacket)
+              .transactionId;
+      command
+        ..emit(frameOf(StartDataPacket(transactionId: tid, totalLength: 3)))
+        ..emit(frameOf(EndDataPacket(transactionId: tid, payload: payload)))
+        ..emit(frameOf(OperationResponsePacket(
+            responseCode: PtpResponseCode.ok, transactionId: tid)));
+
+      final result = await future; // 正常完成(响应已被 dispatcher 处理)
+      expect(result.data, payload);
+
+      // Cancel 迟到:无在途事务 → 无包可发、立即返回,不得悬挂
+      expect(await t.cancelInFlight(), isFalse);
+      expect(cancelPackets(command.sent), 0);
+      final (_, r2) = await replyOk(
+          command,
+          t.execute(
+              const PtpRequest(opcode: PtpOperationCode.getDeviceInfo)));
+      expect(r2.responseCode, PtpResponseCode.ok);
+    });
+
+    test('排水墙钟超时(无帧):相机不理 Cancel 也不收口 → 断链路径', () async {
+      // 看门狗 5s 长于排水阀 60ms:证明收口的是排水阀而非看门狗
+      final (t, command, event) = await connectTransport(
+        timeout: const Duration(seconds: 5),
+        drainLimit: const Duration(milliseconds: 60),
+      );
+      final broke = <String>[];
+      t.breakages.listen(broke.add);
+      final future = t.execute(const PtpRequest(
+          opcode: PtpOperationCode.getPartialObject, params: [42, 0, 10]));
+      await pumpEventQueue();
+
+      expect(await t.cancelInFlight(), isTrue);
+      await expectLater(future, throwsA(isA<PtpLinkException>()));
+      await pumpEventQueue();
+      expect(broke.single, contains('取消排水超时'));
+      expect(command.closed, isTrue);
+      expect(event.closed, isTrue);
+      await expectLater(
+          t.execute(const PtpRequest(opcode: PtpOperationCode.getDeviceInfo)),
+          throwsA(isA<PtpLinkException>()));
+    });
+
+    test('排水墙钟阀一次性计时:数据帧一直来但响应永不收口 → 阀先于看门狗断链',
+        () async {
+      // 看门狗 500ms(每帧重置),排水阀 120ms(一次性):帧在 0/30/60/90ms
+      // 持续到达,看门狗永不触发,断链必须来自排水阀。
+      final (t, command, _) = await connectTransport(
+        timeout: const Duration(milliseconds: 500),
+        drainLimit: const Duration(milliseconds: 120),
+      );
+      final broke = <String>[];
+      t.breakages.listen(broke.add);
+      final future = t.execute(const PtpRequest(
+          opcode: PtpOperationCode.getPartialObject, params: [42, 0, 1024]));
+      await pumpEventQueue();
+      final tid =
+          (codec.decode(command.sent.last) as OperationRequestPacket)
+              .transactionId;
+
+      expect(await t.cancelInFlight(), isTrue);
+      // 绝对时刻 0/30/60/90ms 各吐一帧(全在 120ms 阀内,不会打到已关通道)
+      for (final ms in [0, 30, 60, 90]) {
+        unawaited(Future<void>.delayed(Duration(milliseconds: ms)).then((_) {
+          command.emit(frameOf(
+              DataPacket(transactionId: tid, payload: Uint8List(1))));
+        }));
+      }
+      await expectLater(future, throwsA(isA<PtpLinkException>()));
+      await pumpEventQueue();
+      expect(broke.single, contains('取消排水超时'));
+      expect(command.closed, isTrue);
+    });
+
+    test('排水字节阀:排水期实收越过 StartData 声明 → 断链', () async {
+      final (t, command, _) = await connectTransport();
+      final broke = <String>[];
+      t.breakages.listen(broke.add);
+      final future = t.execute(const PtpRequest(
+          opcode: PtpOperationCode.getPartialObject, params: [42, 0, 4]));
+      await pumpEventQueue();
+      final tid =
+          (codec.decode(command.sent.last) as OperationRequestPacket)
+              .transactionId;
+      command.emit(frameOf(StartDataPacket(transactionId: tid, totalLength: 4)));
+      command.emit(frameOf(
+          DataPacket(transactionId: tid, payload: Uint8List.fromList([1, 2]))));
+      await pumpEventQueue();
+      expect(await t.cancelInFlight(), isTrue);
+
+      // 排水期吐 10B(> 声明 4B)= 流失序 → 断链(不留死等)
+      command.emit(
+          frameOf(DataPacket(transactionId: tid, payload: Uint8List(10))));
+      await expectLater(future, throwsA(isA<PtpLinkException>()));
+      await pumpEventQueue();
+      expect(broke.single, contains('取消排水超量'));
+      expect(command.closed, isTrue);
     });
   });
 

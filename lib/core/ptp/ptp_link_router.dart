@@ -37,7 +37,7 @@ final class PtpLinkDetachedException implements Exception {
 /// attach/detach 由连接层(CameraConnectionImpl)在 connect/teardown 时
 /// 驱动;execute 转发当前内层。本类自身无超时/重试 —— 链路活性由各
 /// 内层(USB 看门狗 / PTP-IP 毒化语义)负责。
-final class PtpLinkRouter implements PtpTransport {
+final class PtpLinkRouter implements PtpTransport, PtpCancelCapable {
   PtpTransport? _inner;
   StreamSubscription<PtpEvent>? _eventsSub;
   bool _closed = false;
@@ -47,6 +47,20 @@ final class PtpLinkRouter implements PtpTransport {
 
   @override
   Stream<PtpEvent> get events => _eventsCtrl.stream;
+
+  /// 取消-排水透传:内层具备能力(PTP-IP)即转发,否则(USB / 未挂
+  /// 内层 / 已关)false no-op。在途 execute 以内层自己的语义收口
+  /// (PtpCancelledException / 旧链结果),路由器簿记的 Completer 随
+  /// 之接力,无需额外处理。
+  @override
+  Future<bool> cancelInFlight() async {
+    if (_closed) return false;
+    // if-case 模式绑定:is 检查不提升到与声明类型无关的能力接口
+    if (_inner case final PtpCancelCapable capable) {
+      return capable.cancelInFlight();
+    }
+    return false;
+  }
 
   /// 挂载链路(替换式:旧内层只解绑、不关闭,由调用方管理生命周期)。
   void attach(PtpTransport inner) {

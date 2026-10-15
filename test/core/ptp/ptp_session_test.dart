@@ -22,10 +22,16 @@ final class _GatedReply {
 }
 
 /// 假传输层:按序回放预置结果(PtpResult)或异常。
-final class FakePtpTransport implements PtpTransport {
+///
+/// 实现 [PtpCancelCapable] 以覆盖 Cancel-Drain 接线(计数即可,排水
+/// 收口由脚本预置 failAfter(PtpCancelledException) 模拟)。
+final class FakePtpTransport implements PtpTransport, PtpCancelCapable {
   final requests = <PtpRequest>[];
   final Queue<Object> script = Queue();
   final StreamController<PtpEvent> _eventCtrl = StreamController.broadcast();
+
+  /// cancelInFlight 调用计数(Cancel-Drain 接线断言用)。
+  var cancelInFlightCalls = 0;
 
   void reply(PtpResult result) => script.add(result);
   void fail(Exception e) => script.add(e);
@@ -37,6 +43,12 @@ final class FakePtpTransport implements PtpTransport {
   /// 预置一个延迟失败:execute 在 [gate] 完成前挂起,然后抛 [e]。
   void failAfter(Future<void> gate, Exception e) =>
       script.add(_GatedReply(gate, e));
+
+  @override
+  Future<bool> cancelInFlight() async {
+    cancelInFlightCalls++;
+    return true;
+  }
 
   @override
   Future<PtpResult> execute(PtpRequest request,
@@ -92,6 +104,24 @@ final class LockProbeTransport implements PtpTransport {
       responseCode: PtpResponseCode.ok,
       data: Uint8List.fromList([0xFF, 0xD8]),
     );
+  }
+
+  @override
+  Stream<PtpEvent> get events => const Stream.empty();
+
+  @override
+  Future<void> close() async {}
+}
+
+/// cancelInFlight 一调就炸的能力假件(取消通道自身异常的降级测试用)。
+final class _CancelFailingTransport implements PtpTransport, PtpCancelCapable {
+  @override
+  Future<bool> cancelInFlight() async => throw Exception('排水通道抖动');
+
+  @override
+  Future<PtpResult> execute(PtpRequest request,
+      {void Function(Uint8List chunk)? onData}) async {
+    throw UnimplementedError();
   }
 
   @override
@@ -1279,6 +1309,41 @@ void main() {
           session.getThumb(1), throwsA(isA<PtpResponseException>()));
       final data = await session.getThumb(2);
       expect(data, [0xFF, 0xD8]);
+    });
+  });
+
+  group('取消-排水透传(cancelInFlight)', () {
+    test('在途事务持锁时绕过串行锁立即返回(不排队死等)', () async {
+      final gate = Completer<void>();
+      final fake = FakePtpTransport()
+        ..replyAfter(
+            gate.future,
+            PtpResult(
+                responseCode: PtpResponseCode.ok,
+                data: buildDeviceInfoDataset()));
+      final session = PtpSession(transport: fake);
+      final exec = session.getDeviceInfo(); // 持锁挂在相机闸上
+      await pumpEventQueue();
+
+      // 若 cancelInFlight 排队等锁,timeout 先到 → 失败可见
+      final cancelled = await session
+          .cancelInFlight()
+          .timeout(const Duration(milliseconds: 200));
+      expect(cancelled, isTrue);
+      expect(fake.cancelInFlightCalls, 1);
+
+      gate.complete();
+      await exec; // 原事务不受牵连,照常完成(假件不真取消)
+    });
+
+    test('链路不支持(USB / 未实现能力)→ false no-op', () async {
+      final session = PtpSession(transport: LockProbeTransport(Completer<void>()));
+      expect(await session.cancelInFlight(), isFalse);
+    });
+
+    test('取消通道异常 → false 落回旧路径(取消不当失败放大)', () async {
+      final session = PtpSession(transport: _CancelFailingTransport());
+      expect(await session.cancelInFlight(), isFalse);
     });
   });
 
