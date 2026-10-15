@@ -231,6 +231,41 @@ void main() {
     });
   });
 
+  group('示波器族持久化(2026-10-15:档位四选一 + N-Log 刻度)', () {
+    test('默认关/全幅刻度;JSON 往返;旧档缺省与表外值回落', () {
+      expect(const AppSettings().monitorScope, 0, reason: '默认 off');
+      expect(const AppSettings().monitorScopeNLog, isFalse);
+
+      final on = const AppSettings()
+          .copyWith(monitorScope: 3, monitorScopeNLog: true);
+      final back = AppSettings.fromJson(on.toJson());
+      expect(back.monitorScope, 3);
+      expect(back.monitorScopeNLog, isTrue);
+
+      // 旧版本文件无此键 → 关 / 全幅
+      final bare = AppSettings.fromJson({'autoTransfer': true});
+      expect(bare.monitorScope, 0);
+      expect(bare.monitorScopeNLog, isFalse);
+      // 表外索引(手改文件)回落关;布尔刻度档独立回落 false
+      final bogus = AppSettings.fromJson({'monitorScope': 9});
+      expect(bogus.monitorScope, 0);
+      expect(AppSettings.fromJson({'monitorScope': -1}).monitorScope, 0);
+    });
+
+    test('文件落盘往返(FileSettingsStore)', () async {
+      final dir =
+          await Directory.systemTemp.createTemp('np_settings_scope');
+      addTearDown(() => dir.delete(recursive: true));
+      final store = FileSettingsStore(dataDir: () async => dir.path);
+      await store.update(const AppSettings().copyWith(
+          monitorScope: 4, monitorScopeNLog: true));
+      final reloaded = FileSettingsStore(dataDir: () async => dir.path);
+      final s = await reloaded.current();
+      expect(s.monitorScope, 4);
+      expect(s.monitorScopeNLog, isTrue);
+    });
+  });
+
   group('音量键快门开关持久化(2026-10-14 Android)', () {
     test('默认关;JSON 往返;旧档缺省回落关', () {
       expect(const AppSettings().volumeKeyShutter, isFalse);

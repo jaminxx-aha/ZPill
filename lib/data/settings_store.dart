@@ -106,6 +106,8 @@ final class AppSettings {
     this.framingSafeArea = false,
     this.framingCenterMark = false,
     this.monitorWaveform = false,
+    this.monitorScope = 0,
+    this.monitorScopeNLog = false,
     this.monitorLutIndex = -1,
     this.liveViewOn = true,
     this.liveViewImageSize = 3,
@@ -195,8 +197,19 @@ final class AppSettings {
   final bool framingSafeArea;
   final bool framingCenterMark;
 
-  /// 波形示波器(按列-亮度桶密度;共享帧分析,页面侧同步分析器启停)。
+  /// **旧档字段**:2026-10-15 前波形示波器的布尔开关,示波器族四选一
+  /// 起改为 [monitorScope] 后保留作迁移源(读侧升级、写侧随 scope 保
+  /// 连贯,见 features/remote/monitor_toggles.dart 的
+  /// monitorTogglesFromSettings)。
   final bool monitorWaveform;
+
+  /// 示波器档(0=关/1=波形/2=RGB Parade/3=矢量/4=红绿灯;缺省关)。
+  /// 表外值回落关;面板芯片循环切换,四示波器共享帧分析。
+  final int monitorScope;
+
+  /// 示波器 Y 轴 N-Log 刻度(波形/Parade 下消费;默认关)。手动档:
+  /// 相机 N-Log 态(0xD0BB)自动跟随留账,见 core/remote/scopes.dart。
+  final bool monitorScopeNLog;
 
   /// 监看 LUT 索引(-1 = 关;0..n = 内置风格表序)。越界值按关消费
   /// (见 features/remote/monitor_toggles.dart 的 monitorLutOf),
@@ -266,6 +279,8 @@ final class AppSettings {
     bool? framingSafeArea,
     bool? framingCenterMark,
     bool? monitorWaveform,
+    int? monitorScope,
+    bool? monitorScopeNLog,
     int? monitorLutIndex,
     bool? liveViewOn,
     Object? liveViewImageSize = _unset,
@@ -307,6 +322,8 @@ final class AppSettings {
         framingSafeArea: framingSafeArea ?? this.framingSafeArea,
         framingCenterMark: framingCenterMark ?? this.framingCenterMark,
         monitorWaveform: monitorWaveform ?? this.monitorWaveform,
+        monitorScope: monitorScope ?? this.monitorScope,
+        monitorScopeNLog: monitorScopeNLog ?? this.monitorScopeNLog,
         monitorLutIndex: monitorLutIndex ?? this.monitorLutIndex,
         liveViewOn: liveViewOn ?? this.liveViewOn,
         liveViewImageSize: liveViewImageSize == _unset
@@ -354,6 +371,8 @@ final class AppSettings {
       other.framingSafeArea == framingSafeArea &&
       other.framingCenterMark == framingCenterMark &&
       other.monitorWaveform == monitorWaveform &&
+      other.monitorScope == monitorScope &&
+      other.monitorScopeNLog == monitorScopeNLog &&
       other.monitorLutIndex == monitorLutIndex &&
       other.liveViewOn == liveViewOn &&
       other.liveViewImageSize == liveViewImageSize &&
@@ -373,7 +392,8 @@ final class AppSettings {
         monitorFalseColor, monitorPeaking, monitorPeakingLevel,
         monitorPeakingColor, monitorPeakingEngine, monitorFocusDial,
         framingAspect, framingSafeArea, framingCenterMark,
-        monitorWaveform, monitorLutIndex, liveViewOn,
+        monitorWaveform, monitorScope, monitorScopeNLog, monitorLutIndex,
+        liveViewOn,
         liveViewImageSize, liveViewImageCompression, sdramCapture,
         bleGpsInject, volumeKeyShutter,
       ]);
@@ -410,6 +430,8 @@ final class AppSettings {
         'framingSafeArea': framingSafeArea,
         'framingCenterMark': framingCenterMark,
         'monitorWaveform': monitorWaveform,
+        'monitorScope': monitorScope,
+        'monitorScopeNLog': monitorScopeNLog,
         'monitorLutIndex': monitorLutIndex,
         'liveViewOn': liveViewOn,
         if (liveViewImageSize != null)
@@ -472,6 +494,10 @@ final class AppSettings {
         framingSafeArea: json['framingSafeArea'] == true,
         framingCenterMark: json['framingCenterMark'] == true,
         monitorWaveform: json['monitorWaveform'] == true,
+        // 示波器档:旧档缺键(= 0 关)/表外值回落关。
+        monitorScope:
+            _pickEnumIndex(json['monitorScope'], const [0, 1, 2, 3, 4], 0),
+        monitorScopeNLog: json['monitorScopeNLog'] == true,
         // 表外值(负数/手改)不做范围钳制,消费侧按关(LUT 表外 = null)。
         monitorLutIndex: json['monitorLutIndex'] is int
             ? json['monitorLutIndex'] as int

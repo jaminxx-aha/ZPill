@@ -6,11 +6,29 @@ import '../../core/remote/peaking_engines.dart';
 import '../../data/settings_store.dart';
 import '../edit/lut_presets.dart';
 
+/// 示波器档(2026-10-15 示波器族):关 / 波形 / RGB Parade / 矢量 /
+/// 红绿灯,面板芯片循环切换(遮幅同款);持久化为设置索引
+/// ([AppSettings.monitorScope])。四示波器共享一份帧分析,与直方图
+/// 可同开(左下同锚,示波器上移让位)。
+enum ScopeKind { off, waveform, parade, vector, traffic }
+
+extension ScopeKindX on ScopeKind {
+  /// 循环下一档(off → 波形 → RGB → 矢量 → 红绿灯 → off)。
+  ScopeKind get next =>
+      ScopeKind.values[(index + 1) % ScopeKind.values.length];
+}
+
+/// 设置索引 → 示波器档:表外值(负数/手改文件)回落关。
+ScopeKind scopeKindOf(int index) =>
+    index >= 0 && index < ScopeKind.values.length
+        ? ScopeKind.values[index]
+        : ScopeKind.off;
+
 /// 监看开关组(2026-10-12 十二轮起入持久化设置:AppSettings monitor*
 /// 字段族,经 [monitorTogglesFromSettings]/[applyMonitorToggles]
 /// 桥接拆装;此前是页面级会话态,重进拍摄页即丢)。
 ///
-/// 斑马纹/直方图/伪色/峰值/波形五项共享同一份帧分析 —— 开关落定后由
+/// 斑马纹/直方图/伪色/峰值/示波器共享同一份帧分析 —— 开关落定后由
 /// 页面同步 RemoteController.analyzer 启停(见 RemotePage
 /// ._syncAnalyzerEnabled)。构图框三件与 LUT 索引是纯显示层,不占
 /// 分析器。
@@ -30,7 +48,8 @@ class MonitorToggles {
     this.framingAspect = FramingAspect.off,
     this.framingSafeArea = false,
     this.framingCenterMark = false,
-    this.waveform = false,
+    this.scope = ScopeKind.off,
+    this.scopeNLog = false,
     this.lutIndex = -1,
   });
 
@@ -65,8 +84,13 @@ class MonitorToggles {
   /// 中心标(十字 + 圆环)。
   final bool framingCenterMark;
 
-  /// 波形示波器(屏幕坐标层,直方图上方)。
-  final bool waveform;
+  /// 示波器档(波形/RGB Parade/矢量/红绿灯四选一;off = 关)。
+  final ScopeKind scope;
+
+  /// 示波器 Y 轴 N-Log 刻度(仅波形/Parade 消费):**手动档,常闭** ——
+  /// 相机 N-Log 态(0xD0BB 只读,D0Bx 族不推事件须轮询)的自动跟随
+  /// 留账,数学见 core/remote/scopes.dart。
+  final bool scopeNLog;
 
   /// 监看 LUT 索引(-1 = 关;0..n = [builtinLuts] 表序,越界按关)。
   final int lutIndex;
@@ -85,7 +109,8 @@ class MonitorToggles {
     FramingAspect? framingAspect,
     bool? framingSafeArea,
     bool? framingCenterMark,
-    bool? waveform,
+    ScopeKind? scope,
+    bool? scopeNLog,
     int? lutIndex,
   }) =>
       MonitorToggles(
@@ -102,7 +127,8 @@ class MonitorToggles {
         framingAspect: framingAspect ?? this.framingAspect,
         framingSafeArea: framingSafeArea ?? this.framingSafeArea,
         framingCenterMark: framingCenterMark ?? this.framingCenterMark,
-        waveform: waveform ?? this.waveform,
+        scope: scope ?? this.scope,
+        scopeNLog: scopeNLog ?? this.scopeNLog,
         lutIndex: lutIndex ?? this.lutIndex,
       );
 
@@ -124,7 +150,8 @@ class MonitorToggles {
       other.framingAspect == framingAspect &&
       other.framingSafeArea == framingSafeArea &&
       other.framingCenterMark == framingCenterMark &&
-      other.waveform == waveform &&
+      other.scope == scope &&
+      other.scopeNLog == scopeNLog &&
       other.lutIndex == lutIndex;
 
   @override
@@ -142,12 +169,21 @@ class MonitorToggles {
       framingAspect,
       framingSafeArea,
       framingCenterMark,
-      waveform,
+      scope,
+      scopeNLog,
       lutIndex);
 }
 
 /// [AppSettings] → 页面开关组:进页/设置变更沿对账用。
-MonitorToggles monitorTogglesFromSettings(AppSettings s) => MonitorToggles(
+///
+/// 示波器迁移:2026-10-15 前的旧档只有 [AppSettings.monitorWaveform]
+/// 布尔(波形一件);scope 缺省 off 且旧波形开关开 → 升格为波形档
+/// (写回沿 applyMonitorToggles 会把 monitorScope 一并落盘,迁移
+/// 一次性收敛)。
+MonitorToggles monitorTogglesFromSettings(AppSettings s) {
+  final legacyWaveform =
+      s.monitorWaveform && s.monitorScope == ScopeKind.off.index;
+  return MonitorToggles(
     grid: s.monitorGrid,
     zebra: s.monitorZebra,
     histogram: s.monitorHistogram,
@@ -161,10 +197,14 @@ MonitorToggles monitorTogglesFromSettings(AppSettings s) => MonitorToggles(
     framingAspect: s.framingAspect,
     framingSafeArea: s.framingSafeArea,
     framingCenterMark: s.framingCenterMark,
-    waveform: s.monitorWaveform,
+    scope: legacyWaveform ? ScopeKind.waveform : scopeKindOf(s.monitorScope),
+    scopeNLog: s.monitorScopeNLog,
     lutIndex: s.monitorLutIndex);
+}
 
 /// 页面开关组 → 写回 [AppSettings](其余字段原样保留,由 copyWith 带)。
+/// [AppSettings.monitorWaveform] 旧字段随 scope 保连贯
+/// (= scope == 波形档),与读侧迁移互逆。
 AppSettings applyMonitorToggles(AppSettings s, MonitorToggles t) =>
     s.copyWith(
         monitorGrid: t.grid,
@@ -180,7 +220,9 @@ AppSettings applyMonitorToggles(AppSettings s, MonitorToggles t) =>
         framingAspect: t.framingAspect,
         framingSafeArea: t.framingSafeArea,
         framingCenterMark: t.framingCenterMark,
-        monitorWaveform: t.waveform,
+        monitorScope: t.scope.index,
+        monitorWaveform: t.scope == ScopeKind.waveform,
+        monitorScopeNLog: t.scopeNLog,
         monitorLutIndex: t.lutIndex);
 
 /// 峰值灵敏度档 → 相邻峰格亮度梯度阈值(0-255)。**调优档非协议常量**:

@@ -13,9 +13,11 @@ import 'package:flutter/material.dart';
 
 import '../../core/remote/frame_analysis.dart';
 import '../../core/remote/live_view_header.dart';
+import '../../core/remote/scopes.dart';
 import '../../l10n/l10n.dart';
 import '../../platform/motion_host.dart';
 import 'live_design.dart';
+import 'monitor_toggles.dart';
 
 /// 伪色带色表(索引 = [FrameAnalysis.falseColorBandOf];OpenZCine
 /// ExposureScale 的视频监看惯例:紫=极暗,蓝=欠,绿=中灰附近,
@@ -429,10 +431,17 @@ final class _FramingPainter extends CustomPainter {
 /// 画面列、y = 亮度(底黑顶白),点密度 = 亮度分布 —— 过曝亮脊
 /// (顶部)、欠曝底脊、对比度分布一眼可读。数据来自帧分析的列-亮度
 /// 桶计数(与直方图同一采样环,见 FrameAnalysis.waveform)。
+/// [nLogScale] = true 时 Y 轴换 N-Log 合法量程刻度(64-940 码 ↔
+/// 0-100 IRE,IRE 线 + 18% 灰线;手动档,数学见 core/remote/scopes.dart)。
 class WaveformView extends StatelessWidget {
-  const WaveformView({super.key, required this.analysis});
+  const WaveformView({
+    super.key,
+    required this.analysis,
+    this.nLogScale = false,
+  });
 
   final FrameAnalysis? analysis;
+  final bool nLogScale;
 
   @override
   Widget build(BuildContext context) {
@@ -445,7 +454,7 @@ class WaveformView extends StatelessWidget {
           child: Container(
             color: Colors.black.withValues(alpha: 0.55),
             child: CustomPaint(
-              painter: _WaveformPainter(analysis),
+              painter: _WaveformPainter(analysis, nLogScale),
               size: Size.infinite,
             ),
           ),
@@ -456,21 +465,27 @@ class WaveformView extends StatelessWidget {
 }
 
 final class _WaveformPainter extends CustomPainter {
-  const _WaveformPainter(this.analysis);
+  const _WaveformPainter(this.analysis, this.nLogScale);
 
   final FrameAnalysis? analysis;
+  final bool nLogScale;
 
   @override
   void paint(Canvas canvas, Size size) {
     final a = analysis;
     if (a == null || a.waveformCols == 0) return;
-    // IRE 刻度线:0/25/50/75/100 五条水平参考。
-    final grid = Paint()
-      ..color = Colors.white.withValues(alpha: 0.18)
-      ..strokeWidth = 1;
-    for (var i = 0; i <= 4; i++) {
-      final y = (size.height - 2) * i / 4 + 1;
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), grid);
+    // Y 轴参考线:N-Log 档 = legal-range IRE 刻度(64-940 码 ↔ 0-100
+    // IRE,IRE → luma 反投)+ 18% 灰线;全幅档 = 均分五线(旧行为)。
+    if (nLogScale) {
+      paintNLogScale(canvas, size);
+    } else {
+      final grid = Paint()
+        ..color = Colors.white.withValues(alpha: 0.18)
+        ..strokeWidth = 1;
+      for (var i = 0; i <= 4; i++) {
+        final y = (size.height - 2) * i / 4 + 1;
+        canvas.drawLine(Offset(0, y), Offset(size.width, y), grid);
+      }
     }
     final max = a.waveform.reduce((x, y) => x > y ? x : y);
     if (max <= 0) return;
@@ -495,12 +510,399 @@ final class _WaveformPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_WaveformPainter old) => old.analysis != analysis;
+  bool shouldRepaint(_WaveformPainter old) =>
+      old.analysis != analysis || old.nLogScale != nLogScale;
 }
 
 /// 波形密度色(示波器磷光绿,与电平表绿区同族):越密越实。
 Color _waveformColor(double density) =>
     const Color(0xFF56EB84).withValues(alpha: 0.25 + 0.75 * density);
+
+/// 小盒刻度小字(8px,半透明白)。
+void _tinyLabel(Canvas canvas, String text, Offset at) {
+  TextPainter(
+    text: TextSpan(
+        text: text,
+        style: TextStyle(
+            color: Colors.white.withValues(alpha: 0.55), fontSize: 8)),
+    textDirection: TextDirection.ltr,
+  )
+    ..layout()
+    ..paint(canvas, at);
+}
+
+/// N-Log legal-range Y 轴刻度(波形/Parade 共用):IRE 0/50/100 三线
+/// (右缘标值)+ 18% 灰虚线(官方锚点码 372 ≈ 35.2 IRE)。IRE → 8-bit
+/// luma 反投(scopes.dart),底黑顶白与密度桶同向。
+void paintNLogScale(Canvas canvas, Size size) {
+  final grid = Paint()
+    ..color = Colors.white.withValues(alpha: 0.18)
+    ..strokeWidth = 1;
+  // IRE 线的 y:luma8/255 → 与桶方向一致(底黑顶白,顶底留 1px)。
+  double yOfIre(double ire) {
+    final luma = nLogLuma8OfIre(ire).clamp(0.0, 255.0);
+    return (size.height - 1) - (luma / 255) * (size.height - 2);
+  }
+
+  for (final ire in const [0.0, 50.0, 100.0]) {
+    final y = yOfIre(ire);
+    canvas.drawLine(Offset(0, y), Offset(size.width, y), grid);
+    _tinyLabel(canvas, ire.toStringAsFixed(0),
+        Offset(size.width - 14, (y - 8).clamp(0.0, size.height - 8)));
+  }
+  // 18% 灰线(官方锚点码 372):短划线标位,不加字(小盒太挤)。
+  final midY = yOfIre(nLogIreOfCode10(nLogMidGrayCode10));
+  final dash = Paint()
+    ..color = Colors.white.withValues(alpha: 0.35)
+    ..strokeWidth = 1;
+  for (var x = 0.0; x < size.width; x += 6) {
+    canvas.drawLine(Offset(x, midY), Offset(x + 3, midY), dash);
+  }
+}
+
+/// RGB Parade(三联波形,R|G|B 并排同构):每通道一联、各自通道色调
+/// 磷光 —— 白平衡偏色(三联错位)与单通道削顶(单联顶脊)一眼可读。
+/// 数据 = FrameAnalysis.parade(3 通道 × 列 × 亮度桶,与波形同一
+/// 采样环);[nLogScale] 刻度同波形(N-Log legal-range IRE 线)。
+class ParadeView extends StatelessWidget {
+  const ParadeView({
+    super.key,
+    required this.analysis,
+    this.nLogScale = false,
+  });
+
+  final FrameAnalysis? analysis;
+  final bool nLogScale;
+
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      child: SizedBox(
+        width: 160,
+        height: 90,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(4),
+          child: Container(
+            color: Colors.black.withValues(alpha: 0.55),
+            child: CustomPaint(
+              painter: _ParadePainter(analysis, nLogScale),
+              size: Size.infinite,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 三联通道磷光基色(密度越高越实,色相跟通道)。
+const List<Color> _paradeChannelColors = [
+  Color(0xFFEB5C5C), // R
+  Color(0xFF56EB84), // G(波形同款绿)
+  Color(0xFF5C9BEB), // B
+];
+
+final class _ParadePainter extends CustomPainter {
+  const _ParadePainter(this.analysis, this.nLogScale);
+
+  final FrameAnalysis? analysis;
+  final bool nLogScale;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final a = analysis;
+    if (a == null || a.waveformCols == 0) return;
+    if (nLogScale) paintNLogScale(canvas, size);
+    final bins = a.waveformBins;
+    final cols = a.waveformCols;
+    final plane = cols * bins;
+    final panelW = size.width / 3;
+    final cellW = panelW / cols;
+    final cellH = (size.height - 2) / bins;
+    final paint = Paint();
+    for (var ch = 0; ch < 3; ch++) {
+      final base = ch * plane;
+      var max = 0;
+      for (var i = 0; i < plane; i++) {
+        if (a.parade[base + i] > max) max = a.parade[base + i];
+      }
+      if (max <= 0) continue;
+      final left = ch * panelW;
+      for (var col = 0; col < cols; col++) {
+        for (var bin = 0; bin < bins; bin++) {
+          final v = a.parade[base + col * bins + bin];
+          if (v <= 0) continue;
+          final density = (v / max).clamp(0.0, 1.0);
+          paint.color = _paradeChannelColors[ch]
+              .withValues(alpha: 0.25 + 0.75 * density);
+          canvas.drawRect(
+            Rect.fromLTWH(left + col * cellW,
+                size.height - 1 - (bin + 1) * cellH, cellW + 0.5, cellH + 0.5),
+            paint,
+          );
+        }
+      }
+      // 通道字(拉丁缩写,无需翻译)。
+      _tinyLabel(canvas, 'RGB'[ch], Offset(left + 3, 3));
+    }
+  }
+
+  @override
+  bool shouldRepaint(_ParadePainter old) =>
+      old.analysis != analysis || old.nLogScale != nLogScale;
+}
+
+/// 矢量示波器(Cb/Cr 圆盘):角度 = 色相、半径 = 饱和度,密度 =
+/// 采样聚集;刻度盘 = 外圈 + 75% 六目标框(R/Mg/B/Cy/G/Yl,与采样
+/// 同一 Rec.601 色度式自洽,75% 饱和原色恰落各自框内)+ 中心十字。
+/// 数据 = FrameAnalysis.vector(密度网格),数学见 core/remote/scopes.dart。
+class VectorView extends StatelessWidget {
+  const VectorView({super.key, required this.analysis});
+
+  final FrameAnalysis? analysis;
+
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      child: SizedBox(
+        width: 96,
+        height: 96,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(4),
+          child: Container(
+            color: Colors.black.withValues(alpha: 0.55),
+            child: CustomPaint(
+              painter: _VectorPainter(analysis),
+              size: Size.infinite,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+final class _VectorPainter extends CustomPainter {
+  const _VectorPainter(this.analysis);
+
+  final FrameAnalysis? analysis;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final a = analysis;
+    final c = size.center(Offset.zero);
+    final r = math.min(size.width, size.height) / 2 - 3;
+    if (r <= 0) return;
+    // 外圈(满饱和盘缘)。
+    canvas.drawCircle(
+        c,
+        r,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1
+          ..color = Colors.white.withValues(alpha: 0.3));
+    // 中心十字。
+    final cross = Paint()
+      ..color = Colors.white.withValues(alpha: 0.3)
+      ..strokeWidth = 1;
+    canvas.drawLine(Offset(c.dx - 5, c.dy), Offset(c.dx + 5, c.dy), cross);
+    canvas.drawLine(Offset(c.dx, c.dy - 5), Offset(c.dx, c.dy + 5), cross);
+    // 75% 六目标框 + 通道字(拉丁缩写;位置与采样同式自洽)。
+    final box = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1
+      ..color = Colors.white.withValues(alpha: 0.45);
+    for (var i = 0; i < vectorTargets75.length; i++) {
+      final (tx, ty) = vectorTargets75[i];
+      final at = Offset(c.dx + tx * r, c.dy - ty * r);
+      canvas.drawRect(Rect.fromCenter(center: at, width: 7, height: 7), box);
+      _tinyLabel(
+          canvas,
+          vectorTargetLabels[i],
+          Offset(c.dx + tx * r + 5, c.dy - ty * r - 7));
+    }
+    final aa = a;
+    if (aa == null || aa.vectorN <= 0) return;
+    // 密度点:网格格 → 盘面小块,越密越实(磷光绿同款)。
+    final n = aa.vectorN;
+    var max = 0;
+    for (final v in aa.vector) {
+      if (v > max) max = v;
+    }
+    if (max <= 0) return;
+    final cellSide = (2 * r) / n;
+    final paint = Paint();
+    for (var row = 0; row < n; row++) {
+      for (var col = 0; col < n; col++) {
+        final v = aa.vector[row * n + col];
+        if (v <= 0) continue;
+        final density = (v / max).clamp(0.0, 1.0);
+        paint.color = _waveformColor(density);
+        final cx = c.dx - r + (col + 0.5) * cellSide;
+        final cy = c.dy - r + (row + 0.5) * cellSide;
+        canvas.drawRect(
+          Rect.fromCenter(
+              center: Offset(cx, cy),
+              width: cellSide + 0.5,
+              height: cellSide + 0.5),
+          paint,
+        );
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(_VectorPainter old) => old.analysis != analysis;
+}
+
+/// 红绿灯三色(与伪色带同族:蓝 = 欠曝,绿 = 合式,红 = 过曝)。
+const Color kTrafficUnderColor = Color(0xFF1E88E5);
+const Color kTrafficOkColor = Color(0xFF56EB84);
+const Color kTrafficOverColor = Color(0xFFE53935);
+
+/// 红绿灯(Traffic Lights):画面三横带(上/中/下)各自欠曝/合式/过曝
+/// —— 每带一行:标签 + 三段占比条(蓝|绿|红)+ 状态灯(带态点色,
+/// 过曝优先)。阈值常量在 core/remote/scopes.dart(欠 < 16 / 过 ≥ 250 /
+/// 占比 > 10% 点灯);数据 = FrameAnalysis.trafficBandCounts。
+class TrafficLightsView extends StatelessWidget {
+  const TrafficLightsView({
+    super.key,
+    required this.analysis,
+    this.bandLabels = const ['上部', '中部', '下部'],
+  });
+
+  final FrameAnalysis? analysis;
+
+  /// 三带标签(显示点传 t() 译文;缺省中文键)。
+  final List<String> bandLabels;
+
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      child: SizedBox(
+        width: 160,
+        height: 58,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(4),
+          child: Container(
+            color: Colors.black.withValues(alpha: 0.55),
+            child: CustomPaint(
+              painter: _TrafficLightsPainter(analysis, bandLabels),
+              size: Size.infinite,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+final class _TrafficLightsPainter extends CustomPainter {
+  const _TrafficLightsPainter(this.analysis, this.bandLabels);
+
+  final FrameAnalysis? analysis;
+  final List<String> bandLabels;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final a = analysis;
+    if (a == null) return;
+    final bands = a.trafficLights;
+    final rowH = size.height / 3;
+    for (var b = 0; b < 3; b++) {
+      final band = bands[b];
+      final top = b * rowH;
+      // 标签(缺省中文键,显示点传译文)。
+      if (b < bandLabels.length) {
+        TextPainter(
+          text: TextSpan(
+              text: bandLabels[b],
+              style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.55), fontSize: 9)),
+          textDirection: TextDirection.ltr,
+        )
+          ..layout()
+          ..paint(canvas, Offset(4, top + (rowH - 9) / 2));
+      }
+      // 三段占比条:蓝(欠)| 绿(合)| 红(过),按占比分宽(标签列 24:
+      // 两字带名 + 4px 左边距)。
+      final barLeft = 24.0;
+      final barRight = size.width - 16;
+      final barW = barRight - barLeft;
+      final barTop = top + (rowH - 7) / 2;
+      var x = barLeft;
+      void seg(double fraction, Color color) {
+        final w = barW * fraction;
+        if (w > 0) {
+          canvas.drawRect(
+              Rect.fromLTWH(x, barTop, w, 7),
+              Paint()
+                ..color = color.withValues(alpha: 0.25 + 0.75 * fraction));
+        }
+        x += w;
+      }
+
+      seg(band.underFraction, kTrafficUnderColor);
+      seg(band.okFraction, kTrafficOkColor);
+      seg(band.overFraction, kTrafficOverColor);
+      // 状态灯:带态点色(空带按合式,不误报)。
+      final lampColor = switch (band.state) {
+        ScopeTrafficState.under => kTrafficUnderColor,
+        ScopeTrafficState.ok => kTrafficOkColor,
+        ScopeTrafficState.over => kTrafficOverColor,
+      };
+      canvas.drawCircle(
+          Offset(barRight + 8, top + rowH / 2),
+          3.5,
+          Paint()
+            ..color = lampColor
+            ..style = PaintingStyle.fill);
+      canvas.drawCircle(
+          Offset(barRight + 8, top + rowH / 2),
+          3.5,
+          Paint()
+            ..color = lampColor.withValues(alpha: 0.5)
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 1);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_TrafficLightsPainter old) =>
+      old.analysis != analysis || old.bandLabels != bandLabels;
+}
+
+/// 示波器分派器(设置档四选一,取景区接线用):波形 / RGB Parade /
+/// 矢量 / 红绿灯,共享同一份帧分析;off = 空件(取景区不会用到,
+/// 兜底防御)。[nLogScale] 仅波形/Parade 消费(N-Log legal-range IRE
+/// 刻度,手动档);[bandLabels] 仅红绿灯消费(上/中/下带标签)。
+class ScopeView extends StatelessWidget {
+  const ScopeView({
+    super.key,
+    required this.kind,
+    required this.analysis,
+    this.nLogScale = false,
+    this.bandLabels = const ['上', '中', '下'],
+  });
+
+  final ScopeKind kind;
+  final FrameAnalysis? analysis;
+  final bool nLogScale;
+  final List<String> bandLabels;
+
+  @override
+  Widget build(BuildContext context) {
+    return switch (kind) {
+      ScopeKind.off => const SizedBox.shrink(),
+      ScopeKind.waveform =>
+        WaveformView(analysis: analysis, nLogScale: nLogScale),
+      ScopeKind.parade => ParadeView(analysis: analysis, nLogScale: nLogScale),
+      ScopeKind.vector => VectorView(analysis: analysis),
+      ScopeKind.traffic => TrafficLightsView(
+          analysis: analysis, bandLabels: bandLabels),
+    };
+  }
+}
 
 /// 相机自报的 AF 框组(帧头 display-info):框 0 = 当前 AF 区域
 /// (**真实尺寸** —— 单点小框/动态 L 大框随相机设置),主体检测开着时

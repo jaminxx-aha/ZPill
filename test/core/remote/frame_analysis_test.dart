@@ -7,6 +7,7 @@ import 'package:image/image.dart' as img;
 import 'package:nikon_pill/core/remote/frame_analysis.dart';
 import 'package:nikon_pill/core/remote/frame_analyzer.dart';
 import 'package:nikon_pill/core/remote/peaking_engines.dart';
+import 'package:nikon_pill/core/remote/scopes.dart';
 
 /// 32×24 灰度渐变 JPEG(左黑右白),右端四分之一过曝。
 Uint8List _gradientJpeg() {
@@ -26,6 +27,43 @@ Uint8List _whiteCornerJpeg() {
       final white = x >= 24 && y < 8; // 右上角纯白
       image.setPixelRgba(x, y, white ? 255 : 20, white ? 255 : 20,
           white ? 255 : 20, 255);
+    }
+  }
+  return Uint8List.fromList(img.encodeJpg(image));
+}
+
+/// 左半纯红 / 右半纯蓝 32×24(Parade 通道独立性与矢量色相方向的载体;
+/// 两色都无绿 —— G 通道全零,G 联密度只能落在底桶)。
+Uint8List _splitColorJpeg() {
+  final image = img.Image(width: 32, height: 24);
+  for (var y = 0; y < 24; y++) {
+    for (var x = 0; x < 32; x++) {
+      final red = x < 16;
+      image.setPixelRgba(x, y, red ? 255 : 0, 0, red ? 0 : 255, 255);
+    }
+  }
+  return Uint8List.fromList(img.encodeJpg(image));
+}
+
+/// 三横带 32×24:上带纯白 / 中带中灰 / 下带纯黑(红绿灯三带判定的载体;
+/// 白 luma 255 ≥ 250 过、灰 128 合式、黑 0 < 16 欠)。
+Uint8List _threeBandJpeg() {
+  final image = img.Image(width: 32, height: 24);
+  for (var y = 0; y < 24; y++) {
+    final v = y < 8 ? 255 : (y < 16 ? 128 : 0);
+    for (var x = 0; x < 32; x++) {
+      image.setPixelRgba(x, y, v, v, v, 255);
+    }
+  }
+  return Uint8List.fromList(img.encodeJpg(image));
+}
+
+/// 平涂色帧 32×24(矢量盘口径:纯红 → R 射线,中灰 → 盘心)。
+Uint8List _flatJpeg(int r, int g, int b) {
+  final image = img.Image(width: 32, height: 24);
+  for (var y = 0; y < 24; y++) {
+    for (var x = 0; x < 32; x++) {
+      image.setPixelRgba(x, y, r, g, b, 255);
     }
   }
   return Uint8List.fromList(img.encodeJpg(image));
@@ -295,6 +333,135 @@ void main() {
 
         expect(peakBin(7) - peakBin(0), greaterThan(16),
             reason: '0..248 渐变两端主桶差应远超 16 桶');
+      });
+    });
+
+    group('示波器族采样(2026-10-15:Parade/矢量/红绿灯同环积累)', () {
+      test('Parade:左红右蓝帧 —— R 联密度在亮桶偏左,B 联偏右,G 联不见亮桶;三联与波形同采样集',
+          () {
+        final a = analyzeJpegFrame(_splitColorJpeg(), waveformCols: 8);
+        expect(a, isNotNull);
+        final bins = a!.waveformBins;
+        final plane = a.waveformCols * bins;
+        // 列通道计数(ch 0=R/1=G/2=B;b0..b1 桶区间闭开合计)。
+        int chColRange(int ch, int col, int b0, int b1) {
+          var t = 0;
+          for (var b = b0; b < b1; b++) {
+            t += a.parade[ch * plane + col * bins + b];
+          }
+          return t;
+        }
+
+        // 顶桶带(bins-4..bins):只有亮通道命中 —— 红半幅的 R、蓝半幅的 B。
+        // 列 1-2 / 5-6 离红蓝接缝(列 4 边界)远,避开 4:2:0 插值渗色。
+        final rTopLeft = chColRange(0, 1, bins - 4, bins) +
+            chColRange(0, 2, bins - 4, bins);
+        final rTopRight = chColRange(0, 5, bins - 4, bins) +
+            chColRange(0, 6, bins - 4, bins);
+        final bTopRight = chColRange(2, 5, bins - 4, bins) +
+            chColRange(2, 6, bins - 4, bins);
+        final bTopLeft = chColRange(2, 1, bins - 4, bins) +
+            chColRange(2, 2, bins - 4, bins);
+        final gTop = chColRange(1, 1, bins - 4, bins) +
+            chColRange(1, 2, bins - 4, bins) +
+            chColRange(1, 5, bins - 4, bins) +
+            chColRange(1, 6, bins - 4, bins);
+        expect(rTopLeft, greaterThan(0), reason: '红半幅 R 通道命中亮桶');
+        expect(rTopRight, 0, reason: '蓝半幅无红,顶桶带必空');
+        expect(bTopRight, greaterThan(0), reason: '蓝半幅 B 通道命中亮桶');
+        expect(bTopLeft, 0, reason: '红半幅无蓝,顶桶带必空');
+        expect(gTop, 0, reason: '两色都无绿,G 联顶桶带必空(暗桶不判)');
+
+        // 同采样集不变量:每列三联计数彼此相等,且等于该列波形计数
+        // (同一批采样各记一笔)。
+        int waveCol(int col) {
+          var t = 0;
+          for (var b = 0; b < bins; b++) {
+            t += a.waveform[col * bins + b];
+          }
+          return t;
+        }
+
+        for (final col in const [0, 3, 7]) {
+          final r = chColRange(0, col, 0, bins);
+          final g = chColRange(1, col, 0, bins);
+          final b = chColRange(2, col, 0, bins);
+          expect(r, g);
+          expect(g, b);
+          expect(r, waveCol(col),
+              reason: '列 $col:Parade 三联与波形共用同一批采样');
+        }
+      });
+
+      test('矢量:纯红帧全落 Cr 正半盘(色相方向),灰帧聚盘心;总量与波形同采样集',
+          () {
+        const n = scopeVectorGridN;
+        final red = analyzeJpegFrame(_flatJpeg(255, 0, 0), vectorN: n)!;
+        // 纯红:nx = (Cr−128)/127.5 = 1(Cr 正端 = 盘右半)、ny ≈ −0.34
+        //(Cb 负 = 下半)。JPEG 色度噪声 ±3 只在盘缘内侧挪格,不过中线。
+        var redCells = 0;
+        for (var i = 0; i < red.vector.length; i++) {
+          if (red.vector[i] == 0) continue;
+          redCells++;
+          expect(i % n, greaterThan(n ~/ 2),
+              reason: '纯红所有采样都在 Cr 正半盘(右半)');
+        }
+        expect(redCells, greaterThan(0));
+        // 密度主格在下半盘(Cb < 128 一侧,行号 > 中心行)
+        var bestI = 0, bestV = 0;
+        for (var i = 0; i < red.vector.length; i++) {
+          if (red.vector[i] > bestV) {
+            bestV = red.vector[i];
+            bestI = i;
+          }
+        }
+        expect(bestI ~/ n, greaterThan(n ~/ 2), reason: '红的主密度在下半盘');
+
+        final gray = analyzeJpegFrame(_flatJpeg(128, 128, 128), vectorN: n)!;
+        for (var i = 0; i < gray.vector.length; i++) {
+          if (gray.vector[i] == 0) continue;
+          final col = i % n, row = i ~/ n;
+          expect((col - n ~/ 2).abs(), lessThan(3),
+              reason: '灰帧色度无偏离,采样聚盘心(±2 格容 JPEG 噪声)');
+          expect((row - n ~/ 2).abs(), lessThan(3));
+        }
+
+        // 总量不变量:矢量盘收下每个采样(与波形/直方图同批)。
+        int sum(List<int> xs) {
+          var t = 0;
+          for (final v in xs) {
+            t += v;
+          }
+          return t;
+        }
+
+        expect(sum(red.vector), sum(red.waveform));
+        expect(sum(red.vector), red.lumaHistogram.reduce((x, y) => x + y));
+      });
+
+      test('红绿灯:三横带帧上过/中合/下欠;全白全过、全黑全欠、灰帧全合',
+          () {
+        final bands = analyzeJpegFrame(_threeBandJpeg())!.trafficLights;
+        expect(bands.length, 3);
+        expect(bands[0].state, ScopeTrafficState.over, reason: '上带纯白 ≥ 250');
+        expect(bands[1].state, ScopeTrafficState.ok, reason: '中带中灰合式');
+        expect(bands[2].state, ScopeTrafficState.under, reason: '下带纯黑 < 16');
+        expect(bands[0].overFraction, greaterThan(0.5));
+        expect(bands[1].okFraction, greaterThan(0.5));
+        expect(bands[2].underFraction, greaterThan(0.5));
+
+        final white = analyzeJpegFrame(_flatJpeg(255, 255, 255))!;
+        for (final b in white.trafficLights) {
+          expect(b.state, ScopeTrafficState.over);
+        }
+        final black = analyzeJpegFrame(_flatJpeg(0, 0, 0))!;
+        for (final b in black.trafficLights) {
+          expect(b.state, ScopeTrafficState.under);
+        }
+        final gray = analyzeJpegFrame(_flatJpeg(128, 128, 128))!;
+        for (final b in gray.trafficLights) {
+          expect(b.state, ScopeTrafficState.ok);
+        }
       });
     });
   });

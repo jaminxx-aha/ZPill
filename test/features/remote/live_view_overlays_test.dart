@@ -7,6 +7,7 @@ import 'package:nikon_pill/core/remote/frame_analysis.dart';
 import 'package:nikon_pill/core/remote/live_view_header.dart';
 import 'package:nikon_pill/features/remote/live_design.dart';
 import 'package:nikon_pill/features/remote/live_view_overlays.dart';
+import 'package:nikon_pill/features/remote/monitor_toggles.dart';
 
 LiveViewHeader _header({
   bool recording = false,
@@ -298,10 +299,29 @@ void main() {
     });
   });
 
-  group('监看差集叠层(2026-10-14:波形/构图框)', () {
+  group('监看差集叠层(2026-10-14:波形/构图框;10-15 示波器族)', () {
     FrameAnalysis buildAnalysis() {
       final waveform = Uint32List(8 * 64);
       waveform[4 * 64 + 40] = 7; // 中列中上桶有点密度
+      // Parade:R/G/B 三联各带一点密度(通道间独立)。
+      final parade = Uint32List(3 * 8 * 64);
+      parade[0 * 8 * 64 + 2 * 64 + 10] = 5; // R 联第 2 列偏暗
+      parade[1 * 8 * 64 + 5 * 64 + 40] = 6; // G 联第 5 列中亮
+      parade[2 * 8 * 64 + 6 * 64 + 60] = 4; // B 联第 6 列高亮
+      // 矢量:盘心附近一格密度(灰;非零让密度路走通)。
+      final vector = Uint32List(48 * 48);
+      vector[24 * 48 + 24] = 9;
+      // 红绿灯:三带各有欠/合/过计数(中部带全合式)。
+      final traffic = Uint32List(9);
+      traffic[0] = 30;
+      traffic[1] = 70;
+      traffic[2] = 0; // 上带欠偏多 → under
+      traffic[3] = 0;
+      traffic[4] = 100;
+      traffic[5] = 0; // 中带全合式 → ok
+      traffic[6] = 0;
+      traffic[7] = 60;
+      traffic[8] = 40; // 下带过 40% → over
       return FrameAnalysis(
         width: 32,
         height: 24,
@@ -316,6 +336,10 @@ void main() {
         peakingRows: 12,
         waveform: waveform,
         waveformCols: 8,
+        parade: parade,
+        vector: vector,
+        vectorN: 48,
+        trafficBandCounts: traffic,
       );
     }
 
@@ -326,6 +350,58 @@ void main() {
       await tester.pumpWidget(MaterialApp(
           home: Scaffold(body: WaveformView(analysis: buildAnalysis()))));
       expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('波形 N-Log 刻度:刻度档上屏不炸(IRE 线 + 18% 灰虚线)',
+        (tester) async {
+      await tester.pumpWidget(MaterialApp(
+          home: Scaffold(
+              body: WaveformView(analysis: buildAnalysis(), nLogScale: true))));
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('RGB Parade:三联上屏不炸;N-Log 刻度同吃', (tester) async {
+      await tester.pumpWidget(MaterialApp(
+          home: Scaffold(body: ParadeView(analysis: buildAnalysis()))));
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(MaterialApp(
+          home: Scaffold(
+              body: ParadeView(
+                  analysis: buildAnalysis(), nLogScale: true))));
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('矢量:刻度盘(外圈+六目标框+中心十字)上屏不炸',
+        (tester) async {
+      await tester.pumpWidget(MaterialApp(
+          home: Scaffold(body: VectorView(analysis: buildAnalysis()))));
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('红绿灯:三带行(标签+三段条+状态灯)上屏不炸;带名可注入',
+        (tester) async {
+      await tester.pumpWidget(MaterialApp(
+          home: Scaffold(body: TrafficLightsView(analysis: buildAnalysis()))));
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(MaterialApp(
+          home: Scaffold(
+              body: TrafficLightsView(
+                  analysis: buildAnalysis(),
+                  bandLabels: const ['Top', 'Mid', 'Bot']))));
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('ScopeView 分派:四档各走各的视图,off = 空件', (tester) async {
+      for (final kind in ScopeKind.values) {
+        await tester.pumpWidget(MaterialApp(
+            home: Scaffold(
+                body: ScopeView(kind: kind, analysis: buildAnalysis()))));
+        expect(tester.takeException(), isNull, reason: '$kind 上屏不炸');
+      }
+      await tester.pumpWidget(const MaterialApp(
+          home: Scaffold(body: ScopeView(kind: ScopeKind.off, analysis: null))));
+      expect(find.byType(SizedBox), findsWidgets,
+          reason: 'off = SizedBox.shrink 空件');
     });
 
     testWidgets('构图框:遮幅+安全框+中心标上屏不炸;无遮幅仅画安全框',
