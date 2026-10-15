@@ -72,7 +72,7 @@ abstract interface class UsbHostChannel implements UsbBytePipe {
 }
 
 /// 经 `nikonpill/usb` channel:方法 `listCameras`/`open`/`bulkOut`/
-/// `bulkRead`/`close`;事件流走 EventChannel `nikonpill/usb/events`。
+/// `bulkRead`/`drainIn`/`close`;事件流走 EventChannel `nikonpill/usb/events`。
 ///
 /// native 落地状态:
 /// - ohos:✅ 真机闭环 —— @ohos.usbManager,ohos/entry/…/usbhost/UsbHostPlugin.ets。
@@ -139,6 +139,14 @@ final class MethodChannelUsbHost implements UsbHostChannel {
 
   @override
   Future<void> close() => channel.invokeMethod('close');
+
+  /// 中止后排空 bulk IN:Android native 有界吸干(残余字节 + 超读暂存,
+  /// 见 UsbBytePipe.drainIn 契约)。iOS/ohos native 未实现该方法 →
+  /// MissingPluginException,由调用方(UsbPtpTransport)best-effort 静默。
+  @override
+  Future<void> drainIn() async {
+    await channel.invokeMethod<Object?>('drainIn');
+  }
 
   /// 原生通道无断链检测(ohos 无热插拔事件 API);生产装配在
   /// AppServices 里用 WatchdogUsbHostChannel 包装后才有真实事件。

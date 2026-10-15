@@ -242,6 +242,135 @@ void main() {
       );
     });
   });
+
+  group('中止后排空(drainIn,nico 三件套之三)', () {
+    /// 数据容器头(声明 [bodyLen] 字节体)+ 只到 [partialLen] 字节体:
+    /// 相机半途断流,数据相位收不齐 → 超时中止。
+    void enqueueStarvedData(
+      FakeUsbBytePipe pipe, {
+      required int bodyLen,
+      required int partialLen,
+    }) {
+      final data = encodeUsbData(
+        opcode: PtpOperationCode.getObject,
+        transactionId: 0,
+        payload: Uint8List(bodyLen),
+      );
+      pipe.enqueue(Uint8List.fromList(data.sublist(0, 12))); // 头
+      pipe.enqueue(Uint8List(partialLen)); // 体(内容无关)
+    }
+
+    test('数据相位超时中止:先排空再抛 TimeoutException', () async {
+      final pipe = FakeUsbBytePipe();
+      final t = UsbPtpTransport(pipe: pipe);
+      enqueueStarvedData(pipe, bodyLen: 100, partialLen: 40);
+      await expectLater(
+        t.execute(
+            const PtpRequest(opcode: PtpOperationCode.getObject, params: [1])),
+        throwsA(isA<TimeoutException>()),
+      );
+      expect(pipe.drainCalls, 1);
+    });
+
+    test('txid 错位中止(FormatException):同样排空', () async {
+      final pipe = FakeUsbBytePipe();
+      final t = UsbPtpTransport(pipe: pipe);
+      pipe.enqueue(encodeUsbResponse(
+          responseCode: PtpResponseCode.ok, transactionId: 7));
+      await expectLater(
+        t.execute(const PtpRequest(opcode: PtpOperationCode.getDeviceInfo)),
+        throwsFormatException,
+      );
+      expect(pipe.drainCalls, 1);
+    });
+
+    test('成功事务不排空', () async {
+      final pipe = FakeUsbBytePipe();
+      final t = UsbPtpTransport(pipe: pipe);
+      pipe.enqueue(encodeUsbData(
+        opcode: PtpOperationCode.getStorageIds,
+        transactionId: 0,
+        payload: Uint8List(4),
+      ));
+      pipe.enqueue(
+          encodeUsbResponse(responseCode: PtpResponseCode.ok, transactionId: 0));
+      await t.execute(
+          const PtpRequest(opcode: PtpOperationCode.getStorageIds));
+      expect(pipe.drainCalls, 0);
+    });
+
+    test('流式 onData 中止:已到块不回吐,管道排空', () async {
+      final pipe = FakeUsbBytePipe();
+      final t = UsbPtpTransport(pipe: pipe);
+      final data = encodeUsbData(
+        opcode: PtpOperationCode.getObject,
+        transactionId: 0,
+        payload: Uint8List.fromList(List.generate(100000, (i) => i & 0xFF)),
+      );
+      pipe.enqueue(Uint8List.fromList(data.sublist(0, 12))); // 头
+      pipe.enqueue(Uint8List.fromList(data.sublist(12, 12 + 30000))); // 30KB
+      final chunks = <Uint8List>[];
+      await expectLater(
+        t.execute(
+          const PtpRequest(opcode: PtpOperationCode.getObject, params: [42]),
+          onData: chunks.add,
+        ),
+        throwsA(isA<TimeoutException>()),
+      );
+      expect(chunks.map((c) => c.length), [30000]); // 已到块已交付
+      expect(pipe.drainCalls, 1);
+    });
+
+    test('排空自身失败不掩盖原始异常', () async {
+      final pipe = FakeUsbBytePipe();
+      pipe.drainImpl = () async => throw Exception('链路已死');
+      final t = UsbPtpTransport(pipe: pipe);
+      enqueueStarvedData(pipe, bodyLen: 100, partialLen: 40);
+      await expectLater(
+        t.execute(
+            const PtpRequest(opcode: PtpOperationCode.getObject, params: [1])),
+        throwsA(isA<TimeoutException>()), // 原始异常,不是排空的 Exception
+      );
+      expect(pipe.drainCalls, 1);
+    });
+
+    test('中止排空吸掉迟到尾包:下一事务拿到自己的字节', () async {
+      final pipe = FakeUsbBytePipe();
+      final t = UsbPtpTransport(pipe: pipe);
+      // 排空期间相机还在吐被中止事务的尾包(native 吸干的对象;
+      // 无排空接线时这 12B 会被下一事务当容器头吃掉 → 错位)
+      pipe.drainImpl = () async {
+        pipe.enqueue(Uint8List.fromList(List.filled(12, 9)));
+      };
+      enqueueStarvedData(pipe, bodyLen: 100, partialLen: 40);
+      await expectLater(
+        t.execute(
+            const PtpRequest(opcode: PtpOperationCode.getObject, params: [1])),
+        throwsA(isA<TimeoutException>()),
+      );
+      expect(pipe.drainCalls, 1);
+      // tx1(txid=1)的响应容器不被污染
+      pipe.enqueue(encodeUsbResponse(
+          responseCode: PtpResponseCode.ok, transactionId: 1));
+      final result = await t.execute(
+          const PtpRequest(opcode: PtpOperationCode.getDeviceInfo));
+      expect(result.responseCode, PtpResponseCode.ok);
+    });
+
+    test('drainIn 语义:丢弃超读余量与待读队列(fake 对齐 native)', () async {
+      final pipe = FakeUsbBytePipe();
+      // 制造超读余量:读 4B,余 28B 留在 fake 的 leftover
+      pipe.enqueue(Uint8List(32));
+      await pipe.bulkRead(4, timeoutMs: 100);
+      pipe.enqueue(Uint8List(16)); // 队列再压一段待读残余
+      await pipe.drainIn();
+      await expectLater(
+        pipe.bulkRead(16, timeoutMs: 100),
+        throwsA(isA<TimeoutException>()), // 全空:残余确被丢弃
+      );
+      expect(pipe.drainCalls, 1);
+    });
+  });
 }
 
 Uint8List concat(Iterable<Uint8List> chunks) {

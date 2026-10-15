@@ -7,6 +7,8 @@
 /// - 数据入/响应相位 → bulk IN,**容器帧在本层组**:读 12 字节头、
 ///   按 u32 长度补齐;大数据容器(GetObject 的 25MB NEF 是单个容器!)
 ///   按 [kUsbStreamChunkBytes] 分块经 `onData` 流出,不整体驻留内存;
+///   相位内异常中止 = 排空([UsbBytePipe.drainIn])后再抛,残余字节
+///   不错位下一事务(nico 三件套之一;ZLP/清 halt 重试在 native);
 /// - 事件 → interrupt IN(native 已组好完整事件容器)→ [decodeUsbEvent]。
 ///
 /// 事务相位顺序(USB STI):命令 → [数据出] → [数据入] → 响应;
@@ -36,6 +38,12 @@ abstract interface class UsbBytePipe {
   /// 不为凑满而无限等待)。窗口内一个字节都没到则抛
   /// [TimeoutException]。STALL 的 CLEAR_HALT 重试在 native 内部消化。
   Future<Uint8List> bulkRead(int maxLen, {required int timeoutMs});
+
+  /// 中止后排空 bulk IN:事务异常收场后吸干残余字节(相机还在吐的
+  /// 数据相位尾巴 + native 超读暂存),下一事务不从错位字节开始。
+  /// native 有界(静默窗 + 轮数上限);无冲刷能力的实现(iOS/ohos
+  /// 未实现该通道方法)为 no-op 或抛错,调用方须 best-effort 静默。
+  Future<void> drainIn();
 
   /// interrupt IN 事件流:每条为一个完整事件容器(native 组帧,≤64B)。
   Stream<Uint8List> get interruptEvents;
@@ -126,22 +134,42 @@ final class UsbPtpTransport implements PtpTransport {
       ));
     }
     // 相位 3:数据入(可选)+ 响应。错误序:相机直接回响应、无数据入。
-    final first = await _readContainer(txid, onData: onData);
-    if (first.type == UsbContainerType.data) {
-      final resp = await _readContainer(txid);
-      if (resp.type != UsbContainerType.response) {
-        throw FormatException('数据容器之后应为响应容器,收到 type=${resp.type}');
+    // 本相位任何异常 = 事务中止:残余字节(相机还在吐的数据相位尾巴、
+    // native 超读暂存)会错位下一事务 —— best-effort 排空后再抛
+    // (nico PtpSession 中止收尾同款;排空自身失败不掩盖原始异常)。
+    try {
+      final first = await _readContainer(txid, onData: onData);
+      if (first.type == UsbContainerType.data) {
+        final resp = await _readContainer(txid);
+        if (resp.type != UsbContainerType.response) {
+          throw FormatException('数据容器之后应为响应容器,收到 type=${resp.type}');
+        }
+        return PtpResult(
+          responseCode: resp.code,
+          params: resp.params,
+          data: onData != null ? null : first.payload,
+        );
       }
-      return PtpResult(
-        responseCode: resp.code,
-        params: resp.params,
-        data: onData != null ? null : first.payload,
-      );
+      if (first.type != UsbContainerType.response) {
+        throw FormatException('期待响应容器,收到 type=${first.type}');
+      }
+      return PtpResult(responseCode: first.code, params: first.params);
+    } on Exception {
+      await _drainAfterAbort();
+      rethrow;
     }
-    if (first.type != UsbContainerType.response) {
-      throw FormatException('期待响应容器,收到 type=${first.type}');
+  }
+
+  /// 事务中止后的 best-effort 排空:吸干 bulk IN 残余,下一事务不从
+  /// 错位字节开始。排空自身失败(平台未实现 → MissingPluginException、
+  /// 链路已死)一律静默 —— 原始异常才是真相;残余未吸尽的极端由
+  /// 上层断链重连兜底。
+  Future<void> _drainAfterAbort() async {
+    try {
+      await pipe.drainIn();
+    } on Exception {
+      // best-effort:见上
     }
-    return PtpResult(responseCode: first.code, params: first.params);
   }
 
   @override

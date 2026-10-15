@@ -39,6 +39,11 @@ const int kUsbWatchdogGraceMs = 6000;
 /// bulk OUT 总兜底(native 内部 5s/块 + STALL 重试一次,整段给足)。
 const int kUsbBulkOutWatchdogMs = 20000;
 
+/// drainIn 兜底:native 自带有界(32 轮 × 300ms 静默窗 ≈ 最坏 9.6s),
+/// 这里只兜「静默窗也挂死」的极端;超时静默返回 —— 排空失败不判链路
+/// 死(死活由收发/探测路径判定),也不毒化(下一个事务还在它上面跑)。
+const int kUsbDrainWatchdogMs = 15000;
+
 /// 拔出轮询缺省间隔。
 const Duration kUsbDetachPollInterval = Duration(seconds: 2);
 
@@ -54,6 +59,7 @@ final class WatchdogUsbHostChannel implements UsbHostChannel {
     required this.inner,
     this.readGraceMs = kUsbWatchdogGraceMs,
     this.bulkOutWatchdogMs = kUsbBulkOutWatchdogMs,
+    this.drainWatchdogMs = kUsbDrainWatchdogMs,
     this.detachPollInterval = kUsbDetachPollInterval,
     this.probeInterval = kUsbLinkProbeInterval,
     this.probe,
@@ -66,6 +72,9 @@ final class WatchdogUsbHostChannel implements UsbHostChannel {
 
   /// bulkOut 兜底(毫秒);测试可调小。
   final int bulkOutWatchdogMs;
+
+  /// drainIn 兜底(毫秒);测试可调小。
+  final int drainWatchdogMs;
 
   /// 拔出轮询间隔;null 关闭(单测用)。
   final Duration? detachPollInterval;
@@ -152,6 +161,18 @@ final class WatchdogUsbHostChannel implements UsbHostChannel {
 
   @override
   Stream<Uint8List> get interruptEvents => inner.interruptEvents;
+
+  /// 中止后排空:转发内层并兜挂死(native 有界自不必说,防的是静默窗
+  /// 本身挂死 —— 同 ohos bulkTransfer 不中止已排队读的旧坑)。超时静默
+  /// 返回、不广播断链:排空是 best-effort 恢复动作,不是链路活性证据。
+  @override
+  Future<void> drainIn() async {
+    _ensureAlive();
+    await inner.drainIn().timeout(
+          Duration(milliseconds: drainWatchdogMs),
+          onTimeout: () {},
+        );
+  }
 
   /// 断链后收发入口秒抛(带原委,等重连);TimeoutException 保证会话层
   /// 的 `on Exception` 清理路径能接住。

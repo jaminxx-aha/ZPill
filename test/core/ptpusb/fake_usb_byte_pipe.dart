@@ -15,6 +15,14 @@ final class FakeUsbBytePipe implements UsbBytePipe {
   Uint8List _leftover = Uint8List(0);
   final StreamController<Uint8List> _eventCtrl = StreamController.broadcast();
 
+  /// drainIn 调用计数(中止后排空断言用)。
+  int drainCalls = 0;
+
+  /// drainIn 行为注入:null=正常(清超读余量+待读队列);非 null 时
+  /// 注入行为先于清理执行 —— 行为里入队的字节视作「排空期间相机还在
+  /// 吐、被本轮吸干」(native:清 leftover → 静默窗循环吸到静默为止)。
+  Future<void> Function()? drainImpl;
+
   /// 入队一段「设备发来的」字节。
   void enqueue(Uint8List bytes) => _inChunks.add(bytes);
 
@@ -52,4 +60,15 @@ final class FakeUsbBytePipe implements UsbBytePipe {
 
   @override
   Stream<Uint8List> get interruptEvents => _eventCtrl.stream;
+
+  /// 对齐 native 契约:排空 = 丢弃管道里的一切残余(超读余量 + 待读
+  /// 队列);被中止事务压在队列里的字节,下一事务不再读到。
+  @override
+  Future<void> drainIn() async {
+    drainCalls++;
+    final impl = drainImpl;
+    if (impl != null) await impl();
+    _leftover = Uint8List(0);
+    _inChunks.clear();
+  }
 }

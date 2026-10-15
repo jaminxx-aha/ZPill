@@ -57,6 +57,9 @@ final class FakeUsbHostChannel implements UsbHostChannel {
       Uint8List(0);
 
   @override
+  Future<void> drainIn() async {}
+
+  @override
   Stream<Uint8List> get interruptEvents => _eventCtrl.stream;
 }
 

@@ -24,6 +24,11 @@ final class _FakeInner implements UsbHostChannel {
   Future<Uint8List> Function(int maxLen)? bulkReadImpl;
   Future<void> Function(Uint8List bytes)? bulkOutImpl;
 
+  /// drainIn 调用计数;drainImpl=null 正常返回,否则执行注入行为
+  /// (挂起用 never-complete)。
+  int drainCalls = 0;
+  Future<void> Function()? drainImpl;
+
   @override
   Future<List<UsbDeviceHandle>> listCameras() async => cameras;
 
@@ -42,6 +47,12 @@ final class _FakeInner implements UsbHostChannel {
       bulkReadImpl?.call(maxLen) ?? Future.value(Uint8List(4));
 
   @override
+  Future<void> drainIn() {
+    drainCalls++;
+    return drainImpl?.call() ?? Future.value();
+  }
+
+  @override
   Stream<Uint8List> get interruptEvents => const Stream.empty();
 
   @override
@@ -52,6 +63,7 @@ WatchdogUsbHostChannel _watchdog(_FakeInner inner) => WatchdogUsbHostChannel(
       inner: inner,
       readGraceMs: 30,
       bulkOutWatchdogMs: 30,
+      drainWatchdogMs: 30,
       detachPollInterval: null,
     );
 
@@ -306,5 +318,39 @@ void main() {
 
     inner.bulkOutImpl = null;
     await wd.bulkOut(Uint8List(4)); // 新链路收发正常,不秒抛
+  });
+
+  // ── drainIn(中止后排空,nico 三件套之三)──────────────────────
+
+  test('drainIn 转发内层', () async {
+    final inner = _FakeInner();
+    final wd = _watchdog(inner);
+    await wd.drainIn();
+    expect(inner.drainCalls, 1);
+  });
+
+  test('drainIn 挂死:兜底超时静默返回,不广播断链、不毒化', () async {
+    final inner = _FakeInner();
+    inner.drainImpl = () => Completer<void>().future;
+    final wd = _watchdog(inner);
+    final reasons = <String>[];
+    wd.breakages.listen(reasons.add);
+
+    await wd.drainIn(); // 30ms 兜底到点,静默完成(不抛)
+    await pumpEventQueue();
+    expect(reasons, isEmpty); // 排空失败不是链路活性证据,不判死
+    // 未毒化:后续收发照常透传
+    expect(await wd.bulkRead(512, timeoutMs: 15), hasLength(4));
+    await wd.bulkOut(Uint8List(4));
+  });
+
+  test('断链后 drainIn 秒抛(链路已死无从排空)', () async {
+    final inner = _FakeInner();
+    inner.bulkReadImpl = (_) => Completer<Uint8List>().future;
+    final wd = _watchdog(inner);
+    await expectLater(
+        wd.bulkRead(512, timeoutMs: 15), throwsA(isA<TimeoutException>()));
+    await expectLater(wd.drainIn(), throwsA(isA<TimeoutException>()));
+    // 调用方(UsbPtpTransport._drainAfterAbort)按 best-effort 静默
   });
 }
