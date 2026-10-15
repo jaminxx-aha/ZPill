@@ -137,6 +137,9 @@ void main() {
     host = FakeBleHost();
     now = DateTime.utc(2026, 10, 13, 8, 0, 0);
     session = BleCameraSession(host: host, now: () => now);
+    // 拆链弃写:Ready 沿自驱首写是真实 2.5s 延迟,tearDown 断链让守卫
+    // 弃写,防迟发写漏进下一测试的时序。
+    addTearDown(() => session.disconnect());
   });
 
   GeoFix fixAt(double lat,
@@ -150,11 +153,13 @@ void main() {
       );
 
   /// 驱动完整握手:连接 → stage1 → stage2 → stage4 → NOT1。
-  Future<void> runHandshake({bool resume = false}) async {
+  Future<void> runHandshake(
+      {bool resume = false, BleCameraSession? target}) async {
+    final s = target ?? session;
     Object? ok;
     final done = resume
-        ? session.retryReconnect().then((v) => ok = v)
-        : session.pair(device);
+        ? s.retryReconnect().then((v) => ok = v)
+        : s.pair(device);
     host.emit(const BleConnected(
         uuid: 'P1', characteristics: {}, writeWithoutResponseMtu: 20));
     await pump();
@@ -270,56 +275,73 @@ void main() {
     expect(session.state, BleSessionState.idle);
   });
 
-  test('GEO 节流:首点发;3m 内 20s 内不发;位移 ≥3m 发;陈旧 ≥20s 发', () async {
+  test('GEO 去重门:首点过闸发;<3s 且 <1.1m 跳;位移 ≥1.1m 发;≥3s 发', () async {
     await runHandshake();
     int geoCount() => host.countWrite(kNikonCharGeo);
-    expect(geoCount(), 0);
-
+    // 首写门内(Ready+2.5s)onFix 缓存不写,过闸 tick 回补。
     session.onFix(fixAt(35.5));
     await pump();
-    expect(geoCount(), 1); // 首点
+    expect(geoCount(), 0);
+    now = now.add(const Duration(seconds: 3));
+    await session.tick();
+    expect(geoCount(), 1); // 回补首点
+    expect(host.countWrite(kNikonCharTime), 1); // 同拍首笔 TIME(校时)
 
-    session.onFix(fixAt(35.50001)); // ~1.1m
+    session.onFix(fixAt(35.500009)); // ~1.0m <1.1m 且 <3s → 跳
     await pump();
     expect(geoCount(), 1);
 
-    session.onFix(fixAt(35.50003)); // ~3.3m
+    session.onFix(fixAt(35.50001)); // ~1.11m ≥1.1m → 发(仍 <3s)
     await pump();
     expect(geoCount(), 2);
 
-    now = now.add(const Duration(seconds: 21));
-    session.onFix(fixAt(35.50003)); // 未动但 ≥20s
+    now = now.add(const Duration(seconds: 3));
+    session.onFix(fixAt(35.50001)); // 未动但距上次成功 ≥3s → 发
     await pump();
     expect(geoCount(), 3);
   });
 
-  test('GEO 写失败入缓存:写闸前 tick 不重发,过闸 tick 重发', () async {
+  test('GEO 写失败入缓存:过闸 tick 重发,失败重进闸,成功后恢复', () async {
     await runHandshake();
     host.writeError = Exception('GATT 错误(唤醒窗)');
-    session.onFix(fixAt(35.5));
+    session.onFix(fixAt(35.5)); // 首写门内:缓存不写
     await pump();
-    expect(host.countWrite(kNikonCharGeo), 1); // 失败也记账
-    host.writeError = null;
-
-    await session.tick(); // t+0 仍在 2.5s 写闸内
-    expect(host.countWrite(kNikonCharGeo), 1);
-
+    expect(host.countWrite(kNikonCharGeo), 0);
     now = now.add(const Duration(seconds: 3));
-    await session.tick();
-    expect(host.countWrite(kNikonCharGeo), 2); // 缓存重发
+    await session.tick(); // 过闸回补 → 写失败(失败也记账 1)→ 重进闸
+    expect(host.countWrite(kNikonCharGeo), 1);
+    expect(session.state, BleSessionState.ready); // 不炸会话
+    expect(host.countWrite(kNikonCharTime), 0); // 重进闸:TIME 让位
+
+    host.writeError = null;
+    now = now.add(const Duration(seconds: 3));
+    await session.tick(); // 过重闸:回补成功 + 首笔 TIME
+    expect(host.countWrite(kNikonCharGeo), 2);
+    expect(host.countWrite(kNikonCharTime), 1);
   });
 
-  test('keep-alive:30s 无发送,tick 重发最后定位', () async {
+  test('保鲜与保活:30s 无成功注入重发 GEO;TIME 45s 档到点写', () async {
     await runHandshake();
     session.onFix(fixAt(35.5));
-    await pump();
+    now = now.add(const Duration(seconds: 3));
+    await session.tick(); // 首笔回补 GEO + TIME
     expect(host.countWrite(kNikonCharGeo), 1);
+    expect(host.countWrite(kNikonCharTime), 1);
 
-    now = now.add(const Duration(seconds: 31));
+    now = now.add(const Duration(seconds: 20));
+    await session.tick(); // 20s:GEO 未到 30s、TIME 未到 45s → 静默
+    expect(host.countWrite(kNikonCharGeo), 1);
+    expect(host.countWrite(kNikonCharTime), 1);
+
+    now = now.add(const Duration(seconds: 12)); // 累计 32s
     await session.tick();
-    expect(host.countWrite(kNikonCharGeo), 2);
-    // TIME:收口沿 1 帧(配对校时)+ 本 tick 心跳 1 帧 = 2。
-    expect(host.countWrite(kNikonCharTime), 2); // 同 tick 的 TIME 心跳
+    expect(host.countWrite(kNikonCharGeo), 2); // GEO 保鲜重发
+    expect(host.countWrite(kNikonCharTime), 1); // 32s < 45s 仍未到点
+
+    now = now.add(const Duration(seconds: 14)); // 距上次 TIME 46s
+    await session.tick();
+    expect(host.countWrite(kNikonCharTime), 2); // 45s 档到点
+    expect(host.countWrite(kNikonCharGeo), 2); // 距保鲜成功 14s → 不重发
   });
 
   test('ready 断连 → reconnecting;重连复用身份(deviceId/nonce 不变)', () async {
@@ -351,7 +373,7 @@ void main() {
     }
   });
 
-  test('重连后写闸:2.5s 内 tick 不写,过闸恢复 TIME 心跳', () async {
+  test('重连后写闸:2.5s 内不写,过闸恢复 GEO/TIME;首写门重连同套', () async {
     await runHandshake();
     host.emit(const BleDisconnected('P1'));
     await pump();
@@ -361,7 +383,7 @@ void main() {
     final geoBefore = host.countWrite(kNikonCharGeo);
     final timeBefore = host.countWrite(kNikonCharTime);
 
-    session.onFix(fixAt(35.5)); // 闸内:onFix 不写 GEO
+    session.onFix(fixAt(35.5)); // 闸内:onFix 缓存不写 GEO
     await pump();
     expect(host.countWrite(kNikonCharGeo), geoBefore);
 
@@ -369,11 +391,100 @@ void main() {
     expect(host.countWrite(kNikonCharTime), timeBefore);
 
     now = now.add(const Duration(seconds: 3));
-    session.onFix(fixAt(35.5));
+    session.onFix(fixAt(35.5)); // 过闸直发(无上次成功 → 过去重门)
     await pump();
     expect(host.countWrite(kNikonCharGeo), geoBefore + 1);
-    await session.tick();
+    await session.tick(); // 过闸:缓存已被直发取代,TIME 补上
     expect(host.countWrite(kNikonCharTime), timeBefore + 1);
+  });
+
+  test('Ready 延迟首写:2.5s 内零 GEO/TIME,恰过闸首拍双落', () async {
+    await runHandshake();
+    await pump();
+    // 收口校时不再 Ready 沿即刻发(相机 GPS 会话未醒减灾)。
+    expect(host.countWrite(kNikonCharTime), 0);
+    expect(host.countWrite(kNikonCharGeo), 0);
+
+    session.onFix(fixAt(35.5));
+    await pump();
+    expect(host.countWrite(kNikonCharGeo), 0); // 闸内缓存
+
+    await session.tick();
+    expect(host.countWrite(kNikonCharTime), 0);
+
+    now = now.add(const Duration(milliseconds: 2500)); // 恰过闸
+    await session.tick();
+    expect(host.countWrite(kNikonCharGeo), 1); // 缓存回补
+    expect(host.countWrite(kNikonCharTime), 1); // 首笔 TIME(校时)
+  });
+
+  test('首写自驱:writeGate=0 时 Ready 沿自发校时,不依赖驱动 tick(配对页挂起场景)',
+      () async {
+    final s = BleCameraSession(
+        host: host, now: () => now, writeGate: Duration.zero);
+    await runHandshake(target: s);
+    await pump(); // 一次性延迟(0)沉淀
+    expect(host.countWrite(kNikonCharTime), 1); // 自驱收口校时
+    expect(s.state, BleSessionState.ready);
+    expect(s.lastError, isNull);
+  });
+
+  test('TIME 保活档位:前台 45s 到点;切后台 90s;回前台按 45s', () async {
+    await runHandshake();
+    now = now.add(const Duration(seconds: 3));
+    await session.tick(); // 首笔 TIME(校时)
+    expect(host.countWrite(kNikonCharTime), 1);
+
+    now = now.add(const Duration(seconds: 44));
+    await session.tick(); // 44s < 45s → 未到点
+    expect(host.countWrite(kNikonCharTime), 1);
+
+    now = now.add(const Duration(seconds: 1)); // 恰 45s
+    await session.tick();
+    expect(host.countWrite(kNikonCharTime), 2);
+
+    session.setForeground(false); // 切后台档
+    now = now.add(const Duration(seconds: 44));
+    await session.tick(); // 44s < 90s → 未到点
+    expect(host.countWrite(kNikonCharTime), 2);
+
+    now = now.add(const Duration(seconds: 46)); // 90s 到点
+    await session.tick();
+    expect(host.countWrite(kNikonCharTime), 3);
+
+    session.setForeground(true); // 回前台档:距上次 50s ≥ 45s → 到点
+    now = now.add(const Duration(seconds: 50));
+    await session.tick();
+    expect(host.countWrite(kNikonCharTime), 4);
+  });
+
+  test('断链 ticker 停:非 ready 态到点也不写', () async {
+    await runHandshake();
+    now = now.add(const Duration(seconds: 3));
+    await session.tick();
+    final timeBefore = host.countWrite(kNikonCharTime);
+
+    host.emit(const BleDisconnected('P1'));
+    await pump();
+    expect(session.state, BleSessionState.reconnecting);
+
+    now = now.add(const Duration(seconds: 100));
+    await session.tick(); // 到点也不写:ticker 随断链停
+    expect(host.countWrite(kNikonCharTime), timeBefore);
+  });
+
+  test('TIME 写失败不炸会话:lastError 带因,下一拍重试同载荷', () async {
+    await runHandshake();
+    now = now.add(const Duration(seconds: 3));
+    host.writeError = Exception('GATT 错误(唤醒窗)');
+    await session.tick(); // 首笔 TIME 失败
+    expect(session.state, BleSessionState.ready);
+    expect(session.lastError, contains('TIME 写失败'));
+    expect(host.countWrite(kNikonCharTime), 1); // 失败也记账
+
+    host.writeError = null;
+    await session.tick(); // 保活锚未落 → 立即重试
+    expect(host.countWrite(kNikonCharTime), 2);
   });
 
   group('readWifiCredentials(0x2004,BLE→WiFi 二期)', () {

@@ -1,17 +1,25 @@
-/// BLE 相机会话(M3):四步配对握手 / 身份复用重连 / TIME 心跳 /
+/// BLE 相机会话(M3):四步配对握手 / 身份复用重连 / TIME 保活 /
 /// GEO 注入。
 ///
-/// 纯协议层,零 Timer —— 心跳与重试全部外部驱动(前台注入驱动页
-/// Timer.periodic;iOS 后台由原生 BLE/定位事件唤醒)调 [tick] 与
-/// [retryReconnect]:
+/// 纯协议层,周期驱动零 Timer —— 保活与重试全部外部驱动(前台注入
+/// 驱动页 Timer.periodic;iOS 后台由原生 BLE/定位事件唤醒)调 [tick]
+/// 与 [retryReconnect]:
 /// - 状态机:idle → pairing → ready;ready 断连 → reconnecting,
 ///   退避 1/2/4/8/16/30/60s 封顶,驱动按 [nextRetryDelay] 定时重试;
 ///   pairing 期断连回 idle(握手作废)。
 /// - 重连复用身份:createStage1 带已存 device/nonce,相机据以识别
 ///   旧会话(TODO「二」既定)。
-/// - 写闸:重连后 2.5s 内不写(相机唤醒窗拒收 2900099 同类);GEO
-///   写失败同样入闸缓存,到期由 tick 重发。
-/// - keep-alive:30s 无发送重发最后定位(nsg 保鲜节奏)。
+/// - 首写门:Ready(首配/重连同套)后 [writeGate] 内不写 GEO/TIME
+///   (相机 GPS 会话未醒拒收 0x2007,HarmoNiLink 实证;ohos 2900099
+///   「醒着但会话未就绪」瞬态同类减灾,非替代重试);过闸首笔 TIME
+///   (收口校时)由一次性延迟自发([_deferredFirstWrite]),不依赖驱动
+///   tick —— 配对页挂起期驱动停摆。写失败走既有路径:GEO 入闸缓存
+///   重发,TIME 下一拍到点重试。
+/// - TIME 保活:前台 45s/后台 90s 档位([setForeground];相机 2min
+///   无 BLE 流量掐链,写 0x2006 内容=当前时刻顺带持续校时)。
+/// - GEO 注入:定位流事件驱动([onFix]),距上次成功注入 <3s 且位移
+///   <1.1m 跳过(去重门见 [BleKeepalive]);30s 无成功注入重发最后
+///   定位(nsg 保鲜节奏)。
 library;
 
 import 'dart:async';
@@ -20,6 +28,7 @@ import 'dart:typed_data';
 
 import '../../platform/ble_scanner.dart';
 
+import 'ble_keepalive.dart';
 import 'gatt_uuids.dart';
 import 'geo_payload.dart';
 import 'pairing_engine.dart';
@@ -64,6 +73,7 @@ final class BleCameraSession {
     required BleHost host,
     this.controllerName = 'NikonPill',
     this.handshakeTimeout = const Duration(seconds: 15),
+    this.writeGate = const Duration(milliseconds: 2500),
     DateTime Function()? now,
   })  : _host = host,
         _now = now ?? DateTime.now {
@@ -79,19 +89,22 @@ final class BleCameraSession {
   /// 配对菜单时,stage1 无应答 —— 没有超时 pair() 会永久挂在 pairing。
   final Duration handshakeTimeout;
 
+  /// 写闸:Ready 后首笔 GEO/TIME 与 GEO 失败回补共用的静默窗(相机
+  /// GPS 会话未醒拒收 0x2007 的减灾前置;2900099 瞬态同类)。
+  final Duration writeGate;
+
   /// 诊断跟踪(配对页 hex 日志用;每帧 device/nonce 落一行,可随时
   /// 换绑/清空)。
   void Function(String line)? onTrace;
 
-  static const double _minSendDistanceM = 3.0;
-  static const Duration _minSendInterval = Duration(seconds: 20);
+  /// GEO 保鲜间隔(nsg 节奏):持续无成功注入时重发最后定位。
   static const Duration _keepAlive = Duration(seconds: 30);
-  static const Duration _writeGate = Duration(milliseconds: 2500);
   static const List<int> _backoffSeconds = [1, 2, 4, 8, 16, 30, 60];
 
   final BleHost _host;
   final DateTime Function() _now;
   final NikonPairingEngine _engine = NikonPairingEngine();
+  final BleKeepalive _keepalive = BleKeepalive();
   late final StreamSubscription<BleEvent> _sub;
 
   BleSessionState _state = BleSessionState.idle;
@@ -122,8 +135,11 @@ final class BleCameraSession {
 
   GeoFix? _lastFix;
   GeoFix? _pendingFix;
-  GeoFix? _lastSent;
-  DateTime? _lastSentAt;
+  /// 上次成功注入的定位与时刻(去重门/保鲜锚;失败沿不更新)。
+  GeoFix? _lastOkFix;
+  DateTime? _lastOkAt;
+  /// 上次成功 TIME 写时刻(保活档位锚;Ready 沿清零 = 首笔校时待发)。
+  DateTime? _lastTimeOkAt;
 
   /// 最近一次收到的定位(含未满足节流的;UI 可显示)。
   GeoFix? get lastFix => _lastFix;
@@ -364,79 +380,99 @@ final class BleCameraSession {
   // 注入
   // ------------------------------------------------------------------
 
-  /// 定位到达(定位流回调)。ready 且过写闸且节流通过(位移 ≥3m 或
-  /// 距上次 ≥20s)即写 GEO。
+  /// 前台/后台档位(TIME 保活间隔 45s/90s,见 [BleKeepalive]):上层
+  /// 生命周期观察注入(AppServices 挂 AppLifecycleListener);未注入恒
+  /// 前台档。切档只改下一拍到点判定,不立即补写。
+  void setForeground(bool foreground) => _keepalive.foreground = foreground;
+
+  /// 定位到达(定位流回调,事件驱动)。ready 且过写闸且过去重门(距上
+  /// 次成功注入 <3s 且位移 <1.1m 跳过,见 [BleKeepalive])即写 GEO;
+  /// 写闸期缓存待过闸回补(不弃点)。
   void onFix(GeoFix fix) {
     _lastFix = fix;
     if (_state != BleSessionState.ready) return;
     final t = _now();
-    if (_gated(t)) return;
-    final sent = _lastSent;
-    final moved =
-        sent == null || _distanceM(sent, fix) >= _minSendDistanceM;
-    final stale = _lastSentAt == null ||
-        t.difference(_lastSentAt!) >= _minSendInterval;
-    if (moved || stale) {
+    if (_gated(t)) {
+      _pendingFix = fix;
+      return;
+    }
+    if (_keepalive.geoPassesDedup(t, fix, _lastOkFix, _lastOkAt)) {
+      // 缓存的旧点被本点取代(直发失败沿 _sendGeo 会回填缓存)。
+      _pendingFix = null;
       unawaited(_sendGeo(fix, t));
     }
   }
 
-  /// 外部心跳驱动(幂等):写闸期直接返回;到期重发 GEO → TIME
-  /// 心跳 → keep-alive(30s 无发送重发最后定位)。
+  /// 外部心跳驱动(幂等):非 ready 态零动作(断链 ticker 停);写闸期
+  /// 直接返回;过闸走 [_flushDueWrites](缓存定位回补 → TIME 保活到点
+  /// → GEO 保鲜)。
   Future<void> tick() async {
     if (_state != BleSessionState.ready) return;
     final t = _now();
     if (_gated(t)) return;
+    await _flushDueWrites(t);
+  }
+
+  /// 过闸写入体(tick 与首写自发沿 [_deferredFirstWrite] 共用)。
+  Future<void> _flushDueWrites(DateTime t) async {
     final pending = _pendingFix;
     if (pending != null) {
       _pendingFix = null;
       await _sendGeo(pending, t);
-      if (_gated(_now())) return;
+      if (_gated(_now())) return; // GEO 失败重进闸:后续写等下一拍
     }
+    if (_keepalive.timeDue(t, _lastTimeOkAt)) {
+      await _sendTime(t);
+    }
+    final lastOk = _lastOkFix;
+    if (lastOk != null &&
+        _lastOkAt != null &&
+        t.difference(_lastOkAt!) >= _keepAlive) {
+      await _sendGeo(lastOk, t);
+    }
+  }
+
+  /// 首写门开沿自发写(不依赖驱动 tick —— 配对页挂起期驱动停摆,收口
+  /// 校时不能只靠 tick 补发):过闸体与 tick 共用;断链/拆链/仍在闸内
+  /// 则弃(驱动下一拍兜底)。
+  Future<void> _deferredFirstWrite() async {
+    await Future<void>.delayed(writeGate);
+    if (_state != BleSessionState.ready) return;
+    final t = _now();
+    if (_gated(t)) return;
     try {
-      await _host.write(kNikonCharTime, TimePayload.build(t));
-      timeWriteCount++;
+      await _flushDueWrites(t);
     } on Exception catch (e) {
-      lastError = 'TIME 写失败:$e';
-    }
-    final sent = _lastSent;
-    if (sent != null &&
-        _lastSentAt != null &&
-        t.difference(_lastSentAt!) >= _keepAlive) {
-      await _sendGeo(sent, t);
+      lastError = '首写失败:$e';
     }
   }
 
   Future<void> _sendGeo(GeoFix fix, DateTime t) async {
-    _lastSent = fix;
-    _lastSentAt = t;
     try {
       await _host.write(kNikonCharGeo, GeoPayload().build(fix));
+      _lastOkFix = fix;
+      _lastOkAt = t;
       geoWriteCount++;
       lastGeoAt = t;
     } on Exception catch (e) {
       _pendingFix = fix;
-      _gateWritesUntil = t.add(_writeGate);
+      _gateWritesUntil = t.add(writeGate);
       lastError = 'GEO 写失败:$e';
+    }
+  }
+
+  Future<void> _sendTime(DateTime t) async {
+    try {
+      await _host.write(kNikonCharTime, TimePayload.build(t));
+      _lastTimeOkAt = t;
+      timeWriteCount++;
+    } on Exception catch (e) {
+      lastError = 'TIME 写失败:$e';
     }
   }
 
   bool _gated(DateTime t) =>
       _gateWritesUntil != null && t.isBefore(_gateWritesUntil!);
-
-  /// 球面距离(米;haversine,注入节流精度足够)。
-  static double _distanceM(GeoFix a, GeoFix b) {
-    const r = 6371000.0;
-    double rad(double d) => d * pi / 180;
-    final dLat = rad(b.latitude - a.latitude);
-    final dLon = rad(b.longitude - a.longitude);
-    final h = sin(dLat / 2) * sin(dLat / 2) +
-        cos(rad(a.latitude)) *
-            cos(rad(b.latitude)) *
-            sin(dLon / 2) *
-            sin(dLon / 2);
-    return 2 * r * atan2(sqrt(h), sqrt(1 - h));
-  }
 
   // ------------------------------------------------------------------
   // 事件推进(握手状态机)
@@ -447,9 +483,7 @@ final class BleCameraSession {
       case BleConnected(:final uuid):
         if (_state != BleSessionState.pairing) return;
         _connectedUuid = uuid;
-        if (_resuming) {
-          _gateWritesUntil = _now().add(_writeGate);
-        }
+        // 写闸不在此设:握手期无注入写,Ready 沿统一起闸(_completeIfReady)。
         try {
           // 第二段静默窗:深睡周期内零 GATT 流量(SnapBridge 的
           // DEEP_SLEEP_WAIT 同款);窗内相机发安全请求 → 系统配对码。
@@ -643,21 +677,19 @@ final class BleCameraSession {
       name: controllerName,
     );
     _backoffStep = 0;
+    // 首写门:Ready 后 writeGate 内不发 GEO/TIME(首配/重连同套 ——
+    // 相机 GPS 会话未醒拒收 0x2007,HarmoNiLink 实证;2900099 瞬态同类
+    // 减灾,非替代重试)。
+    _gateWritesUntil = _now().add(writeGate);
+    _lastTimeOkAt = null;
     _setState(BleSessionState.ready);
     _handshake?.complete();
     _handshake = null;
     _trace('配对成功 ✓ device=${stage1.device.toRadixString(16)}');
-    // 收口沿即校时(SnapBridge 语义:配对事务末环;相机注册可能等
-    // 这帧才落档 —— CLI 真机那次 TIME 显式写过,app 此前从没发过)。
-    unawaited(() async {
-      try {
-        await _host.write(
-            kNikonCharTime, TimePayload.build(_now().toUtc()));
-        _trace('TIME → 收口沿校时已发');
-      } on Exception catch (e) {
-        _trace('TIME 收口沿校时失败:$e');
-      }
-    }());
+    // 收口校时(SnapBridge 语义:配对事务末环)保留,但改过首写门才发:
+    // 一次性延迟自发([_deferredFirstWrite]),配对页挂起期驱动 tick 停摆
+    // 也能落地;闸内到达的定位缓存同沿回补。
+    unawaited(_deferredFirstWrite());
   }
 
   void _failHandshake() {
