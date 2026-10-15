@@ -37,6 +37,9 @@ import kotlin.math.min
  * - 窗口内无数据 → PlatformException code 'usb_timeout'(Dart 映射
  *   TimeoutException);
  * - bulkOut:native 内部 16KB 分块循环写;
+ * - drainIn:中止/超时事务的有界冲刷 —— 吸干 bulk IN 残余字节(相机
+ *   还在吐的数据相位尾巴 + 超读暂存),下一事务不从错位字节开始
+ *   (Dart 的 UsbPtpTransport 在事务异常收场时调用,见 drainIn 头注);
  * - interrupt 事件走 EventChannel,完整事件容器(≤64B)由本文件重组
  *   (12B 头 + u32 长度驱动)。
  *
@@ -47,9 +50,11 @@ import kotlin.math.min
  *   bulkRead 内部 16KB 分块循环组装,一次通道调用读满 maxLen
  *   (Dart 1MB 流块不再退化为逐 16KB 通道往返;详见 bulkRead 头注);
  *   timeout=0(无限)路径不受此限,interrupt 轮询 64B 缓冲无影响;
- * - bulkTransfer 失败统一返回负值,**无法区分 STALL 与超时**:读路径按
- *   契约上报 usb_timeout(待真机核对;写路径按 ohos 实证走
- *   CLEAR_FEATURE 重试一次,STALL 在相机侧是流控不是错误);
+ * - bulkTransfer 失败统一返回负值,**无法区分 STALL 与超时**(nico 亦无
+ *   判别手法,负值无条件清 halt 重试一次):写路径每 16KB 块清 halt 重试
+ *   一次(ohos 实证,STALL 在相机侧是流控不是错误);读路径空手负值同样
+ *   清 halt 原地重读一次 —— STALL 即时失败、超时吃满窗口,窗口尚有
+ *   余量才值得重试;重试仍败按契约上报(usb_timeout/usb_error);
  * - 无 clearHalt API:走 controlTransfer(0x02, 0x01, 0, addr, null, 0, 0)
  *   手工 CLEAR_FEATURE(ENDPOINT_HALT)。open 成功后对两个 bulk 端点
  *   各做一次(上轮失败会在设备侧留下脏状态:OUT data toggle 停在
@@ -89,6 +94,13 @@ class UsbHostPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHandl
 
         /// interrupt 事件缓冲:PTP 事件容器 ≤64B(Zf 实测 12/16B)。
         private const val INTERRUPT_BUF_BYTES = 64
+
+        /// drainIn 单轮静默窗:一轮 300ms 内无数据即认为吸干(nico 同口径)。
+        private const val DRAIN_QUIET_MS = 300
+
+        /// drainIn 轮数上限:数据持续到达也最多吸 32 轮(有界,别无限等;
+        /// 最坏 ≈9.6s 静默耗尽,单轮 ≤16KB 受 AOSP 有限超时上限约束)。
+        private const val DRAIN_MAX_ROUNDS = 32
     }
 
     /** 打开会话:连接、接口与三个端点。 */
@@ -198,6 +210,7 @@ class UsbHostPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHandl
                 call.argument<Int>("timeoutMs") ?: 0,
                 result,
             )
+            "drainIn" -> drainIn(result)
             "close" -> {
                 teardownSession()
                 postSuccess(result, null)
@@ -478,8 +491,9 @@ class UsbHostPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHandl
     /// - 短读(n<callLen)= 相机突发结束 → 立即交付;满块继续;
     /// - ZLB(n==0):已见数据 = 传输边界 → 交付;未见数据 = 耗窗口续等
     ///   (ohos 真机实证存在 ZLB-先于-数据);
-    /// - n<0:已有部分数据则交付短读(数据是真实的,不丢),否则按
-    ///   超时/错误上报;
+    /// - n<0:已有部分数据则交付短读(数据是真实的,不丢);空手负值
+    ///   清 halt(ENDPOINT_HALT)后原地重读一次(STALL=相机流控,即时
+    ///   失败;超时=窗口耗尽,不再重试),仍败按超时/错误上报;
     /// - 容器恰为 16KB 整数倍时靠尾随 ZLB 收尾(ZLB 在传输结束后即刻
     ///   到达),极端时序下最多等到窗口耗尽才交付,数据不丢(待真机核对)。
     ///
@@ -515,6 +529,7 @@ class UsbHostPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHandl
                 val deadline = if (timeoutMs > 0) start + timeoutMs else Long.MAX_VALUE
                 var filled = 0
                 var failed = false
+                var haltRetried = false
                 loop@ while (filled < buffer.size) {
                     val room = buffer.size - filled
                     val callLen: Int
@@ -549,6 +564,19 @@ class UsbHostPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHandl
                             // 未见数据的 ZLB:继续耗窗口等真数据
                         }
                         else -> {
+                            // 空手负值:清 halt 后原地重读一次(nico/libgphoto2
+                            // 口径 —— Android 负值分不清 STALL 与超时,但
+                            // STALL 即时失败、超时吃满窗口,窗口尚有余量才
+                            // 值得重试)。有限窗口已耗尽 = 真超时,不再重试。
+                            if (filled == 0 && !haltRetried &&
+                                (timeoutMs <= 0 ||
+                                    deadline - SystemClock.elapsedRealtime() > 0)
+                            ) {
+                                haltRetried = true
+                                Log.w(TAG, "bulkRead ret=$n,CLEAR_FEATURE 后原地重读")
+                                clearHalt(s, s.bulkIn.address)
+                                continue@loop
+                            }
                             if (filled == 0) failed = true
                             break@loop // 部分数据优先交付
                         }
@@ -573,8 +601,8 @@ class UsbHostPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHandl
                     }
                 } else if (failed) {
                     if (timeoutMs > 0) {
-                        // 窗口内无数据:对齐 Dart 的 TimeoutException 语义。
-                        // Android 无法区分 STALL/超时,按超时上报(待真机核对)。
+                        // 窗口内无数据(含清 halt 重读仍败):对齐 Dart 的
+                        // TimeoutException 语义 —— 可恢复的普通失败,不断链。
                         postError(result, "usb_timeout", "bulkTransfer 负值返回(有限超时窗口内无数据)")
                     } else {
                         postError(result, "usb_error", "bulkTransfer 负值返回(无限等待失败)")
@@ -584,6 +612,55 @@ class UsbHostPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHandl
                 }
             } catch (e: Exception) {
                 postError(result, "usb_error", "bulkRead: $e")
+            }
+        }
+    }
+
+    /// bulk IN 冲刷:中止/超时事务的残余字节吸干,下一事务不从错位
+    /// 字节开始(nico PtpTransport.drainIn 同款)。调用方是 Dart 的
+    /// UsbPtpTransport 在事务异常收场时于 execute() 内调用 —— 冲刷
+    /// 发生在 PtpSession 串行门持有期内,与下一事务天然串行不交错。
+    ///
+    /// 残余两处来源都要收:
+    /// - bulkRead 超读暂存(bulkInLeftover)—— 属被中止事务,先丢;
+    /// - 相机仍在吐的数据相位字节 —— 单轮 ≤16KB(AOSP 有限超时上限)
+    ///   × 300ms 静默窗,静默一轮即吸干;连续 [DRAIN_MAX_ROUNDS] 轮
+    ///   上限保证有界(数据持续到达也不无限等)。
+    /// 单轮容量 16KB×32 轮 = 512KB(nico 为 64KB×32;残余超过此量
+    /// 的极端只能靠上层断链重连,大档取消的排空走 Dart 整档收块路线,
+    /// 不经过这里)。返回冲刷字节数(Dart 契约为 void,仅日志价值)。
+    private fun drainIn(result: Result) {
+        val s = session
+        if (s == null) {
+            postError(result, "usb_closed", "会话未打开")
+            return
+        }
+        ioExecutor.execute {
+            try {
+                synchronized(lock) {
+                    bulkInLeftover = ByteArray(0)
+                }
+                val buf = ByteArray(BULK_IN_MIN_READ_BYTES)
+                var drained = 0L
+                var rounds = 0
+                while (rounds < DRAIN_MAX_ROUNDS) {
+                    rounds++
+                    val n = s.connection.bulkTransfer(s.bulkIn, buf, buf.size, DRAIN_QUIET_MS)
+                    if (n < 0) break // 静默窗内无数据:已吸干
+                    drained += n // n==0(ZLB)也耗一轮,继续吸
+                }
+                if (drained > 0) {
+                    Log.i(TAG, "drainIn 吸干 ${drained}B(${rounds} 轮)")
+                }
+                // 会话轮换守卫:与 bulkRead 同款 —— 旧链路的冲刷结果只
+                // 释放通道应答,不污染新会话。
+                if (session !== s) {
+                    postError(result, "usb_stale", "会话已轮换,冲刷结果丢弃")
+                    return@execute
+                }
+                postSuccess(result, drained)
+            } catch (e: Exception) {
+                postError(result, "usb_error", "drainIn: $e")
             }
         }
     }
