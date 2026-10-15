@@ -15,6 +15,7 @@ import 'package:nikon_pill/core/ptp/ptp_transport.dart';
 import 'package:nikon_pill/core/ble/ble_camera_session.dart';
 import 'package:nikon_pill/core/ble/gatt_uuids.dart';
 import 'package:nikon_pill/core/ble/pairing_message.dart';
+import 'package:nikon_pill/core/ble/wifi_credentials.dart';
 import 'package:nikon_pill/core/remote/live_view_engine.dart';
 import 'package:nikon_pill/core/utils/byte_writer.dart';
 import 'package:nikon_pill/data/ble_identity_store.dart';
@@ -53,13 +54,15 @@ class _FakeSettingsStore implements SettingsStore {
   }
 }
 
-/// 记账假 joiner:join 落账可编程返回(SSID/密码/安全字节断言用),
-/// release 计数(断连沿释放进程路由)。
+/// 记账假 joiner:join 落账可编程返回(SSID/密码/安全字节断言用,
+/// gateway 模拟 native 读到的 DHCP 网关),release 计数(断连沿释放
+/// 进程路由)。
 final class _FakeWifiJoiner implements WifiJoiner {
-  _FakeWifiJoiner({this.ok = true, this.reason});
+  _FakeWifiJoiner({this.ok = true, this.reason, this.gateway});
 
   bool ok;
   String? reason;
+  String? gateway;
   String? joinedSsid;
   String? joinedPassword;
   int? joinedSecurity;
@@ -74,7 +77,7 @@ final class _FakeWifiJoiner implements WifiJoiner {
     joinedSsid = ssid;
     joinedPassword = password;
     joinedSecurity = security;
-    return WifiJoinResult(ok: ok, reason: reason);
+    return WifiJoinResult(ok: ok, reason: reason, gateway: gateway);
   }
 
   @override
@@ -239,6 +242,102 @@ void main() {
       controller.ipController.clear();
       await controller.connectWireless();
       expect(conn.connectIp, kDefaultCameraIp);
+    });
+
+    test('apCameraIp 候选序:自定义手填 > mDNS 发现 > join 网关 > 默认', () {
+      // 自定义手填(≠ 默认)最优先:用户明示直连
+      expect(
+          apCameraIp(
+              manual: ' 10.0.0.5 ',
+              discovered: const [],
+              gateway: '192.168.100.1'),
+          '10.0.0.5');
+      // mDNS 发现压网关(手填 = 预填默认,即未自定义)
+      expect(
+          apCameraIp(
+              manual: kDefaultCameraIp,
+              discovered: const [_zfCamera],
+              gateway: '192.168.100.1'),
+          '192.168.0.104');
+      // 网关压默认:相机热点网段因机型而异,网关比硬编码 192.168.1.1 普适
+      expect(
+          apCameraIp(
+              manual: kDefaultCameraIp,
+              discovered: const [],
+              gateway: '192.168.100.1'),
+          '192.168.100.1');
+      expect(
+          apCameraIp(
+              manual: '', discovered: const [], gateway: '192.168.100.1'),
+          '192.168.100.1');
+      // 网关缺席(native 拿不到不带键 / 空白串)回落默认 192.168.1.1
+      expect(apCameraIp(manual: kDefaultCameraIp, discovered: const []),
+          kDefaultCameraIp);
+      expect(apCameraIp(manual: '', discovered: const [], gateway: '  '),
+          kDefaultCameraIp);
+    });
+
+    test('joinCameraAp ok 带网关:自动连接直达网关 IP(不再硬编码默认)', () async {
+      final conn = _FakeConnection();
+      final joiner = _FakeWifiJoiner(gateway: '192.168.100.1');
+      final controller =
+          ConnectionController(connection: conn, wifiJoiner: joiner)
+            ..cameraApCredentials = const WifiCredentials(
+                ssid: 'Zf_80114411',
+                password: 'wpa2pass99',
+                security: 0x02,
+                keySource: 'test');
+      final outcome = await controller.joinCameraAp();
+      expect(outcome, ApJoinOutcome.joined);
+      expect(controller.apGateway, '192.168.100.1');
+      expect(controller.method, ConnectionMethod.ap);
+      await pumpEventQueue(); // connectWireless 是发射不等待,排微任务落地
+      expect(conn.connectIp, '192.168.100.1');
+    });
+
+    test('joinCameraAp ok 无网关:回落默认 192.168.1.1(现状不变)', () async {
+      final conn = _FakeConnection();
+      final controller =
+          ConnectionController(connection: conn, wifiJoiner: _FakeWifiJoiner())
+            ..cameraApCredentials = const WifiCredentials(
+                ssid: 'Zf_80114411',
+                password: 'wpa2pass99',
+                security: 0x02,
+                keySource: 'test');
+      final outcome = await controller.joinCameraAp();
+      expect(outcome, ApJoinOutcome.joined);
+      expect(controller.apGateway, isNull);
+      await pumpEventQueue();
+      expect(conn.connectIp, kDefaultCameraIp);
+    });
+
+    test('STA 路不吃网关:apGateway 在手,connectManualIp 仍只认手填(空不动作)',
+        () async {
+      final conn = _FakeConnection();
+      final controller = ConnectionController(connection: conn)
+        ..apGateway = '192.168.100.1';
+      // 空输入不动作 —— STA 网关是路由器,绝不让 AP 网关顶上
+      await controller.connectManualIp();
+      expect(conn.connectIp, isNull);
+      controller.manualIpController.text = ' 192.168.0.5 ';
+      await controller.connectManualIp();
+      expect(conn.connectIp, '192.168.0.5');
+    });
+
+    test('selectMethod 切进 AP 清 mDNS 旧网结果(旧网段发现连相机热点只会超时)',
+        () async {
+      final scanner = _FakeScanner();
+      final controller =
+          ConnectionController(connection: _FakeConnection(), scanner: scanner);
+      await controller.startScan();
+      scanner.eventsCtrl.add(const NsdCameraFound(_zfCamera));
+      await pumpEventQueue();
+      expect(controller.cameras, isNotEmpty);
+
+      controller.selectMethod(ConnectionMethod.ap);
+      await pumpEventQueue();
+      expect(controller.cameras, isEmpty,
+          reason: 'AP 分段在相机热点网段,STA 扫描的旧结果跨网段,作废');
     });
 
     test('hint:connected 无提示(信息视图自释);pairing/failed 保留', () async {

@@ -43,10 +43,16 @@ final class MethodChannelNetworkMonitor implements NetworkMonitor {
 /// 程序化加入 Wi-Fi 的结果;ok=false 时 [reason] 如实(unsupported /
 /// timeout / unavailable / 平台原话)。
 final class WifiJoinResult {
-  const WifiJoinResult({required this.ok, this.reason});
+  const WifiJoinResult({required this.ok, this.reason, this.gateway});
 
   final bool ok;
   final String? reason;
+
+  /// 加入网络的 DHCP 网关(点分 IPv4;native 在 join 定局沿读,拿不到
+  /// 不带该键 → null)。相机热点是 AP 拓扑,网关即相机本机 IP —— 比
+  /// 硬编码 192.168.1.1 普适(不同相机网段不同)。**只有 AP(加入相机
+  /// 热点)路可消费**:STA 的网关是路由器,连它只会得到莫名超时。
+  final String? gateway;
 }
 
 /// 程序化加入热点(`nikonpill/network` 方法 `join`/`release`)。
@@ -91,6 +97,8 @@ final class MethodChannelWifiJoiner implements WifiJoiner {
       return WifiJoinResult(
         ok: map?['ok'] == true,
         reason: map?['reason'] as String?,
+        // native 拿不到就不带键 → null(契约见类注)
+        gateway: map?['gateway'] as String?,
       );
     } on MissingPluginException {
       // iOS/ohos 未落地(见类注):如实 unsupported,UI 回手动指引。
