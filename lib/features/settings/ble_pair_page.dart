@@ -17,6 +17,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../app_services.dart';
+import '../../core/ble/adv_payload.dart';
 import '../../core/ble/ble_camera_session.dart';
 import '../../core/ble/gatt_uuids.dart';
 import '../../core/ble/time_payload.dart';
@@ -29,7 +30,13 @@ String hexOf(List<int> bytes) =>
     bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ');
 
 class BlePairPage extends StatefulWidget {
-  const BlePairPage({super.key});
+  const BlePairPage({super.key, this.savedIdentity});
+
+  /// 预置已存身份:测试注入用(生产不传 —— 走盘档异步加载)。有值时
+  /// 跳过盘档读取,首帧即可参与「在等别的手机」冲突比较;真盘档的
+  /// File IO 在页测试的 fake-async 里永不落地,身份只能注入。
+  @visibleForTesting
+  final BlePairedIdentity? savedIdentity;
 
   @override
   State<BlePairPage> createState() => _BlePairPageState();
@@ -100,7 +107,8 @@ class _BlePairPageState extends State<BlePairPage> with WidgetsBindingObserver {
   }
 
   Future<void> _loadSaved() async {
-    final saved = await AppServices.instance.bleIdentityStore.load();
+    final saved = widget.savedIdentity ??
+        await AppServices.instance.bleIdentityStore.load();
     String? auth;
     try {
       auth = await PlatformServices.locationStream.authorizationStatus();
@@ -226,6 +234,7 @@ class _BlePairPageState extends State<BlePairPage> with WidgetsBindingObserver {
     _retrying = true;
     if (mounted) setState(() {});
     _log('重连(复用身份 ${_saved!.deviceId.toRadixString(16)})…');
+    var hintedForeign = false;
     for (var attempt = 1; attempt <= 6 && _retrying; attempt++) {
       if (_session.state == BleSessionState.ready) {
         _log('已就绪 ✓');
@@ -241,6 +250,18 @@ class _BlePairPageState extends State<BlePairPage> with WidgetsBindingObserver {
       _log('第 $attempt 轮无命中${err == null ? '' : '($err)'},'
           '${_session.nextRetryDelay.inSeconds}s 后再试(相机须停在'
           '「连接至智能设备」页或可重连待机)');
+      // 重连未命中 + 本页扫描结果里有「在等别的手机」的相机 → 复用同一条
+      // 冲突指引(重连扫描被 native 过滤只看我方 deviceId,别家相机只有
+      // 本页配对扫描才看得见);每轮重连只提示一次,免刷屏。
+      if (!hintedForeign) {
+        final foreign = _foreignWaiting();
+        final foreignId =
+            foreign == null ? null : expectedControllerDeviceId(foreign.mfgData);
+        if (foreign != null && foreignId != null) {
+          hintedForeign = true;
+          _log(_conflictHint(context, foreignId));
+        }
+      }
       await Future<void>.delayed(_session.nextRetryDelay);
     }
     _retrying = false;
@@ -322,6 +343,44 @@ class _BlePairPageState extends State<BlePairPage> with WidgetsBindingObserver {
     } on Exception catch (e) {
       _log('$label 失败:$e');
     }
+  }
+
+  /// 我方注册身份的 deviceId(已存档优先,会话内存兜底;null = 首次
+  /// 配对,无从比较冲突)。
+  int? get _ownDeviceId =>
+      _saved?.deviceId ?? _session.identity?.deviceId;
+
+  /// 「在等别的手机」指引文案(扫描行提示与重连失败日志共用;动作
+  /// 措辞借 HarmoNiLink 真机口径:相机「已配对设备」菜单切换设备)。
+  String _conflictHint(BuildContext context, int foreignId) => context.t(
+      '此相机在等别的手机(设备ID 0x{id}):请在相机「已配对设备」菜单'
+      '断开现有连接或改选本机,或确认相机没被其他手机(如 SnapBridge)占用',
+      {'id': foreignId.toRadixString(16).toUpperCase()});
+
+  /// 当前列表里首个「在等别的手机」的设备(无则 null;重连未命中时的
+  /// 指引来源 —— 重连扫描(scanForDeviceId)被 native 按我方 deviceId
+  /// 过滤,看不见别家相机,只能翻本页自己的配对扫描结果)。
+  BleDevice? _foreignWaiting() {
+    final own = _ownDeviceId;
+    if (own == null) return null;
+    for (final d in _devices) {
+      if (cameraWaitsForOtherController(d.mfgData, own)) return d;
+    }
+    return null;
+  }
+
+  /// 广告厂商数据展示:0x0399 可解 → 结构化 deviceId(相机当前配对
+  /// 关系的 ID);不可解(配对菜单态无 0x0399 / 异厂商数据)保底 hex
+  /// 供方言核对。
+  String _mfgSuffix(BuildContext context, BleDevice device) {
+    final mfg = device.mfgData;
+    if (mfg == null) return '';
+    final id = expectedControllerDeviceId(mfg);
+    return id == null
+        ? '  mfg ${hexOf(mfg)}'
+        : '  ${context.t('设备ID 0x{id}', {
+            'id': id.toRadixString(16).toUpperCase()
+          })}';
   }
 
   /// 状态行文案(需 context 走 t():getter 拿不到 BuildContext,消费点
@@ -517,8 +576,31 @@ class _BlePairPageState extends State<BlePairPage> with WidgetsBindingObserver {
                       title: Text(device.name.isEmpty
                           ? context.t('(无名)')
                           : device.name),
-                      subtitle: Text('${device.uuid}  RSSI ${device.rssi}'
-                          '${device.mfgData == null ? '' : '  mfg ${hexOf(device.mfgData!)}'}'),
+                      subtitle: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('${device.uuid}  RSSI ${device.rssi}'
+                              '${_mfgSuffix(context, device)}'),
+                          // 冲突指引(HarmoNiLink 口径):相机广播的是它
+                          // 当前配对目标的 deviceId —— 解出来不是我们 =
+                          // 它在等别的手机,点连必被拒。
+                          if (cameraWaitsForOtherController(
+                              device.mfgData, _ownDeviceId))
+                            Text(
+                              _conflictHint(
+                                  context,
+                                  expectedControllerDeviceId(
+                                      device.mfgData)!),
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .bodySmall
+                                  ?.copyWith(
+                                      color: Theme.of(context)
+                                          .colorScheme
+                                          .error),
+                            ),
+                        ],
+                      ),
                       onTap: () => unawaited(_pair(device)),
                     ),
                 ],
