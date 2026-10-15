@@ -101,6 +101,9 @@ const Map<String, String> enCatalog = {
   '读 0x2004': 'Read 0x2004',
   '断开': 'Disconnect',
   '(无名)': '(unnamed)',
+  '设备ID 0x{id}': 'Device ID 0x{id}',
+  '此相机在等别的手机(设备ID 0x{id}):请在相机「已配对设备」菜单断开现有连接或改选本机,或确认相机没被其他手机(如 SnapBridge)占用':
+      'This camera is waiting for another phone (device ID 0x{id}): disconnect the existing connection or switch to this phone in the camera\'s "Paired Devices" menu, or make sure the camera is not occupied by another phone (e.g. SnapBridge)',
   '日志(长按可选中,或点右侧复制全部)': 'Log (long-press to select, or copy all on the right)',
   '复制全部日志': 'Copy all logs',
   '日志已复制': 'Log copied',
