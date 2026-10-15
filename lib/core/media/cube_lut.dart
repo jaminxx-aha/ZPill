@@ -152,6 +152,26 @@ final class CubeLut {
     return CubeLut._(title, size, [0, 0, 0], [1, 1, 1], table);
   }
 
+  /// 从既有表构造(固定 0..1 域):XMP RGBTable 解码链等内部产出的
+  /// 表直接入库,不再经 .cube 文本往返。[table] 为 size³×3(红最快),
+  /// 值须有限;尺寸/长度/值不符抛 [FormatException]。
+  factory CubeLut.fromTable(String title, int size, List<double> table) {
+    if (size < 2 || size > 256) {
+      throw FormatException('LUT 尺寸应为 2..256,得 $size');
+    }
+    final expected = size * size * size * 3;
+    if (table.length != expected) {
+      throw FormatException('表长应为 $expected($size³×3),得 ${table.length}');
+    }
+    for (final v in table) {
+      if (!v.isFinite) {
+        throw const FormatException('表值须为有限数');
+      }
+    }
+    return CubeLut._(title, size, [0, 0, 0], [1, 1, 1],
+        Float32List.fromList(table));
+  }
+
   /// 三线性插值:输入输出均为 0..1(RGB 归一化),输入超出按端点取值。
   List<double> apply(double r, double g, double b) {
     final x = _toGrid(r, 0), y = _toGrid(g, 1), z = _toGrid(b, 2);
