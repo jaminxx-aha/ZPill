@@ -11,7 +11,7 @@ import 'package:nikon_pill/core/ptp/ptp_transport.dart';
 import 'package:nikon_pill/core/ptpip/object_format.dart';
 import 'package:nikon_pill/core/utils/byte_writer.dart';
 
-import '../ptp/ptp_session_test.dart' show FakePtpTransport;
+import '../ptp/ptp_session_test.dart' show FakePtpTransport, PropListDataset;
 
 /// 手搓 ObjectInfo 数据集(布局独立于被测代码,ISO 15740 §13.3 的
 /// Zf 真机结构,同 object_info_test;浏览所需字段参数化)。
@@ -67,12 +67,21 @@ PtpResult _okData(Uint8List dataset) =>
 const PtpResult _refused =
     PtpResult(responseCode: PtpResponseCode.generalError);
 
+/// 相机不支持 0x9805(批量快路缺席的既定形态:枚举先探批量、被拒即
+/// 会话降级回退逐对象 —— 既有测试全部按「无批量相机」脚本走)。
+const PtpResult _noPropList =
+    PtpResult(responseCode: PtpResponseCode.operationNotSupported);
+
 /// 句柄树:根(0)→ DCIM(0x10)→ 100NIKON(0x11)→ NEF(0x12)/JPG(0x13)。
 /// NEF 格式码 0x3000(真机实测),靠 .nef 扩展名兜底分类。
 ///
 /// 应答按**请求顺序**排:仓库句柄倒序请求(最新优先),0x13 最先问。
-void _replyTree(FakePtpTransport fake) {
+void _replyTreeHandles(FakePtpTransport fake) {
   fake.reply(_okData(_handlesDataset([0x10, 0x11, 0x12, 0x13])));
+}
+
+/// 4×GetObjectInfo 应答(倒序请求序 0x13 → 0x10)。
+void _replyTreeInfos(FakePtpTransport fake) {
   fake.reply(_okData(_objectInfoDataset(
       format: 0x3801, parent: 0x11, size: 8400000,
       name: 'DSC_0002.JPG', captured: '20260926T090000'))); // 0x13
@@ -85,6 +94,49 @@ void _replyTree(FakePtpTransport fake) {
       format: 0x3001, parent: 0, size: 0, name: 'DCIM'))); // 0x10
 }
 
+/// 整树应答(handles → 4×info,无批量位):**同会话已降级后的后续轮**
+/// (0x9805 不再被请求)与旧世界断言复用。
+void _replyTree(FakePtpTransport fake) {
+  _replyTreeHandles(fake);
+  _replyTreeInfos(fake);
+}
+
+/// 首轮整树应答(handles → **0x9805 拒答** → 4×info):新枚举流先探
+/// 批量快路,相机不支持即降级走逐对象(既有逐对象语义测试的脚本形)。
+void _replyTreeNoBatch(FakePtpTransport fake) {
+  _replyTreeHandles(fake);
+  fake.reply(_noPropList);
+  _replyTreeInfos(fake);
+}
+
+/// 0x9805 全量批量数据集(句柄树 0x10-0x13 全对象 × §6.6.1 信息组字段,
+/// 值与 [_replyTreeInfos] 的 ObjectInfo 同源):批量路产出的相册应与
+/// 逐对象世界等价;夹杂一条 UINT128(PersistentUID,全属性应答的真实
+/// 形态)验证可跳类型在消费侧不炸。
+Uint8List _propListTreeDataset() {
+  final d = PropListDataset()
+    // 0x13 DSC_0002.JPG
+    ..str(0x13, PtpObjectPropCode.objectFilename, 'DSC_0002.JPG')
+    ..u16(0x13, PtpObjectPropCode.objectFormat, 0x3801)
+    ..u64(0x13, PtpObjectPropCode.objectSize, 8400000)
+    ..u32(0x13, PtpObjectPropCode.parentObject, 0x11)
+    ..str(0x13, PtpObjectPropCode.dateCreated, '20260926T090000')
+    // 0x12 DSC_0001.NEF(格式码 0x3000,靠 .nef 兜底 —— 与 ObjectInfo 路同规)
+    ..str(0x12, PtpObjectPropCode.objectFilename, 'DSC_0001.NEF')
+    ..u16(0x12, PtpObjectPropCode.objectFormat, 0x3000)
+    ..u64(0x12, PtpObjectPropCode.objectSize, 26843545)
+    ..u32(0x12, PtpObjectPropCode.parentObject, 0x11)
+    ..str(0x12, PtpObjectPropCode.dateCreated, '20260927T101520')
+    // 0x11 100NIKON / 0x10 DCIM(夹对象,相册具名依赖)
+    ..str(0x11, PtpObjectPropCode.objectFilename, '100NIKON')
+    ..u16(0x11, PtpObjectPropCode.objectFormat, 0x3001)
+    ..str(0x10, PtpObjectPropCode.objectFilename, 'DCIM')
+    ..u16(0x10, PtpObjectPropCode.objectFormat, 0x3001)
+    // 全属性应答的真实杂质:UINT128 PersistentUID(0xDC41)可跳不炸。
+    ..raw(0x13, 0xDC41, 0x000A, List.filled(16, 0x07));
+  return d.build();
+}
+
 int _infoCount(FakePtpTransport fake) =>
     fake.requests
         .where((r) => r.opcode == PtpOperationCode.getObjectInfo)
@@ -95,7 +147,7 @@ void main() {
       () async {
     final fake = FakePtpTransport();
     final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
-    _replyTree(fake);
+    _replyTreeNoBatch(fake);
 
     await repo.loadAlbums();
 
@@ -119,7 +171,7 @@ void main() {
   test('loadAlbums:汇总相册在前,文件夹相册按 parent 分组、时间倒序', () async {
     final fake = FakePtpTransport();
     final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
-    _replyTree(fake);
+    _replyTreeNoBatch(fake);
 
     final albums = await repo.loadAlbums();
 
@@ -152,6 +204,7 @@ void main() {
     // 应答按倒序请求序:0x22 → 0x10。
     fake.reply(
         _okData(_handlesDataset([0x10, 0x11, 0x12, 0x20, 0x21, 0x22])));
+    fake.reply(_noPropList); // 0x9805 探批量被拒(会话降级)
     fake.reply(_okData(_objectInfoDataset(
         format: 0x3008, parent: 0x11, size: 2000, name: 'DSC_0004.MOV',
         captured: '20260928T120000'))); // 0x22
@@ -180,7 +233,7 @@ void main() {
     final fake = FakePtpTransport();
     final repo = ObjectRepositoryImpl(
         session: PtpSession(transport: fake), chunkSize: 2);
-    _replyTree(fake);
+    _replyTreeNoBatch(fake);
     final updates = <AlbumsUpdate>[];
     repo.updates.listen(updates.add);
 
@@ -206,7 +259,7 @@ void main() {
   test('并发 loadAlbums 共享同一次枚举;两个订阅者都收到全部块', () async {
     final fake = FakePtpTransport();
     final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
-    _replyTree(fake);
+    _replyTreeNoBatch(fake);
     final sub1 = <AlbumsUpdate>[];
     final sub2 = <AlbumsUpdate>[];
     repo.updates.listen(sub1.add);
@@ -215,7 +268,8 @@ void main() {
     final results =
         await Future.wait([repo.loadAlbums(), repo.loadAlbums()]);
     expect(results[0].map((a) => a.name), results[1].map((a) => a.name));
-    expect(fake.requests, hasLength(5)); // 1×GetObjectHandles + 4×GetObjectInfo
+    // 1×GetObjectHandles + 1×0x9805(拒)+ 4×GetObjectInfo。
+    expect(fake.requests, hasLength(6));
     // 去重不吞事件:非发起方的订阅者也能收到全部广播。
     expect(sub1, hasLength(2)); // 默认 chunkSize=24:单块 + 完成事件
     expect(sub2.map((u) => u.complete), [false, true]);
@@ -224,7 +278,7 @@ void main() {
   test('entryFor 查缓存;未枚举到的句柄显式报错', () async {
     final fake = FakePtpTransport();
     final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
-    _replyTree(fake);
+    _replyTreeNoBatch(fake);
 
     await repo.loadAlbums();
     final entry = await repo.entryFor(0x12);
@@ -235,7 +289,7 @@ void main() {
   test('removeHandles:成功删除的句柄出缓存并重发布 complete 事件', () async {
     final fake = FakePtpTransport();
     final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
-    _replyTree(fake);
+    _replyTreeNoBatch(fake);
     await repo.loadAlbums();
     final updates = <AlbumsUpdate>[];
     final sub = repo.updates.listen(updates.add);
@@ -252,7 +306,7 @@ void main() {
   test('removeHandles:组的照片全删光 → 空文件夹相册自然消失', () async {
     final fake = FakePtpTransport();
     final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
-    _replyTree(fake);
+    _replyTreeNoBatch(fake);
     await repo.loadAlbums();
 
     repo.removeHandles([0x12, 0x13]); // 两张照片都删
@@ -265,7 +319,7 @@ void main() {
   test('removeHandles:缓存里不存在的句柄不触发发布', () async {
     final fake = FakePtpTransport();
     final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
-    _replyTree(fake);
+    _replyTreeNoBatch(fake);
     await repo.loadAlbums();
     final updates = <AlbumsUpdate>[];
     final sub = repo.updates.listen(updates.add);
@@ -279,17 +333,18 @@ void main() {
   test('reset() 丢弃缓存,下次 loadAlbums 重新全量枚举', () async {
     final fake = FakePtpTransport();
     final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
-    _replyTree(fake);
+    _replyTreeNoBatch(fake);
     await repo.loadAlbums();
     expect(repo.isLoaded, isTrue);
 
     repo.reset();
     expect(repo.isLoaded, isFalse);
 
-    _replyTree(fake); // 重连后相机重新应答一轮
+    _replyTree(fake); // 同会话已降级:重枚举不再探 0x9805,直接逐对象
     final albums = await repo.loadAlbums();
     expect(albums.first.name, '全部照片');
-    expect(fake.requests, hasLength(10)); // 两轮各 5 次往返
+    // 轮 1:handles + 0x9805(拒)+ 4×info;轮 2:handles + 4×info。
+    expect(fake.requests, hasLength(11));
   });
 
   test('枚举途中 reset:世代废弃提前停,不再发请求、不发布完成事件', () async {
@@ -299,7 +354,8 @@ void main() {
     // 块 1(0x13/0x12)正常完成并广播;块 2 的 0x11 挂在门上 —— 门后
     // reset 已发生,世代检查让枚举即刻返回,0x10 不会被请求。
     final stall = Completer<void>();
-    fake.reply(_okData(_handlesDataset([0x10, 0x11, 0x12, 0x13])));
+    _replyTreeHandles(fake);
+    fake.reply(_noPropList); // 0x9805 探批量被拒(会话降级)
     fake.reply(_okData(_objectInfoDataset(
         format: 0x3801, parent: 0x11, size: 8400000,
         name: 'DSC_0002.JPG', captured: '20260926T090000'))); // 0x13
@@ -323,17 +379,19 @@ void main() {
     await sub.cancel();
 
     // 重新来一轮正常枚举可用。
-    _replyTree(fake);
+    _replyTree(fake); // 同会话已降级:直接逐对象,无 0x9805 位
     final albums = await repo.loadAlbums();
     expect(albums.first.items, isNotEmpty);
-    expect(fake.requests, hasLength(9)); // 4(轮 1)+ 5(轮 2)
+    // 轮 1:handles + 0x9805 + 3×info;轮 2:handles + 4×info。
+    expect(fake.requests, hasLength(10));
   });
 
   test('中途失败:部分缓存保留,重试只补缺失对象(断点续传)', () async {
     final fake = FakePtpTransport();
     final repo =
         ObjectRepositoryImpl(session: PtpSession(transport: fake), chunkSize: 2);
-    fake.reply(_okData(_handlesDataset([0x10, 0x11, 0x12, 0x13])));
+    _replyTreeHandles(fake);
+    fake.reply(_noPropList); // 0x9805 探批量被拒(会话降级)
     fake.reply(_okData(_objectInfoDataset(
         format: 0x3801, parent: 0x11, size: 8400000,
         name: 'DSC_0002.JPG', captured: '20260926T090000'))); // 0x13
@@ -346,7 +404,8 @@ void main() {
         repo.loadAlbums(), throwsA(isA<TimeoutException>()));
     expect(repo.isLoaded, isFalse);
 
-    // 续传:句柄重枚举 + 只补 0x11/0x10(0x13/0x12 已在缓存)。
+    // 续传:句柄重枚举 + 只补 0x11/0x10(0x13/0x12 已在缓存;会话已
+    // 降级,续传轮不再探 0x9805)。
     fake.reply(_okData(_handlesDataset([0x10, 0x11, 0x12, 0x13])));
     fake.reply(_okData(_objectInfoDataset(
         format: 0x3001, parent: 0x10, size: 0, name: '100NIKON'))); // 0x11
@@ -369,6 +428,7 @@ void main() {
     final fake = FakePtpTransport();
     final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
     fake.reply(_okData(_handlesDataset([0x10, 0x11, 0x12, 0x13])));
+    fake.reply(_noPropList); // 0x9805 探批量被拒(会话降级)
     fake.reply(_okData(_objectInfoDataset(
         format: 0x3801, parent: 0x11, size: 8400000,
         name: 'DSC_0002.JPG', captured: '20260926T090000'))); // 0x13 ✓
@@ -389,6 +449,7 @@ void main() {
     final fake = FakePtpTransport();
     final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
     fake.reply(_okData(_handlesDataset([0x10, 0x11, 0x12, 0x13])));
+    fake.reply(_noPropList); // 0x9805 探批量被拒(会话降级)
     fake.reply(_refused); // 0x13
     fake.reply(_refused); // 0x12
     fake.reply(_refused); // 0x11 → 连续第 3 个,上抛
@@ -421,6 +482,7 @@ void main() {
     final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
     // 句柄升序 [夹, NEF, JPG, 独立JPG];倒序请求:0x24 → 0x23 → 0x11 → 0x10。
     fake.reply(_okData(_handlesDataset([0x10, 0x11, 0x22, 0x23, 0x24])));
+    fake.reply(_noPropList); // 0x9805 探批量被拒(会话降级)
     fake.reply(_okData(_objectInfoDataset(
         format: 0x3801, parent: 0x11, size: 2000000,
         name: 'DSC_0002.JPG', captured: '20260926T090000'))); // 0x24
@@ -467,6 +529,7 @@ void main() {
     final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
     // slot1 夹 0x10 放 NEF,slot2 夹 0x20 放 JPG,同快门同基名。
     fake.reply(_okData(_handlesDataset([0x10, 0x12, 0x20, 0x22])));
+    fake.reply(_noPropList); // 0x9805 探批量被拒(会话降级)
     fake.reply(_okData(_objectInfoDataset(
         format: 0x3801, parent: 0x20, size: 8400000,
         name: 'DSC_0001.JPG', captured: '20260927T101520'))); // 0x22
@@ -496,6 +559,7 @@ void main() {
     final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
     // 两张独立照片:同基名(跨夹)、拍摄时刻差一年 —— 不得配对。
     fake.reply(_okData(_handlesDataset([0x10, 0x12, 0x20, 0x22])));
+    fake.reply(_noPropList); // 0x9805 探批量被拒(会话降级)
     fake.reply(_okData(_objectInfoDataset(
         format: 0x3801, parent: 0x20, size: 8400000,
         name: 'DSC_0001.JPG', captured: '20261001T090000'))); // 0x22
@@ -520,6 +584,7 @@ void main() {
     // 句柄升序 [SLOT1夹, NEF, SLOT2夹, JPG];倒序块 1 = [0x22(JPG), 0x20(夹)],
     // 块 2 = [0x12(NEF), 0x10(夹)] —— 配对的两份拆在两块。
     fake.reply(_okData(_handlesDataset([0x10, 0x12, 0x20, 0x22])));
+    fake.reply(_noPropList); // 0x9805 探批量被拒(会话降级)
     fake.reply(_okData(_objectInfoDataset(
         format: 0x3801, parent: 0x20, size: 8400000,
         name: 'DSC_0001.JPG', captured: '20260927T101520'))); // 0x22
@@ -553,6 +618,7 @@ void main() {
     final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
     // 同夹 0x11:JPG 落盘晚 3 秒(CaptureDate 各记各的提交时刻)。
     fake.reply(_okData(_handlesDataset([0x10, 0x11, 0x22, 0x23])));
+    fake.reply(_noPropList); // 0x9805 探批量被拒(会话降级)
     fake.reply(_okData(_objectInfoDataset(
         format: 0x3801, parent: 0x11, size: 8400000,
         name: 'DSC_0001.JPG', captured: '20261002T090003'))); // 0x23
@@ -578,6 +644,7 @@ void main() {
     // NEF 的 captureDate 空串、modificationDate 在 —— 时刻不得丢(排序/
     // 跨夹佐证都靠它)。
     fake.reply(_okData(_handlesDataset([0x10, 0x11, 0x12, 0x13])));
+    fake.reply(_noPropList); // 0x9805 探批量被拒(会话降级)
     fake.reply(_okData(_objectInfoDataset(
         format: 0x3801, parent: 0x11, size: 8400000,
         name: 'DSC_0002.JPG', captured: '20260926T090000'))); // 0x13
@@ -603,6 +670,7 @@ void main() {
     // 两槽各有一个「100NIKON」(不同句柄),同一快门的 JPG/NEF 分存两夹
     //(真机双槽镜像/分存的实际形态)。
     fake.reply(_okData(_handlesDataset([0x10, 0x12, 0x20, 0x22])));
+    fake.reply(_noPropList); // 0x9805 探批量被拒(会话降级)
     fake.reply(_okData(_objectInfoDataset(
         format: 0x3801, parent: 0x20, size: 8400000,
         name: 'DSC_0001.JPG', captured: '20260927T101520'))); // 0x22
@@ -632,6 +700,7 @@ void main() {
     // 倒序块 1 = [0x22(JPG), 0x20(槽2夹), 0x12(NEF)],块 2 = [0x10(槽1夹)]:
     // 槽 2 的夹对象先到(相册以 0x20 亮相),槽 1 的夹对象后到 → 并名。
     fake.reply(_okData(_handlesDataset([0x10, 0x12, 0x20, 0x22])));
+    fake.reply(_noPropList); // 0x9805 探批量被拒(会话降级)
     fake.reply(_okData(_objectInfoDataset(
         format: 0x3801, parent: 0x20, size: 8400000,
         name: 'DSC_0001.JPG', captured: '20260927T101520'))); // 0x22
@@ -655,5 +724,185 @@ void main() {
     expect(updates[1].albums.map((a) => a.name), ['全部照片', '100NIKON']);
     expect(updates[1].albums[1].folderHandle, 0x10);
     expect(updates[1].albums[1].items.single.typeLabel, 'jpg+raw');
+  });
+
+  // ── 批量快路 0x9805(2026-10-15)────────────────────────────────
+
+  test('批量快路:一次 0x9805 拿全量属性,GetObjectInfo 零发(N 次变 1 次)', () async {
+    final fake = FakePtpTransport();
+    final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
+    _replyTreeHandles(fake);
+    fake.reply(_okData(_propListTreeDataset()));
+
+    final albums = await repo.loadAlbums();
+
+    // 请求全景:GetObjectHandles + 0x9805 各一次,GetObjectInfo 一次不发。
+    expect(fake.requests.map((r) => r.opcode), [
+      PtpOperationCode.getObjectHandles,
+      NikonOperationCode.getObjectPropList,
+    ]);
+    expect(_infoCount(fake), 0);
+    // 参数 = n-link 生产同款五参全量形(全对象/全格式/全属性/P4 补零/全层级)。
+    expect(
+      fake.requests[1].params,
+      [0xFFFFFFFF, 0x00000000, 0xFFFFFFFF, 0x00000000, 0xFFFFFFFF],
+    );
+    // 相册与逐对象世界等价(同值数据集):NEF 9-27 在前,字段全落。
+    expect(albums.map((a) => a.name), ['全部照片', '100NIKON']);
+    expect(albums[0].items.map((g) => g.name), ['DSC_0001.NEF', 'DSC_0002.JPG']);
+    final nef = albums[0].items.first.primary;
+    expect(nef.kind, ObjectKind.image); // 0x3000 → .nef 兜底
+    expect(nef.sizeInBytes, 26843545);
+    expect(nef.parentHandle, 0x11);
+    expect(nef.capturedAt, DateTime.utc(2026, 9, 27, 10, 15, 20));
+
+    // 成功不置降级:reset 后重枚举仍先探批量(两轮各 1 次 0x9805)。
+    repo.reset();
+    _replyTreeHandles(fake);
+    fake.reply(_okData(_propListTreeDataset()));
+    await repo.loadAlbums();
+    expect(
+      fake.requests
+          .where((r) => r.opcode == NikonOperationCode.getObjectPropList)
+          .length,
+      2,
+    );
+  });
+
+  test('批量快路成功:发布「批量已到」快照 + 完成事件,夹相册即时亮相', () async {
+    final fake = FakePtpTransport();
+    final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
+    _replyTreeHandles(fake);
+    fake.reply(_okData(_propListTreeDataset()));
+    final updates = <AlbumsUpdate>[];
+    repo.updates.listen(updates.add);
+
+    await repo.loadAlbums();
+
+    // 批量一把全到:快照即 4/4,随后完成事件(块循环零跑)。
+    expect(updates.map((u) => (u.loaded, u.total, u.complete)),
+        [(4, 4, false), (4, 4, true)]);
+    // 夹对象随批量同到:首拍就是具名相册,无占位闪变。
+    expect(updates[0].albums.map((a) => a.name), ['全部照片', '100NIKON']);
+    expect(updates.last.albums.map((a) => a.name), ['全部照片', '100NIKON']);
+  });
+
+  test('批量数据集不可信:未知类型整体弃 → 逐对象回退,同会话不再探', () async {
+    final fake = FakePtpTransport();
+    final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
+    final d = PropListDataset()
+      ..str(0x13, PtpObjectPropCode.objectFilename, 'DSC_0002.JPG') // 首条正常
+      ..raw(0x13, PtpObjectPropCode.objectFormat, 0x00FF, [0x81, 0x38]); // 未知类型
+    _replyTreeHandles(fake);
+    fake.reply(_okData(d.build()));
+    _replyTreeInfos(fake);
+
+    final albums = await repo.loadAlbums();
+
+    // 行为不回归:相册与逐对象世界一致;0x9805 只发过 1 次(降级秒拒)。
+    expect(albums.map((a) => a.name), ['全部照片', '100NIKON']);
+    expect(albums[0].items.map((g) => g.name), ['DSC_0001.NEF', 'DSC_0002.JPG']);
+    expect(
+      fake.requests
+          .where((r) => r.opcode == NikonOperationCode.getObjectPropList)
+          .length,
+      1,
+    );
+    expect(
+      fake.requests
+          .where((r) => r.opcode == PtpOperationCode.getObjectInfo)
+          .map((r) => r.params.single),
+      [0x13, 0x12, 0x11, 0x10], // 缺口全量逐对象补
+    );
+  });
+
+  test('批量部分覆盖:缺身份字段的条目与缺席对象由逐对象补齐', () async {
+    final fake = FakePtpTransport();
+    final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
+    // 0x13 全字段批量到;0x12 缺文件名(条目弃,宁缺毋滥);0x11/0x10 缺席。
+    final d = PropListDataset()
+      ..str(0x13, PtpObjectPropCode.objectFilename, 'DSC_0002.JPG')
+      ..u16(0x13, PtpObjectPropCode.objectFormat, 0x3801)
+      ..u64(0x13, PtpObjectPropCode.objectSize, 8400000)
+      ..u32(0x13, PtpObjectPropCode.parentObject, 0x11)
+      ..str(0x13, PtpObjectPropCode.dateCreated, '20260926T090000')
+      ..u16(0x12, PtpObjectPropCode.objectFormat, 0x3000)
+      ..u64(0x12, PtpObjectPropCode.objectSize, 26843545);
+    _replyTreeHandles(fake);
+    fake.reply(_okData(d.build()));
+    fake.reply(_okData(_objectInfoDataset(
+        format: 0x3000, parent: 0x11, size: 26843545,
+        name: 'DSC_0001.NEF', captured: '20260927T101520'))); // 0x12
+    fake.reply(_okData(_objectInfoDataset(
+        format: 0x3001, parent: 0x10, size: 0, name: '100NIKON'))); // 0x11
+    fake.reply(_okData(_objectInfoDataset(
+        format: 0x3001, parent: 0, size: 0, name: 'DCIM'))); // 0x10
+    final updates = <AlbumsUpdate>[];
+    repo.updates.listen(updates.add);
+
+    final albums = await repo.loadAlbums();
+
+    // 0x13 批量已到不重问;缺口 = [0x12, 0x11, 0x10] 逐对象补。
+    expect(
+      fake.requests
+          .where((r) => r.opcode == PtpOperationCode.getObjectInfo)
+          .map((r) => r.params.single),
+      [0x12, 0x11, 0x10],
+    );
+    // 发布节奏:批量快照(1/4)→ 缺口块(4/4)→ 完成事件。
+    expect(updates.map((u) => (u.loaded, u.total, u.complete)),
+        [(1, 4, false), (4, 4, false), (4, 4, true)]);
+    expect(albums[0].items.map((g) => g.name), ['DSC_0001.NEF', 'DSC_0002.JPG']);
+  });
+
+  test('批量含幽灵句柄:不在 GetObjectHandles 结果里的条目忽略(句柄纪律)', () async {
+    final fake = FakePtpTransport();
+    final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
+    // 合法树(0x10-0x13)全字段 + 幽灵 0x99 全字段;0x99 不在
+    // GetObjectHandles 结果里 —— 即使批量应答带全字段也不入缓存
+    //(句柄只能来自 GetObjectHandles,TODO 注意事项 2)。
+    final full = PropListDataset()
+      ..str(0x13, PtpObjectPropCode.objectFilename, 'DSC_0002.JPG')
+      ..u16(0x13, PtpObjectPropCode.objectFormat, 0x3801)
+      ..u64(0x13, PtpObjectPropCode.objectSize, 8400000)
+      ..u32(0x13, PtpObjectPropCode.parentObject, 0x11)
+      ..str(0x13, PtpObjectPropCode.dateCreated, '20260926T090000')
+      ..str(0x12, PtpObjectPropCode.objectFilename, 'DSC_0001.NEF')
+      ..u16(0x12, PtpObjectPropCode.objectFormat, 0x3000)
+      ..u64(0x12, PtpObjectPropCode.objectSize, 26843545)
+      ..u32(0x12, PtpObjectPropCode.parentObject, 0x11)
+      ..str(0x12, PtpObjectPropCode.dateCreated, '20260927T101520')
+      ..str(0x11, PtpObjectPropCode.objectFilename, '100NIKON')
+      ..u16(0x11, PtpObjectPropCode.objectFormat, 0x3001)
+      ..str(0x10, PtpObjectPropCode.objectFilename, 'DCIM')
+      ..u16(0x10, PtpObjectPropCode.objectFormat, 0x3001)
+      ..str(0x99, PtpObjectPropCode.objectFilename, 'GHOST.JPG')
+      ..u16(0x99, PtpObjectPropCode.objectFormat, 0x3801)
+      ..u64(0x99, PtpObjectPropCode.objectSize, 123)
+      ..u32(0x99, PtpObjectPropCode.parentObject, 0x11);
+    _replyTreeHandles(fake);
+    fake.reply(_okData(full.build()));
+
+    final albums = await repo.loadAlbums();
+
+    // 幽灵不入缓存:entryFor 显式报错,相册只有两张合法照片。
+    expect(() => repo.entryFor(0x99), throwsStateError);
+    expect(albums[0].items.map((g) => g.primary.name),
+        ['DSC_0001.NEF', 'DSC_0002.JPG']);
+    // 全量批量(零缺口):GetObjectInfo 仍零发。
+    expect(_infoCount(fake), 0);
+  });
+
+  test('批量阶段链路级异常:上抛终止枚举,不吞、不逐对象硬敲', () async {
+    final fake = FakePtpTransport();
+    final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
+    _replyTreeHandles(fake);
+    fake.fail(TimeoutException('USB 链路已中断,等待重接')); // 0x9805 挂死
+
+    await expectLater(
+        repo.loadAlbums(), throwsA(isA<TimeoutException>()));
+    expect(repo.isLoaded, isFalse);
+    // 链路级异常不吞也不降级硬敲:无任何 GetObjectInfo 发出。
+    expect(_infoCount(fake), 0);
   });
 }

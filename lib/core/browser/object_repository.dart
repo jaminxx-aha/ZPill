@@ -6,6 +6,7 @@ import 'dart:math' as math;
 
 import '../ptpip/object_format.dart';
 import '../ptpip/object_info.dart';
+import '../ptp/operation_codes.dart';
 import '../ptp/ptp_session.dart';
 import 'album.dart';
 import 'object_entry.dart';
@@ -73,6 +74,52 @@ abstract interface class ObjectRepository {
     );
   }
 
+  /// 0x9805 批量属性(单对象的多条 [PtpObjectProp])→ ObjectEntry,字段
+  /// 定集与 [toEntry] 一致(文件名/大小/格式码/父夹/时刻)。**文件名
+  /// (0xDC07)或格式码(0xDC02)缺失 → null**:该对象交逐对象
+  /// GetObjectInfo 路径补(批量快路宁缺毋滥,防无名/无类脏 entry 进相册)。
+  /// 不在 GetObjectHandles 结果里的句柄由调用方过滤(TODO 注意事项 2:
+  /// 句柄只能来自 GetObjectHandles 响应)。
+  static ObjectEntry? toEntryFromProps(
+      int handle, Iterable<PtpObjectProp> props) {
+    String? name;
+    int? format;
+    var size = 0;
+    var parent = 0;
+    String? created;
+    String? modified;
+    for (final p in props) {
+      switch (p.code) {
+        case PtpObjectPropCode.objectFilename:
+          name = p.value as String?;
+        case PtpObjectPropCode.objectFormat:
+          format = p.value as int?;
+        case PtpObjectPropCode.objectSize:
+          size = (p.value as int?) ?? 0;
+        case PtpObjectPropCode.parentObject:
+          parent = (p.value as int?) ?? 0;
+        case PtpObjectPropCode.dateCreated:
+          created = p.value as String?;
+        case PtpObjectPropCode.dateModified:
+          modified = p.value as String?;
+      }
+    }
+    if (name == null || name.isEmpty || format == null) return null;
+    var kind = kindForFormatCode(format);
+    if (kind == ObjectKind.other) {
+      kind = kindForFilename(name); // NEF 0x3000 同款扩展名兜底
+    }
+    return ObjectEntry(
+      handle: handle,
+      name: name,
+      sizeInBytes: size,
+      kind: kind,
+      parentHandle: parent,
+      capturedAt: _parsePtpDate(created) ?? _parsePtpDate(modified),
+      formatCode: format,
+    );
+  }
+
   /// PTP 日期串 `YYYYMMDDThhmmss.s`(UTC)→ DateTime;解析失败返回 null。
   static DateTime? _parsePtpDate(String? raw) {
     if (raw == null || raw.length < 15) return null;
@@ -95,7 +142,9 @@ abstract interface class ObjectRepository {
 ///
 /// 填充顺序:句柄倒序(尼康句柄升序 ≈ 拍摄顺序,最新照片低延迟亮相;
 /// probe --objmeta 相关性结论若证伪则删反转 —— 只影响出现先后,不影响
-/// 最终排序)。Nikon 0x9434 GetObjectsMetaData 批量快路留后续(探针先行)。
+/// 最终排序)。批量快路走 MTP 0x9805 GetObjectPropList(官方 §6.2.11.5,
+/// 2026-10-15 落地);Nikon 0x9434 GetObjectsMetaData 是候选替代路
+/// (探针先行,留真机对比)。
 ///
 /// Zf 真机语义(2026-09-27 实测):parent=0 才是全量枚举(602 个对象,
 /// 0xFFFFFFFF 只回根层),故全量走 [GetObjectHandlesParams.parentRoot]。
@@ -181,7 +230,8 @@ final class ObjectRepositoryImpl implements ObjectRepository {
   }
 
   /// 全量枚举(渐进):GetObjectHandles(Zf 语义 parent=0)→ 句柄倒序 →
-  /// 跳过已缓存(断点续传)→ 分块逐个 GetObjectInfo,每块合并入缓存并
+  /// 跳过已缓存(断点续传)→ **批量快路 0x9805**(一把拿全部对象属性,
+  /// 失败/降级静默回退)→ 缺口分块逐个 GetObjectInfo,每块合并入缓存并
   /// 广播到 [updates]。
   Future<void> _loadAll() async {
     final generation = _generation;
@@ -199,12 +249,61 @@ final class ObjectRepositoryImpl implements ObjectRepository {
       for (final h in ordered)
         if (!_byHandle.containsKey(h)) h,
     ];
-    var loaded = ordered.length - pending.length;
+
+    // ── 批量快路(0x9805,官方 §6.2.11.5):全部对象 × 全部属性一把拿,
+    // 1×RTT 替代 N×GetObjectInfo(参数五参全量形 = n-link 生产同款)。
+    // 真发失败/数据集不可信在会话层置降级旗标,本会话后续枚举直接
+    // 跳过本段;三类批量特有失败在此吞掉走逐对象(行为不回归),链路
+    // 级异常(超时/断链)不吞照旧上抛终止枚举。真机核对项:Zf 对
+    // 0x9805 的实际支持面与首屏提速实测。
+    if (pending.isNotEmpty) {
+      List<PtpObjectProp>? props;
+      try {
+        props = await session.getObjectPropList(
+          0xFFFFFFFF, // P1:全部对象
+          formatCode: 0x00000000, // P2:全部格式
+          propCode: 0xFFFFFFFF, // P3:全部属性
+          depth: 0xFFFFFFFF, // P5:整个层级(P4 组码补 0)
+        );
+      } on UnsupportedError {
+        // 本会话已降级(含本次真发失败后的秒拒):直接走逐对象。
+      } on PtpResponseException {
+        // 相机拒绝 0x9805(op 不在册/参数拒):会话已降级,走逐对象。
+      } on FormatException {
+        // 数据集不可信(未知类型/计数不符):会话已降级,走逐对象。
+      }
+      if (generation != _generation) return; // 每个 await 后、写缓存前
+      if (props != null) {
+        // 按句柄归并(同对象多属性条目分散在流中);不在 GetObjectHandles
+        // 结果里的句柄忽略(句柄只能来自 GetObjectHandles,TODO 注意事项 2)。
+        final byHandle = <int, List<PtpObjectProp>>{};
+        for (final p in props) {
+          if (!handleSet.contains(p.handle)) continue;
+          byHandle.putIfAbsent(p.handle, () => []).add(p);
+        }
+        for (final e in byHandle.entries) {
+          final entry = ObjectRepository.toEntryFromProps(e.key, e.value);
+          if (entry != null) _byHandle[e.key] = entry;
+        }
+      }
+    }
+
+    // 批量缺口(含批量路整体缺席/条目被弃)由既有逐对象路径补齐 ——
+    // 断点续传语义天然复用:循环只问缓存里还没有的。
+    final gaps = [
+      for (final h in pending)
+        if (!_byHandle.containsKey(h)) h,
+    ];
+    if (gaps.length < pending.length) {
+      // 批量确有产出:先广播一次「批量已到、缺口未补」的快照。
+      _publish(ordered.length - gaps.length, ordered.length, complete: false);
+    }
+    var loaded = ordered.length - gaps.length;
     var consecutiveFailures = 0;
-    for (var start = 0; start < pending.length; start += chunkSize) {
-      final end = math.min(start + chunkSize, pending.length);
+    for (var start = 0; start < gaps.length; start += chunkSize) {
+      final end = math.min(start + chunkSize, gaps.length);
       for (var i = start; i < end; i++) {
-        final handle = pending[i];
+        final handle = gaps[i];
         final PtpObjectInfo info;
         try {
           info = await session.getObjectInfo(handle);

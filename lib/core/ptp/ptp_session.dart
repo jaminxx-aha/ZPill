@@ -262,6 +262,7 @@ final class PtpSession {
     _sessionOpen = true;
     _remoteModeActive = false; // 新链新账:旧链的 remote 模式持有态不带来
     _largeThumbDegraded = false; // 新链新账:0x90C4 重新探测
+    _objectPropListDegraded = false; // 新链新账:0x9805 重新探测
     connectLadder.clear(); // 一连接一账:新连接的梯从零记
   }
 
@@ -270,6 +271,7 @@ final class PtpSession {
   Future<void> close() async {
     _remoteModeActive = false; // 链将亡:remote 持有态一律作废(含未开会话的旁路持有)
     _largeThumbDegraded = false; // 链将亡:0x90C4 降级态作废,新链重探
+    _objectPropListDegraded = false; // 链将亡:0x9805 降级态作废,新链重探
     if (!_sessionOpen) return;
     _sessionOpen = false;
     await _serialized(() async {
@@ -450,6 +452,14 @@ final class PtpSession {
   /// [close()] 复位 —— 新连接重新探测。
   bool _largeThumbDegraded = false;
   bool get largeThumbDegraded => _largeThumbDegraded;
+
+  /// 0x9805 会话级降级旗标(语义同 [_largeThumbDegraded]):本会话内
+  /// GetObjectPropList 已被真发证实不可用(错误应答/数据集不可信/链路
+  /// 异常),仓库层据此直走逐对象 GetObjectInfo。[open()] / [close()]
+  /// 复位 —— 新连接重新探测;码表不在册不置位(不做 supportsOperation
+  /// 门禁,STA 9-op 小表假门,直发纪律同 0x90C4/0x920F)。
+  bool _objectPropListDegraded = false;
+  bool get objectPropListDegraded => _objectPropListDegraded;
 
   /// JPEG SOI(FFD8)嗅探:数据非 FFD8 开头时在前 512B 内找 SOI 并剥头
   /// (Nikon 0x90C4 数据布局真机验证中,防御性处理「头 + JPEG」形态);
@@ -1312,48 +1322,187 @@ final class PtpSession {
     _ensureOk(result, NikonOperationCode.setObjectPropValue);
   }
 
-  /// GetObjectPropList(0x9805,官方 §6.2.11.5):对象属性批量读。
-  /// [handle]:具体句柄 / 0x00000000 根层直下 / 0xFFFFFFFF 全部对象;
-  /// [formatCode]:0 = 全部格式;[propCode]:具体属性码 / 0x00000000
-  /// 按 [groupCode] 组 / 0xFFFFFFFF 全部属性;[depth]:null = 仅 [handle]
-  /// 指定对象(P5 省略),0 = 层级深度内,0xFFFFFFFF = 整个层级。
-  /// 数据集 = u32 计数 + N×(u32 句柄 + u16 属性码 + u16 类型 + DTS 值)。
+  /// GetObjectPropList(0x9805,官方 §6.2.11.5):对象属性批量读 ——
+  /// 一把拿多对象多属性(首屏枚举 1×RTT 替代 N×GetObjectInfo)。
+  ///
+  /// 参数(官方 §6.2.11.5 Operation Parameter 表,按位序不可跳档):
+  /// [handle] P1 ObjectHandle:具体句柄 / 0x00000000 根层直下 /
+  /// 0xFFFFFFFF 全部对象;[formatCode] P2 [ObjectFormatCode]:
+  /// 0x00000000 = 全部格式;[propCode] P3 ObjectPropCode:具体属性码 /
+  /// 0x00000000(按 [groupCode] 组,Zf §6.6 信息组 = 0x00000001)/
+  /// 0xFFFFFFFF 全部属性;[groupCode] P4 [ObjectPropGroupCode](仅 P3=
+  /// 0x00000000 时生效;给了 [depth] 而未给组码时补 0x00000000 占位);
+  /// [depth] P5 [Depth]:null = 省略(仅 P1 指定对象)/ 0x00000000
+  /// 指定深度 / 0xFFFFFFFF 整个层级。首屏全量五参形
+  /// [0xFFFFFFFF, 0, 0xFFFFFFFF, 0, 0xFFFFFFFF] = n-link 生产同款。
+  ///
+  /// 数据集(官方 §6.2.11.5 数据集表)= u32 NumberOfElements +
+  /// N×(u32 ObjectHandle + u16 PropertyCode + u16 Datatype + DTS 值),
+  /// **无 GetSet 字节**(那是 0x9802 ObjectPropDesc 的布局;n-link 的
+  /// 「无计数前缀连续流」口径与官方表相左,以官方为准 —— 若真机应答
+  /// 果真无计数,首 u32 会被当元素数解析,几乎必然解析弃/降级,安全
+  /// 回退逐对象,不产脏数据)。
+  ///
+  /// 会话级降级([objectPropListDegraded]):真发失败(错误应答/解析
+  /// 弃/链路异常)即置位,本会话后续调用秒拒 [UnsupportedError] 不再
+  /// 逐枚举浪费 RTT;[open()] 开新会话复位重探(同
+  /// [_largeThumbDegraded] 纪律)。不做能力表门禁直发(在册假门)。
   Future<List<PtpObjectProp>> getObjectPropList(
     int handle, {
     int formatCode = 0x00000000,
     int propCode = 0xFFFFFFFF,
+    int? groupCode,
     int? depth,
   }) async {
+    if (_objectPropListDegraded) {
+      throw UnsupportedError('GetObjectPropList(0x9805) 本会话已降级');
+    }
+    // P4/P5 按位序不可跳:给了任一可选后段参数,P4 组码缺席补 0。
     final params = [handle, formatCode, propCode];
+    if (groupCode != null || depth != null) {
+      params.add(groupCode ?? 0x00000000);
+    }
     if (depth != null) params.add(depth);
-    final result = await _serialized(() => transport.execute(PtpRequest(
-          opcode: NikonOperationCode.getObjectPropList,
-          params: params,
-        )));
-    _ensureOk(result, NikonOperationCode.getObjectPropList);
-    final data = result.data;
+    final PtpResult result;
+    try {
+      result = await _serialized(() => transport.execute(PtpRequest(
+            opcode: NikonOperationCode.getObjectPropList,
+            params: params,
+          )));
+      _ensureOk(result, NikonOperationCode.getObjectPropList);
+    } on Exception {
+      // 错误应答(op 不在册/参数拒)或链路异常:真发证据,一次失败即
+      // 降级本会话;原异常上抛(诊断要真相),调用方回退逐对象路径。
+      _objectPropListDegraded = true;
+      rethrow;
+    }
+    try {
+      return _parseObjectPropList(result.data);
+    } on FormatException {
+      _objectPropListDegraded = true; // 数据集不可信:整体弃,不产脏数据
+      rethrow;
+    } on ArgumentError {
+      // ByteReader 越界(RangeError 族)= 截断数据集,与格式弃同判。
+      _objectPropListDegraded = true;
+      throw const FormatException('GetObjectPropList(0x9805) 数据集截断越界');
+    }
+  }
+
+  /// 0x9805 ObjectPropList 数据集解析(官方 §6.2.11.5 数据集表):
+  /// u32 计数 + N×(u32 句柄 + u16 属性码 + u16 类型 + DTS 值)。
+  ///
+  /// 防错位三闸(n-link 纪律):①计数与字节流互相印证 —— 提前耗尽或
+  /// 解完仍有尾巴都判不可信;②值类型按 [_readObjectPropValue] 定宽读,
+  /// 表外未知类型整体抛 [FormatException];③ByteReader 越界(截断)归
+  /// 一为 [FormatException]。任一触发 = 本会话降级,回退逐对象。
+  static List<PtpObjectProp> _parseObjectPropList(Uint8List? data) {
+    // OK 应答零数据/不足计数头:按「空属性表」读(单对象查询的合法形;
+    // 全量场景下空表由仓库层按缺口回退补齐,不判失败)。
     if (data == null || data.length < 4) return const [];
-    final reader = ByteReader(data);
-    final count = reader.u32();
+    final r = ByteReader(data);
+    final count = r.u32();
     final props = <PtpObjectProp>[];
-    for (var i = 0; i < count && !reader.eof; i++) {
-      final objectHandle = reader.u32();
-      final code = reader.u16();
-      final type = reader.u16();
-      final dt = PtpDataType.fromCode(type);
-      final valueStart = reader.offset;
-      final value = dt.read(reader);
-      final consumed = reader.offset - valueStart;
+    for (var i = 0; i < count; i++) {
+      if (r.remaining < 8) {
+        throw FormatException(
+            'GetObjectPropList(0x9805) 数据集在第 $i/$count 条提前耗尽');
+      }
+      final objectHandle = r.u32();
+      final code = r.u16();
+      final type = r.u16();
+      final valueStart = r.offset;
+      final value = _readObjectPropValue(r, type);
       props.add(PtpObjectProp(
         handle: objectHandle,
         code: code,
         dataType: type,
-        rawValue:
-            Uint8List.sublistView(data, valueStart, valueStart + consumed),
+        rawValue: Uint8List.sublistView(data, valueStart, r.offset),
         value: value,
       ));
     }
+    if (!r.eof) {
+      throw FormatException(
+          'GetObjectPropList(0x9805) 数据集解完计数 $count 后仍剩 ${r.remaining}B');
+    }
     return props;
+  }
+
+  /// 0x9805 条目值读取:标准标量直解;**已知宽度的扩展形态**(INT128/
+  /// UINT128 0x0009/0x000A —— Zf §6.6.1.13 PersistentUID 在列;数组型
+  /// 0x4001-0x4008 u32 元素数 + 元素×N —— §6.6.1.16
+  /// RepresentativeSampleData 在列)按宽度跳过不弃解析(值置 null,
+  /// rawValue 留档,宽度已知不会错位);**表外未知类型整体抛
+  /// [FormatException]**(宁弃不猜,n-link 纪律)。
+  static Object? _readObjectPropValue(ByteReader r, int typeCode) {
+    switch (typeCode) {
+      case 0x0001: // INT8
+        _needPropBytes(r, 1);
+        return r.u8().toSigned(8);
+      case 0x0002: // UINT8
+        _needPropBytes(r, 1);
+        return r.u8();
+      case 0x0003: // INT16
+        _needPropBytes(r, 2);
+        return r.u16().toSigned(16);
+      case 0x0004: // UINT16
+        _needPropBytes(r, 2);
+        return r.u16();
+      case 0x0005: // INT32
+        _needPropBytes(r, 4);
+        return r.u32().toSigned(32);
+      case 0x0006: // UINT32
+        _needPropBytes(r, 4);
+        return r.u32();
+      case 0x0007: // INT64
+        _needPropBytes(r, 8);
+        return r.u64().toSigned(64);
+      case 0x0008: // UINT64
+        _needPropBytes(r, 8);
+        return r.u64();
+      case 0x0009: // INT128:16B 已知宽,Dart int 放不下,跳过不解值
+      case 0x000A: // UINT128(§6.6.1.13 PersistentUID)
+        _needPropBytes(r, 16);
+        r.raw(16);
+        return null;
+      case 0x4001: // AINT8 ─ 数组:u32 元素数 + 元素×宽
+      case 0x4002: // AUINT8(§6.6.1.16 RepresentativeSampleData)
+      case 0x4003: // AINT16
+      case 0x4004: // AUINT16
+      case 0x4005: // AINT32
+      case 0x4006: // AUINT32
+      case 0x4007: // AINT64
+      case 0x4008: // AUINT64
+        _needPropBytes(r, 4);
+        final n = r.u32();
+        final width = switch (typeCode) {
+          0x4001 || 0x4002 => 1,
+          0x4003 || 0x4004 => 2,
+          0x4005 || 0x4006 => 4,
+          _ => 8,
+        };
+        if (n > r.remaining ~/ width) {
+          throw FormatException(
+              'GetObjectPropList(0x9805) 数组元素数 $n 超出剩余 ${r.remaining}B');
+        }
+        r.raw(n * width);
+        return null;
+      case 0xFFFF: // STR:u8 字符数 + UTF-16LE(0xFF = 未提供)
+        _needPropBytes(r, 1);
+        final n = r.bytes[r.offset];
+        if (n != 0xFF) _needPropBytes(r, 1 + 2 * n);
+        return r.ptpString();
+      default:
+        throw FormatException(
+            'GetObjectPropList(0x9805) 未知数据集类型 0x${typeCode.toRadixString(16)}(防错位整体弃)');
+    }
+  }
+
+  /// 0x9805 值读取的剩余字节预检(不足 = 截断数据集)。
+  static void _needPropBytes(ByteReader r, int n) {
+    if (r.remaining < n) {
+      throw FormatException(
+          'GetObjectPropList(0x9805) 值字节不足(需 $n 剩 ${r.remaining}B)');
+    }
   }
 
   /// u32 计数 + N×u16 数组解析(0x9801)。
