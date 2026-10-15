@@ -47,3 +47,12 @@ kotlin {
 flutter {
     source = "../.."
 }
+
+dependencies {
+    // 视频 LUT 导出(VideoLutExportPlugin):Transformer 硬件导出 +
+    // 内置 SingleColorLut 效果。版本对齐参考实现(Camera_Bridge 实证
+    // 1.9.2 全链可用);ToShortPcm 音频前置在该版本 family 内。
+    implementation("androidx.media3:media3-transformer:1.9.2")
+    implementation("androidx.media3:media3-effect:1.9.2")
+    implementation("androidx.media3:media3-common:1.9.2")
+}

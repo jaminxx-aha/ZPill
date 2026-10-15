@@ -9,6 +9,7 @@ import com.aha.nikonpill.motion.MotionPlugin
 import com.aha.nikonpill.network.NetworkPlugin
 import com.aha.nikonpill.nsd.NsdPlugin
 import com.aha.nikonpill.usb.UsbHostPlugin
+import com.aha.nikonpill.video.VideoLutExportPlugin
 import com.aha.nikonpill.video.VideoPlugin
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -38,6 +39,7 @@ class MainActivity : FlutterActivity() {
         flutterEngine.plugins.add(BlePlugin())
         flutterEngine.plugins.add(BgPlugin())
         flutterEngine.plugins.add(VideoPlugin())
+        flutterEngine.plugins.add(VideoLutExportPlugin())
         flutterEngine.plugins.add(NetworkPlugin())
         volumeChannel = MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,

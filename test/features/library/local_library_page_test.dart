@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:nikon_pill/core/browser/object_entry.dart';
 import 'package:nikon_pill/core/browser/photo_group.dart' show baseNameOf;
+import 'package:nikon_pill/core/media/cube_lut.dart';
 import 'package:nikon_pill/core/ptpip/object_format.dart';
 import 'package:nikon_pill/core/transfer/transfer_engine.dart';
 import 'package:nikon_pill/core/transfer/transfer_task.dart';
@@ -15,6 +16,7 @@ import 'package:nikon_pill/features/library/local_library_page.dart';
 import 'package:nikon_pill/features/transfers/transfers_page.dart';
 import 'package:nikon_pill/platform/gallery_saver.dart';
 import 'package:nikon_pill/platform/raw_decoder.dart';
+import 'package:nikon_pill/platform/video_lut_export.dart';
 import 'package:nikon_pill/platform/video_player.dart';
 
 /// 伪相册服务:downloadsDir 指向临时目录,importFiles 落账可断言;
@@ -147,6 +149,30 @@ final class _FakeVideoPlayer implements VideoPlayer {
   }
 }
 
+/// 假 LUT 导出宿主:isSupported 恒真;export 记账并回固定产物路径
+/// (预置的临时 MP4,落库后由查看器删)。
+final class _FakeVideoLut implements VideoLutExportHost {
+  _FakeVideoLut(this.outPath);
+
+  final String outPath;
+  final exportCalls = <String>[];
+
+  @override
+  Future<bool> isSupported() async => true;
+
+  @override
+  Future<String> export(String path, CubeLut lut,
+      {void Function(int progress)? onProgress}) async {
+    exportCalls.add(path);
+    onProgress?.call(50);
+    onProgress?.call(100);
+    return outPath;
+  }
+
+  @override
+  Future<void> cancel() async {}
+}
+
 /// 假内嵌视频视图:占位盒 + 微任务里回 onCreated(固定 viewId 7)。
 /// 不建真平台视图(Widget 测试环境造不出;生产行为装机验)。
 final class _StubVideoView extends StatefulWidget {
@@ -263,7 +289,8 @@ void main() {
   Widget host(_FakeGallery gallery, TransfersController controller,
           {RawDecoder? rawDecoder,
           VideoPlayer? videoPlayer,
-          EmbeddedVideoViewBuilder? embeddedView}) =>
+          EmbeddedVideoViewBuilder? embeddedView,
+          VideoLutExportHost? videoLut}) =>
       MaterialApp(
           home: LocalLibraryPage(
         controller: controller,
@@ -271,15 +298,18 @@ void main() {
         rawDecoder: rawDecoder ?? _FakeRawDecoder(fail: true),
         videoPlayer: videoPlayer ?? _FakeVideoPlayer(),
         embeddedVideoView: embeddedView,
+        videoLutExport: videoLut,
       ));
 
   /// 内嵌播放人设:embedded 播放器 + 假视图(onCreated 回固定 viewId 7)。
   Widget embeddedHost(_FakeGallery gallery, TransfersController controller,
-          _FakeVideoPlayer player) =>
+          _FakeVideoPlayer player,
+          {VideoLutExportHost? videoLut}) =>
       host(gallery, controller,
           videoPlayer: player,
           embeddedView: (path, onCreated) =>
-              _StubVideoView(onCreated: onCreated));
+              _StubVideoView(onCreated: onCreated),
+          videoLut: videoLut);
 
   testWidgets('空态:应用内还没有文件', (tester) async {
     final gallery = _FakeGallery(dir);
@@ -391,6 +421,44 @@ void main() {
     expect(find.text('已导入系统相册(应用内文件保留)'), findsOneWidget);
     // 文件本体保留(导入是复制不是移动)
     expect(File('${dir.path}/b.jpg').existsSync(), isTrue);
+
+    // 冲掉 snackbar 的自动消失 timer(不能留 pending 到测试末)
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('视频 LUT 导出:视频页入口 → 选表 → 导出落库(_LUT.mp4 改名,'
+      '临时档用完即删)', (tester) async {
+    writeFile('c.mov', modified: DateTime(2026, 10, 3));
+    final gallery = _FakeGallery(dir);
+    final player = _FakeVideoPlayer(embedded: true);
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    final outPath = '${dir.path}/_out.mp4';
+    File(outPath).writeAsBytesSync([9, 9, 9]);
+    final lut = _FakeVideoLut(outPath);
+    await tester.pumpWidget(
+        embeddedHost(gallery, controller, player, videoLut: lut));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('c.mov')));
+    await tester.pumpAndSettle();
+    // 视频页有 LUT 入口(照片页由 isVideoFilename 门自然不出现)
+    expect(find.byTooltip('LUT 导出'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('LUT 导出'));
+    await tester.pumpAndSettle();
+    expect(find.text('LUT 风格'), findsOneWidget);
+
+    await tester.tap(find.text('青橙'));
+    await tester.pumpAndSettle();
+
+    expect(lut.exportCalls, ['${dir.path}/c.mov']);
+    final call = gallery.importCalls.single.single;
+    expect(call.filename, 'c_LUT.mp4');
+    expect(call.kind, ObjectKind.video);
+    expect(find.text('已保存到系统相册'), findsOneWidget);
+    expect(File(outPath).existsSync(), isFalse); // 临时档用完即删
 
     // 冲掉 snackbar 的自动消失 timer(不能留 pending 到测试末)
     await tester.pump(const Duration(seconds: 5));

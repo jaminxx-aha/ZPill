@@ -188,6 +188,55 @@ Lut_3d_Size 2
       }
     }
   });
+
+  test('cubeDataRgba:0..1 域直展开(红最快,alpha 恒 1)', () {
+    final lut = CubeLut.parse(_positionCube(2));
+    final rgba = lut.cubeDataRgba();
+    expect(rgba.length, 2 * 2 * 2 * 4);
+    // 位置编码表:格点值 = 坐标;顺序 (b 最慢, r 最快)。
+    var j = 0;
+    for (var b = 0; b < 2; b++) {
+      for (var g = 0; g < 2; g++) {
+        for (var r = 0; r < 2; r++) {
+          expect(rgba[j++], r.toDouble(), reason: 'r@(r=$r,g=$g,b=$b)');
+          expect(rgba[j++], g.toDouble(), reason: 'g@(r=$r,g=$g,b=$b)');
+          expect(rgba[j++], b.toDouble(), reason: 'b@(r=$r,g=$g,b=$b)');
+          expect(rgba[j++], 1.0, reason: 'a@(r=$r,g=$g,b=$b)');
+        }
+      }
+    }
+  });
+
+  test('cubeDataRgba:非 0..1 域重采样(域外输入钳端点)', () {
+    // DOMAIN_MIN 0.2:格点输入 0 在域外 → 钳到域下端 0.2 → 落表内
+    // 格点 0;输入 1 = 域上端 1.0,原样命中格点 1。size-2 无内点,
+    // 重采样的插值数学由 apply 既有测试覆盖,这里钉「钳」语义。
+    const domainCube = 'LUT_3D_SIZE 2\n'
+        'DOMAIN_MIN 0.2 0.2 0.2\n'
+        '0.0 0.0 0.0\n' // (0,0,0)
+        '1.0 0.0 0.0\n' // (1,0,0)
+        '0.0 1.0 0.0\n'
+        '1.0 1.0 0.0\n'
+        '0.0 0.0 1.0\n'
+        '1.0 0.0 1.0\n'
+        '0.0 1.0 1.0\n'
+        '1.0 1.0 1.0\n';
+    final lut = CubeLut.parse(domainCube);
+    final rgba = lut.cubeDataRgba();
+    // cell (r=0,g=0,b=0):apply(0,0,0) → 钳到域 0.2 → 表 (0,0,0)。
+    expect(rgba[0], 0.0);
+    expect(rgba[1], 0.0);
+    expect(rgba[2], 0.0);
+    expect(rgba[3], 1.0);
+    // cell (r=1,g=0,b=0):apply(1,0,0) → r=域上端 1 → 表 (1,0,0)。
+    expect(rgba[4], 1.0);
+    expect(rgba[5], 0.0);
+    expect(rgba[6], 0.0);
+    // cell (r=0,g=0,b=1):apply(0,0,1) → b=域上端 → 表 (0,0,1) 行。
+    // 扁平 cell 序 = ((b·N+g)·N+r),即 ((1·2+0)·2+0)。
+    final idx = ((1 * 2 + 0) * 2 + 0) * 4;
+    expect(rgba.sublist(idx, idx + 4), [0.0, 0.0, 1.0, 1.0]);
+  });
 }
 
 Matcher closeTo3(double r, double g, double b) => predicate<List<double>>(

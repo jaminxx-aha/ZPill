@@ -46,5 +46,8 @@ import UIKit
     if let registrar = registry.registrar(forPlugin: "VolumeKeyPlugin") {
       VolumeKeyPlugin.register(with: registrar)
     }
+    if let registrar = registry.registrar(forPlugin: "VideoLutExportPlugin") {
+      VideoLutExportPlugin.register(with: registrar)
+    }
   }
 }
