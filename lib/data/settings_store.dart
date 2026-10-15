@@ -238,9 +238,10 @@ final class AppSettings {
   /// 配对入口在设置页。
   final bool bleGpsInject;
 
-  /// Android 音量键快门:开 = 拍摄页存续期原生拦音量键转快门(上/下
+  /// 音量键快门:开 = 拍摄页存续期原生拦音量键转快门(上/下
   /// 同效,命中走 RemoteController.capture 同一守卫);关/异端 = 音量键
-  /// 归系统。Android 独有(iOS 不放行音量键给应用,ohos 未做原生拦截)。
+  /// 归系统。Android 拦键事件、iOS 观察系统音量沿(启用期音量会被
+  /// 回吸到锚点,停用还原),ohos 未做原生拦截。
   final bool volumeKeyShutter;
 
   /// copyWith 的「未传」哨兵:画质两字段要能把 null(跟随相机)写回,

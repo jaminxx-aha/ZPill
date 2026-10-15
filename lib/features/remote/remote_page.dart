@@ -77,8 +77,6 @@
 library;
 
 import 'dart:async';
-import 'dart:io' show Platform;
-
 import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -127,8 +125,8 @@ class RemotePage extends StatefulWidget {
   /// 单例的 SettingsController)。
   final ValueListenable<AppSettings>? settingsListenable;
 
-  /// 音量键快门宿主(测试注入;null = Android 上用 MethodChannel 单例,
-  /// 其余平台不接线 —— iOS 系统不放行音量键到应用,ohos 未做原生拦截)。
+  /// 音量键快门宿主(测试注入;null = Android/iOS 用 MethodChannel
+  /// 单例,其余平台不接线 —— ohos 未做原生拦截)。
   final VolumeKeyHost? volumeKeys;
 
   @override
@@ -186,10 +184,11 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   bool _bleReady = false;
   StreamSubscription<BleSessionState>? _bleStateSub;
 
-  /// 音量键快门宿主:注入优先(单测);无注入时 Android 才接线(其余
-  /// 平台原生侧无拦截,接线也无事发生,索性不接)。
-  late final VolumeKeyHost? _volumeKeys = widget.volumeKeys ??
-      (Platform.isAndroid ? MethodChannelVolumeKeys.instance : null);
+  /// 音量键快门宿主:注入优先(单测);无注入时按平台分派(Android
+  /// 拦 onKeyUp / iOS 观察系统音量,见 volume_keys.dart;其余平台
+  /// 原生侧无实现,接线也无事发生,索性不接)。
+  late final VolumeKeyHost? _volumeKeys =
+      widget.volumeKeys ?? MethodChannelVolumeKeys.platformHost;
   StreamSubscription<VolumeKey>? _volumeKeySub;
   bool _volumeShutterWired = false;
 
@@ -210,7 +209,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     _syncAnalyzerEnabled();
     controller.autoLiveViewEnabled = _settings.value.liveViewOn;
     _settings.addListener(_onSettingsChanged);
-    // 音量键快门(Android):开关开即让原生拦音量键并订阅,离页/关
+    // 音量键快门(Android/iOS):开关开即让原生拦音量键并订阅,离页/关
     // 开关沿还系统(见 _syncVolumeKeyShutter)。
     _syncVolumeKeyShutter();
     // BLE GPS 注入芯片门禁 = 已配对(身份在),**不是**瞬时就绪 ——
@@ -416,14 +415,14 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     _persistSettings(_settings.value.copyWith(bleGpsInject: value));
   }
 
-  /// 音量键快门落定(浮层芯片,Android 独有行):只写设置;原生开关
+  /// 音量键快门落定(浮层芯片,Android/iOS 行):只写设置;原生开关
   /// (setEnabled 推/撤 + 订阅)由 [_syncVolumeKeyShutter] 在设置改动沿
   /// 收口 —— 同一沿,先落库后接线,回声同值零动作。
   void _updateVolumeKeyShutter(bool value) {
     _persistSettings(_settings.value.copyWith(volumeKeyShutter: value));
   }
 
-  /// 音量键快门接线沿(进页/设置改动/离页):宿主在(Android)且开关
+  /// 音量键快门接线沿(进页/设置改动/离页):宿主在(Android/iOS)且开关
   /// 开 → 原生拦音量键 + 订阅事件流;关/离页 → 退订 + 还系统。命中走
   /// [RemoteController.capture] —— 与屏上快门钮同一守卫同一错误横幅
   /// (capturing 防重入、未连接如实落「未连接相机」),不绕过错误处理。
