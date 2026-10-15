@@ -340,4 +340,72 @@ void main() {
     expect(p.g, inInclusiveRange(140, 170));
     expect(p.b, inInclusiveRange(190, 220));
   });
+
+  testWidgets('胶片:分组筛选换芯片集,选中使能保存,「无」回禁用', (tester) async {
+    final gallery = FakeGallerySaver();
+    await _pumpPage(tester, gallery: gallery);
+    await tester.tap(find.byTooltip('胶片'));
+    await tester.pump();
+
+    // 默认组=富士胶片;芯片行横向懒加载,只断言视口内已构建的芯片。
+    expect(find.text('PROVIA 标准'), findsOneWidget);
+    expect(find.text('GR 正片'), findsNothing); // 理光组,不在默认组
+
+    await tester.tap(find.text('经典正片'));
+    await tester.pump();
+    expect(_saveEnabled(tester), isTrue);
+
+    // 切组:富士芯片换理光芯片,已选预设保留(保存仍使能)。
+    await tester.tap(find.text('理光人文'));
+    await tester.pump();
+    expect(find.text('GR 正片'), findsOneWidget);
+    expect(find.text('经典正片'), findsNothing);
+    expect(_saveEnabled(tester), isTrue);
+
+    await tester.tap(find.widgetWithText(ChoiceChip, '无'));
+    await tester.pump();
+    expect(_saveEnabled(tester), isFalse);
+  });
+
+  testWidgets('胶片:重置收走预设(保存回禁用)', (tester) async {
+    final gallery = FakeGallerySaver();
+    await _pumpPage(tester, gallery: gallery);
+    await tester.tap(find.byTooltip('胶片'));
+    await tester.pump();
+    await tester.tap(find.text('PROVIA 标准'));
+    await tester.pump();
+    expect(_saveEnabled(tester), isTrue);
+
+    await tester.tap(find.byTooltip('重置'));
+    await tester.pump();
+    expect(_saveEnabled(tester), isFalse);
+  });
+
+  testWidgets('保存:所选胶片矩阵烘焙进输出文件(经典正片手调矩阵)', (tester) async {
+    final gallery = FakeGallerySaver()
+      ..importResult = [Uri.parse('file:///saved/1.jpg')];
+    // 纯色 (200,100,50) → classicChrome 手调矩阵 → (208,96,48)。
+    await _pumpPage(tester,
+        gallery: gallery, jpeg: _solidJpeg(80, 60, 200, 100, 50));
+
+    await tester.tap(find.byTooltip('胶片'));
+    await tester.pump();
+    await tester.tap(find.text('经典正片'));
+    await tester.pump();
+    expect(_saveEnabled(tester), isTrue);
+
+    await tester.tap(find.byTooltip('保存到相册'));
+    await tester.pump(); // 转圈
+    await _drainSave(tester, gallery);
+
+    expect(gallery.importCalls.length, 1);
+    final decoded = img.decodeJpg(gallery.importedBytes.single)!;
+    expect(decoded.width, 80); // 原分辨率保存(预览档是缩小图)
+    expect(decoded.height, 60);
+    final p = decoded.getPixel(0, 0);
+    // r'=1.08*200-0.05*100-0.03*50-2=207.5→208;两轮 JPEG 往返,容差 ±15。
+    expect(p.r, inInclusiveRange(193, 223));
+    expect(p.g, inInclusiveRange(81, 111));
+    expect(p.b, inInclusiveRange(33, 63));
+  });
 }

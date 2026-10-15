@@ -9,6 +9,7 @@ import 'package:flutter/foundation.dart';
 import 'package:image/image.dart' as img;
 
 import '../../core/media/cube_lut.dart';
+import '../../core/media/film_presets.dart';
 import '../../core/media/image_edit.dart';
 
 final class EditController extends ChangeNotifier {
@@ -30,6 +31,7 @@ final class EditController extends ChangeNotifier {
   int _rotationQuarter = 0;
   Rect? _cropRect;
   EditAdjustments _adjustments = const EditAdjustments();
+  FilmPreset? _filmPreset;
   CubeLut? _lut;
 
   /// 底图解码失败(非 JPEG / 损坏):页面按不可编辑处理。
@@ -41,12 +43,14 @@ final class EditController extends ChangeNotifier {
   int get rotationQuarter => _rotationQuarter;
   Rect? get cropRect => _cropRect;
   EditAdjustments get adjustments => _adjustments;
+  FilmPreset? get filmPreset => _filmPreset;
   CubeLut? get lut => _lut;
 
   PhotoEdit get edit => PhotoEdit(
         rotationQuarter: _rotationQuarter,
         cropRect: _cropRect,
         adjustments: _adjustments,
+        filmPreset: _filmPreset,
         lut: _lut,
       );
 
@@ -103,10 +107,16 @@ final class EditController extends ChangeNotifier {
     _renderPreview();
   }
 
+  void setFilmPreset(FilmPreset? value) {
+    _filmPreset = value;
+    _renderPreview();
+  }
+
   void reset() {
     _rotationQuarter = 0;
     _cropRect = null;
     _adjustments = const EditAdjustments();
+    _filmPreset = null;
     _lut = null;
     _renderPreview();
   }

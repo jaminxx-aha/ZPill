@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 
 import 'package:nikon_pill/core/media/cube_lut.dart';
+import 'package:nikon_pill/core/media/film_presets.dart';
 import 'package:nikon_pill/core/media/image_edit.dart';
 import 'package:nikon_pill/features/edit/edit_controller.dart';
 
@@ -123,5 +124,36 @@ void main() {
     c.setLut(CubeLut.fromFunction('x', 2, (r, g, b) => [r, g, b]));
     c.reset();
     expect(notified, 5);
+  });
+
+  test('胶片预设:选中使能、清空回中性、reset 收走', () {
+    final c = EditController(jpeg: _jpeg(60, 40));
+    final preset = filmPresets.firstWhere((p) => p.id == 'leicaMonochrome');
+    expect(c.edited, isFalse);
+    c.setFilmPreset(preset);
+    expect(c.edited, isTrue);
+    expect(c.filmPreset, same(preset));
+    expect(c.edit.filmPreset, same(preset));
+    c.setFilmPreset(null);
+    expect(c.edited, isFalse);
+    expect(c.filmPreset, isNull);
+    c.setFilmPreset(preset);
+    c.reset();
+    expect(c.edited, isFalse);
+    expect(c.filmPreset, isNull);
+  });
+
+  test('renderFull:胶片矩阵烘焙进原分辨率输出(徕卡黑白 → 灰)', () {
+    // (200,100,50) → 0.35*200+0.65*100+0.15*50-10 = 132.5 → 133 ± JPEG。
+    final c = EditController(
+        jpeg: _solidJpeg(80, 60, 200, 100, 50), maxPreviewEdge: 40);
+    c.setFilmPreset(filmPresets.firstWhere((p) => p.id == 'leicaMonochrome'));
+    final decoded = img.decodeJpg(c.renderFull())!;
+    expect(decoded.width, 80); // 原分辨率(预览档是 40×30)
+    expect(decoded.height, 60);
+    final p = decoded.getPixel(0, 0);
+    expect(p.r, inInclusiveRange(118, 148));
+    expect(p.g, inInclusiveRange(118, 148));
+    expect(p.b, inInclusiveRange(118, 148));
   });
 }
