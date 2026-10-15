@@ -455,10 +455,13 @@ class CaptureSettingsPanel extends StatelessWidget {
     );
   }
 
-  /// 峰值选项行(2026-10-14 灵敏度/颜色可配):灵敏度三档(低/中/高 =
-  /// 梯度阈值 24/40/64,调优档非协议常量,映射在 monitor_toggles 的
-  /// monitorPeakingThresholdOf)+ 高亮色三档(金/白/红,取色在
-  /// live_view_overlays 的 peakingColorOf);走 [onTogglesChanged] 持久化。
+  /// 峰值选项行(2026-10-14 灵敏度/颜色可配;2026-10-15 加算法档):
+  /// 算法二选一(双尺度比值 = 默认,散景/失焦不亮,核见 core/remote/
+  /// peaking_engines.dart;经典 = 单尺度梯度回退)+ 灵敏度三档
+  /// (低/中/高:经典梯度阈值 24/40/64,双尺度参数见
+  /// peakingDualScaleParamsOf,调优档非协议常量)+ 高亮色三档
+  /// (金/白/红,取色在 live_view_overlays 的 peakingColorOf);
+  /// 走 [onTogglesChanged] 持久化。
   Widget _peakingOptionRows(BuildContext context) {
     final live = LiveDesign.of(context);
     Widget row(String label, List<(String, int)> options, int current,
@@ -492,6 +495,11 @@ class CaptureSettingsPanel extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        row(
+            context.t('峰值算法'),
+            const [('双尺度', 0), ('经典', 1)],
+            toggles.peakingEngine,
+            (v) => onTogglesChanged(toggles.copyWith(peakingEngine: v))),
         row(
             context.t('峰值灵敏度'),
             const [('低', 0), ('中', 1), ('高', 2)],

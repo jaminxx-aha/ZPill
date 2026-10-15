@@ -1,9 +1,12 @@
+import 'dart:math' as math;
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 
 import 'package:nikon_pill/core/remote/frame_analysis.dart';
 import 'package:nikon_pill/core/remote/frame_analyzer.dart';
+import 'package:nikon_pill/core/remote/peaking_engines.dart';
 
 /// 32×24 灰度渐变 JPEG(左黑右白),右端四分之一过曝。
 Uint8List _gradientJpeg() {
@@ -31,6 +34,61 @@ Uint8List _whiteCornerJpeg() {
 final class _FakeFrames extends ChangeNotifier implements ValueListenable<Uint8List?> {
   @override
   Uint8List? value;
+}
+
+/// 合成峰格平面:cols×rows,luma 由 [lumaOf] 逐格给出(counts 全 1;
+/// [holes] 内的格挖成空格,峰格均值 0 = analyzeJpegFrame 的稀疏采样口径)。
+(List<double>, List<int>) _plane(int cols, int rows,
+    double Function(int x, int y) lumaOf, {Set<int> holes = const {}}) {
+  final means = List<double>.filled(cols * rows, 0);
+  final counts = List<int>.filled(cols * rows, 1);
+  for (var y = 0; y < rows; y++) {
+    for (var x = 0; x < cols; x++) {
+      final i = y * cols + x;
+      if (holes.contains(i)) {
+        counts[i] = 0;
+        continue;
+      }
+      means[i] = lumaOf(x, y);
+    }
+  }
+  return (means, counts);
+}
+
+/// 高斯软边列值(离散高斯 CDF,边心 ±8 抽头归一):center 左侧回到
+/// lo,过 center 升到 lo+amplitude;σ→0 退化为硬台阶。峰值增量落在
+/// center-1 → center 列间(quad 锚在 center-1 列 → 双尺度亮该列)。
+double _gaussEdgeLuma(int x,
+    {required double lo,
+    required double amplitude,
+    required double sigma,
+    required int center}) {
+  var z = 0.0;
+  var acc = 0.0;
+  for (var o = -8; o <= 8; o++) {
+    final w = math.exp(-o * o / (2 * sigma * sigma));
+    z += w;
+    if (center + o <= x) acc += w;
+  }
+  return lo + amplitude * acc / z;
+}
+
+/// 散景帧:128×96 垂直高斯软边(暗 20 → 亮 240,σ2.5px;默认峰格
+/// 64×48 = 2px/格,偶数像素单点采样 → 网格口径 σ≈1.25 格)。软边
+/// 峰格邻差 ≈70(经典引擎阈值 24/40/64 都过 = 旧误报);再模糊后
+/// 比值 ≈1.7 < 1.90(双尺度三档全灭)。
+Uint8List _softEdgeJpeg() {
+  final image = img.Image(width: 128, height: 96);
+  for (var y = 0; y < 96; y++) {
+    for (var x = 0; x < 128; x++) {
+      final v = _gaussEdgeLuma(x,
+              lo: 20, amplitude: 220, sigma: 2.5, center: 64)
+          .round()
+          .clamp(0, 255);
+      image.setPixelRgba(x, y, v, v, v, 255);
+    }
+  }
+  return Uint8List.fromList(img.encodeJpg(image));
 }
 
 void main() {
@@ -127,21 +185,25 @@ void main() {
       expect(gradient!.hasPeaking, isFalse);
     });
 
-    test('峰值灵敏度阈值:参数改档产生不同掩码(24/40/64 = 低/中/高档)', () {
+    test('峰值灵敏度阈值(经典引擎回归):参数改档产生不同掩码(24/40/64 = 低/中/高档)', () {
       // 渐变帧按 8 列峰格采样,相邻格均值差恰 32(0..248 渐变 / 4px 格):
-      // 低于中档、高于低档 —— 三档在此帧上分出三种结果。
+      // 低于中档、高于低档 —— 三档在此帧上分出三种结果。显式走经典
+      // 引擎(单尺度梯度,2026-10-14 前的唯一路径)锁旧路径行为。
       FrameAnalysis grad(int threshold) => analyzeJpegFrame(_gradientJpeg(),
           maskCols: 8,
           maskRows: 6,
           peakingCols: 8,
           peakingRows: 6,
+          peakingEngine: PeakingEngine.gradient,
           peakingThreshold: threshold)!;
+      // 缺省引擎已是双尺度:纯渐变(每格等差)再模糊后能量不变,
+      // 比值 = 1,任何档都不亮(与经典中档 32 < 40 结论一致)。
       expect(
           analyzeJpegFrame(_gradientJpeg(),
                   maskCols: 8, maskRows: 6, peakingCols: 8, peakingRows: 6)!
               .hasPeaking,
           isFalse,
-          reason: '缺省阈值 = 中档 40(旧行为不变)');
+          reason: '缺省引擎 = 双尺度,渐变比值 1 恒不亮');
       expect(grad(40).hasPeaking, isFalse, reason: '32 < 40:中档不圈渐变');
       expect(grad(64).hasPeaking, isFalse, reason: '高档只圈最陡边缘');
       final low = grad(24);
@@ -156,10 +218,32 @@ void main() {
                     maskRows: 6,
                     peakingCols: 8,
                     peakingRows: 6,
+                    peakingEngine: PeakingEngine.gradient,
                     peakingThreshold: t)!
                 .hasPeaking,
             isTrue,
             reason: '黑底→白角陡变远超最高档 64');
+      }
+    });
+
+    test('散景帧端到端:经典引擎亮(旧误报),双尺度(缺省)不亮', () {
+      final jpeg = _softEdgeJpeg();
+      expect(
+          analyzeJpegFrame(jpeg,
+                  peakingEngine: PeakingEngine.gradient,
+                  peakingThreshold: 40)!
+              .hasPeaking,
+          isTrue,
+          reason: '软边峰格邻差 ~70 ≥ 40:经典引擎圈散景(旧行为误报)');
+      for (final level in const [0, 1, 2]) {
+        final p = peakingDualScaleParamsOf(level);
+        expect(
+            analyzeJpegFrame(jpeg,
+                    peakingRatioThreshold: p.ratioThreshold,
+                    peakingNoiseGate: p.noiseGate)!
+                .hasPeaking,
+            isFalse,
+            reason: '双尺度档 $level:比值 ≈1.7 < 阈值,散景不亮');
       }
     });
 
@@ -215,6 +299,187 @@ void main() {
     });
   });
 
+  group('双尺度比值引擎(合成网格,Zhuo & Sim 2011 口径)', () {
+    const cols = 16, rows = 12;
+
+    // 垂直边平面:x 向软/硬边、y 向均匀;边落在 col 7→8(center=8)。
+    (List<double>, List<int>) vEdge(double sigma, double lo, double amplitude) =>
+        _plane(cols, rows,
+            (x, y) => _gaussEdgeLuma(x, lo: lo, amplitude: amplitude, sigma: sigma, center: 8));
+
+    Uint8List dual((List<double>, List<int>) plane,
+            {double ratio = 2.10, int gate = 450}) =>
+        dualScalePeakingMask(
+            means: plane.$1,
+            counts: plane.$2,
+            cols: cols,
+            rows: rows,
+            ratioThreshold: ratio,
+            noiseGate: gate);
+
+    Uint8List grad((List<double>, List<int>) plane, {int threshold = 40}) =>
+        gradientPeakingMask(
+            means: plane.$1,
+            counts: plane.$2,
+            cols: cols,
+            rows: rows,
+            threshold: threshold);
+
+    Set<int> lit(Uint8List m) =>
+        {for (var i = 0; i < m.length; i++) if (m[i] == 1) i};
+
+    test('锐利台阶边(σ→0):双尺度恰亮边左列(行 0..rows-2),三档全亮', () {
+      final plane = vEdge(0.05, 20, 200); // 20 → 220 单格台阶
+      final m = dual(plane);
+      expect(lit(m), {for (var y = 0; y + 1 < rows; y++) y * cols + 7},
+          reason: 'quad 锚在边左列 col 7,末行无完整 quad');
+      for (final level in const [0, 1, 2]) {
+        final p = peakingDualScaleParamsOf(level);
+        expect(
+            lit(dual(plane, ratio: p.ratioThreshold, gate: p.noiseGate))
+                .isNotEmpty,
+            isTrue,
+            reason: '台阶比值饱和 4.0、E_B ≈ 11700,档 $level 也亮');
+      }
+      // 经典引擎同列(行 0..rows-1:只查右邻,末行也亮)
+      expect(lit(grad(plane, threshold: 64)),
+          {for (var y = 0; y < rows; y++) y * cols + 7});
+    });
+
+    test('高斯软边:σ0.7(近合焦)三档亮且只在边列;σ1.4(失焦)三档灭', () {
+      final near = vEdge(0.7, 20, 235);
+      for (final level in const [0, 1, 2]) {
+        final p = peakingDualScaleParamsOf(level);
+        final m = dual(near, ratio: p.ratioThreshold, gate: p.noiseGate);
+        expect(lit(m).isNotEmpty, isTrue, reason: 'σ0.7 比值 ≈3.2,档 $level 也亮');
+        expect(lit(m).every((i) => i % cols == 7), isTrue,
+            reason: '只在边左列亮,侧翼格比值 <1 不亮');
+      }
+      final far = vEdge(1.4, 20, 235);
+      for (final level in const [0, 1, 2]) {
+        final p = peakingDualScaleParamsOf(level);
+        expect(
+            lit(dual(far, ratio: p.ratioThreshold, gate: p.noiseGate)).isEmpty,
+            isTrue,
+            reason: 'σ1.4 比值 ≈1.55 < 1.90,最松档也不亮');
+      }
+    });
+
+    test('散景高亮(亮块软边)核心回归:同平面经典三档全亮、双尺度三档全灭', () {
+      // 散景光斑的网格口径 = 全幅亮块(20→255)+ 软边:软边峰值邻差
+      // ≈67 ≥ 经典最高档 64 → 旧引擎三档全误亮(散景高亮被当合焦);
+      // 再模糊后能量比 ≈1.55 → 双尺度三档全灭 —— 本算法的存在理由。
+      final bokeh = vEdge(1.4, 20, 235);
+      for (final t in const [24, 40, 64]) {
+        expect(lit(grad(bokeh, threshold: t)).isNotEmpty, isTrue,
+            reason: '经典引擎档 $t:软边邻差 ~67 过单阈值(旧误报)');
+      }
+      for (final level in const [0, 1, 2]) {
+        final p = peakingDualScaleParamsOf(level);
+        expect(
+            lit(dual(bokeh, ratio: p.ratioThreshold, gate: p.noiseGate))
+                .isEmpty,
+            isTrue,
+            reason: '双尺度档 $level:比值判据剔除散景');
+      }
+      // 机制核验:阈值放开到 1.0(比值不限)就亮 —— 拒绝来自比值而非
+      // 能量门槛(E_B ≈ 5800 ≥ 高档门槛 1200,门槛是放行的)。
+      expect(lit(dual(bokeh, ratio: 1.0, gate: 1200)).isNotEmpty, isTrue);
+    });
+
+    test('高频噪声纹理(±16 棋盘):双尺度三档全灭(门槛拒),经典低档满屏', () {
+      // 传感器噪声不被镜头模糊,比值上看恒「合焦」—— 拒它靠粗尺度
+      // 能量门槛:棋盘再模糊后 ≈平坦,E_B 远不过档。经典引擎只看
+      // 邻差 32 ≥ 低档 24 → 满屏误亮(旧噪声误报)。
+      final plane =
+          _plane(cols, rows, (x, y) => 128 + ((x + y) % 2 == 0 ? 16 : -16));
+      for (final level in const [0, 1, 2]) {
+        final p = peakingDualScaleParamsOf(level);
+        expect(
+            lit(dual(plane, ratio: p.ratioThreshold, gate: p.noiseGate))
+                .isEmpty,
+            isTrue,
+            reason: '档 $level:再模糊后棋盘归平坦,能量不过门槛');
+      }
+      // 经典低档:邻差 32 ≥ 24,除右下角格(无右/下邻)外全亮
+      expect(lit(grad(plane, threshold: 24)).length, cols * rows - 1);
+    });
+
+    test('纯平坦/全黑/全白:两引擎都不亮(低光/平坦区定义)', () {
+      for (final v in const [128.0, 0.0, 255.0]) {
+        final plane = _plane(cols, rows, (x, y) => v);
+        expect(lit(dual(plane)).isEmpty, isTrue, reason: '平坦 luma $v');
+        expect(lit(grad(plane)).isEmpty, isTrue);
+      }
+    });
+
+    test('档位单调:低 ⊇ 中 ⊇ 高;σ1.0 边(比值 ≈2.08)低档亮/高档灭', () {
+      final plane = vEdge(1.0, 20, 200);
+      final masks = [
+        for (final level in const [0, 1, 2])
+          lit(dual(plane,
+              ratio: peakingDualScaleParamsOf(level).ratioThreshold,
+              gate: peakingDualScaleParamsOf(level).noiseGate))
+      ];
+      expect(masks[0].isNotEmpty, isTrue, reason: 'σ1.0 比值 ≈2.08 ≥ 低档 1.90');
+      expect(masks[2].isEmpty, isTrue, reason: 'σ1.0 比值 ≈2.08 < 高档 2.30');
+      // 越严越少(结构性:低档两参数都更松,亮集单调收缩)
+      expect(masks[2].difference(masks[1]), isEmpty);
+      expect(masks[1].difference(masks[0]), isEmpty);
+    });
+
+    test('空格:所在 quad 跳过不抛;网格不足 2 行/列恒不亮', () {
+      // 台阶边亮侧(col 8)挖空格:含空格的 quad(行 4/5 的 col 7)
+      // 跳过,远离空格的行照常亮,也不冒出新列。
+      final holes = {5 * cols + 8};
+      final plane =
+          _plane(cols, rows, (x, y) => x >= 8 ? 220.0 : 20.0, holes: holes);
+      final m = lit(dual(plane));
+      expect(m.every((i) => i % cols == 7), isTrue, reason: '不冒新列');
+      expect(m.contains(4 * cols + 7) || m.contains(5 * cols + 7), isFalse,
+          reason: '含空格的 quad(行 4/5)不亮');
+      expect(m.contains(1 * cols + 7), isTrue, reason: '远离空格的行照常亮');
+      expect(m.contains(9 * cols + 7), isTrue);
+      // 退化网格:单行/单列无完整 quad
+      final (m1, c1) = _plane(1, 4, (x, y) => x + y * 100);
+      expect(
+          dualScalePeakingMask(
+              means: m1, counts: c1, cols: 1, rows: 4, ratioThreshold: 2.10, noiseGate: 450),
+          everyElement(0));
+      final (m2, c2) = _plane(4, 1, (x, y) => 0.0);
+      expect(
+          dualScalePeakingMask(
+              means: m2, counts: c2, cols: 4, rows: 1, ratioThreshold: 2.10, noiseGate: 450),
+          everyElement(0));
+    });
+
+    test('peakingSharpnessRatio:除零守卫 / 饱和钳 / ≥ 阈值边界语义', () {
+      expect(peakingSharpnessRatio(100, 0), 0);
+      expect(peakingSharpnessRatio(100, -5), 0, reason: '负粗能量(不发生)守卫');
+      expect(peakingSharpnessRatio(400, 100), closeTo(peakingRatioCeiling, 1e-12));
+      expect(peakingSharpnessRatio(1e9, 1), peakingRatioCeiling,
+          reason: '完美合焦饱和 4.0');
+      expect(peakingSharpnessRatio(210, 100), closeTo(2.10, 1e-12),
+          reason: '恰在阈值上 → 判据 ≥ 成立');
+      expect(peakingSharpnessRatio(209, 100), closeTo(2.09, 1e-12),
+          reason: '阈值下 → 不亮');
+    });
+
+    test('peakingDualScaleParamsOf:三档同向有序,表外档回落中档', () {
+      final low = peakingDualScaleParamsOf(0);
+      final mid = peakingDualScaleParamsOf(1);
+      final high = peakingDualScaleParamsOf(2);
+      expect(low.ratioThreshold, lessThan(mid.ratioThreshold));
+      expect(mid.ratioThreshold, lessThan(high.ratioThreshold));
+      expect(low.noiseGate, lessThan(mid.noiseGate));
+      expect(mid.noiseGate, lessThan(high.noiseGate));
+      for (final bogus in const [-1, 3, 99]) {
+        expect(peakingDualScaleParamsOf(bogus), mid,
+            reason: '档 $bogus 表外回落中');
+      }
+    });
+  });
+
   group('FrameAnalyzer', () {
     test('禁用:帧到达零分析', () {
       final analyzer = FrameAnalyzer(everyNth: 2);
@@ -255,6 +520,27 @@ void main() {
       expect(analyzer.analysis.value, isNotNull);
       analyzer.detach();
       expect(analyzer.analysis.value, isNull);
+    });
+
+    test('引擎字段传参:缺省双尺度散景不亮;切经典引擎即亮', () {
+      final analyzer = FrameAnalyzer(everyNth: 1);
+      final frames = _FakeFrames();
+      analyzer.attach(frames);
+      analyzer.enabled.value = true;
+      addTearDown(() => analyzer.dispose());
+
+      frames.value = _softEdgeJpeg();
+      frames.notifyListeners();
+      expect(analyzer.analysis.value, isNotNull);
+      expect(analyzer.analysis.value!.hasPeaking, isFalse,
+          reason: '缺省引擎 = 双尺度,散景软边不亮');
+
+      analyzer.peakingEngine = PeakingEngine.gradient;
+      analyzer.peakingThreshold = 40; // 监看灵敏度中档
+      frames.value = _softEdgeJpeg();
+      frames.notifyListeners();
+      expect(analyzer.analysis.value!.hasPeaking, isTrue,
+          reason: '改引擎字段 = 改判定(页面「峰值算法」切档路径)');
     });
   });
 }

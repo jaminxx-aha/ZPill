@@ -143,26 +143,35 @@ void main() {
     });
   });
 
-  group('峰值档位持久化(2026-10-14:灵敏度/颜色可配)', () {
-    test('默认中灵敏度/金色(= 旧行为);JSON 往返;旧档缺省与表外值回落', () {
+  group('峰值档位持久化(2026-10-14:灵敏度/颜色可配;10-15 峰值算法)', () {
+    test('默认中灵敏度/金色/双尺度(= 旧行为阈值回退档);JSON 往返;旧档缺省与表外值回落', () {
       expect(const AppSettings().monitorPeakingLevel, 1);
       expect(const AppSettings().monitorPeakingColor, 0);
+      expect(const AppSettings().monitorPeakingEngine, 0);
 
       final tuned = const AppSettings().copyWith(
-          monitorPeakingLevel: 2, monitorPeakingColor: 1);
+          monitorPeakingLevel: 2,
+          monitorPeakingColor: 1,
+          monitorPeakingEngine: 1);
       final back = AppSettings.fromJson(tuned.toJson());
       expect(back.monitorPeakingLevel, 2);
       expect(back.monitorPeakingColor, 1);
+      expect(back.monitorPeakingEngine, 1);
 
-      // 旧版本文件无此键 → 默认档(中/金 = 旧行为)
+      // 旧版本文件无此键 → 默认档(中/金/双尺度 = 缺省引擎不变)
       final bare = AppSettings.fromJson({'autoTransfer': true});
       expect(bare.monitorPeakingLevel, 1);
       expect(bare.monitorPeakingColor, 0);
+      expect(bare.monitorPeakingEngine, 0);
       // 表外值(手改文件)回落默认档
-      final bogus = AppSettings.fromJson(
-          {'monitorPeakingLevel': 7, 'monitorPeakingColor': -1});
+      final bogus = AppSettings.fromJson({
+        'monitorPeakingLevel': 7,
+        'monitorPeakingColor': -1,
+        'monitorPeakingEngine': 9
+      });
       expect(bogus.monitorPeakingLevel, 1);
       expect(bogus.monitorPeakingColor, 0);
+      expect(bogus.monitorPeakingEngine, 0);
     });
 
     test('文件落盘往返(FileSettingsStore)', () async {
@@ -170,11 +179,14 @@ void main() {
       addTearDown(() => dir.delete(recursive: true));
       final store = FileSettingsStore(dataDir: () async => dir.path);
       await store.update(const AppSettings().copyWith(
-          monitorPeakingLevel: 0, monitorPeakingColor: 2));
+          monitorPeakingLevel: 0,
+          monitorPeakingColor: 2,
+          monitorPeakingEngine: 1));
       final reloaded = FileSettingsStore(dataDir: () async => dir.path);
       final s = await reloaded.current();
       expect(s.monitorPeakingLevel, 0);
       expect(s.monitorPeakingColor, 2);
+      expect(s.monitorPeakingEngine, 1);
     });
   });
 
