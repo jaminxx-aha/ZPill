@@ -12,6 +12,8 @@ import 'package:nikon_pill/core/camera/camera_info.dart';
 import 'package:nikon_pill/core/ptp/operation_codes.dart';
 import 'package:nikon_pill/core/ptp/ptp_session.dart';
 import 'package:nikon_pill/core/ptp/ptp_transport.dart';
+import 'package:nikon_pill/core/ptpip/probe.dart';
+import 'package:nikon_pill/core/ptpip/subnet_scan.dart';
 import 'package:nikon_pill/core/ble/ble_camera_session.dart';
 import 'package:nikon_pill/core/ble/gatt_uuids.dart';
 import 'package:nikon_pill/core/ble/pairing_message.dart';
@@ -527,6 +529,124 @@ void main() {
       expect(conn.connectIp, '2.2.2.2');
       expect(conn.connectInstanceName, 'B');
     });
+
+    group('scanSubnet(/24 网段扫描兜底,2026-10-15)', () {
+      test('门禁:mDNS 已有结果 / 会话活跃时不扫,闲置态放行全网段', () async {
+        var connectCalls = 0;
+        final subnet = SubnetCameraScanner(
+          interfaceIps: () async => ['192.168.0.5'],
+          connectCheck: (host, port, timeout) async {
+            connectCalls++;
+            return false;
+          },
+        );
+        final nsd = _FakeScanner();
+        final conn = _FakeConnection();
+        final controller = ConnectionController(
+            connection: conn, scanner: nsd, subnetScanner: subnet);
+
+        // ① mDNS 有结果:探测连接是对单连接槽位的无谓打扰
+        nsd.eventsCtrl.add(const NsdCameraFound(_zfCamera));
+        await pumpEventQueue();
+        await controller.scanSubnet();
+        expect(connectCalls, 0, reason: 'mDNS 已发现,不扫(硬约束①)');
+        nsd.eventsCtrl.add(const NsdCameraLost('Z_f_8014411'));
+        await pumpEventQueue();
+
+        // ② 会话活跃(连接中/已连接):探测 socket 可能占配对槽
+        conn.statesCtrl.add(CameraLinkState.connecting);
+        await pumpEventQueue();
+        await controller.scanSubnet();
+        conn.statesCtrl.add(CameraLinkState.connected);
+        await pumpEventQueue();
+        await controller.scanSubnet();
+        expect(connectCalls, 0, reason: '会话活跃,禁止探测(硬约束②)');
+
+        // 闲置(disconnected):放行,全网段 253 候选逐个检查
+        conn.statesCtrl.add(CameraLinkState.disconnected);
+        await pumpEventQueue();
+        await controller.scanSubnet();
+        expect(connectCalls, 253);
+        expect(controller.subnetScanCompleted, isTrue);
+      });
+
+      test('门禁③:扫描在途重入被挡(不并发双探测),收口后旗标复位', () async {
+        final gate = Completer<void>();
+        var connectCalls = 0;
+        final subnet = SubnetCameraScanner(
+          interfaceIps: () async => ['192.168.0.5'],
+          concurrency: 2,
+          connectCheck: (host, port, timeout) {
+            connectCalls++;
+            return gate.future.then((_) => false);
+          },
+        );
+        final controller = ConnectionController(
+            connection: _FakeConnection(), subnetScanner: subnet);
+        final first = controller.scanSubnet();
+        await pumpEventQueue();
+        expect(controller.scanningSubnet, isTrue);
+        expect(connectCalls, 2); // 池 2 个 worker 各挂一个
+        await controller.scanSubnet(); // 重入:被门挡下
+        expect(connectCalls, 2, reason: '未发起新一轮(硬约束③)');
+        gate.complete();
+        await first;
+        expect(controller.scanningSubnet, isFalse);
+        expect(controller.subnetScanCompleted, isTrue);
+        expect(controller.subnetCameras, isEmpty);
+      });
+
+      test('结果落账 + connectProbed:名字透传实例名;被拒相机 IP 展示', () async {
+        final conn = _FakeConnection();
+        final subnet = SubnetCameraScanner(
+          interfaceIps: () async => ['192.168.0.5'],
+          connectCheck: (host, port, timeout) async =>
+              host == '192.168.0.2' || host == '192.168.0.9',
+          probe: (host) async => host == '192.168.0.2'
+              ? ProbedCamera(
+                  host: host, name: 'NIKON Z f', cameraGuid: Uint8List(16))
+              : ProbedCamera(
+                  host: host,
+                  name: '',
+                  cameraGuid: Uint8List(0),
+                  initFailReason: 0x1),
+        );
+        final controller =
+            ConnectionController(connection: conn, subnetScanner: subnet);
+        await controller.scanSubnet();
+        expect(controller.subnetCameras, hasLength(2));
+        expect(controller.subnetCameras.first.name, 'NIKON Z f');
+        expect(controller.subnetCameras.last.rejected, isTrue,
+            reason: 'InitFail 相机照样入榜(name 空,UI 以 IP 展示)');
+
+        await controller.connectProbed(controller.subnetCameras.first);
+        expect(conn.connectIp, '192.168.0.2');
+        expect(conn.connectInstanceName, 'NIKON Z f');
+        expect(controller.activeIp, '192.168.0.2');
+
+        await controller.connectProbed(controller.subnetCameras.last);
+        expect(conn.connectIp, '192.168.0.9');
+        expect(conn.connectInstanceName, isNull,
+            reason: '被拒相机无名,实例名留空(连接档案退型号)');
+      });
+
+      test('切到 AP 分段清空网段扫描结果(旧网段发现不作数)', () async {
+        final subnet = SubnetCameraScanner(
+          interfaceIps: () async => ['192.168.0.5'],
+          connectCheck: (host, port, timeout) async => host == '192.168.0.2',
+          probe: (host) async => ProbedCamera(
+              host: host, name: 'NIKON Z f', cameraGuid: Uint8List(16)),
+        );
+        final controller = ConnectionController(
+            connection: _FakeConnection(), subnetScanner: subnet);
+        await controller.scanSubnet();
+        expect(controller.subnetCameras, hasLength(1));
+
+        controller.selectMethod(ConnectionMethod.ap);
+        expect(controller.subnetCameras, isEmpty);
+        expect(controller.subnetScanCompleted, isFalse);
+      });
+    });
   });
 
   group('ConnectionPage', () {
@@ -591,6 +711,71 @@ void main() {
       expect(conn.connectIp, '192.168.0.104');
       expect(conn.connectInstanceName, 'Z_f_8014411');
       expect(scanner.stopCalls, 1);
+    });
+
+    testWidgets('STA 卡网段扫描:mDNS 无结果出「扫描网段」,点选结果走真连接流',
+        (tester) async {
+      final conn = _FakeConnection();
+      final subnet = SubnetCameraScanner(
+        interfaceIps: () async => ['192.168.0.5'],
+        connectCheck: (host, port, timeout) async => host == '192.168.0.2',
+        probe: (host) async => ProbedCamera(
+            host: host, name: 'NIKON Z f', cameraGuid: Uint8List(16)),
+      );
+      final controller =
+          ConnectionController(connection: conn, subnetScanner: subnet);
+      await tester
+          .pumpWidget(MaterialApp(home: ConnectionPage(controller: controller)));
+
+      await tester.tap(find.text('同一 Wi-Fi'));
+      await tester.pump();
+      // mDNS 无结果:网段扫描入口在场
+      expect(find.text('扫描网段'), findsOneWidget);
+
+      await tester.tap(find.text('扫描网段'));
+      await tester.pump(); // 扫描启动(纯微任务,帧内即完成)
+      await tester.pump();
+      expect(controller.subnetScanCompleted, isTrue);
+      expect(find.text('NIKON Z f'), findsOneWidget);
+      expect(find.text('192.168.0.2'), findsOneWidget);
+
+      // 点选结果:走既有 STA 连接流(实例名 = 探测出的相机名)
+      await tester.tap(find.text('NIKON Z f'));
+      await tester.pump();
+      expect(conn.connectIp, '192.168.0.2');
+      expect(conn.connectInstanceName, 'NIKON Z f');
+    });
+
+    testWidgets('STA 卡网段扫描:mDNS 出结果后入口退场;空扫描出如实提示',
+        (tester) async {
+      final nsd = _FakeScanner();
+      final controller = ConnectionController(
+          connection: _FakeConnection(),
+          scanner: nsd,
+          subnetScanner: SubnetCameraScanner(
+            interfaceIps: () async => ['192.168.0.5'],
+            connectCheck: (host, port, timeout) async => false,
+          ));
+      await tester
+          .pumpWidget(MaterialApp(home: ConnectionPage(controller: controller)));
+
+      await tester.tap(find.text('同一 Wi-Fi'));
+      await tester.pump();
+      expect(find.text('扫描网段'), findsOneWidget);
+
+      // 扫描完无发现:如实提示(不臆造结果)
+      await controller.scanSubnet();
+      await tester.pump();
+      expect(
+          find.text('网段扫描未发现相机:请确认相机与手机在同一个 '
+              'Wi-Fi,且相机停留在「等待连接」画面'),
+          findsOneWidget);
+
+      // mDNS 出结果:网段扫描入口退场(探测免打扰,硬约束①)
+      nsd.eventsCtrl.add(const NsdCameraFound(_zfCamera));
+      await tester.pump();
+      expect(find.text('扫描网段'), findsNothing);
+      expect(find.text('Z_f_8014411'), findsOneWidget);
     });
 
     testWidgets('断开后快速重连列表刷新(connected → disconnected 沿上重拉档案)',
