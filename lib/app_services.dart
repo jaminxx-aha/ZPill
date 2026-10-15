@@ -11,6 +11,8 @@ library;
 import 'dart:async';
 import 'dart:io' show Platform;
 
+import 'package:flutter/widgets.dart' show AppLifecycleListener, AppLifecycleState;
+
 import 'core/ble/ble_camera_session.dart';
 import 'core/ble/geo_payload.dart';
 import 'core/browser/camera_file_ops.dart';
@@ -189,11 +191,19 @@ final class AppServices {
       store: configSnapshots,
     );
     // BLE 相机会话先建(连接页「蓝牙」分段装配要引用;GPS 注入驱动
-    // 挂接在其后 —— 协议层零 Timer,前台驱动全收在这里:定位流 →
-    // onFix;15s tick → TIME 心跳/keep-alive;退避重试一次性 Timer
+    // 挂接在其后 —— 协议层周期驱动零 Timer,前台驱动全收在这里:定位流 →
+    // onFix;5s tick → 保活到点判定/缓存回补;退避重试一次性 Timer
     // 按 nextRetryDelay 定时。BLE 会话独立于 PTP 链接 —— 开关开即起,
     // app 存活期维持,不随 USB/无线断连拆)。
     bleSession = BleCameraSession(host: PlatformServices.ble);
+    // 前台/后台档位(BLE TIME 保活 45s/90s):生命周期观察在服务层就地
+    // 接线,UI 零感知;resumed=前台档,其余态(含 inactive 瞬态)按
+    // 后台档 —— 只影响下一拍到点判定,无副作用。监听器随
+    // WidgetsBinding 强引用存活(单例 app 期不拆)。
+    AppLifecycleListener(
+      onStateChange: (s) =>
+          bleSession.setForeground(s == AppLifecycleState.resumed),
+    );
     connectionController = ConnectionController(
       connection: connection,
       scanner: PlatformServices.nsd,
@@ -423,8 +433,11 @@ final class AppServices {
           )),
           onError: (Object e) => bleSession.lastError = '定位流失败:$e',
         );
+    // 拍频 5s = 到点判定分辨率(首写门 2.5s/GEO 失败回补重闸 2.5s →
+    // 实际首写 ≤7.5s);TIME 写本身由会话按 45s/90s 档位门控,拍频加密
+    // 不抬 BLE 流量。
     _bleTick = Timer.periodic(
-        const Duration(seconds: 15), (_) => unawaited(bleSession.tick()));
+        const Duration(seconds: 5), (_) => unawaited(bleSession.tick()));
     // 冷启恢复档:idle/reconnecting 且盘载身份在 → 直接进重试循环(免
     // 重走菜单配对;挂起恢复沿链路保留,可停在 reconnecting,同样续跑);
     // 已 ready(配对页「重连」按钮走的路)→ 定位流同样要起,不能只盯
