@@ -40,6 +40,7 @@ import '../../l10n/l10n.dart';
 import '../../platform/motion_host.dart';
 import 'feed_quality.dart';
 import 'feed_transform.dart';
+import 'interval_status_row.dart';
 import 'live_design.dart';
 import 'live_view_overlays.dart';
 import 'monitor_toggles.dart';
@@ -71,6 +72,11 @@ class RemoteFeedArea extends StatefulWidget {
 
   /// 贴右屏幕坐标叠层(录制读出/拉焦轮)的右让位(横屏快门柱 78)。
   final double rightInset;
+
+  /// 横幅底让位:间隔拍摄状态行占贴边位时抬高一行(状态行高 32 +
+  /// 间隙 10)。
+  double get bannerInset =>
+      bottomInset + (controller.intervalActive ? 42 : 0);
 
   /// 适配模式(2026-10-12 用户定案「不留黑边」):竖屏传
   /// [FeedFit.widthFill](画面恒满宽,两侧无黑边)、横屏传
@@ -558,39 +564,47 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea> {
             // **自动重连横幅排最前**(恢复期 linkUp 已闩 false,「未
             // 连接」不得抢屏):常驻不走 LiveBannerHost 节律,重连成功
             // 沿自动消失;相机忙横幅同源(看门狗 BUSY 保持)。
+            // **间隔拍摄状态行占最底层贴边位**(常驻 + 停止钮,安全
+            // 优先不随纯净监看隐藏):横幅让位其上(inset 抬高)。
+            if (controller.intervalActive)
+              Align(
+                alignment: Alignment.bottomCenter,
+                child: IntervalStatusRow(
+                    controller: controller, bottomInset: widget.bottomInset),
+              ),
             if (controller.reconnecting)
               Align(
                 alignment: Alignment.bottomCenter,
                 child: LiveBanner(
                     context.t('连接中断 —— 正在自动重连;画面为断开前的保持帧,非实时'),
                     LiveDesign.dark.accent,
-                    bottomInset: widget.bottomInset),
+                    bottomInset: widget.bannerInset),
               )
             else if (controller.liveViewBusyHold)
               Align(
                 alignment: Alignment.bottomCenter,
                 child: LiveBanner(context.t('相机忙(写卡/下载中),取景画面保持'),
                     LiveDesign.dark.accent,
-                    bottomInset: widget.bottomInset),
+                    bottomInset: widget.bannerInset),
               )
             else if (!controller.linkUp)
               Align(
                 alignment: Alignment.bottomCenter,
                 child: LiveBanner(context.t('未连接相机 —— 请先在「相机」页建立连接'),
                     LiveDesign.dark.accent,
-                    bottomInset: widget.bottomInset),
+                    bottomInset: widget.bannerInset),
               )
             else if (controller.error != null)
               Align(
                 alignment: Alignment.bottomCenter,
                 child: LiveBannerHost(controller.error!, LiveDesign.dark.bad,
-                    bottomInset: widget.bottomInset),
+                    bottomInset: widget.bannerInset),
               ),
             if (controller.notice != null)
               Align(
                 alignment: Alignment.bottomCenter,
                 child: LiveBannerHost(controller.notice!, LiveDesign.dark.good,
-                    bottomInset: widget.bottomInset, autoDismiss: true),
+                    bottomInset: widget.bannerInset, autoDismiss: true),
               ),
             // 缩放倍率角标(>1 才现身;点按复位)。
             if (!widget.hideChrome && _zoom > 1.01)

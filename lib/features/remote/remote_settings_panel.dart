@@ -588,7 +588,11 @@ class CaptureSettingsPanel extends StatelessWidget {
           live: LiveDesign.of(context),
           label: context.t('SDRAM 直拍'),
           selected: controller.sdramCapture,
-          onTap: () => onSdramCaptureChanged(!controller.sdramCapture),
+          // 间隔拍摄运行中:SDRAM 直拍不可中途开(逐拍回传图库与调度轮
+          // 冲突,也是启动互锁项)。
+          onTap: controller.intervalActive
+              ? null
+              : () => onSdramCaptureChanged(!controller.sdramCapture),
           tooltip: context.t('AF+SDRAM 一体拍(0x90CB):对象不入卡,回传 APP 存图库'),
         ),
         _smallChip(
@@ -627,9 +631,32 @@ class CaptureSettingsPanel extends StatelessWidget {
                 ? context.t('自拍')
                 : context.t('自拍 {s}s', {'s': '${controller.selfTimerSeconds}'}),
             selected: controller.selfTimerSeconds > 0,
-            onTap: () => _pickSelfTimer(chipContext, controller),
+            // 间隔拍摄运行中:自拍让位(灰化)—— 定时 B 门/自拍倒计时
+            // 与调度轮互相踩脚,先停轮再配。
+            onTap: controller.intervalActive
+                ? null
+                : () => _pickSelfTimer(chipContext, controller),
             tooltip: context.t('自拍定时:关/2s/5s/10s 点选;倒计时中再点取消'),
           ),
+        ),
+        _smallChip(
+          live: LiveDesign.of(context),
+          label: controller.intervalActive
+              ? context.t('间隔 {a}/{b}', {
+                  'a': '${controller.intervalTaken}',
+                  'b': controller.intervalShotCount == null
+                      ? '∞'
+                      : '${controller.intervalShotCount}'
+                })
+              : context.t('间隔拍摄'),
+          selected: controller.intervalActive,
+          // 运行中点芯片 = 立即停轮(状态行同款停止,快捷入口);
+          // 空闲点 = 参数底单(间隔/张数 → 开始)。
+          onTap: controller.intervalActive
+              ? controller.stopInterval
+              : () => _pickInterval(context, controller),
+          tooltip: context.t(
+              '间隔拍摄(延时摄影):设间隔与张数自动连拍;运行中点按立即停止'),
         ),
         _takeoverChip(context,
             controller: controller, onTakeoverRequest: onTakeoverRequest),
@@ -739,4 +766,140 @@ Future<void> _pickSelfTimer(
     ],
   );
   if (value != null) controller.setSelfTimer(value);
+}
+
+/// 间隔拍摄参数底单(芯片 → 底部弹层):间隔(秒,1-3600 钳制在
+/// [IntervalConfig])+ 张数(0 = ∞ 无限轮)两行步进 + 开始钮。
+/// 启动互锁在控制器([RemoteController.startInterval]):B 门/录像/
+/// SDRAM/自拍倒计时中拒绝并 notice 指路。菜单颜色随应用主题。
+Future<void> _pickInterval(
+    BuildContext chipContext, RemoteController controller) async {
+  var intervalSec = 5;
+  var shots = 10; // 0 = ∞
+  await showModalBottomSheet<void>(
+    context: chipContext,
+    backgroundColor: LiveDesign.of(chipContext).surface,
+    builder: (sheetContext) => SafeArea(
+      child: StatefulBuilder(
+        builder: (sheetContext, setSheetState) => Padding(
+          padding: const EdgeInsets.fromLTRB(20, 14, 20, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(sheetContext.t('间隔拍摄参数'),
+                  style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: LiveDesign.of(sheetContext).text)),
+              const SizedBox(height: 10),
+              _intervalStepper(
+                sheetContext,
+                label: sheetContext.t('间隔'),
+                valueLabel: intervalSec >= 60
+                    ? sheetContext.t('{m} 分 {s} 秒',
+                        {'m': '${intervalSec ~/ 60}', 's': '${intervalSec % 60}'})
+                    : sheetContext.t('{s} 秒', {'s': '$intervalSec'}),
+                onDecr: intervalSec > 1
+                    ? () => setSheetState(() => intervalSec--)
+                    : null,
+                onIncr: intervalSec < 3600
+                    ? () => setSheetState(() {
+                          // 5s 内逐秒,之后粗步进(1/5/10/30/60 …)
+                          intervalSec += intervalSec < 5
+                              ? 1
+                              : intervalSec < 10
+                                  ? 5
+                                  : intervalSec < 60
+                                      ? 10
+                                      : intervalSec < 300
+                                          ? 60
+                                          : 300;
+                        })
+                    : null,
+              ),
+              _intervalStepper(
+                sheetContext,
+                label: sheetContext.t('张数'),
+                valueLabel: shots == 0
+                    ? sheetContext.t('∞ 无限')
+                    : '$shots',
+                onDecr: shots > 0
+                    ? () => setSheetState(() => shots--)
+                    : null,
+                onIncr: shots < 9999
+                    ? () => setSheetState(() {
+                          shots += shots < 10 ? 5 : shots < 100 ? 10 : 100;
+                        })
+                    : null,
+              ),
+              const SizedBox(height: 6),
+              Text(
+                sheetContext.t('每拍等相机就绪再释放;单拍失败自动跳过,'
+                    '连续 3 拍失败自动停止'),
+                style: TextStyle(
+                    fontSize: 11, color: LiveDesign.of(sheetContext).faint),
+              ),
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  key: const ValueKey('interval-start'),
+                  onPressed: () {
+                    Navigator.of(sheetContext).pop();
+                    controller.startInterval(
+                        intervalSeconds: intervalSec,
+                        shotCount: shots == 0 ? null : shots);
+                  },
+                  child: Text(sheetContext.t('开始')),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+/// 参数步进行(label + 值 + −/+)。
+Widget _intervalStepper(
+  BuildContext context, {
+  required String label,
+  required String valueLabel,
+  VoidCallback? onDecr,
+  VoidCallback? onIncr,
+}) {
+  final live = LiveDesign.of(context);
+  Widget side(IconData icon, VoidCallback? onTap) => InkWell(
+        onTap: onTap,
+        customBorder: const CircleBorder(),
+        child: SizedBox(
+          width: 40,
+          height: 36,
+          child: Icon(icon,
+              size: 20,
+              color: onTap != null ? live.text : live.faint),
+        ),
+      );
+  return Padding(
+    padding: const EdgeInsets.symmetric(vertical: 4),
+    child: Row(
+      children: [
+        Text(label, style: TextStyle(fontSize: 12, color: live.muted)),
+        const Spacer(),
+        side(Icons.remove_circle_outline, onDecr),
+        SizedBox(
+          width: 96,
+          child: Text(valueLabel,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                  fontSize: 13,
+                  color: live.text,
+                  fontFeatures: const [FontFeature.tabularFigures()])),
+        ),
+        side(Icons.add_circle_outline, onIncr),
+      ],
+    ),
+  );
 }

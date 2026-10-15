@@ -10,6 +10,7 @@ import 'package:nikon_pill/core/ptp/device_prop.dart';
 import 'package:nikon_pill/core/ptp/operation_codes.dart';
 import 'package:nikon_pill/core/ptp/ptp_session.dart';
 import 'package:nikon_pill/core/ptp/ptp_transport.dart';
+import 'package:nikon_pill/core/remote/intervalometer.dart';
 import 'package:nikon_pill/core/remote/live_view_engine.dart';
 import 'package:nikon_pill/core/remote/live_view_header.dart';
 import 'package:nikon_pill/core/transfer/transfer_engine.dart';
@@ -3218,6 +3219,150 @@ void main() {
       await pumpEventQueue();
       expect(controller.tracking, isFalse);
       expect(controller.aeLocked, isFalse);
+    });
+  });
+
+  group('间隔拍摄', () {
+    test('1 张轮:探就绪(0x90C8)→ 0x9207 → 落地轮询 → 完成摘要', () async {
+      transport
+        ..ok() // 调度就绪探测(0x90C8)
+        ..ok() // 0x9207(无 op 表缓存 → 现代面直发)
+        ..ok(); // 落地轮询 deviceReady
+      controller.startInterval(intervalSeconds: 5, shotCount: 1);
+      await pumpEventQueue();
+      expect(controller.intervalStatus, IntervalometerStatus.running);
+      expect(controller.capturing, isTrue, reason: '单拍在途(芯随拍闪忙)');
+
+      delay.release(); // 落地轮询节拍到点
+      await controller.intervalDone;
+      expect(controller.intervalStatus, IntervalometerStatus.stopped);
+      expect(controller.intervalTaken, 1);
+      expect(controller.capturing, isFalse);
+      expect(controller.notice, '间隔拍摄完成:1 张全部成功');
+      expect(transport.count(NikonOperationCode.deviceReady), 2,
+          reason: '调度探测 + 落地轮询各一次');
+      expect(
+          transport.count(NikonOperationCode.initiateCaptureRecInMedia), 1);
+      expect(controller.error, isNull);
+    });
+
+    test('忙超时跳拍:探测窗内恒忙(0x2019)→ 跳过本拍继续轮', () async {
+      controller.intervalometer.readyPolls = 2; // 拨小探测预算
+      transport
+        ..reply(PtpResponseCode.deviceBusy) // 探测 1:忙
+        ..reply(PtpResponseCode.deviceBusy) // 探测 2:忙 → 预算尽
+        ..ok() // 第 2 拍探测:就绪
+        ..ok() // 0x9207
+        ..ok(); // 落地轮询
+      controller.startInterval(intervalSeconds: 5, shotCount: 2);
+      await pumpEventQueue();
+      delay.release(); // 探测节拍
+      await pumpEventQueue();
+      expect(controller.intervalAttempted, 1, reason: '跳拍已记账');
+      expect(transport.count(NikonOperationCode.initiateCaptureRecInMedia), 0,
+          reason: '忙超时不发快门');
+
+      delay.release(); // 间隔到点 → 第 2 拍
+      await pumpEventQueue();
+      delay.release(); // 第 2 拍落地轮询
+      await controller.intervalDone;
+      expect(controller.intervalTaken, 1);
+      expect(controller.intervalFailed, 1);
+      expect(controller.notice, '间隔拍摄完成:1 张成功,1 张失败');
+      expect(transport.count(NikonOperationCode.initiateCaptureRecInMedia), 1);
+    });
+
+    test('连续失败自停:3 拍全拒 → 自动停 + 真因摘要', () async {
+      for (var i = 0; i < 3; i++) {
+        transport
+          ..ok() // 探测:就绪
+          ..reply(PtpResponseCode.deviceBusy) // 0x9207 忙(非码级,不回落)
+          ..reply(PtpResponseCode.deviceBusy); // 0xD102 WarningStatus 读拒
+      }
+      controller.startInterval(intervalSeconds: 5, shotCount: 10);
+      await pumpEventQueue(); // 第 1 拍失败
+      delay.release(); // 间隔 → 第 2 拍
+      await pumpEventQueue();
+      delay.release(); // 间隔 → 第 3 拍
+      await controller.intervalDone;
+      expect(controller.intervalStatus, IntervalometerStatus.stopped);
+      expect(controller.intervalAttempted, 3);
+      expect(controller.intervalTaken, 0);
+      expect(controller.notice, contains('间隔拍摄自动停止'));
+    });
+
+    test('启动互锁:B 门 / 录像中 / SDRAM 直拍 / 未连接 全拒(零流量)',
+        () async {
+      // B 门(快门值 Bulb 哨兵)
+      controller.paramProps[PtpDevicePropCode.exposureTime] =
+          const PropState(value: 0xFFFFFFFF);
+      controller.startInterval(intervalSeconds: 5, shotCount: 1);
+      expect(controller.intervalStatus, IntervalometerStatus.idle);
+      expect(controller.notice, contains('B 门'));
+      controller.paramProps.clear();
+
+      controller.recording = true;
+      controller.startInterval(intervalSeconds: 5, shotCount: 1);
+      expect(controller.intervalStatus, IntervalometerStatus.idle);
+      expect(controller.notice, contains('录像中'));
+      controller.recording = false;
+
+      controller.sdramCapture = true;
+      controller.startInterval(intervalSeconds: 5, shotCount: 1);
+      expect(controller.intervalStatus, IntervalometerStatus.idle);
+      expect(controller.notice, contains('SDRAM'));
+      controller.sdramCapture = false;
+
+      conn.statesCtrl.add(CameraLinkState.disconnected);
+      await pumpEventQueue();
+      controller.startInterval(intervalSeconds: 5, shotCount: 1);
+      expect(controller.intervalStatus, IntervalometerStatus.idle);
+      expect(controller.notice, contains('未连接相机'));
+      expect(transport.requests, isEmpty, reason: '全部本地拒绝零流量');
+    });
+
+    test('断链自动停:间隔等待在途掉线 → 调度即停,横幅让位连接指引',
+        () async {
+      transport
+        ..ok() // 探测
+        ..ok() // 0x9207
+        ..ok(); // 落地轮询
+      controller.startInterval(intervalSeconds: 5, shotCount: 3);
+      await pumpEventQueue();
+      delay.release(); // 第 1 拍落地
+      await pumpEventQueue();
+      expect(controller.intervalTaken, 1);
+
+      conn.statesCtrl.add(CameraLinkState.disconnected);
+      await pumpEventQueue(); // 状态沿 → _invalidate → 调度停
+      await controller.intervalDone;
+      expect(controller.intervalStatus, IntervalometerStatus.stopped);
+      expect(controller.intervalAttempted, 1);
+      expect(controller.notice, isNull, reason: '断链清横幅,「未连接」独占');
+    });
+
+    test('运行中快门让位:capture() 本地拒绝零流量;停轮后恢复手动',
+        () async {
+      transport
+        ..ok() // 探测
+        ..ok() // 0x9207
+        ..ok(); // 落地轮询
+      controller.startInterval(intervalSeconds: 5, shotCount: 2);
+      await pumpEventQueue();
+      delay.release(); // 第 1 拍落地 → 间隔等待
+      await pumpEventQueue();
+      expect(controller.intervalTaken, 1);
+
+      final requestsBefore = transport.requests.length;
+      await controller.capture();
+      expect(controller.notice, contains('间隔拍摄进行中'));
+      expect(transport.requests.length, requestsBefore, reason: '零流量');
+
+      controller.stopInterval();
+      await controller.intervalDone;
+      expect(controller.notice, contains('间隔拍摄已停止'));
+      expect(transport.count(NikonOperationCode.initiateCaptureRecInMedia), 1,
+          reason: '停轮后未补拍');
     });
   });
 }

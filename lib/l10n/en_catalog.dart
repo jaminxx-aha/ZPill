@@ -783,4 +783,28 @@ const Map<String, String> enCatalog = {
       'Waiting for the camera to come back over USB (plug the cable in again to resume automatically)',
   '取景流多次重启未恢复':
       'The viewfinder stream failed to recover after repeated restarts',
+
+  // ── remote 间隔拍摄(静态键;控制器 notice 的运行期插值串按既定
+  // 口径回落中文,同错误消息家族)──
+  '间隔拍摄': 'Interval Shooting',
+  '间隔拍摄参数': 'Interval Shooting Setup',
+  '间隔 {a}/{b}': 'Interval {a}/{b}',
+  '间隔拍摄 {a}/{b} 张': 'Interval {a}/{b} shots',
+  '间隔拍摄 {a}/{b} 张 · 已暂停': 'Interval {a}/{b} shots · paused',
+  '{n} 张失败': '{n} failed',
+  '间隔': 'Interval',
+  '张数': 'Shots',
+  '{m} 分 {s} 秒': '{m}m {s}s',
+  '∞ 无限': '∞ unlimited',
+  '开始': 'Start',
+  '每拍等相机就绪再释放;单拍失败自动跳过,连续 3 拍失败自动停止':
+      'Each shot waits for the camera to be ready; a failed shot is skipped, and the run stops after 3 consecutive failures',
+  '间隔拍摄(延时摄影):设间隔与张数自动连拍;运行中点按立即停止':
+      'Interval shooting (time-lapse): auto-captures at the set interval and count; tap while running to stop immediately',
+  '暂停间隔拍摄(当前一拍完成后挂起)':
+      'Pause interval shooting (holds after the current shot finishes)',
+  '恢复间隔拍摄(间隔从恢复时刻重新起算)':
+      'Resume interval shooting (the interval restarts from the moment you resume)',
+  '停止间隔拍摄(立即;在途一拍落地后收口)':
+      'Stop interval shooting (immediate; the in-flight shot still lands)',
 };
