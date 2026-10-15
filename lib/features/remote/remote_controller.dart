@@ -62,6 +62,7 @@ import '../../core/ptp/ptp_transport.dart';
 import '../../core/remote/frame_analysis.dart';
 import '../../core/remote/frame_analyzer.dart';
 import '../../core/remote/live_view_engine.dart';
+import '../../core/remote/intervalometer.dart';
 import '../../core/remote/mf_travel_ends.dart';
 import '../../core/transfer/transfer_engine.dart';
 import '../../core/transfer/transfer_task.dart';
@@ -330,6 +331,108 @@ final class RemoteController extends ChangeNotifier {
 
   /// 拍摄参数写入中(编辑面板防连点)。
   bool writing = false;
+
+  // ---- 间隔拍摄(延时摄影)----
+
+  /// 间隔拍摄调度器(纯核心件,见 [Intervalometer] 头注):延迟/就绪
+  /// 探测/单拍事务全注入 —— 单拍复用屏上快门链([_captureOnce]:码回落/
+  /// CaptureSort 对焦后拍/落地等待/取景挂起),零第二套快门方言。
+  /// 探针 = 0x90C8 DeviceReady(忙等语义在 session 层收敛)。
+  late final Intervalometer _interval = Intervalometer(
+    delay: _delay,
+    probeReady: () => session.deviceReady(),
+    shoot: _intervalShot,
+  )..addListener(_onIntervalChanged);
+
+  IntervalometerStatus get intervalStatus => _interval.status;
+  bool get intervalActive => _interval.active;
+  int get intervalTaken => _interval.taken;
+  int get intervalAttempted => _interval.attempted;
+  int get intervalFailed => _interval.failed;
+  int? get intervalShotCount => _interval.config?.shotCount;
+
+  /// 调度器原句(测试拨小就绪预算/失败阈值用)。
+  Intervalometer get intervalometer => _interval;
+
+  /// 本轮收口 Future(测试 await 用)。
+  Future<void> get intervalDone => _interval.done;
+
+  /// 启动间隔拍摄。入口互锁(全部 notice 指路不炸):B 门/Time 曝光中
+  /// (按住或定时)、录像中、SDRAM 直拍开(逐拍回传图库与紧间隔冲突)、
+  /// 自拍倒计时中、单拍/连拍在途。间隔/张数域钳制见 [IntervalConfig]。
+  void startInterval({required int intervalSeconds, int? shotCount}) {
+    if (_interval.active) return;
+    if (!_linkUp) {
+      notice = '未连接相机,无法启动间隔拍摄';
+    } else if (_shutterIsOpenShutter ||
+        _openShutterHeld ||
+        _bulbExposureLeft != null) {
+      notice = '快门在 B 门/Time 曝光中,先收门再启动间隔拍摄';
+    } else if (recording) {
+      notice = '录像中不能启动间隔拍摄,请先停止录像';
+    } else if (sdramCapture) {
+      notice = 'SDRAM 直拍开着不能启动间隔拍摄,请先在「辅助」里关掉';
+    } else if (selfTimerCountdown != null) {
+      notice = '自拍倒计时进行中,稍后再启动间隔拍摄';
+    } else if (capturing) {
+      notice = '拍照进行中,稍后再启动间隔拍摄';
+    } else {
+      _interval.start(IntervalConfig(
+        interval: Duration(seconds: intervalSeconds),
+        shotCount: shotCount,
+      ));
+      return; // start 已通知(_onIntervalChanged 转发)
+    }
+    notifyListeners();
+  }
+
+  void pauseInterval() => _interval.pause();
+  void resumeInterval() => _interval.resume();
+  void stopInterval() => _interval.stop();
+
+  /// 间隔拍摄单拍执行器:UI 静默(错误只记账,跳拍策略;进度由状态行
+  /// 透出),链路/B 门守卫复用 capture 口径。capturing 逐拍置位 —— 屏
+  /// 上快门芯随拍闪忙,与手动单拍观感一致。
+  Future<(bool, String?)> _intervalShot() async {
+    if (!_linkUp) return (false, '未连接相机');
+    if (_shutterIsOpenShutter) {
+      return (false, '快门在 B 门/Time 档,本拍跳过');
+    }
+    capturing = true;
+    notifyListeners();
+    try {
+      return await _captureOnce();
+    } finally {
+      capturing = false;
+      notifyListeners();
+    }
+  }
+
+  /// 调度器状态/记账变化 → 转发刷新;一轮收口时把摘要上 notice
+  /// (completed/autoStopped/stopped 三态文案)。断链沿的 stop 先于
+  /// _invalidate 清 notice,不残留「已停止」横幅。
+  void _onIntervalChanged() {
+    if (_disposed) return;
+    final iv = _interval;
+    if (iv.status == IntervalometerStatus.stopped &&
+        iv.stopReason != null) {
+      switch (iv.stopReason!) {
+        case IntervalStopReason.completed:
+          notice = iv.failed == 0
+              ? '间隔拍摄完成:${iv.taken} 张全部成功'
+              : '间隔拍摄完成:${iv.taken} 张成功,${iv.failed} 张失败';
+        case IntervalStopReason.autoStopped:
+          notice = '间隔拍摄自动停止:连续 ${iv.consecutiveFailures} 拍'
+              '失败(已拍 ${iv.taken} 张)—— 请检查相机状态'
+              '(存储卡 / 拨杆档 / 相机屏提示)';
+        case IntervalStopReason.stopped:
+          notice = iv.failed == 0
+              ? '间隔拍摄已停止:共 ${iv.taken} 张'
+              : '间隔拍摄已停止:${iv.taken} 张成功,${iv.failed} 张失败';
+      }
+    }
+    notifyListeners();
+  }
 
   String? error;
 
@@ -791,6 +894,13 @@ final class RemoteController extends ChangeNotifier {
       notifyListeners();
       return;
     }
+    if (intervalActive) {
+      // 间隔拍摄运行中:屏上快门(含 B 门按住/连拍按住)全部让位,
+      // 本地拒绝零流量 —— 停止间隔拍摄后再手动拍。
+      notice = '间隔拍摄进行中,快门已停用;如需手动拍摄请先停止间隔拍摄';
+      notifyListeners();
+      return;
+    }
     if (_bulbCloseFailed) {
       // 上次 B 门收门预算耗尽(曝光可能仍开着):这次按下不另开曝光,
       // 直接再试收门链 —— 「再点一次快门收门」的恢复路径。
@@ -1063,7 +1173,9 @@ final class RemoteController extends ChangeNotifier {
   // ---- 录制(0x920A/0x920B)+ MF 步进(0x9204)----
 
   /// 录制开关:取景开启为前置(机身口径)。录制中拍照会被机身拒,
-  /// 先提示。事件 0xC10A/0xC108 到达时对齐状态(双保险)。
+  /// 先提示。事件 0xC10A/0xC108 到达时对齐状态(双保险)。间隔拍摄
+  /// 运行中禁开录(对「录像中禁启间隔」的对称互锁 —— 录像会让每拍
+  /// 静照落空,先停轮再录)。
   Future<void> toggleRecord() async {
     if (!_linkUp) {
       error = '未连接相机';
@@ -1072,6 +1184,11 @@ final class RemoteController extends ChangeNotifier {
     }
     if (!liveViewActive) {
       error = '请先开启取景再录制';
+      notifyListeners();
+      return;
+    }
+    if (intervalActive) {
+      notice = '间隔拍摄进行中,不能开录;请先停止间隔拍摄';
       notifyListeners();
       return;
     }
@@ -1978,6 +2095,13 @@ final class RemoteController extends ChangeNotifier {
       notifyListeners();
       return;
     }
+    if (intervalActive) {
+      // 间隔拍摄运行中:屏上快门/音量键快门全部让位(快门由调度器按
+      // 间隔驱动),如实提示 —— 用户要手动拍先停间隔轮。
+      notice = '间隔拍摄进行中,快门已停用;如需手动拍摄请先停止间隔拍摄';
+      notifyListeners();
+      return;
+    }
     if (_shutterIsOpenShutter) {
       // B 门/Time 经不起「点按即走」:曝光开了没人收门(音量键快门等
       // capture() 直呼路径)—— 本地拒绝零流量并指路;按住曝光走屏上
@@ -1991,59 +2115,37 @@ final class RemoteController extends ChangeNotifier {
     error = null;
     notice = null;
     notifyListeners();
+    try {
+      final (ok, message) = await _captureOnce();
+      if (!ok) {
+        error = message;
+      } else if (message != null) {
+        notice = message; // SDRAM 回落提示落收口后(「已拍摄」先到)
+      }
+    } finally {
+      capturing = false;
+      notifyListeners();
+    }
+  }
+
+  /// 单张拍摄核心链(屏上快门 [capture] 与间隔拍摄单拍共用):挂起取景
+  /// → 发码(含码回落/CaptureSort 换形/SDRAM 一体拍)→ 等落地
+  /// (CaptureComplete 事件优先,DeviceReady 兜底)→ SDRAM 回传收尾。
+  /// 只管相机事务,不碰 UI 状态(capturing/error/notice 由调用方按场景
+  /// 收口)—— 间隔拍摄单拍失败只记账(跳拍策略),不走屏上错误横幅。
+  /// 返回 (是否成功, 文案):失败文案 = 错误消息;成功文案 = SDRAM 回落
+  /// 提示(仅回落发生时非 null)。
+  Future<(bool, String?)> _captureOnce() async {
     final wasLive = liveViewActive;
     if (wasLive) engine.pause();
-    (bool, String?) firedResult = (false, null);
     try {
+      (bool, String?) firedResult;
       try {
         firedResult = await _fireShutter();
       } on PtpResponseException catch (e) {
-        if (e.responseCode == PtpResponseCode.storeNotAvailable) {
-          // 0x2013:标准义 = 存储不可用(无卡/卡错误);2026-10-11 真机
-          // 另证:机身拨杆在视频档时远程拍照除 0x200F 外也会报此码
-          //(存储卡在位,具体子态待核)—— 双因都指,别把用户支去翻卡槽。
-          error = '快门释放失败:相机存储不可用 —— 请检查存储卡与插槽;'
-              '若卡在位,可能是机身拨杆在视频档拒绝了远程拍照,'
-              '请拨回照片档重试(视频档请用拍摄页的录制钮拍视频)';
-        } else if (e.responseCode == PtpResponseCode.invalidParameter) {
-          error = '快门释放失败:相机不接受快门参数(0x201D,已试全部'
-              '已知形态)—— 请反馈当时的「APP 接管」与「对焦后拍」状态';
-        } else if (e.responseCode == NikonResponseCode.movieFrameReleaseBusy) {
-          // 0xA202:录像中的静照释放进行中(官方 §6.3.2.17)—— 录像
-          // 期间拍静照连拍两下会撞上,等一拍再试。
-          error = '快门释放失败:录像中的静照拍摄尚在进行,请稍候再试';
-        } else if (e.responseCode == PtpResponseCode.accessDenied) {
-          // 0x200F:相机锁定拍照控制 —— Zf 机顶「照片/视频」切换拨杆在
-          // 视频档时 0x9207 即被拒(2026-10-11 真机定案;对称于录像侧
-          // 0xA004 的拨杆提示)。
-          error = '相机当前状态不允许拍照 —— 请把机顶「照片/视频」切换'
-              '拨杆拨回照片档后重试(视频档请用拍摄页的录制钮拍视频)';
-        } else {
-          // 码随文浮出:有提示语时附 〔0x????〕(同连接梯诊断风格);
-          // 无提示语时异常文本自带码,不再重复。
-          final hint = _nikonHint(e.responseCode);
-          var msg = hint == null
-              ? '快门释放失败:$e'
-              : '快门释放失败:$hint'
-                  '〔0x${e.responseCode.toRadixString(16).toUpperCase()}〕';
-          // 尽力读 WarningStatus(0xD102,官方 §6.5.6.24):Bit0 序列错误
-          // → 自愈指引(官方 §11.7.5:下一次释放自清,非重启级故障)。
-          try {
-            final w = await session
-                .getDevicePropValue(PtpDevicePropCode.warningStatus);
-            final raw = w.value;
-            if (raw is int && (raw & 0x1) != 0) {
-              msg = '$msg —— 相机上报序列错误,再按一次快门通常可恢复';
-            }
-          } on Exception {
-            // 读不到就只报原错误
-          }
-          error = msg;
-        }
-        return;
+        return (false, await _captureErrorMessage(e));
       } on Exception catch (e) {
-        error = '快门释放失败:$e';
-        return;
+        return (false, '快门释放失败:$e');
       }
       _captureDone = Completer<void>();
       final (sdramFired, sdramFallback) = firedResult;
@@ -2052,19 +2154,60 @@ final class RemoteController extends ChangeNotifier {
       if (sdramFired && _linkUp) {
         await _collectSdramObject();
       }
-      // 回落提示落收口后:常规卡拍的「已拍摄」(ObjectAdded)会先到,
-      // 这里盖上机制说明 —— 用户须知照片去了卡而非 SDRAM。
-      if (sdramFallback != null) {
-        notice = sdramFallback;
-        notifyListeners();
-      }
+      return (true, sdramFallback);
     } finally {
       _captureDone = null;
       _sdramHandle = null;
       if (wasLive && _viewerVisible) engine.resume();
-      capturing = false;
-      notifyListeners();
     }
+  }
+
+  /// 快门释放被相机拒(码级)的用户提示(原 capture 内联映射抽出,语义
+  /// 不变;尽力读 WarningStatus 0xD102 —— Bit0 序列错误 → 自愈指引)。
+  Future<String> _captureErrorMessage(PtpResponseException e) async {
+    if (e.responseCode == PtpResponseCode.storeNotAvailable) {
+      // 0x2013:标准义 = 存储不可用(无卡/卡错误);2026-10-11 真机
+      // 另证:机身拨杆在视频档时远程拍照除 0x200F 外也会报此码
+      //(存储卡在位,具体子态待核)—— 双因都指,别把用户支去翻卡槽。
+      return '快门释放失败:相机存储不可用 —— 请检查存储卡与插槽;'
+          '若卡在位,可能是机身拨杆在视频档拒绝了远程拍照,'
+          '请拨回照片档重试(视频档请用拍摄页的录制钮拍视频)';
+    }
+    if (e.responseCode == PtpResponseCode.invalidParameter) {
+      return '快门释放失败:相机不接受快门参数(0x201D,已试全部'
+          '已知形态)—— 请反馈当时的「APP 接管」与「对焦后拍」状态';
+    }
+    if (e.responseCode == NikonResponseCode.movieFrameReleaseBusy) {
+      // 0xA202:录像中的静照释放进行中(官方 §6.3.2.17)—— 录像
+      // 期间拍静照连拍两下会撞上,等一拍再试。
+      return '快门释放失败:录像中的静照拍摄尚在进行,请稍候再试';
+    }
+    if (e.responseCode == PtpResponseCode.accessDenied) {
+      // 0x200F:相机锁定拍照控制 —— Zf 机顶「照片/视频」切换拨杆在
+      // 视频档时 0x9207 即被拒(2026-10-11 真机定案;对称于录像侧
+      // 0xA004 的拨杆提示)。
+      return '相机当前状态不允许拍照 —— 请把机顶「照片/视频」切换'
+          '拨杆拨回照片档后重试(视频档请用拍摄页的录制钮拍视频)';
+    }
+    // 码随文浮出:有提示语时附 〔0x????〕(同连接梯诊断风格);
+    // 无提示语时异常文本自带码,不再重复。
+    final hint = _nikonHint(e.responseCode);
+    var msg = hint == null
+        ? '快门释放失败:$e'
+        : '快门释放失败:$hint〔0x${e.responseCode.toRadixString(16).toUpperCase()}〕';
+    // 尽力读 WarningStatus(0xD102,官方 §6.5.6.24):Bit0 序列错误
+    // → 自愈指引(官方 §11.7.5:下一次释放自清,非重启级故障)。
+    try {
+      final w =
+          await session.getDevicePropValue(PtpDevicePropCode.warningStatus);
+      final raw = w.value;
+      if (raw is int && (raw & 0x1) != 0) {
+        msg = '$msg —— 相机上报序列错误,再按一次快门通常可恢复';
+      }
+    } on Exception {
+      // 读不到就只报原错误
+    }
+    return msg;
   }
 
   /// 等拍照落地:CaptureComplete 事件先到即收口,否则 DeviceReady 兜底。
@@ -2550,6 +2693,10 @@ final class RemoteController extends ChangeNotifier {
     _bulbShutterRestore = null;
     _bulbExposureLeft = null;
     _cancelSelfTimer();
+    // 间隔拍摄随链路消亡:调度等待即时取消(在途单拍事务被门闩挡在
+    // 收尾,快门命运如实交给相机侧)。停止摘要 notice 被下方清空,
+    // 「未连接」横幅独占告知。
+    _interval.stop();
     _dialGen++;
     _dialAccum = 0;
     _dialDriving = false;
@@ -2595,6 +2742,9 @@ final class RemoteController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _interval.stop();
+    _interval.removeListener(_onIntervalChanged);
+    _interval.dispose();
     _aePolling = false;
     _aeRun++;
     _reviewTimer?.cancel();

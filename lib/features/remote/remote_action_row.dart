@@ -273,15 +273,19 @@ Widget _shutterButton(LivePalette live, RemoteController controller,
     {required CaptureMode mode}) {
   const size = 78.0;
   final photo = mode == CaptureMode.photo;
+  // 照片档:间隔拍摄运行中让位(灰化;调度器按间隔驱动快门,手动
+  // 按下/按住会被控制器拒并提示)。
   final usable = photo
-      ? controller.linkUp
+      ? controller.linkUp && !controller.intervalActive
       : controller.linkUp && controller.liveViewActive;
   final rec = controller.recording;
   return GestureDetector(
     behavior: HitTestBehavior.opaque,
     onTapDown: photo
         ? (_) {
-            if (controller.linkUp && !controller.capturing) {
+            if (controller.linkUp &&
+                !controller.capturing &&
+                !controller.intervalActive) {
               unawaited(controller.capturePressed());
             }
           }

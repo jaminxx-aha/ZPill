@@ -12,6 +12,7 @@ import 'package:nikon_pill/core/ptp/operation_codes.dart';
 import 'package:nikon_pill/core/ptp/ptp_session.dart';
 import 'package:nikon_pill/features/remote/shooting_param_catalog.dart';
 import 'package:nikon_pill/core/ptp/ptp_transport.dart';
+import 'package:nikon_pill/core/remote/intervalometer.dart';
 import 'package:nikon_pill/core/remote/live_view_engine.dart';
 import 'package:nikon_pill/core/remote/live_view_header.dart';
 import 'package:nikon_pill/core/utils/byte_writer.dart';
@@ -2840,5 +2841,98 @@ void main() {
             r.opcode == PtpOperationCode.initiateCapture),
         isEmpty,
         reason: '退订后音量键零快门请求');
+  });
+
+  testWidgets('间隔拍摄:设置面板入口 → 参数底单开始 → 状态行/互锁灰化 → 停止',
+      (tester) async {
+    _portrait(tester);
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = _directRemoteController(transport, conn: conn);
+    addTearDown(controller.dispose);
+    _scriptAutoStart(transport); // 进页自动起景
+    _scriptParams(transport);
+    await tester
+        .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
+    conn.statesCtrl.add(CameraLinkState.connected);
+    await tester.pumpAndSettle();
+
+    // 设置浮层 → 辅助区间隔芯片
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
+    expect(find.text('间隔拍摄'), findsOneWidget, reason: '辅助区入口芯片');
+
+    // 参数底单(默认 5 秒 / 10 张)→ 首拍脚本就位后开始
+    await tester.tap(find.text('间隔拍摄'));
+    await tester.pumpAndSettle();
+    expect(find.text('间隔拍摄参数'), findsOneWidget, reason: '底单标题');
+    expect(find.text('5 秒'), findsOneWidget, reason: '间隔默认 5s');
+    expect(find.text('10'), findsOneWidget, reason: '张数默认 10');
+    transport
+      ..ok() // 调度就绪探测(0x90C8)
+      ..ok(); // 0x9207(首拍立即发,无首拍延迟)
+    await tester.tap(find.byKey(const ValueKey('interval-start')));
+    // capturing 期间快门芯 spinner 持续排帧,pumpAndSettle 会超时 ——
+    // 有界 pump:处理点按(pop + startInterval 微任务链:探测 + 快门)。
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(
+        transport.requests
+            .where((r) => r.opcode == NikonOperationCode.deviceReady)
+            .length,
+        1,
+        reason: '调度就绪探测已发');
+    expect(
+        transport.requests
+            .where((r) => r.opcode == NikonOperationCode.initiateCaptureRecInMedia)
+            .length,
+        1,
+        reason: '首拍快门已发');
+
+    // CaptureComplete 事件收口首拍 → 间隔等待驻停(parked delay)
+    transport.eventCtrl.add(const PtpEvent(
+        code: PtpEventCode.captureComplete, transactionId: 0xFFFFFFFF));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(controller.intervalTaken, 1);
+
+    // 浮层常开:芯片进度镜像 + 自拍/SDRAM 互锁灰化(芯片 onTap 置空)。
+    expect(find.text('间隔 1/10'), findsOneWidget,
+        reason: '芯片进度镜像运行态');
+    final selfTimerChip = tester.widget<InkWell>(find
+        .ancestor(of: find.text('自拍'), matching: find.byType(InkWell))
+        .first);
+    expect(selfTimerChip.onTap, isNull, reason: '运行中自拍让位灰化');
+    final sdramChip = tester.widget<InkWell>(find
+        .ancestor(of: find.text('SDRAM 直拍'), matching: find.byType(InkWell))
+        .first);
+    expect(sdramChip.onTap, isNull, reason: '运行中 SDRAM 直拍禁中途开');
+
+    // 收设置浮层(tune 再点即收)→ 状态行常驻贴底(第 x/y 张 + 停止钮;
+    // 浮层开着时满铺收层会垫在状态行前,停止钮须收浮层后才可点)。
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('间隔拍摄'), findsNothing, reason: '浮层已收(芯片随撤)');
+    expect(find.byKey(const ValueKey('interval-status-row')), findsOneWidget);
+    expect(find.text('间隔拍摄 1/10 张'), findsOneWidget);
+
+    // 停止:状态行即撤,摘要横幅透出
+    await tester.tap(find.byKey(const ValueKey('interval-stop')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(controller.intervalStatus, IntervalometerStatus.stopped);
+    expect(find.byKey(const ValueKey('interval-status-row')), findsNothing);
+    expect(find.text('间隔拍摄已停止:共 1 张'), findsOneWidget);
+    expect(
+        transport.requests
+            .where((r) => r.opcode == NikonOperationCode.initiateCaptureRecInMedia)
+            .length,
+        1,
+        reason: '停轮后不再发快门');
+
+    // 摘要横幅 4s 淡出计时:推过窗收口,不留挂起 Timer
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pump(const Duration(milliseconds: 400));
   });
 }
