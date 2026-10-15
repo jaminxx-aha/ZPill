@@ -351,5 +351,14 @@ abstract final class PtpObjectPropCode {
   /// 对象保护状态(u16:0x0000 不保护 / 0x0001 只读)—— 0x1012 写保护
   /// 无读回,真实态走 0x9803 对象属性读回。
   static const int protectionStatus = 0x0004;
+
+  // ── 官方 §6.6.1 对象信息组(GroupCode=0x00000001;0x9805 批量读的
+  // 首屏消费字段,2026-10-15 入册)──
+  static const int objectFormat = 0xDC02; // u16(§6.6.1.2)
+  static const int objectSize = 0xDC04; // u64(§6.6.1.4)
+  static const int objectFilename = 0xDC07; // STR(§6.6.1.7)
+  static const int dateCreated = 0xDC08; // STR YYYYMMDDThhmmss.s(§6.6.1.8)
+  static const int dateModified = 0xDC09; // STR(§6.6.1.9)
+  static const int parentObject = 0xDC0B; // u32(§6.6.1.11)
 }
 

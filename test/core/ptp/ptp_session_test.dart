@@ -131,6 +131,75 @@ final class _CancelFailingTransport implements PtpTransport, PtpCancelCapable {
   Future<void> close() async {}
 }
 
+/// 手搓 0x9805 ObjectPropList 数据集(官方 §6.2.11.5 数据集表,布局
+/// 独立于被测代码):u32 计数 + N×(u32 句柄 + u16 属性码 + u16 类型 +
+/// DTS 值),**无 GetSet 字节**(那是 0x9802 ObjectPropDesc 的布局)。
+final class PropListDataset {
+  final _entries = <Uint8List>[];
+
+  void _entry(int handle, int code, int type, void Function(ByteWriter w) v) {
+    final w = ByteWriter()
+      ..u32(handle)
+      ..u16(code)
+      ..u16(type);
+    v(w);
+    _entries.add(w.takeBytes());
+  }
+
+  /// UINT16(0x0004)条目。
+  void u16(int handle, int code, int value) =>
+      _entry(handle, code, 0x0004, (w) => w.u16(value));
+
+  /// UINT32(0x0006)条目。
+  void u32(int handle, int code, int value) =>
+      _entry(handle, code, 0x0006, (w) => w.u32(value));
+
+  /// UINT64(0x0008)条目。
+  void u64(int handle, int code, int value) =>
+      _entry(handle, code, 0x0008, (w) => w.u64(value));
+
+  /// STR(0xFFFF)条目。
+  void str(int handle, int code, String value) =>
+      _entry(handle, code, 0xFFFF, (w) => w.ptpString(value));
+
+  /// 自定类型码 + 原始值字节(未知类型/INT128/数组等防错位场景用)。
+  void raw(int handle, int code, int type, List<int> valueBytes) =>
+      _entry(handle, code, type, (w) => w.raw(valueBytes));
+
+  Uint8List build() {
+    final w = ByteWriter()..u32(_entries.length);
+    for (final e in _entries) {
+      w.raw(e);
+    }
+    return w.takeBytes();
+  }
+}
+
+/// 最小 ObjectInfo 数据集(0x9805 降级后「GetObjectInfo 仍可用」断言用;
+/// 52B 定长头 + 文件名串,日期串未提供)。
+Uint8List minimalObjectInfoDataset(String filename) {
+  final w = ByteWriter()
+    ..u32(0x00010001) // StorageID
+    ..u16(0x3801) // ObjectFormat
+    ..u16(0) // ProtectionStatus
+    ..u32(1000) // CompressedSize
+    ..u16(0x3808) // ThumbFormat
+    ..u32(0) // ThumbCompressedSize
+    ..u32(0) // ThumbPixWidth
+    ..u32(0) // ThumbPixHeight
+    ..u32(0) // ImagePixWidth
+    ..u32(0) // ImagePixHeight
+    ..u32(0) // ImageBitDepth
+    ..u32(0) // ParentObject
+    ..u16(0) // AssociationType
+    ..u32(0) // AssociationDesc
+    ..u32(0) // SequenceNumber
+    ..ptpString(filename)
+    ..ptpString(null) // captureDate 未提供
+    ..ptpString(null); // modificationDate 未提供
+  return w.takeBytes();
+}
+
 /// 手搓 GetDeviceInfo 数据集(ByteWriter;字段布局独立于被测代码)。
 /// [operations] 可覆盖操作码表(默认不含 0x90C4,测「不在册」路径用)。
 /// [serial] 可覆盖序列号(默认含前导零,覆盖 Zf 补零方言归一用例)。
@@ -1664,7 +1733,7 @@ void main() {
       expect(props[1].value, 500);
     });
 
-    test('getObjectPropList:depth 省略时 3 参,给了才追加 P5', () async {
+    test('getObjectPropList:depth 省略时 3 参;给了 P5 组码补位 P4', () async {
       t.reply(PtpResult(
           responseCode: PtpResponseCode.ok,
           data: Uint8List.fromList([0, 0, 0, 0])));
@@ -1676,7 +1745,159 @@ void main() {
           data: Uint8List.fromList([0, 0, 0, 0])));
       await session.getObjectPropList(0x10,
           propCode: 0x0004, depth: 0xFFFFFFFF);
-      expect(t.requests.last.params, [0x10, 0, 0x0004, 0xFFFFFFFF]);
+      // P4/P5 按位序不可跳:给了 depth 而未给组码,P4 补 0x00000000。
+      expect(
+          t.requests.last.params, [0x10, 0, 0x0004, 0x00000000, 0xFFFFFFFF]);
+
+      t.reply(PtpResult(
+          responseCode: PtpResponseCode.ok,
+          data: Uint8List.fromList([0, 0, 0, 0])));
+      await session.getObjectPropList(0x10,
+          propCode: 0x00000000, groupCode: 0x00000001);
+      // P3=0 按 P4 组码取(官方 §6.2.11.5:Zf §6.6 信息组 = 0x00000001)。
+      expect(t.requests.last.params, [0x10, 0, 0x00000000, 0x00000001]);
+    });
+
+    test(
+        'getObjectPropList 批量解析:多对象多属性(含变长串),'
+        '首屏五参全量形 = n-link 生产同款', () async {
+      final ds = PropListDataset()
+        ..u16(0x13, PtpObjectPropCode.objectFormat, 0x3801)
+        ..str(0x13, PtpObjectPropCode.objectFilename, 'DSC_0002.JPG')
+        ..u64(0x13, PtpObjectPropCode.objectSize, 8400000)
+        ..u32(0x13, PtpObjectPropCode.parentObject, 0x11)
+        ..str(0x13, PtpObjectPropCode.dateCreated, '20260926T090000')
+        ..u16(0x10, PtpObjectPropCode.objectFormat, 0x3001)
+        ..str(0x10, PtpObjectPropCode.objectFilename, 'DCIM');
+      t.reply(
+          PtpResult(responseCode: PtpResponseCode.ok, data: ds.build()));
+      final props = await session.getObjectPropList(0xFFFFFFFF,
+          formatCode: 0x00000000, propCode: 0xFFFFFFFF, depth: 0xFFFFFFFF);
+      expect(t.requests.single.opcode, NikonOperationCode.getObjectPropList);
+      expect(t.requests.single.params,
+          [0xFFFFFFFF, 0x00000000, 0xFFFFFFFF, 0x00000000, 0xFFFFFFFF]);
+      expect(props, hasLength(7));
+      Object? val(int h, int c) =>
+          props.firstWhere((p) => p.handle == h && p.code == c).value;
+      expect(val(0x13, PtpObjectPropCode.objectFilename), 'DSC_0002.JPG');
+      expect(val(0x13, PtpObjectPropCode.objectSize), 8400000);
+      expect(val(0x13, PtpObjectPropCode.parentObject), 0x11);
+      expect(val(0x13, PtpObjectPropCode.dateCreated), '20260926T090000');
+      expect(val(0x10, PtpObjectPropCode.objectFormat), 0x3001);
+      expect(session.objectPropListDegraded, isFalse);
+    });
+
+    test(
+        'getObjectPropList:未知 DataType 整体弃(FormatException)'
+        '+ 本会话降级秒拒不再发', () async {
+      final ds = PropListDataset()
+        ..u16(0x13, PtpObjectPropCode.objectFormat, 0x3801) // 首条正常
+        ..raw(0x13, 0xDC41, 0x5555, [1, 2, 3, 4]); // 表外类型 → 整体弃
+      t.reply(
+          PtpResult(responseCode: PtpResponseCode.ok, data: ds.build()));
+      await expectLater(session.getObjectPropList(0xFFFFFFFF, depth: 0xFFFFFFFF),
+          throwsA(isA<FormatException>()));
+      expect(session.objectPropListDegraded, isTrue);
+      // 秒拒:本会话后续调用直接 UnsupportedError,不再消耗往返。
+      await expectLater(session.getObjectPropList(0xFFFFFFFF, depth: 0xFFFFFFFF),
+          throwsA(isA<UnsupportedError>()));
+      expect(t.requests, hasLength(1));
+    });
+
+    test(
+        'getObjectPropList:相机拒(错误应答)→ 降级 → 秒拒 → '
+        '回退 GetObjectInfo 仍可用', () async {
+      t.reply(
+          const PtpResult(responseCode: PtpResponseCode.operationNotSupported));
+      await expectLater(session.getObjectPropList(0xFFFFFFFF, depth: 0xFFFFFFFF),
+          throwsA(isA<PtpResponseException>()));
+      expect(session.objectPropListDegraded, isTrue);
+      await expectLater(session.getObjectPropList(0xFFFFFFFF, depth: 0xFFFFFFFF),
+          throwsA(isA<UnsupportedError>()));
+      expect(t.requests, hasLength(1)); // 拒答只发生一次
+
+      // 降级不连坐:逐对象 GetObjectInfo 路径照常(仓库回退的根基)。
+      t.reply(PtpResult(
+          responseCode: PtpResponseCode.ok,
+          data: minimalObjectInfoDataset('DSC_0002.JPG')));
+      final info = await session.getObjectInfo(0x13);
+      expect(info.filename, 'DSC_0002.JPG');
+    });
+
+    test('getObjectPropList:open() 复位降级旗标,新会话重新探测', () async {
+      t.reply(
+          const PtpResult(responseCode: PtpResponseCode.operationNotSupported));
+      await expectLater(session.getObjectPropList(0xFFFFFFFF, depth: 0xFFFFFFFF),
+          throwsA(isA<PtpResponseException>()));
+      expect(session.objectPropListDegraded, isTrue);
+
+      t.reply(const PtpResult(responseCode: PtpResponseCode.ok)); // OpenSession
+      await session.open();
+      expect(session.objectPropListDegraded, isFalse);
+
+      final ds = PropListDataset()
+        ..str(0x13, PtpObjectPropCode.objectFilename, 'DSC_0002.JPG');
+      t.reply(
+          PtpResult(responseCode: PtpResponseCode.ok, data: ds.build()));
+      final props =
+          await session.getObjectPropList(0xFFFFFFFF, depth: 0xFFFFFFFF);
+      expect(props.single.value, 'DSC_0002.JPG');
+    });
+
+    test(
+        'getObjectPropList:INT128/数组型按已知宽跳过不弃解析'
+        '(Zf §6.6 实型:PersistentUID / RepresentativeSampleData)', () async {
+      final ds = PropListDataset()
+        ..raw(0x12, 0xDC41, 0x000A, List.filled(16, 0xAB)) // UINT128
+        ..raw(0x12, 0xDC86, 0x4002, [3, 0, 0, 0, 9, 9, 9]) // AUINT8×3
+        ..u64(0x12, PtpObjectPropCode.objectSize, 26843545);
+      t.reply(
+          PtpResult(responseCode: PtpResponseCode.ok, data: ds.build()));
+      final props =
+          await session.getObjectPropList(0xFFFFFFFF, depth: 0xFFFFFFFF);
+      expect(props, hasLength(3));
+      // 128 位/数组:值不解(null),rawValue 按实宽留档;后续条目不错位。
+      expect(props[0].value, isNull);
+      expect(props[0].rawValue, hasLength(16));
+      expect(props[1].value, isNull);
+      expect(props[1].rawValue, hasLength(7)); // u32 元素数 + 3 字节
+      expect(props[2].value, 26843545);
+      expect(session.objectPropListDegraded, isFalse);
+    });
+
+    test('getObjectPropList:计数与字节流不符(尾巴/提前耗尽)判不可信降级',
+        () async {
+      // 尾巴:count=1 但流内还有第二条的字节。
+      final w = ByteWriter()
+        ..u32(1)
+        ..u32(0x13)
+        ..u16(PtpObjectPropCode.objectFormat)
+        ..u16(0x0004)
+        ..u16(0x3801)
+        ..u32(0x10)
+        ..u16(PtpObjectPropCode.objectFormat)
+        ..u16(0x0004)
+        ..u16(0x3001);
+      t.reply(PtpResult(responseCode: PtpResponseCode.ok, data: w.takeBytes()));
+      await expectLater(session.getObjectPropList(0xFFFFFFFF, depth: 0xFFFFFFFF),
+          throwsA(isA<FormatException>()));
+      expect(session.objectPropListDegraded, isTrue);
+
+      // 提前耗尽:count=2 只有一条(另起会话验证)。
+      final t2 = FakePtpTransport();
+      final s2 = PtpSession(transport: t2);
+      final w2 = ByteWriter()
+        ..u32(2)
+        ..u32(0x13)
+        ..u16(PtpObjectPropCode.objectFormat)
+        ..u16(0x0004)
+        ..u16(0x3801);
+      t2.reply(
+          PtpResult(responseCode: PtpResponseCode.ok, data: w2.takeBytes()));
+      await expectLater(
+          s2.getObjectPropList(0xFFFFFFFF, depth: 0xFFFFFFFF),
+          throwsA(isA<FormatException>()));
+      expect(s2.objectPropListDegraded, isTrue);
     });
 
     test('非 OK 响应统一抛 PtpResponseException(clearEvent 例)', () async {
