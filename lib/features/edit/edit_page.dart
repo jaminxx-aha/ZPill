@@ -3,8 +3,9 @@
 /// 交互模型:参数改动的重算都在预览小图上(见 [EditController]);
 /// 保存时 [compute] 把参数应用到原分辨率(重编码秒级,勿卡 UI)。
 /// 裁剪是独立模式:底图铺满 + 遮罩 + 角/边手柄,确认才落到参数。
-/// LUT 面板含内置风格 + 剪贴板导入 .cube 文本(受系统剪贴板容量
-/// 限制,偏大 LUT 建议先缩到 17³)。
+/// LUT 面板含内置风格 + 剪贴板导入 .cube/.xmp 文本(.cube 为 SpeedGrade
+/// 表;.xmp 为 Adobe 相机配置 RGBTable,见 core/media/xmp_rgb_table;
+/// 受系统剪贴板容量限制,偏大 LUT 建议先缩到 17³)。
 library;
 
 import 'dart:io';
@@ -17,6 +18,7 @@ import 'package:flutter/services.dart' show Clipboard;
 
 import '../../core/media/cube_lut.dart';
 import '../../core/media/image_edit.dart';
+import '../../core/media/xmp_rgb_table.dart' show looksLikeXmp, parseXmpRgbTable;
 import '../../core/ptpip/object_format.dart' show ObjectKind;
 import '../../core/transfer/object_downloader.dart' show ObjectDownloader;
 import '../../design/app_colors.dart';
@@ -179,7 +181,11 @@ class _EditPageState extends State<EditPage> {
       return;
     }
     try {
-      final lut = CubeLut.parse(text);
+      // 同一剪贴板入口分派:XMP 标记(rdf:Description 等)走 RGBTable
+      // 解码链,否则按 .cube 文本解析;两类失败都抛 FormatException。
+      final lut = looksLikeXmp(text)
+          ? parseXmpRgbTable(text).toCubeLut()
+          : CubeLut.parse(text);
       setState(() => _importedLut = lut);
       _controller.setLut(lut);
       final title = lut.title.isEmpty ? context.t('未命名') : lut.title;
@@ -558,7 +564,8 @@ class _EditPageState extends State<EditPage> {
                       // LUT 标题键存 edit/lut_presets 的 builtinLuts
                       // (4 条已按 i18n-3 先例在 i18n-4 入目录,remote_
                       // settings_panel 同款显示点包 t);「无/导入」与剪贴板
-                      // 导入的 .cube TITLE(通常拉丁)未命中原样回落。
+                      // 导入的 .cube TITLE/.xmp 表名(通常拉丁)未命中原样
+                      // 回落。
                       label: Text(context.t(name)),
                       selected: _controller.lut == lut,
                       onSelected: (_) => _controller.setLut(lut),
@@ -572,7 +579,7 @@ class _EditPageState extends State<EditPage> {
             style: OutlinedButton.styleFrom(foregroundColor: AppMedia.onMedia),
             onPressed: _importLutFromClipboard,
             icon: const Icon(Icons.content_paste),
-            label: Text(context.t('从剪贴板导入 .cube')),
+            label: Text(context.t('从剪贴板导入 .cube/.xmp')),
           ),
         ],
       ),

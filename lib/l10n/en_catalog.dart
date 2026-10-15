@@ -735,7 +735,8 @@ const Map<String, String> enCatalog = {
   // edit_page(「取消」「无」复用既有键;LUT 芯片标题键存 edit/lut_presets
   // 的 builtinLuts —— 4 条已在 i18n-4(remote-pages 段)入表,remote_
   // settings_panel 与本页 _lutPanel 两个显示点同键包 t;剪贴板导入的
-  // .cube TITLE 通常为拉丁串,未命中原样回落。「应用」是 Apply 动词
+  // .cube TITLE/.xmp 表名通常为拉丁串,未命中原样回落。「应用」是 Apply
+  // 动词
   // —— i18n-6 预留的决定在此落地:browser 段的「到应用/下载到应用」
   // 是名词性介词片段,不同键不撞义。toast 走 _toast 消费点收口,
   // 带参模板在调用点先 t+填充(二次 t 不命中键原样回落,无害))
@@ -755,7 +756,7 @@ const Map<String, String> enCatalog = {
   '对比': 'Contrast',
   '饱和': 'Saturation',
   '暖调': 'Warmth',
-  '从剪贴板导入 .cube': 'Import .cube from Clipboard',
+  '从剪贴板导入 .cube/.xmp': 'Import .cube/.xmp from Clipboard',
   '导入': 'Imported',
   '已保存到相册': 'Saved to the album',
   '未保存(已取消)': 'Not saved (cancelled)',

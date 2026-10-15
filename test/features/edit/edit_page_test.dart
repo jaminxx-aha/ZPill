@@ -193,7 +193,7 @@ void main() {
       (call) async =>
           call.method == 'Clipboard.getData' ? {'text': cube} : null,
     );
-    await tester.tap(find.text('从剪贴板导入 .cube'));
+    await tester.tap(find.text('从剪贴板导入 .cube/.xmp'));
     await tester.pump();
     expect(find.text('已导入「pos」(2³)'), findsOneWidget);
     expect(find.text('pos'), findsOneWidget);
@@ -203,7 +203,48 @@ void main() {
       SystemChannels.platform,
       (call) async => call.method == 'Clipboard.getData' ? {'text': '垃圾'} : null,
     );
-    await tester.tap(find.text('从剪贴板导入 .cube'));
+    await tester.tap(find.text('从剪贴板导入 .cube/.xmp'));
+    await tester.pump();
+    expect(find.textContaining('导入失败'), findsOneWidget);
+  });
+
+  testWidgets('LUT:XMP 剪贴板导入走 RGBTable 链;坏 XMP 给失败提示', (tester) async {
+    final gallery = FakeGallerySaver();
+    await _pumpPage(tester, gallery: gallery);
+    await tester.tap(find.byTooltip('LUT'));
+    await tester.pump();
+
+    // 属性式 XMP + 一条 N=2 全零增量表(向量语义见
+    // test/core/media/xmp_rgb_table_test.dart,此处只验挂点接线)。
+    const xmp = '<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>\n'
+        '<x:xmpmeta xmlns:x="adobe:ns:meta/">\n'
+        ' <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"\n'
+        '          xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">\n'
+        '  <rdf:Description rdf:about="" crs:RGBTable="t"'
+        ' crs:Table_t=":0000OcImwM!emwO1/)wKOJQvZ2100H6SM2"/>\n'
+        ' </rdf:RDF>\n'
+        '</x:xmpmeta>\n';
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async => call.method == 'Clipboard.getData' ? {'text': xmp} : null,
+    );
+    await tester.tap(find.text('从剪贴板导入 .cube/.xmp'));
+    await tester.pump();
+    expect(find.text('已导入「XMP LUT」(2³)'), findsOneWidget);
+    expect(find.text('XMP LUT'), findsOneWidget);
+    expect(_saveEnabled(tester), isTrue);
+
+    // 有 XMP 标记但表数据是垃圾:走 XMP 分支照样 FormatException。
+    const badXmp =
+        '<x:xmpmeta xmlns:x="adobe:ns:meta/">\n <rdf:RDF xmlns:rdf="r">\n'
+        '  <rdf:Description rdf:about="" crs:Table_x=",;;,"/>\n'
+        ' </rdf:RDF>\n</x:xmpmeta>\n';
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async =>
+          call.method == 'Clipboard.getData' ? {'text': badXmp} : null,
+    );
+    await tester.tap(find.text('从剪贴板导入 .cube/.xmp'));
     await tester.pump();
     expect(find.textContaining('导入失败'), findsOneWidget);
   });
@@ -282,7 +323,7 @@ void main() {
       (call) async =>
           call.method == 'Clipboard.getData' ? {'text': invCube} : null,
     );
-    await tester.tap(find.text('从剪贴板导入 .cube'));
+    await tester.tap(find.text('从剪贴板导入 .cube/.xmp'));
     await tester.pump();
     expect(_saveEnabled(tester), isTrue); // 导入即选中
 
