@@ -7,8 +7,9 @@
 ///
 /// 管线顺序:方向烘焙(bakeOrientation,EXIF Orientation 清零、像素
 /// 转正)→ 顺时针旋转 90°×n → 裁剪 → 亮度/对比度/饱和度/暖调 →
-/// LUT → JPEG 重编码(quality 92)。变换产新画布,image 包经
-/// Image.fromResized 会克隆 EXIF,机型/日期等卡片字段随行。
+/// 胶片矩阵(4x5,见 film_presets)→ LUT → JPEG 重编码(quality 92)。
+/// 变换产新画布,image 包经 Image.fromResized 会克隆 EXIF,机型/日期
+/// 等卡片字段随行。
 ///
 /// 失败语义同水印:非 JPEG / 解码失败 → 原样返回(同一实例)。
 library;
@@ -20,6 +21,7 @@ import 'dart:ui' show Rect;
 import 'package:image/image.dart' as img;
 
 import 'cube_lut.dart';
+import 'film_presets.dart';
 
 /// 标量调节(全部 1/0 = 不动):亮度/对比度/饱和度 0..2(1 = 原样),
 /// 暖调 -1..1(正 = 阴影压蓝、高光限蓝;负 = 反向偏冷)。
@@ -59,6 +61,7 @@ final class PhotoEdit {
     this.rotationQuarter = 0,
     this.cropRect,
     this.adjustments = const EditAdjustments(),
+    this.filmPreset,
     this.lut,
   });
 
@@ -70,6 +73,9 @@ final class PhotoEdit {
 
   final EditAdjustments adjustments;
 
+  /// 应用中的胶片预设(4x5 色彩矩阵);null = 无。
+  final FilmPreset? filmPreset;
+
   /// 应用中的 3D LUT;null = 无。
   final CubeLut? lut;
 
@@ -77,6 +83,7 @@ final class PhotoEdit {
       rotationQuarter % 4 == 0 &&
       cropRect == null &&
       adjustments.isNeutral &&
+      filmPreset == null &&
       lut == null;
 
   PhotoEdit copyWith({
@@ -84,6 +91,8 @@ final class PhotoEdit {
     Rect? cropRect,
     bool clearCrop = false,
     EditAdjustments? adjustments,
+    FilmPreset? filmPreset,
+    bool clearFilmPreset = false,
     CubeLut? lut,
     bool clearLut = false,
   }) =>
@@ -92,6 +101,8 @@ final class PhotoEdit {
         cropRect:
             clearCrop ? null : (cropRect ?? this.cropRect),
         adjustments: adjustments ?? this.adjustments,
+        filmPreset:
+            clearFilmPreset ? null : (filmPreset ?? this.filmPreset),
         lut: clearLut ? null : (lut ?? this.lut),
       );
 }
@@ -151,8 +162,9 @@ img.Image applyEditToImage(img.Image baked, PhotoEdit edit) {
     out = img.copyCrop(out, x: x, y: y, width: w, height: h);
   }
   final a = edit.adjustments;
-  if (!a.isNeutral || edit.lut != null) {
-    out = img.Image.from(out); // adjustColor 就地改写,别动预览底图
+  final film = edit.filmPreset;
+  if (!a.isNeutral || film != null || edit.lut != null) {
+    out = img.Image.from(out); // adjustColor/矩阵就地改写,别动预览底图
     final w = a.warmth.clamp(-1.0, 1.0);
     if (w != 0) {
       img.Color blacks, whites;
@@ -183,6 +195,20 @@ img.Image applyEditToImage(img.Image baked, PhotoEdit edit) {
         saturation: a.saturation == 1 ? null : a.saturation,
       );
     }
+    if (film != null) {
+      // 胶片矩阵:标量调节之后、LUT 之前(参考仓同序:用户调节垫底、
+      // 预设视觉盖上)。与 film_presets.applyColorMatrix 字节版同式,
+      // 一致性由 film_presets_test 交叉对账锁死。
+      final m = film.matrix;
+      for (final p in out) {
+        final r = p.r, g = p.g, b = p.b, al = p.a;
+        p
+          ..r = _m8(m[0] * r + m[1] * g + m[2] * b + m[3] * al + m[4])
+          ..g = _m8(m[5] * r + m[6] * g + m[7] * b + m[8] * al + m[9])
+          ..b = _m8(m[10] * r + m[11] * g + m[12] * b + m[13] * al + m[14])
+          ..a = _m8(m[15] * r + m[16] * g + m[17] * b + m[18] * al + m[19]);
+      }
+    }
     final lut = edit.lut;
     if (lut != null) {
       for (final p in out) {
@@ -195,6 +221,15 @@ img.Image applyEditToImage(img.Image baked, PhotoEdit edit) {
     }
   }
   return out;
+}
+
+/// 矩阵通道结算:四舍五入后钳 0..255。与 film_presets.applyColorMatrix
+/// 同式(img.Image 像素路径独立实现,交叉对账在 film_presets_test)。
+/// RGB 三通道图上 p.a 读写是 image 包的安全空转(≥4 通道才落笔),
+/// 而库内矩阵 alpha 行恒单位阵,两种位深行为一致。
+int _m8(double v) {
+  final r = v.round();
+  return r < 0 ? 0 : (r > 255 ? 255 : r);
 }
 
 /// 预览解码:方向烘焙 + 长边缩到 [maxEdge](交互期处理小图,保存时

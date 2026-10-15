@@ -1,11 +1,14 @@
-/// 编辑页(TODO §五 T4):预览 + 四工具(旋转/裁剪/调节/LUT)+ 相册保存。
+/// 编辑页(TODO §五 T4):预览 + 五工具(旋转/裁剪/调节/LUT/胶片)
+/// + 相册保存。
 ///
 /// 交互模型:参数改动的重算都在预览小图上(见 [EditController]);
 /// 保存时 [compute] 把参数应用到原分辨率(重编码秒级,勿卡 UI)。
 /// 裁剪是独立模式:底图铺满 + 遮罩 + 角/边手柄,确认才落到参数。
 /// LUT 面板含内置风格 + 剪贴板导入 .cube/.xmp 文本(.cube 为 SpeedGrade
 /// 表;.xmp 为 Adobe 相机配置 RGBTable,见 core/media/xmp_rgb_table;
-/// 受系统剪贴板容量限制,偏大 LUT 建议先缩到 17³)。
+/// 受系统剪贴板容量限制,偏大 LUT 建议先缩到 17³)。胶片面板是 4x5
+/// 色彩矩阵预设库(core/media/film_presets,数值出处 MIT 见该文件头),
+/// 按参考仓分组两级筛选,「无」= null、original 与其像素等价不单列。
 library;
 
 import 'dart:io';
@@ -17,6 +20,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show Clipboard;
 
 import '../../core/media/cube_lut.dart';
+import '../../core/media/film_presets.dart';
 import '../../core/media/image_edit.dart';
 import '../../core/media/xmp_rgb_table.dart' show looksLikeXmp, parseXmpRgbTable;
 import '../../core/ptpip/object_format.dart' show ObjectKind;
@@ -28,7 +32,7 @@ import '../../platform/services.dart';
 import 'edit_controller.dart';
 import 'lut_presets.dart';
 
-enum _Tool { rotate, crop, adjust, lut }
+enum _Tool { rotate, crop, adjust, lut, film }
 
 Uint8List _renderFullJob((Uint8List, PhotoEdit) args) =>
     applyEdit(args.$1, args.$2);
@@ -56,6 +60,9 @@ class _EditPageState extends State<EditPage> {
   _Tool _tool = _Tool.rotate;
   CubeLut? _importedLut;
   bool _saving = false;
+
+  // 胶片面板当前分组(纯 UI 筛选态,不进编辑参数;重置不收回)。
+  String _filmGroup = filmPresetGroups.first;
 
   // 裁剪模式工作区(未确认前不进控制器)。
   bool _cropping = false;
@@ -325,12 +332,14 @@ class _EditPageState extends State<EditPage> {
                           _Tool.crop => Icons.crop,
                           _Tool.adjust => Icons.tune,
                           _Tool.lut => Icons.palette_outlined,
+                          _Tool.film => Icons.camera_roll,
                         }),
                         tooltip: switch (t) {
                           _Tool.rotate => context.t('旋转'),
                           _Tool.crop => context.t('裁剪'),
                           _Tool.adjust => context.t('调节'),
                           _Tool.lut => 'LUT',
+                          _Tool.film => context.t('胶片'),
                         },
                       ),
                     ),
@@ -349,6 +358,7 @@ class _EditPageState extends State<EditPage> {
                         _Tool.crop => _cropEntryPanel(),
                         _Tool.adjust => _adjustPanel(),
                         _Tool.lut => _lutPanel(),
+                        _Tool.film => _filmPanel(),
                       },
                     ),
             ),
@@ -581,6 +591,68 @@ class _EditPageState extends State<EditPage> {
             icon: const Icon(Icons.content_paste),
             label: Text(context.t('从剪贴板导入 .cube/.xmp')),
           ),
+        ],
+      ),
+    );
+  }
+
+  /// 预设显示名:中文环境 nameZh,英文环境 nameEn。预设名是数据非键
+  /// (87 款入 en_catalog 的目录成本远超收益,且参考仓自带英文 code),
+  /// 裸测试树(无 L10nScope)按中文 —— 与 .cube TITLE 原样回落同哲学。
+  String _filmName(FilmPreset p) =>
+      L10nScope.of(context)?.code == 'en' ? p.nameEn : p.nameZh;
+
+  Widget _filmPanel() {
+    // 「无」= null;original 与 null 像素等价(单位阵),不单列芯片。
+    final visible = [
+      for (final p in filmPresets)
+        if (p.id != 'original' && p.group == _filmGroup) p,
+    ];
+    Widget chipRow(List<Widget> children) => SizedBox(
+          height: 40,
+          child: ListView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            children: children,
+          ),
+        );
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Column(
+        children: [
+          // 分组行:键存 film_presets 的 filmPresetGroups(固定 7 组,
+          // 已按 LUT 芯片标题先例入目录)。
+          chipRow([
+            for (final g in filmPresetGroups)
+              Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: ChoiceChip(
+                  label: Text(context.t(g)),
+                  selected: _filmGroup == g,
+                  onSelected: (_) => setState(() => _filmGroup = g),
+                ),
+              ),
+          ]),
+          const SizedBox(height: 8),
+          chipRow([
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: ChoiceChip(
+                label: Text(context.t('无')),
+                selected: _controller.filmPreset == null,
+                onSelected: (_) => _controller.setFilmPreset(null),
+              ),
+            ),
+            for (final p in visible)
+              Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: ChoiceChip(
+                  label: Text(_filmName(p)),
+                  selected: _controller.filmPreset == p,
+                  onSelected: (_) => _controller.setFilmPreset(p),
+                ),
+              ),
+          ]),
         ],
       ),
     );

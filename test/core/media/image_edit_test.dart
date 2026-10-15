@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 
 import 'package:nikon_pill/core/media/cube_lut.dart';
+import 'package:nikon_pill/core/media/film_presets.dart';
 import 'package:nikon_pill/core/media/image_edit.dart';
 import 'package:nikon_pill/core/media/watermark.dart'
     show exifCardDataOf, readJpegExif;
@@ -205,6 +206,79 @@ void main() {
     final decoded = img.decodeJpg(rotated)!;
     expect(decoded.width, 30);
     expect(decoded.height, 40);
+  });
+
+  test('胶片预设:4x5 矩阵进管线(手调矩阵手算值 + 黑位钳 0)', () {
+    // leicaMonochrome 手调矩阵:亮度行 0.35/0.65/0.15、offset -10。
+    final preset = filmPresets.firstWhere((p) => p.id == 'leicaMonochrome');
+    final image = img.Image(width: 2, height: 1);
+    image.setPixelRgba(0, 0, 200, 100, 50, 255);
+    image.setPixelRgba(1, 0, 0, 0, 0, 255);
+    final out = applyEditToImage(image, PhotoEdit(filmPreset: preset));
+    // (200,100,50):0.35*200+0.65*100+0.15*50-10 = 132.5 → 133。
+    final p = out.getPixel(0, 0);
+    expect(p.r, 133);
+    expect(p.g, 133);
+    expect(p.b, 133);
+    // 黑位 (0,0,0):-10 → 钳 0。
+    expect(out.getPixel(1, 0).r, 0);
+  });
+
+  test('胶片预设:标量调节在前、矩阵在后(顺序锁,偏移破乘法交换)', () {
+    // 亮度 0.5 先折半、矩阵 +50 后盖:(200,100,50) → (100,50,25)
+    // → (150,100,75);若顺序颠倒则是 0.5*(+50 先加) = (125,75,50)。
+    const preset = FilmPreset(
+      id: 'offset50',
+      nameZh: '偏移',
+      nameEn: 'Offset',
+      group: '经典精选',
+      matrix: [
+        1, 0, 0, 0, 50, //
+        0, 1, 0, 0, 50, //
+        0, 0, 1, 0, 50, //
+        0, 0, 0, 1, 0, //
+      ],
+    );
+    final image = img.Image(width: 1, height: 1);
+    image.setPixelRgba(0, 0, 200, 100, 50, 255);
+    final out = applyEditToImage(
+      image,
+      const PhotoEdit(
+        adjustments: EditAdjustments(brightness: 0.5),
+        filmPreset: preset,
+      ),
+    );
+    expect(out.getPixel(0, 0).r, 150);
+    expect(out.getPixel(0, 0).g, 100);
+    expect(out.getPixel(0, 0).b, 75);
+  });
+
+  test('PhotoEdit:胶片预设参与中性判定与 copyWith 清除', () {
+    const neutral = PhotoEdit();
+    expect(neutral.isNeutral, isTrue);
+    final preset = filmPresets.firstWhere((p) => p.id == 'fujiProvia');
+    final withFilm = neutral.copyWith(filmPreset: preset);
+    expect(withFilm.isNeutral, isFalse);
+    expect(withFilm.filmPreset, same(preset));
+    expect(withFilm.copyWith(clearFilmPreset: true).isNeutral, isTrue);
+  });
+
+  test('applyEdit:胶片矩阵烘焙进 JPEG 产物(徕卡黑白 → 灰,容差区间)',
+      () {
+    final preset = filmPresets.firstWhere((p) => p.id == 'leicaMonochrome');
+    final image = img.Image(width: 40, height: 30);
+    for (var y = 0; y < 30; y++) {
+      for (var x = 0; x < 40; x++) {
+        image.setPixelRgba(x, y, 200, 100, 50, 255);
+      }
+    }
+    final out = applyEdit(_jpeg(image), PhotoEdit(filmPreset: preset));
+    final decoded = img.decodeJpg(out)!;
+    final p = decoded.getPixel(0, 0);
+    // 目标 133 ± JPEG 往返噪声。
+    expect(p.r, inInclusiveRange(118, 148));
+    expect(p.g, inInclusiveRange(118, 148));
+    expect(p.b, inInclusiveRange(118, 148));
   });
 
   test('applyEdit:EXIF 随行(旋转重编码后卡片字段仍可读)', () {

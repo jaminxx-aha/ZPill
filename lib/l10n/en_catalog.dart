@@ -783,6 +783,20 @@ const Map<String, String> enCatalog = {
   '已导入「{title}」({size}³)': 'Imported "{title}" ({size}³)',
   '导入失败:{e}': 'Import failed: {e}',
 
+  // edit_page 胶片面板(i18n-8 后续波):工具名 + 分组芯片 —— 分组键存
+  // core/media/film_presets 的 filmPresetGroups(固定 7 组,同 LUT 芯片
+  // 标题先例入目录);预设名(87 款)是数据非键,英文环境直接取预设
+  // 自带的 nameEn(参考仓 code 原文),不走 t —— 目录成本远超收益,
+  // 且与 .cube TITLE 原样回落同哲学。
+  '胶片': 'Film',
+  '富士胶片': 'Fuji Film',
+  '柯达胶片': 'Kodak Film',
+  '理光人文': 'Ricoh Street',
+  '索尼大师': 'Sony Masters',
+  '经典黑白': 'Classic B&W',
+  '电影特色': 'Cinema',
+  '经典精选': 'Classic Picks',
+
   // connection 层静态错误兜底(i18n-8 终检补包):键存 core/camera/
   // camera_connection 与 app_services(无 BuildContext,中文直存),消费
   // 点 connection_status_card 的 _HintText 已包 t(i18n-3),静态键本波
