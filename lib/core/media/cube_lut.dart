@@ -226,4 +226,38 @@ final class CubeLut {
     }
     return out;
   }
+
+  /// 视频导出用 RGBA 浮点数据集(N³×4,红最快,alpha 恒 1):喂
+  /// iOS CIColorCube(inputCubeData)与 Android Media3 SingleColorLut。
+  /// 两者都把格点输入映射为 0..1,故非 0..1 域的外来表在此**重采样**
+  /// 到 0..1 网格(逐格点 [apply],域外输入按端点取值);0..1 域直接
+  /// 展开零损耗。
+  Float32List cubeDataRgba() {
+    final n3 = size * size * size;
+    final isUnitDomain = _domainMin.every((v) => v == 0.0) &&
+        _domainMax.every((v) => v == 1.0);
+    final out = Float32List(n3 * 4);
+    var j = 0;
+    if (isUnitDomain) {
+      for (var i = 0; i < _table.length; i += 3) {
+        out[j++] = _table[i];
+        out[j++] = _table[i + 1];
+        out[j++] = _table[i + 2];
+        out[j++] = 1.0;
+      }
+      return out;
+    }
+    for (var b = 0; b < size; b++) {
+      for (var g = 0; g < size; g++) {
+        for (var r = 0; r < size; r++) {
+          final out3 = apply(r / (size - 1), g / (size - 1), b / (size - 1));
+          out[j++] = out3[0];
+          out[j++] = out3[1];
+          out[j++] = out3[2];
+          out[j++] = 1.0;
+        }
+      }
+    }
+    return out;
+  }
 }

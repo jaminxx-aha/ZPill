@@ -27,6 +27,7 @@
 		7A10000200000000000000A9 /* BlePlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A10000100000000000000A9 /* BlePlugin.swift */; };
 		7A10000200000000000000AA /* NetworkPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A10000100000000000000AA /* NetworkPlugin.swift */; };
 		7A10000200000000000000AB /* VolumeKeyPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A10000100000000000000AB /* VolumeKeyPlugin.swift */; };
+		7A10000400000000000000AB /* VideoLutExportPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A10000300000000000000AB /* VideoLutExportPlugin.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -81,6 +82,7 @@
 		7A10000100000000000000A9 /* BlePlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlePlugin.swift; sourceTree = "<group>"; };
 		7A10000100000000000000AA /* NetworkPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkPlugin.swift; sourceTree = "<group>"; };
 		7A10000100000000000000AB /* VolumeKeyPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VolumeKeyPlugin.swift; sourceTree = "<group>"; };
+		7A10000300000000000000AB /* VideoLutExportPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoLutExportPlugin.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -157,6 +159,7 @@
 				7A10000100000000000000A9 /* BlePlugin.swift */,
 				7A10000100000000000000AA /* NetworkPlugin.swift */,
 				7A10000100000000000000AB /* VolumeKeyPlugin.swift */,
+				7A10000300000000000000AB /* VideoLutExportPlugin.swift */,
 			);
 			path = Runner;
 			sourceTree = "<group>";
@@ -328,6 +331,7 @@
 				7A10000200000000000000A9 /* BlePlugin.swift in Sources */,
 				7A10000200000000000000AA /* NetworkPlugin.swift in Sources */,
 				7A10000200000000000000AB /* VolumeKeyPlugin.swift in Sources */,
+				7A10000400000000000000AB /* VideoLutExportPlugin.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

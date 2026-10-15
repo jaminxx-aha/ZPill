@@ -30,12 +30,15 @@ import 'package:flutter/services.dart';
 
 import '../../app_services.dart';
 import '../../core/browser/photo_group.dart';
+import '../../core/media/cube_lut.dart';
+import '../../core/media/xmp_rgb_table.dart' show parseXmpRgbTable;
 import '../../core/ptpip/object_format.dart';
 import '../../design/app_colors.dart';
 import '../../l10n/l10n.dart';
 import '../../platform/gallery_saver.dart';
 import '../../platform/raw_decoder.dart';
 import '../../platform/services.dart';
+import '../../platform/video_lut_export.dart';
 import '../../platform/video_player.dart';
 import '../common/format.dart' show formatDateTime;
 import '../common/widgets/confirm_dialog.dart';
@@ -44,6 +47,7 @@ import '../common/widgets/embedded_video_player.dart';
 import '../common/widgets/photo_info_sheet.dart';
 import '../common/widgets/states.dart';
 import '../transfers/transfers_page.dart';
+import 'lut_export_sheet.dart';
 
 /// 图库格式过滤:按扩展名分流,与相机侧条目判定同源。
 /// label 原文即 t() 键(RAW/JPG 拉丁串未命中直返),显示点包 t()。
@@ -160,6 +164,7 @@ class LocalLibraryPage extends StatefulWidget {
     this.rawDecoder,
     this.videoPlayer,
     this.embeddedVideoView,
+    this.videoLutExport,
   });
 
   /// 测试注入;缺省用 AppServices 单例(应用级共享,本页不持有)。
@@ -177,6 +182,10 @@ class LocalLibraryPage extends StatefulWidget {
   /// 测试注入(视频页内嵌视图);缺省用 iOS 平台视图。仅在
   /// [VideoPlayer.supportsEmbeddedView] 为真时被构建。
   final EmbeddedVideoViewBuilder? embeddedVideoView;
+
+  /// 测试注入(视频 LUT 导出宿主);缺省 MethodChannel 实现
+  /// (ohos 无 native,入口按 isSupported 隐藏)。
+  final VideoLutExportHost? videoLutExport;
 
   @override
   State<LocalLibraryPage> createState() => _LocalLibraryPageState();
@@ -608,6 +617,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
           videoPlayer: _videoPlayer,
           thumbFor: _thumbFor,
           embeddedVideoView: widget.embeddedVideoView,
+          videoLutExport: widget.videoLutExport,
         ),
       ),
     );
@@ -646,6 +656,7 @@ class _LibraryViewer extends StatefulWidget {
     required this.videoPlayer,
     required this.thumbFor,
     this.embeddedVideoView,
+    this.videoLutExport,
   });
 
   /// 网格过滤序快照(修改时间倒序);查看器内删除只改本地列表,
@@ -663,6 +674,10 @@ class _LibraryViewer extends StatefulWidget {
   /// 测试注入(视频页内嵌视图);缺省 iOS 平台视图。
   final EmbeddedVideoViewBuilder? embeddedVideoView;
 
+  /// 测试注入(LUT 导出宿主);缺省 MethodChannel 实现(ohos 无
+  /// native,入口按 isSupported 隐藏)。
+  final VideoLutExportHost? videoLutExport;
+
   @override
   State<_LibraryViewer> createState() => _LibraryViewerState();
 }
@@ -672,6 +687,20 @@ class _LibraryViewerState extends State<_LibraryViewer> {
   late final PageController _pageController =
       PageController(initialPage: widget.initialIndex);
   late int _index = widget.initialIndex;
+
+  /// LUT 导出宿主与支持位:探测异步落位前不显示入口(ohos 无实现
+  /// → 永 false,入口不出现)。
+  late final VideoLutExportHost _videoLut =
+      widget.videoLutExport ?? MethodChannelVideoLutExport();
+  bool? _lutSupported;
+
+  @override
+  void initState() {
+    super.initState();
+    _videoLut.isSupported().then((v) {
+      if (mounted) setState(() => _lutSupported = v);
+    });
+  }
 
   /// 视频全屏(原地旋转):锁横屏 + 隐顶栏。平台视图不能搬家,但查看
   /// 器自身布局可以 —— 同一 UiKitView 随 Scaffold 转横填满屏幕,零跳变
@@ -749,6 +778,12 @@ class _LibraryViewerState extends State<_LibraryViewer> {
                   onPressed: _importToGallery,
                   icon: const Icon(Icons.photo_library_outlined),
                 ),
+                if (isVideoFilename(_nameOf(_current)) && (_lutSupported ?? false))
+                  IconButton(
+                    tooltip: context.t('LUT 导出'),
+                    onPressed: _exportWithLut,
+                    icon: const Icon(Icons.movie_filter_outlined),
+                  ),
                 IconButton(
                   tooltip: context.t('删除'),
                   onPressed: _delete,
@@ -926,6 +961,126 @@ class _LibraryViewerState extends State<_LibraryViewer> {
           content: Text(imported
               ? context.t('已导入系统相册(应用内文件保留)')
               : context.t('未导入(已取消或失败)'))));
+  }
+
+  void _toastKey(String key) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(context.t(key))));
+  }
+
+  /// 视频 LUT 导出:选表 → 导出 → 落库(临时档用完即删)。入口仅
+  /// 视频页且平台支持(ohos 永不出现,见 initState 探测)。
+  void _exportWithLut() {
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (_) => LutExportSheet(
+        onPick: (lut) {
+          Navigator.of(context).pop();
+          _runLutExport(lut);
+        },
+        onImportFromClipboard: () => _importLutForExport(),
+      ),
+    );
+  }
+
+  /// 剪贴板导入(与编辑页 LUT 面板同一解析链:XMP 标记走 RGBTable,
+  /// 否则按 .cube 文本);失败留在选表上提示,成功关表转导出。
+  Future<void> _importLutForExport() async {
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    final text = data?.text?.trim() ?? '';
+    if (text.isEmpty) {
+      if (mounted) _toastKey('剪贴板没有文本');
+      return;
+    }
+    final CubeLut lut;
+    try {
+      lut = text.contains('rdf:Description') || text.contains('xmpmeta')
+          ? parseXmpRgbTable(text).toCubeLut()
+          : CubeLut.parse(text);
+    } on FormatException {
+      if (mounted) _toastKey('LUT 解析失败');
+      return;
+    }
+    if (mounted) {
+      Navigator.of(context).pop();
+    }
+    await _runLutExport(lut);
+  }
+
+  Future<void> _runLutExport(CubeLut lut) async {
+    final file = _current;
+    final progress = ValueNotifier<int>(0);
+    // 进度对话框:barrier 不可点、取消钮走 host.cancel(导出以
+    // cancelled 收场)。dialogDone 防「用户已按返回键关掉对话框」时
+    // our pop 误关查看器。
+    var dialogDone = false;
+    final dialogFuture = showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(context.t('导出中…')),
+        content: ValueListenableBuilder<int>(
+          valueListenable: progress,
+          builder: (_, v, __) => Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              LinearProgressIndicator(value: v == 0 ? null : v / 100),
+              const SizedBox(height: 8),
+              Text('$v%'),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: _videoLut.cancel,
+            child: Text(context.t('取消')),
+          ),
+        ],
+      ),
+    );
+    unawaited(dialogFuture.whenComplete(() => dialogDone = true));
+    var toast = '';
+    try {
+      final out = await _videoLut.export(
+        file.path,
+        lut,
+        onProgress: (p) => progress.value = p,
+      );
+      final uris = await widget.gallery.importFiles([
+        GalleryImportRequest(
+          path: out,
+          kind: ObjectKind.video,
+          filename: _lutExportName(_nameOf(file)),
+        ),
+      ]);
+      // 落库是拷贝:临时档用完即删(失败/取消的产物 native 侧自清)。
+      try {
+        File(out).deleteSync();
+      } on FileSystemException {
+        // 删不掉不挡(cache 目录,系统会收)。
+      }
+      toast = uris.isNotEmpty ? '已保存到系统相册' : '未导入(已取消或失败)';
+    } on PlatformException catch (e) {
+      toast = e.code == 'cancelled' ? '' : '导出失败';
+    } on Exception {
+      toast = '导出失败';
+    } finally {
+      if (!dialogDone && mounted && Navigator.of(context).canPop()) {
+        Navigator.of(context).pop(); // 关进度对话框
+      }
+      progress.dispose();
+      if (toast.isNotEmpty && mounted) {
+        _toastKey(toast);
+      }
+    }
+  }
+
+  /// 导出产物文件名:原名去扩展 + `_LUT.mp4`(导出统一 MP4 容器)。
+  String _lutExportName(String name) {
+    final dot = name.lastIndexOf('.');
+    final base = dot <= 0 ? name : name.substring(0, dot);
+    return '${base}_LUT.mp4';
   }
 }
 

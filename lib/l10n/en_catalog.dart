@@ -736,6 +736,12 @@ const Map<String, String> enCatalog = {
   '导入系统相册': 'Import to System Album',
   '已导入系统相册(应用内文件保留)': 'Imported to the system album (the in-app file is kept)',
   '未导入(已取消或失败)': 'Not imported (cancelled or failed)',
+  'LUT 导出': 'LUT Export',
+  'LUT 风格': 'LUT Style',
+  '导出中…': 'Exporting…',
+  '导出失败': 'Export Failed',
+  'LUT 解析失败': 'LUT Parse Failed',
+  '已保存到系统相册': 'Saved to the system album',
   'RAW 解码失败(该平台可能不支持)': 'RAW decode failed (this platform may not support it)',
 
   // transfers_page(「取消」「已取消」「未知错误」复用既有键;字节数/速度
