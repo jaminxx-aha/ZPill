@@ -11,11 +11,15 @@
 ///   Cancel-Drain —— 整档排水量不可预估(数百 MB MOV),墙钟阀只会
 ///   误杀慢链,维持排空即删的旧语义。
 /// - GetPartialObject 分块([partialChunkBytes] > 0):每块一个完整
-///   事务,块间响应取消/进度。取消双保险:块间旗标停发新块(旧路径,
-///   链路不支持时兜底)+ **块在途期间轮询旗标对在途块发 Cancel-Drain**
+///   事务,块间响应取消/进度;**单块大小由 AIMD 策略演化**(64KB 起步,
+///   快块加性升、超时/错误减半、1MB 封顶,见 [AimdChunkPolicy];定值
+///   时代 iOS 64KB→1MB 的两次手工调参由此自动化)。取消双保险:块间
+///   旗标停发新块(旧路径,链路不支持时兜底)+ **块在途期间轮询旗标对
+///   在途块发 Cancel-Drain**
 ///   (PTP-IP,私有轮询周期默认 50ms)—— 用户取消即时生效,不必等
 ///   在途块自然跑完;在途块以 [PtpCancelledException] 收口,本类映射为
-///   [DownloadCancelledException](取消成功,不是传输失败)。
+///   [DownloadCancelledException](取消成功,不是传输失败)。取消对
+///   AIMD 不惩罚:块大小原样带入下次传输。
 ///   **iOS IC 通道必须走分块路线**:ImageCaptureCore 把整个数据相位
 ///   塞进一次 requestSendPTPCommand 回调,多 MB 大档(NEF 24MB / MOV
 ///   数百 MB)一次回调不可控 —— 真机触发读超时 → 看门狗判链路死亡,
@@ -33,6 +37,7 @@ import '../browser/object_entry.dart';
 import '../ptp/operation_codes.dart';
 import '../ptp/ptp_session.dart';
 import '../ptp/ptp_transport.dart';
+import 'aimd_chunk.dart';
 
 /// 下载被取消:半成品已删,数据流已排空。
 final class DownloadCancelledException implements Exception {
@@ -66,15 +71,27 @@ class ObjectDownloader {
     required PtpSession session,
     this.partialChunkBytes,
     Duration? cancelPollInterval,
+    AimdChunkPolicy? chunkPolicy,
   })  : _cancelPollInterval =
             cancelPollInterval ?? const Duration(milliseconds: 50),
+        // 每下载器(= 传输会话)一个策略实例:跨 download 调用延续学习,
+        // 不跨下载器/会话共享。注入是测试口径(小数值 + 判快阈值可控);
+        // 缺省自建,上限随 [partialChunkBytes](生产 iOS = 1MB)。
+        _chunkPolicy =
+            chunkPolicy ?? AimdChunkPolicy(maxBytes: partialChunkBytes),
         _session = session;
 
   final PtpSession _session;
 
-  /// GetPartialObject 单块字节;null = 整档 GetObject 流式(见库注释)。
-  /// 相机 op 表无 0x101B 时忽略本参数,回落 GetObject。
+  /// 分块路线开关 + 单块上限([AimdChunkPolicy] 缺省自建时的封顶;
+  /// 注入策略时本值只当路线开关,大小演化全归策略)。null = 整档
+  /// GetObject 流式(见库注释)。相机 op 表无 0x101B 时忽略,回落
+  /// GetObject。
   final int? partialChunkBytes;
+
+  /// 分块路线的 AIMD 策略(块大小演化,见库注释)。私有字段是刻意的:
+  /// 公共成员会进 `implements ObjectDownloader` 的测试假件接口。
+  final AimdChunkPolicy _chunkPolicy;
 
   /// 分块路线的取消轮询周期:块在途期间盯 [download] 的 isCancelled
   /// 旗标,翻真即对在途块发 Cancel-Drain(PTP-IP;链路不支持为 no-op)。
@@ -86,7 +103,8 @@ class ObjectDownloader {
 
   /// 流式下载 [entry] 到 [targetDir](不存在则创建),文件名冲突自动
   /// 加 ` (n)` 序号。[onProgress] 回调累计字节数(整档路线块大小对齐
-  /// kUsbStreamChunkBytes,64KB 级;分块路线 = [partialChunkBytes])。
+  /// kUsbStreamChunkBytes,64KB 级;分块路线 = AIMD 策略当前块,见
+  /// [_chunkPolicy])。
   Future<ObjectDownload> download(
     ObjectEntry entry, {
     required String targetDir,
@@ -128,15 +146,28 @@ class ObjectDownloader {
               break;
             }
             final want =
-                math.min(partialChunkBytes!, entry.sizeInBytes - offset);
+                math.min(_chunkPolicy.currentBytes, entry.sizeInBytes - offset);
             chunkInFlight = true;
+            final chunkWatch = Stopwatch()..start();
             final Uint8List chunk;
             try {
               chunk =
                   await _session.getPartialObject(entry.handle, offset, want);
+            } on TimeoutException {
+              // 超时(USB 单事务读超时):链路撑不起这个块大小 —— 喂降。
+              _chunkPolicy.reportTimeout();
+              rethrow;
+            } on PtpCancelledException {
+              rethrow; // 取消:不惩罚(用户行为 ≠ 链路质量)
+            } on Exception {
+              // 传输错误(相机拒绝应答 / PTP-IP 看门狗断链 / …):喂降。
+              _chunkPolicy.reportError();
+              rethrow;
             } finally {
               chunkInFlight = false;
             }
+            // 成功:带耗时喂策略(快 → 加性升;慢 → 不动,见策略口径)。
+            _chunkPolicy.reportSuccess(chunkWatch.elapsed);
             if (chunk.isEmpty) break; // 相机提前收尾
             sink.add(chunk);
             received += chunk.length;
