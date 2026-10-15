@@ -59,7 +59,8 @@ final class FakePtpTransport implements PtpTransport {
       if (mid > 0) {
         onData(Uint8List.sublistView(d, 0, mid));
         onData(Uint8List.sublistView(d, mid));
-        result = PtpResult(responseCode: result.responseCode, params: result.params);
+        result =
+            PtpResult(responseCode: result.responseCode, params: result.params);
       }
     }
     return result;
@@ -121,10 +122,15 @@ Uint8List buildDeviceInfoDataset(
     w.u16(op);
   }
   w
-    ..u32(1)..u16(0x4002) // events
-    ..u32(2)..u16(0x5001)..u16(0x5007) // deviceProps
+    ..u32(1)
+    ..u16(0x4002) // events
+    ..u32(2)
+    ..u16(0x5001)
+    ..u16(0x5007) // deviceProps
     ..u32(0) // captureFormats
-    ..u32(2)..u16(0x3000)..u16(0x3801); // imageFormats
+    ..u32(2)
+    ..u16(0x3000)
+    ..u16(0x3801); // imageFormats
   putPtpString(w, 'Nikon Corp'); // manufacturer
   putPtpString(w, 'TestModel'); // model
   putPtpString(w, 'V1.00'); // deviceVersion
@@ -182,15 +188,17 @@ void main() {
       final session = PtpSession(transport: fake);
       await session.open();
       expect(session.isSessionOpen, isTrue);
-      expect(fake.requests.map((r) => r.opcode),
-          [PtpOperationCode.openSession]);
+      expect(
+          fake.requests.map((r) => r.opcode), [PtpOperationCode.openSession]);
       expect(fake.requests.single.params, [1]);
     });
 
     test('0x201E 自动恢复:CloseSession 后重开(probe ensure_session 同款)', () async {
       final fake = FakePtpTransport()
-        ..reply(const PtpResult(responseCode: PtpResponseCode.sessionAlreadyOpen))
-        ..reply(const PtpResult(responseCode: PtpResponseCode.ok)) // CloseSession 的响应(内容不查)
+        ..reply(
+            const PtpResult(responseCode: PtpResponseCode.sessionAlreadyOpen))
+        ..reply(const PtpResult(
+            responseCode: PtpResponseCode.ok)) // CloseSession 的响应(内容不查)
         ..reply(const PtpResult(responseCode: PtpResponseCode.ok));
       final session = PtpSession(transport: fake);
       await session.open();
@@ -204,7 +212,8 @@ void main() {
 
     test('恢复中 CloseSession 抛异常也不阻断重开', () async {
       final fake = FakePtpTransport()
-        ..reply(const PtpResult(responseCode: PtpResponseCode.sessionAlreadyOpen))
+        ..reply(
+            const PtpResult(responseCode: PtpResponseCode.sessionAlreadyOpen))
         ..fail(TimeoutException('链路抖动'))
         ..reply(const PtpResult(responseCode: PtpResponseCode.ok));
       final session = PtpSession(transport: fake);
@@ -304,8 +313,7 @@ void main() {
           session.getThumb(0x11), throwsA(isA<PtpResponseException>()));
     });
 
-    test('deleteObject:params=[handle],OK 即成;非 OK 抛异常带操作码',
-        () async {
+    test('deleteObject:params=[handle],OK 即成;非 OK 抛异常带操作码', () async {
       final ok = FakePtpTransport()
         ..reply(const PtpResult(responseCode: PtpResponseCode.ok));
       final session = PtpSession(transport: ok);
@@ -355,6 +363,47 @@ void main() {
       expect(fake.requests.length, 1); // 只有 GetDeviceInfo
     });
 
+    test('getLargeThumb:非 JPEG 载荷(无 SOI)→ UnsupportedError + 会话降级秒拒', () async {
+      final fake = FakePtpTransport()
+        ..reply(PtpResult(
+            responseCode: PtpResponseCode.ok,
+            // NEF 压缩条带形态:整段无 FFD8
+            data: Uint8List.fromList(List.filled(64, 0x55))));
+      final session = PtpSession(transport: fake);
+      await expectLater(session.getLargeThumb(0x22, force: true),
+          throwsA(isA<UnsupportedError>()));
+      expect(session.largeThumbDegraded, isTrue);
+      // 降级后:force 直发秒拒(不再上链浪费 RTT)
+      await expectLater(session.getLargeThumb(0x23, force: true),
+          throwsA(isA<UnsupportedError>()));
+      expect(fake.requests.length, 1);
+    });
+
+    test('getLargeThumb:超时 → 会话降级;open() 开新会话复位重探', () async {
+      final fake = FakePtpTransport()
+        ..fail(TimeoutException('bulkRead 窗口内未收到数据'))
+        ..reply(
+            const PtpResult(responseCode: PtpResponseCode.ok)) // openSession
+        ..reply(PtpResult(
+            responseCode: PtpResponseCode.ok,
+            data: Uint8List.fromList([0xFF, 0xD8, 0xFF, 0xD9])));
+      final session = PtpSession(transport: fake);
+      await expectLater(session.getLargeThumb(0x22, force: true),
+          throwsA(isA<TimeoutException>()));
+      expect(session.largeThumbDegraded, isTrue);
+
+      // 新会话:降级旗标复位,重新真发并成功
+      await session.open();
+      expect(session.largeThumbDegraded, isFalse);
+      expect(await session.getLargeThumb(0x22, force: true),
+          [0xFF, 0xD8, 0xFF, 0xD9]);
+      expect(fake.requests.map((r) => r.opcode), [
+        NikonOperationCode.getLargeThumb, // 首试(超时,置旗标)
+        PtpOperationCode.openSession, // 新会话
+        NikonOperationCode.getLargeThumb, // 复位后重探
+      ]);
+    });
+
     test('getDeviceInfo 缓存:第二次不发请求', () async {
       final fake = FakePtpTransport()
         ..reply(PtpResult(
@@ -377,7 +426,8 @@ void main() {
       expect(fake.requests.length, 1, reason: 'cachedDeviceInfo 不发事务');
     });
 
-    test('getEventEx:0x941C 事件列表解析(u32 计数 + N×(u16 码 + u16 参数数 + 参数))', () async {
+    test('getEventEx:0x941C 事件列表解析(u32 计数 + N×(u16 码 + u16 参数数 + 参数))',
+        () async {
       final w = ByteWriter()
         ..u32(2)
         // 0x4006 DevicePropChanged,1 参数(0x5007)
@@ -389,7 +439,8 @@ void main() {
         ..u16(1)
         ..u32(0x1234);
       final fake = FakePtpTransport()
-        ..reply(PtpResult(responseCode: PtpResponseCode.ok, data: w.takeBytes()));
+        ..reply(
+            PtpResult(responseCode: PtpResponseCode.ok, data: w.takeBytes()));
       final session = PtpSession(transport: fake);
       final events = await session.getEventEx();
       expect(fake.requests.single.opcode, NikonOperationCode.getEventEx);
@@ -409,16 +460,19 @@ void main() {
           code: PtpEventCode.captureComplete, transactionId: 0xFFFFFFFF));
       session.emitPolledEvents([
         const PtpEvent(
-            code: PtpEventCode.objectAdded, transactionId: 0xFFFFFFFF, params: [1]),
+            code: PtpEventCode.objectAdded,
+            transactionId: 0xFFFFFFFF,
+            params: [1]),
       ]);
       await pumpEventQueue();
-      expect(seen, containsAll(
-          [PtpEventCode.captureComplete, PtpEventCode.objectAdded]));
+      expect(
+          seen,
+          containsAll(
+              [PtpEventCode.captureComplete, PtpEventCode.objectAdded]));
       await sub.cancel();
     });
 
-    test('mfDrive:0x9204 params [方向, 脉冲](钳 1..32767);结果分类',
-        () async {
+    test('mfDrive:0x9204 params [方向, 脉冲](钳 1..32767);结果分类', () async {
       final fake = FakePtpTransport()
         ..reply(const PtpResult(responseCode: PtpResponseCode.ok))
         ..reply(const PtpResult(responseCode: NikonResponseCode.mfDriveStepEnd))
@@ -426,8 +480,7 @@ void main() {
             responseCode: NikonResponseCode.mfDriveStepInsufficiency))
         ..reply(const PtpResult(responseCode: PtpResponseCode.generalError));
       final session = PtpSession(transport: fake);
-      expect(
-          await session.mfDrive(towardNear: true, pulses: 999999),
+      expect(await session.mfDrive(towardNear: true, pulses: 999999),
           MfDriveOutcome.complete,
           reason: 'OK:完成');
       expect(fake.requests.first.params, [1, 32767], reason: '钳到上限');
@@ -455,8 +508,7 @@ void main() {
       expect(fake.requests.first.params, isEmpty);
     });
 
-    test('Ex 属性码路由:>0xFFFF 读走 0x943B / 写走 0x943C,标准码不变',
-        () async {
+    test('Ex 属性码路由:>0xFFFF 读走 0x943B / 写走 0x943C,标准码不变', () async {
       final fake = FakePtpTransport()
         ..reply(PtpResult(
             responseCode: PtpResponseCode.ok,
@@ -465,11 +517,13 @@ void main() {
       final session = PtpSession(transport: fake);
       final v = await session.getDevicePropValue(0x0001D006);
       expect(v.value, 2);
-      expect(fake.requests.first.opcode, NikonOperationCode.getDevicePropValueEx);
+      expect(
+          fake.requests.first.opcode, NikonOperationCode.getDevicePropValueEx);
       expect(fake.requests.first.params, [0x0001D006]);
       await session.setDevicePropValue(PtpDevicePropValue(
           code: 0x0001D006, dataType: PtpDataType.uint8, value: 3));
-      expect(fake.requests.last.opcode, NikonOperationCode.setDevicePropValueEx);
+      expect(
+          fake.requests.last.opcode, NikonOperationCode.setDevicePropValueEx);
       // 标准码不受影响
       fake.reply(const PtpResult(responseCode: PtpResponseCode.ok));
       await session.setDevicePropValue(PtpDevicePropValue(
@@ -516,28 +570,30 @@ void main() {
       final fake2 = FakePtpTransport()
         ..reply(PtpResult(
             responseCode: PtpResponseCode.ok,
-            data:
-                clockBytes(now.subtract(const Duration(seconds: 2))).takeBytes()));
+            data: clockBytes(now.subtract(const Duration(seconds: 2)))
+                .takeBytes()));
       final session2 = PtpSession(transport: fake2);
       await session2.syncCameraClock(now: now);
       expect(fake2.requests, hasLength(1), reason: '漂移在阈内:只读不写');
     });
 
-    test('changeCameraMode:0x90C2 params=[mode](APP 接管控制);非 OK 抛异常;'
+    test(
+        'changeCameraMode:0x90C2 params=[mode](APP 接管控制);非 OK 抛异常;'
         'remoteModeActive 随成功应答同步、被拒不翻', () async {
-      final fake = FakePtpTransport()..reply(PtpResult(responseCode: PtpResponseCode.ok));
+      final fake = FakePtpTransport()
+        ..reply(PtpResult(responseCode: PtpResponseCode.ok));
       final session = PtpSession(transport: fake);
       await session.changeCameraMode(1);
       expect(fake.requests.single.opcode, NikonOperationCode.changeCameraMode);
       expect(fake.requests.single.params, [1]);
       expect(session.remoteModeActive, isTrue, reason: '0x90C2(1) 成功即置位');
 
-      fake.reply(PtpResult(responseCode: NikonResponseCode.changeCameraModeFailed));
-      await expectLater(session.changeCameraMode(0),
-          throwsA(isA<PtpResponseException>()));
+      fake.reply(
+          PtpResult(responseCode: NikonResponseCode.changeCameraModeFailed));
+      await expectLater(
+          session.changeCameraMode(0), throwsA(isA<PtpResponseException>()));
       expect(fake.requests.last.params, [0]);
-      expect(session.remoteModeActive, isTrue,
-          reason: '解除被拒不翻旗(相机侧模式未变)');
+      expect(session.remoteModeActive, isTrue, reason: '解除被拒不翻旗(相机侧模式未变)');
 
       fake.reply(PtpResult(responseCode: PtpResponseCode.ok));
       await session.changeCameraMode(0);
@@ -567,11 +623,14 @@ void main() {
         ..u64(64000000000)
         ..u64(21000000000)
         ..u32(480)
-        ..u8(7)..utf16le('Slot 1')..u16(0)
-        ..u8(1)..u16(0); // volumeLabel 空串
+        ..u8(7)
+        ..utf16le('Slot 1')
+        ..u16(0)
+        ..u8(1)
+        ..u16(0); // volumeLabel 空串
       final fake = FakePtpTransport()
-        ..reply(PtpResult(
-            responseCode: PtpResponseCode.ok, data: w.takeBytes()));
+        ..reply(
+            PtpResult(responseCode: PtpResponseCode.ok, data: w.takeBytes()));
       final session = PtpSession(transport: fake);
       final storage = await session.getStorageInfo(0x00010001);
       expect(fake.requests.single.params, [0x00010001]);
@@ -585,14 +644,13 @@ void main() {
       final fake = FakePtpTransport()
         ..reply(const PtpResult(responseCode: 0x2009));
       final session = PtpSession(transport: fake);
-      await expectLater(
-          session.getStorageInfo(0x00010001), throwsA(isA<PtpResponseException>()));
+      await expectLater(session.getStorageInfo(0x00010001),
+          throwsA(isA<PtpResponseException>()));
     });
   });
 
   group('无线配对操作', () {
-    test('getPairingCode:u32 计数 + 数字字节拼接成验证码(NiConn 抓包形态)',
-        () async {
+    test('getPairingCode:u32 计数 + 数字字节拼接成验证码(NiConn 抓包形态)', () async {
       final fake = FakePtpTransport()
         ..reply(PtpResult(
           responseCode: PtpResponseCode.ok,
@@ -601,12 +659,12 @@ void main() {
         ));
       final session = PtpSession(transport: fake);
       expect(await session.getPairingCode(), '5077');
-      expect(fake.requests.single.opcode, NikonOperationCode.getPtpIpPairingCode);
+      expect(
+          fake.requests.single.opcode, NikonOperationCode.getPtpIpPairingCode);
       expect(fake.requests.single.params, isEmpty);
     });
 
-    test('getPairingCode:相机非 OK 响应 → null(多数 = 本客户端已配对)',
-        () async {
+    test('getPairingCode:相机非 OK 响应 → null(多数 = 本客户端已配对)', () async {
       final fake = FakePtpTransport()
         ..reply(const PtpResult(responseCode: PtpResponseCode.generalError));
       final session = PtpSession(transport: fake);
@@ -665,11 +723,14 @@ void main() {
         ..u16(200) // 当前值(值区第二个)
         ..u8(0x02) // FORM 枚举
         ..u16(2)
-        ..u16(100)..u16(6400);
+        ..u16(100)
+        ..u16(6400);
       final fake = FakePtpTransport()
-        ..reply(PtpResult(responseCode: PtpResponseCode.ok, data: w.takeBytes()));
+        ..reply(
+            PtpResult(responseCode: PtpResponseCode.ok, data: w.takeBytes()));
       final session = PtpSession(transport: fake);
-      final d = await session.getDevicePropDesc(PtpDevicePropCode.exposureIndex);
+      final d =
+          await session.getDevicePropDesc(PtpDevicePropCode.exposureIndex);
       expect(d.currentValue, 200);
       expect(d.factoryValue, 100);
       expect(d.enumValues, [100, 6400]);
@@ -686,8 +747,7 @@ void main() {
       expect(fake.requests.single.params, [1]);
     });
 
-    test('enableAppControl:0x9435 拒 → 直落 0xD1F0 兜底(不写身份、不重试)',
-        () async {
+    test('enableAppControl:0x9435 拒 → 直落 0xD1F0 兜底(不写身份、不重试)', () async {
       // OpenZCine 全程不写 0xD406 身份(写身份会让机身把主机按新身份
       // 归类、停「已连接到计算机」屏),连接链因此没有身份段。
       final fake = FakePtpTransport()
@@ -704,7 +764,8 @@ void main() {
       expect(fake.requests[1].dataOut, Uint8List.fromList([1]));
     });
 
-    test('enableAppControl:0x9435 回 0x200F(USB 人设)→ 同样直落 0xD1F0'
+    test(
+        'enableAppControl:0x9435 回 0x200F(USB 人设)→ 同样直落 0xD1F0'
         '(拒绝码不分支,非 OK 一律走兜底)', () async {
       final fake = FakePtpTransport()
         ..reply(const PtpResult(responseCode: PtpResponseCode.accessDenied))
@@ -718,8 +779,7 @@ void main() {
       expect(fake.requests[1].params, [PtpDevicePropCode.applicationMode]);
     });
 
-    test('enableAppControl:全拒 → false 不抛;不受拍摄参数总闸约束',
-        () async {
+    test('enableAppControl:全拒 → false 不抛;不受拍摄参数总闸约束', () async {
       PtpSession.kSetPropEnabled = false; // 应用模式切换非拍摄参数写
       addTearDown(() => PtpSession.kSetPropEnabled = true);
       final fake = FakePtpTransport()
@@ -734,8 +794,7 @@ void main() {
       ]);
     });
 
-    test('writeInitiatorIdentity:载荷 = PTP 串(u8 字符数 + UTF-16LE 无终止符)',
-        () async {
+    test('writeInitiatorIdentity:载荷 = PTP 串(u8 字符数 + UTF-16LE 无终止符)', () async {
       final fake = FakePtpTransport()
         ..reply(const PtpResult(responseCode: PtpResponseCode.ok));
       final session = PtpSession(transport: fake);
@@ -756,16 +815,16 @@ void main() {
       final rejected = FakePtpTransport()
         ..reply(const PtpResult(
             responseCode: PtpResponseCode.operationNotSupported));
-      expect(
-          await PtpSession(transport: rejected).writeInitiatorIdentity(),
+      expect(await PtpSession(transport: rejected).writeInitiatorIdentity(),
           isFalse);
       // 脚本耗尽(execute 抛 StateError)也兜住:尽力而为语义。
       final dead = FakePtpTransport();
-      expect(await PtpSession(transport: dead).writeInitiatorIdentity(),
-          isFalse);
+      expect(
+          await PtpSession(transport: dead).writeInitiatorIdentity(), isFalse);
     });
 
-    test('enableAppControl(remoteLatch):0x9435 拒(USB 人设)→ '
+    test(
+        'enableAppControl(remoteLatch):0x9435 拒(USB 人设)→ '
         '0x90C2(1)→(0) 开闩括号 → true,remoteModeActive 归 false(2026-10-07 '
         'v8/v9 定案:上传优先门单向闩,开了不因退而关;remote 持有态才是'
         '「已连接到计算机」屏元凶,开闩即还身,机身直回取景屏)', () async {
@@ -786,7 +845,8 @@ void main() {
       expect(session.remoteModeActive, isFalse, reason: '括号已退 remote');
     });
 
-    test('enableAppControl(remoteLatch):0x9435 回 OK(IC 假钥匙)→ '
+    test(
+        'enableAppControl(remoteLatch):0x9435 回 OK(IC 假钥匙)→ '
         '仍走 0x90C2(1)→(0) 括号(2026-10-07 归因梯定案:0x9435 接受 ≠ '
         '解锁 0x9201,唯一实证开闩钥匙 = 0x90C2(1)),梯记三步', () async {
       final fake = FakePtpTransport()
@@ -806,7 +866,8 @@ void main() {
       expect(session.connectLadder, ['9435:OK', '90C2:OK', '90C2退:OK']);
     });
 
-    test('enableAppControl(remoteLatch):0x90C2(0) 退步被拒 → 仍 true '
+    test(
+        'enableAppControl(remoteLatch):0x90C2(0) 退步被拒 → 仍 true '
         '(闩已开,流不受影响),remoteModeActive 保持 true(接管侧如实对齐,'
         '退由 teardown 兜底)', () async {
       final fake = FakePtpTransport()
@@ -826,11 +887,12 @@ void main() {
       expect(session.connectLadder, ['9435:OK', '90C2:OK', '90C2退:拒']);
     });
 
-    test('enableAppControl(remoteLatch):0x9435 OK + 0x90C2 拒 → '
-        '仍 true(应用模式已接受,不发 0xD1F0),梯记拒码;open() 清梯',
-        () async {
+    test(
+        'enableAppControl(remoteLatch):0x9435 OK + 0x90C2 拒 → '
+        '仍 true(应用模式已接受,不发 0xD1F0),梯记拒码;open() 清梯', () async {
       final fake = FakePtpTransport()
-        ..reply(const PtpResult(responseCode: PtpResponseCode.ok)) // OpenSession
+        ..reply(
+            const PtpResult(responseCode: PtpResponseCode.ok)) // OpenSession
         ..reply(const PtpResult(responseCode: PtpResponseCode.ok)) // 0x9435
         ..reply(const PtpResult(
             responseCode:
@@ -849,7 +911,8 @@ void main() {
       expect(session.connectLadder, ['9435:OK', '90C2:0x2005']);
     });
 
-    test('enableAppControl(remoteLatch):0x9435 链路异常 → '
+    test(
+        'enableAppControl(remoteLatch):0x9435 链路异常 → '
         '0x90C2 兜底照走(尽力而为,异常不得拦连接主流程)', () async {
       // 首发传输层异常(execute 抛)也落兜底:on Object 兜底语义。
       final fake = FakePtpTransport()
@@ -865,7 +928,8 @@ void main() {
       ]);
     });
 
-    test('enableAppControl(remoteLatch):0x90C2 也拒 → 0xD1F0 兜底 → '
+    test(
+        'enableAppControl(remoteLatch):0x90C2 也拒 → 0xD1F0 兜底 → '
         'true,remoteModeActive 不置位', () async {
       final fake = FakePtpTransport()
         ..reply(const PtpResult(
@@ -891,13 +955,11 @@ void main() {
         ..reply(const PtpResult(
             responseCode: PtpResponseCode.operationNotSupported)) // 0x9435
         ..reply(const PtpResult(
-            responseCode:
-                PtpResponseCode.operationNotSupported)) // 0x90C2 拒
+            responseCode: PtpResponseCode.operationNotSupported)) // 0x90C2 拒
         ..reply(const PtpResult(
             responseCode: PtpResponseCode.generalError)); // 0xD1F0 拒
       final session2 = PtpSession(transport: allRejected);
-      expect(
-          await session2.enableAppControl(remoteLatch: true), isFalse);
+      expect(await session2.enableAppControl(remoteLatch: true), isFalse);
       expect(allRejected.requests.map((r) => r.opcode), [
         NikonOperationCode.changeApplicationMode,
         NikonOperationCode.changeCameraMode,
@@ -905,7 +967,8 @@ void main() {
       ]);
     });
 
-    test('enableAppControl:不带 usbRemoteFallback(无线调用形态)→ '
+    test(
+        'enableAppControl:不带 usbRemoteFallback(无线调用形态)→ '
         '0x90C2 不发,链与旧版一致', () async {
       final fake = FakePtpTransport()
         ..reply(const PtpResult(
@@ -920,11 +983,11 @@ void main() {
           reason: 'latch 不开就不发 0x90C2(接口默认语义;连接流两路现在都开)');
     });
 
-    test('remoteModeActive 生命周期:close()/open() 复位(旧链持有态不带到新链)',
-        () async {
+    test('remoteModeActive 生命周期:close()/open() 复位(旧链持有态不带到新链)', () async {
       final fake = FakePtpTransport()
         ..reply(const PtpResult(responseCode: PtpResponseCode.ok)) // 0x90C2(1)
-        ..reply(const PtpResult(responseCode: PtpResponseCode.ok)); // openSession
+        ..reply(
+            const PtpResult(responseCode: PtpResponseCode.ok)); // openSession
       final session = PtpSession(transport: fake);
       await session.changeCameraMode(1);
       expect(session.remoteModeActive, isTrue);
@@ -934,8 +997,7 @@ void main() {
       expect(session.remoteModeActive, isFalse, reason: 'open 新链仍为空');
     });
 
-    test('setDevicePropValue:总闸紧急关断抛 UnsupportedError 且不发请求',
-        () async {
+    test('setDevicePropValue:总闸紧急关断抛 UnsupportedError 且不发请求', () async {
       PtpSession.kSetPropEnabled = false; // 生产已开,这里显式关断走分支
       addTearDown(() => PtpSession.kSetPropEnabled = true);
       final fake = FakePtpTransport();
@@ -949,8 +1011,7 @@ void main() {
       expect(fake.requests, isEmpty);
     });
 
-    test('setDevicePropValue:总闸开(生产默认)→ 0x1016 带码参数与裸值数据',
-        () async {
+    test('setDevicePropValue:总闸开(生产默认)→ 0x1016 带码参数与裸值数据', () async {
       final fake = FakePtpTransport()
         ..reply(const PtpResult(responseCode: PtpResponseCode.ok));
       final session = PtpSession(transport: fake);
@@ -960,8 +1021,7 @@ void main() {
           value: 320);
       await session.setDevicePropValue(v);
       expect(fake.requests, hasLength(1));
-      expect(fake.requests.single.opcode,
-          PtpOperationCode.setDevicePropValue);
+      expect(fake.requests.single.opcode, PtpOperationCode.setDevicePropValue);
       expect(fake.requests.single.params, [PtpDevicePropCode.fNumber]);
       expect(fake.requests.single.dataOut, Uint8List.fromList([0x40, 0x01]));
     });
@@ -993,8 +1053,7 @@ void main() {
       expect(fake.requests.single.opcode, NikonOperationCode.getLiveViewImage);
     });
 
-    test('getLiveViewObject:默认 0x9428 取帧,原样返回(帧头解析留给上层)',
-        () async {
+    test('getLiveViewObject:默认 0x9428 取帧,原样返回(帧头解析留给上层)', () async {
       final raw = Uint8List.fromList(
           [0x00, 0x64, 0x00, 0x00, 0xFF, 0xD8, 0xFF, 0xE0, 0x00]);
       final fake = FakePtpTransport()
@@ -1002,12 +1061,11 @@ void main() {
       final session = PtpSession(transport: fake);
       final object = await session.getLiveViewObject();
       expect(object, same(raw));
-      expect(fake.requests.single.opcode,
-          NikonOperationCode.getLiveViewImageEx);
+      expect(
+          fake.requests.single.opcode, NikonOperationCode.getLiveViewImageEx);
     });
 
-    test('getLiveViewObject:0x9428 被拒 → 本拍抛错,下一拍起走 0x9203',
-        () async {
+    test('getLiveViewObject:0x9428 被拒 → 本拍抛错,下一拍起走 0x9203', () async {
       final raw = Uint8List.fromList([0xFF, 0xD8, 0xFF, 0xE0, 0x00]);
       final fake = FakePtpTransport()
         ..fail(const PtpResponseException(
@@ -1025,8 +1083,7 @@ void main() {
       ]);
     });
 
-    test('getLiveViewObject:0x2019 忙不置回退旗标(继续 0x9428 重试)',
-        () async {
+    test('getLiveViewObject:0x2019 忙不置回退旗标(继续 0x9428 重试)', () async {
       final raw = Uint8List.fromList([0xFF, 0xD8, 0xFF, 0xE0, 0x00]);
       final fake = FakePtpTransport()
         ..reply(const PtpResult(responseCode: PtpResponseCode.deviceBusy))
@@ -1036,18 +1093,20 @@ void main() {
           session.getLiveViewObject(), throwsA(isA<PtpResponseException>()));
       await session.getLiveViewObject();
       // 忙是瞬时态,两次都必须是 Ex 码(忙即降级会永久锁死旧码)
-      expect(fake.requests
-          .every((r) => r.opcode == NikonOperationCode.getLiveViewImageEx), isTrue);
+      expect(
+          fake.requests
+              .every((r) => r.opcode == NikonOperationCode.getLiveViewImageEx),
+          isTrue);
     });
 
-    test('getLiveViewObject:startLiveView 重置回退旗标(换机自愈)',
-        () async {
+    test('getLiveViewObject:startLiveView 重置回退旗标(换机自愈)', () async {
       final raw = Uint8List.fromList([0xFF, 0xD8, 0xFF, 0xE0, 0x00]);
       final fake = FakePtpTransport()
         ..fail(const PtpResponseException(
             opcode: NikonOperationCode.getLiveViewImageEx,
             responseCode: 0x2005))
-        ..reply(PtpResult(responseCode: PtpResponseCode.ok, data: raw)) // 0x9203
+        ..reply(
+            PtpResult(responseCode: PtpResponseCode.ok, data: raw)) // 0x9203
         ..reply(const PtpResult(responseCode: PtpResponseCode.ok)) // start
         ..reply(PtpResult(responseCode: PtpResponseCode.ok, data: raw)); // Ex
       final session = PtpSession(transport: fake);
@@ -1119,7 +1178,8 @@ void main() {
       expect(await session.deviceReady(), isFalse);
     });
 
-    test('deviceReady:0xA200/0xA201(Bulb/Silent_Release_Busy,官方'
+    test(
+        'deviceReady:0xA200/0xA201(Bulb/Silent_Release_Busy,官方'
         ' §2.8.4 步 5 / §6.3.2.15-16)→ false 继续等,不抛', () async {
       // B 门曝光进行中 DeviceReady 即回 0xA200(官方 B 门序列步 5);
       // 0xA201 静音快门同族 —— 收门/落定等待据此继续等。
@@ -1128,12 +1188,13 @@ void main() {
             const PtpResult(responseCode: NikonResponseCode.bulbReleaseBusy));
       expect(await PtpSession(transport: bulb).deviceReady(), isFalse);
       final silent = FakePtpTransport()
-        ..reply(const PtpResult(
-            responseCode: NikonResponseCode.silentReleaseBusy));
+        ..reply(
+            const PtpResult(responseCode: NikonResponseCode.silentReleaseBusy));
       expect(await PtpSession(transport: silent).deviceReady(), isFalse);
     });
 
-    test('getPictureControlName:0x90CC params=[槽位,0],name=数据[3..23) NUL 截断'
+    test(
+        'getPictureControlName:0x90CC params=[槽位,0],name=数据[3..23) NUL 截断'
         '(digiCamControl 布局)', () async {
       final data = Uint8List(40); // [3..23) 名区,余 NUL 填充
       data[1] = 1; // 单色标志
@@ -1164,8 +1225,10 @@ void main() {
         ..reply(PtpResult(responseCode: PtpResponseCode.ok, data: blanks));
       final session = PtpSession(transport: fake);
       expect(await session.getPictureControlName(201), isNull, reason: '短数据');
-      expect(await session.getPictureControlName(202), isNull, reason: '名区全 NUL');
-      expect(await session.getPictureControlName(203), isNull, reason: '纯空白 trim 后为空');
+      expect(await session.getPictureControlName(202), isNull,
+          reason: '名区全 NUL');
+      expect(await session.getPictureControlName(203), isNull,
+          reason: '纯空白 trim 后为空');
     });
 
     test('getPictureControlName:非 OK 抛 PtpResponseException(控制器首异常即停)',
@@ -1225,7 +1288,8 @@ void main() {
       final session = PtpSession(transport: UsbPtpTransport(pipe: pipe));
 
       // 相机脚本:OpenSession 响应 OK
-      pipe.enqueue(encodeUsbResponse(responseCode: PtpResponseCode.ok, transactionId: 0));
+      pipe.enqueue(encodeUsbResponse(
+          responseCode: PtpResponseCode.ok, transactionId: 0));
       await session.open();
 
       // GetObjectHandles:DATA(count=2) + RESPONSE OK
@@ -1238,7 +1302,8 @@ void main() {
           0x22, 0x00, 0x00, 0x00, //
         ]),
       ));
-      pipe.enqueue(encodeUsbResponse(responseCode: PtpResponseCode.ok, transactionId: 1));
+      pipe.enqueue(encodeUsbResponse(
+          responseCode: PtpResponseCode.ok, transactionId: 1));
       final handles = await session.getObjectHandles();
       expect(handles, [0x11, 0x22]);
 
@@ -1265,14 +1330,15 @@ void main() {
         ..reply(PtpResult(responseCode: PtpResponseCode.ok));
       await session.setObjectProtection(0x1234, protect: true);
       await session.setObjectProtection(0x1234, protect: false);
-      expect(t.requests.map((r) => r.opcode),
-          [PtpOperationCode.setObjectProtection, PtpOperationCode.setObjectProtection]);
+      expect(t.requests.map((r) => r.opcode), [
+        PtpOperationCode.setObjectProtection,
+        PtpOperationCode.setObjectProtection
+      ]);
       expect(t.requests.first.params, [0x1234, 0x0001]);
       expect(t.requests.last.params, [0x1234, 0x0000]);
     });
 
-    test('getVendorCodes:u32 计数 + N×u32 码;0x09=操作码表 / 0x0D=属性码表',
-        () async {
+    test('getVendorCodes:u32 计数 + N×u32 码;0x09=操作码表 / 0x0D=属性码表', () async {
       final table = Uint8List.fromList([
         0x03, 0x00, 0x00, 0x00, //
         0x39, 0x94, 0x00, 0x00, //
@@ -1292,9 +1358,11 @@ void main() {
 
     test('getVendorCodes:空表 / 数据不足 4B → 空列表不炸', () async {
       t
-        ..reply(PtpResult(responseCode: PtpResponseCode.ok,
+        ..reply(PtpResult(
+            responseCode: PtpResponseCode.ok,
             data: Uint8List.fromList([0, 0, 0, 0])))
-        ..reply(PtpResult(responseCode: PtpResponseCode.ok, data: Uint8List(2)));
+        ..reply(
+            PtpResult(responseCode: PtpResponseCode.ok, data: Uint8List(2)));
       expect(await session.getVendorCodes(deviceProps: false), isEmpty);
       expect(await session.getVendorCodes(deviceProps: true), isEmpty);
     });
@@ -1303,8 +1371,7 @@ void main() {
       t
         ..reply(PtpResult(responseCode: PtpResponseCode.ok))
         ..reply(PtpResult(
-            responseCode: PtpResponseCode.ok,
-            data: Uint8List.fromList([7])))
+            responseCode: PtpResponseCode.ok, data: Uint8List.fromList([7])))
         ..reply(PtpResult(responseCode: PtpResponseCode.ok));
       await session.extendedOperationNone(0x0001D006, params: [1, 2]);
       final got = await session.extendedOperationReceive(0x0001D001);
@@ -1322,7 +1389,8 @@ void main() {
       expect(got.data, [7]);
     });
 
-    test('getDevicePropDesc:Ex 码(>0xFFFF)路由 0x943A,u32 码定宽解析'
+    test(
+        'getDevicePropDesc:Ex 码(>0xFFFF)路由 0x943A,u32 码定宽解析'
         '(2026-10-13 USB 探针实证 0x0001D001 色调)', () async {
       // 探针实录数据集:code u32 + u8 型 + getSet + 出厂 + 当前 + 枚举{0,1,2}
       final exDesc = Uint8List.fromList([
@@ -1353,7 +1421,8 @@ void main() {
       session = PtpSession(transport: t);
     });
 
-    test('getFhdPicture:params=[句柄],JPEG SOI 嗅探;0xA00F 无 FHD 抛'
+    test(
+        'getFhdPicture:params=[句柄],JPEG SOI 嗅探;0xA00F 无 FHD 抛'
         'PtpResponseException', () async {
       t.reply(PtpResult(
           responseCode: PtpResponseCode.ok,
@@ -1370,13 +1439,13 @@ void main() {
           data: Uint8List.fromList([3, 0, 0, 0, 0xFF, 0xD8, 9])));
       expect(await session.getFhdPicture(1), [0xFF, 0xD8, 9]);
 
-      t.reply(const PtpResult(
-          responseCode: NikonResponseCode.noFullHdPresent));
+      t.reply(const PtpResult(responseCode: NikonResponseCode.noFullHdPresent));
       await expectLater(
           session.getFhdPicture(1), throwsA(isA<PtpResponseException>()));
     });
 
-    test('changeAELock:params=[1,2] 锁 / [0,2] 解锁(探针双 OK 形),'
+    test(
+        'changeAELock:params=[1,2] 锁 / [0,2] 解锁(探针双 OK 形),'
         'type 可指定', () async {
       t.reply(const PtpResult(responseCode: PtpResponseCode.ok));
       await session.changeAELock(lock: true);
@@ -1404,8 +1473,7 @@ void main() {
       expect(t.requests.last.params, isEmpty);
     });
 
-    test('clearEvent/afAndCaptureRecInSdram/saveCameraSetting:无参直发',
-        () async {
+    test('clearEvent/afAndCaptureRecInSdram/saveCameraSetting:无参直发', () async {
       for (final _ in [
         NikonOperationCode.clearEvent,
         NikonOperationCode.afAndCaptureRecInSdram,
@@ -1424,8 +1492,7 @@ void main() {
       expect(t.requests.every((r) => r.params.isEmpty), isTrue);
     });
 
-    test('changeMonitorOff:params=[1] 强制关 / [0] 取消(§6.2.2.17)',
-        () async {
+    test('changeMonitorOff:params=[1] 强制关 / [0] 取消(§6.2.2.17)', () async {
       t.reply(const PtpResult(responseCode: PtpResponseCode.ok));
       await session.changeMonitorOff(off: true);
       expect(t.requests.single.opcode, NikonOperationCode.changeMonitorOff);
@@ -1444,8 +1511,7 @@ void main() {
         0xDE, 0xAD, 0xBE, 0xEF, // 文件体
       ];
       t.reply(PtpResult(
-          responseCode: PtpResponseCode.ok,
-          data: Uint8List.fromList(dataset)));
+          responseCode: PtpResponseCode.ok, data: Uint8List.fromList(dataset)));
       final setting = await session.getCameraSettingData();
       expect(t.requests.single.opcode, NikonOperationCode.getCameraSettingData);
       expect(setting.name, 'Z7_2_01012026.NCSETUTF8');
@@ -1454,8 +1520,7 @@ void main() {
 
     test('sendCameraSettingData:dataOut = 64B 文件名 + 文件体', () async {
       t.reply(const PtpResult(responseCode: PtpResponseCode.ok));
-      await session.sendCameraSettingData(
-          'AB', Uint8List.fromList([1, 2, 3]));
+      await session.sendCameraSettingData('AB', Uint8List.fromList([1, 2, 3]));
       final out = t.requests.single.dataOut!;
       expect(out.length, 67);
       expect(out.sublist(0, 2), 'AB'.codeUnits);
@@ -1472,24 +1537,25 @@ void main() {
             0x08, 0x00, // 0x0008 ObjectSize
           ])));
       final props = await session.getObjectPropsSupported();
-      expect(t.requests.single.opcode,
-          NikonOperationCode.getObjectPropsSupported);
+      expect(
+          t.requests.single.opcode, NikonOperationCode.getObjectPropsSupported);
       expect(props, [0x0004, 0x0008]);
     });
 
-    test('getObjectPropDesc:参数 [句柄, 属性码],数据集裸透传(无消费方,'
+    test(
+        'getObjectPropDesc:参数 [句柄, 属性码],数据集裸透传(无消费方,'
         '定宽解留接线时)', () async {
       t.reply(PtpResult(
           responseCode: PtpResponseCode.ok,
           data: Uint8List.fromList([0x06, 0x00, 0x00, 0x00])));
       final desc = await session.getObjectPropDesc(0x1234, 0x0004);
-      expect(t.requests.single.opcode,
-          NikonOperationCode.getObjectPropDesc);
+      expect(t.requests.single.opcode, NikonOperationCode.getObjectPropDesc);
       expect(t.requests.single.params, [0x1234, 0x0004]);
       expect(desc, [0x06, 0x00, 0x00, 0x00]);
     });
 
-    test('getObjectPropValue/setObjectPropValue:参数 [句柄, 属性码],'
+    test(
+        'getObjectPropValue/setObjectPropValue:参数 [句柄, 属性码],'
         '裸值透传', () async {
       t.reply(PtpResult(
           responseCode: PtpResponseCode.ok,
@@ -1501,14 +1567,12 @@ void main() {
       t.reply(const PtpResult(responseCode: PtpResponseCode.ok));
       await session.setObjectPropValue(
           0x1234, 0x0004, Uint8List.fromList([0x00, 0x00]));
-      expect(t.requests.last.opcode,
-          NikonOperationCode.setObjectPropValue);
+      expect(t.requests.last.opcode, NikonOperationCode.setObjectPropValue);
       expect(t.requests.last.params, [0x1234, 0x0004]);
       expect(t.requests.last.dataOut, [0x00, 0x00]);
     });
 
-    test('getObjectPropList:u32 计数 + N×(句柄+码+类型+DTS 值)解析',
-        () async {
+    test('getObjectPropList:u32 计数 + N×(句柄+码+类型+DTS 值)解析', () async {
       t.reply(PtpResult(
           responseCode: PtpResponseCode.ok,
           data: Uint8List.fromList([
@@ -1522,10 +1586,9 @@ void main() {
             0x04, 0x00, // UINT16
             0xF4, 0x01, // 值 500
           ])));
-      final props = await session.getObjectPropList(0x1234,
-          propCode: 0xFFFFFFFF);
-      expect(t.requests.single.params,
-          [0x1234, 0x00000000, 0xFFFFFFFF]);
+      final props =
+          await session.getObjectPropList(0x1234, propCode: 0xFFFFFFFF);
+      expect(t.requests.single.params, [0x1234, 0x00000000, 0xFFFFFFFF]);
       expect(props, hasLength(2));
       expect(props[0].handle, 0x1234);
       expect(props[0].code, 0x0004);
@@ -1546,7 +1609,8 @@ void main() {
       t.reply(PtpResult(
           responseCode: PtpResponseCode.ok,
           data: Uint8List.fromList([0, 0, 0, 0])));
-      await session.getObjectPropList(0x10, propCode: 0x0004, depth: 0xFFFFFFFF);
+      await session.getObjectPropList(0x10,
+          propCode: 0x0004, depth: 0xFFFFFFFF);
       expect(t.requests.last.params, [0x10, 0, 0x0004, 0xFFFFFFFF]);
     });
 
