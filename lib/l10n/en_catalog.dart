@@ -247,6 +247,12 @@ const Map<String, String> enCatalog = {
       'Nothing found: the camera only broadcasts while on the "Waiting for connection" screen (leaving it stops broadcasting); if you just finished pairing on the camera, press OK on the camera first. You can also type the IP below to connect directly.',
   '相机 IP(扫描不到时手填)': 'Camera IP (type manually if the scan finds nothing)',
   '如 192.168.1.4': 'e.g. 192.168.1.4',
+  '扫描网段': 'Scan Subnet',
+  '扫描网段中…': 'Scanning subnet…',
+  '探测被拒(相机可能被其他应用占用)':
+      'Probe rejected (camera may be occupied by another app)',
+  '网段扫描未发现相机:请确认相机与手机在同一个 Wi-Fi,且相机停留在「等待连接」画面':
+      'No camera found on this subnet: make sure the camera and phone are on the same Wi-Fi, and the camera stays on the "Waiting for connection" screen',
   '连接': 'Connect',
   '上次:{name}': 'Last: {name}',
   '忘记这台相机': 'Forget This Camera',

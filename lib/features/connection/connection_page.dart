@@ -28,11 +28,14 @@ import '../../core/browser/album.dart';
 import '../../core/camera/camera_connection.dart';
 import '../../core/camera/camera_discovery.dart';
 import '../../core/camera/camera_info.dart';
+import '../../core/ptpip/probe.dart';
+import '../../core/ptpip/subnet_scan.dart';
 import '../../data/ble_identity_store.dart';
 import '../../data/client_identity_store.dart';
 import '../../data/paired_cameras_store.dart';
 import '../../design/app_dimens.dart';
 import '../../l10n/l10n.dart';
+import '../../platform/interface_addresses.dart';
 import '../../platform/network_monitor.dart';
 import '../../platform/nsd_scanner.dart';
 import '../browser/photo_grid_page.dart';
@@ -101,6 +104,7 @@ class ConnectionController extends ChangeNotifier {
     this.wifiJoiner,
     this.settingsController,
     this.onBleInjectChanged,
+    this.subnetScanner,
   }) {
     connection?.states.listen(_onState);
     // 常驻订阅:浏览期间增删相机,未浏览时静默无流。
@@ -115,6 +119,10 @@ class ConnectionController extends ChangeNotifier {
   final CameraConnection? connection;
   final NsdScanner? scanner;
   final PairedCamerasStore? pairedCameras;
+
+  /// /24 网段扫描器(测试注入;null = 生产默认:真 socket 端口检查 +
+  /// probeCamera 轻探测 + platform 接口地址 glue)。
+  final SubnetCameraScanner? subnetScanner;
 
   /// 客户端身份(删除已配对相机时换新,触发全新配对;见 [removeSaved])。
   final ClientIdentityStore? identityStore;
@@ -157,6 +165,10 @@ class ConnectionController extends ChangeNotifier {
     }
     if (m == ConnectionMethod.ap) {
       _cameras.clear();
+      // /24 扫描结果同 mDNS 结果一并清:那是旧网络(路由器网段)的
+      // 发现,拿去连相机热点只会得到跨网段的超时失败。
+      _subnetCameras.clear();
+      _subnetScanCompleted = false;
     }
     method = m;
     notifyListeners();
@@ -472,6 +484,96 @@ class ConnectionController extends ChangeNotifier {
     } on Exception {
       // 重启失败不致命:原浏览若还活着照常工作
     }
+  }
+
+  // ── /24 网段扫描(mDNS 无结果时的 STA 发现兜底) ────────────────
+  // 真机教训硬约束(完整版见 core/ptpip/probe.dart 库注):未完成方言
+  // 的连接可能占配对槽(相机一次只认一个会话)。因此:
+  // ① 只有 mDNS 结果为空时才允许扫描;
+  // ② 会话活跃(已连接/连接中)时禁止探测;
+  // ③ 扫描轮内不重入,开放主机串行探测、失败不重试同一主机;
+  // ④ 绝不并发对同一主机双探测(扫描器内部保证串行)。
+
+  /// /24 扫描结果(相机名/name 空 = 相机被拒 InitFail,UI 以 IP 展示)。
+  final _subnetCameras = <ProbedCamera>[];
+  List<ProbedCamera> get subnetCameras =>
+      List.unmodifiable(_subnetCameras);
+
+  /// /24 扫描进行中(入口按钮转圈/禁用)。
+  bool scanningSubnet = false;
+
+  /// 最近一轮 /24 扫描已收口(空结果提示的判据)。
+  bool _subnetScanCompleted = false;
+
+  /// 最近一轮 /24 扫描已收口(UI 只读判据)。
+  bool get subnetScanCompleted => _subnetScanCompleted;
+
+  /// 扫描本机所在 /24 网段(用户显式触发,不自动):端口检查收集
+  /// 15740 开放主机 → 串行 InitCommandRequest 轻探测(相机名+GUID)。
+  /// 门禁(硬约束①②③):mDNS 已有结果 / 会话活跃 / 扫描在途 → 不动作。
+  Future<void> scanSubnet() async {
+    // ① mDNS 已发现相机:探测连接纯属对单连接槽位的无谓打扰。
+    if (_cameras.isNotEmpty) {
+      return;
+    }
+    // ② 会话活跃(已连接/连接中/配对/恢复中):探测 socket 可能占槽,
+    //    把正轨连接挤成 InitFail 0x1。
+    switch (state) {
+      case CameraLinkState.connected:
+      case CameraLinkState.connecting:
+      case CameraLinkState.pairing:
+      case CameraLinkState.reconnecting:
+        return;
+      case CameraLinkState.disconnected:
+      case CameraLinkState.failed:
+      case CameraLinkState.detecting:
+        break;
+    }
+    // ③ 扫描轮内不重入(重入会并发对同一主机双探测)。
+    if (scanningSubnet) {
+      return;
+    }
+    scanningSubnet = true;
+    _subnetCameras.clear();
+    _subnetScanCompleted = false;
+    notifyListeners();
+    try {
+      final identity = await identityStore?.load();
+      final scanner = subnetScanner ??
+          SubnetCameraScanner(
+            interfaceIps: currentIpv4InterfaceAddresses,
+            // 探测与真连接同一客户端身份(相机按 GUID 识别客户端,
+            // 陌生 GUID 的半开会话更易呛住,见 probe.dart 库注)。
+            clientGuid: identity?.uuid,
+            hostname: identity?.name ?? 'Android Device',
+          );
+      final found = await scanner.scan();
+      // 收口沿才落账:扫描期间切走分段,迟到的结果如实可见(仍在
+      // 同一网络;切到 AP 分段已由 selectMethod 清空)。
+      _subnetCameras
+        ..clear()
+        ..addAll(found);
+    } finally {
+      scanningSubnet = false;
+      _subnetScanCompleted = true;
+      notifyListeners();
+    }
+  }
+
+  /// 点选 /24 扫描结果连接:走既有 STA 连接流(真方言 13 步 + 配对相;
+  /// 探测只是问路,连接不复用探测 socket)。被拒相机(InitFail)也照
+  /// 连 —— 占用指引由连接层失败文案给出。
+  Future<void> connectProbed(ProbedCamera camera) async {
+    final c = connection;
+    if (c == null) {
+      return;
+    }
+    _lastAttempt = () => connectProbed(camera);
+    activeIp = camera.host;
+    await c.connect(
+      ip: camera.host,
+      instanceName: camera.name.isNotEmpty ? camera.name : null,
+    );
   }
 
   Future<void> _reloadSaved() async {
@@ -1259,6 +1361,59 @@ class _ConnectionPageState extends State<ConnectionPage>
                 trailing: const Icon(Icons.chevron_right),
                 onTap: busy ? null : () => controller.connectDiscovered(camera),
               ),
+            // /24 网段扫描兜底(mDNS 无结果时;用户显式触发,不自动):
+            // 端口检查 + InitCommandRequest 轻探测(约束与真机教训见
+            // core/ptpip/probe.dart 库注)。mDNS 已有结果时不出 —— 探测
+            // 连接是对相机单连接槽位的打扰,能免则免。
+            if (controller.cameras.isEmpty) ...[
+              const SizedBox(height: 8),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  // 扫描中 icon 槽换 spinner(全网段一轮最坏 ~10s)。
+                  icon: controller.scanningSubnet
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.travel_explore),
+                  label: Text(controller.scanningSubnet
+                      ? context.t('扫描网段中…')
+                      : context.t('扫描网段')),
+                  onPressed: busy || controller.scanningSubnet
+                      ? null
+                      : controller.scanSubnet,
+                ),
+              ),
+              for (final camera in controller.subnetCameras)
+                ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.photo_camera_outlined),
+                  // name 空(InitFail 被拒)→ 显示 IP;被拒相机也照连,
+                  // 占用指引由连接层失败文案给出。
+                  title: Text(
+                      camera.name.isNotEmpty ? camera.name : camera.host),
+                  subtitle: Text(camera.rejected
+                      ? context.t('探测被拒(相机可能被其他应用占用)')
+                      : camera.host),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: busy
+                      ? null
+                      : () => controller.connectProbed(camera),
+                ),
+              if (controller.subnetScanCompleted &&
+                  controller.subnetCameras.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(
+                    context.t('网段扫描未发现相机:请确认相机与手机在同一个 '
+                        'Wi-Fi,且相机停留在「等待连接」画面'),
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
+            ],
             // 扫描兜底:mDNS 发现依赖相机主动广播(菜单在「等待连接」
             // 状态才广播);已知 IP 时手填直连(独立控制器,不预填 ——
             // 预填 AP 默认地址会误拨路由器)。
