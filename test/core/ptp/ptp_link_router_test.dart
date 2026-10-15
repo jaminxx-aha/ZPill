@@ -50,6 +50,33 @@ final class FakeTransport implements PtpTransport {
 
 PtpResult _ok() => const PtpResult(responseCode: 0x2001);
 
+/// 可取消假内层(Cancel-Drain 转发测试用):cancelInFlight 计数并返回
+/// [cancelResult];transport 面只是 attach 的形参要求,不被调用。
+final class CancelCapableFakeTransport implements PtpTransport, PtpCancelCapable {
+  CancelCapableFakeTransport({this.cancelResult = true});
+
+  final bool cancelResult;
+  var cancelCalls = 0;
+
+  @override
+  Future<bool> cancelInFlight() async {
+    cancelCalls++;
+    return cancelResult;
+  }
+
+  @override
+  Future<PtpResult> execute(PtpRequest request,
+      {void Function(Uint8List chunk)? onData}) async {
+    throw UnimplementedError();
+  }
+
+  @override
+  Stream<PtpEvent> get events => const Stream.empty();
+
+  @override
+  Future<void> close() async {}
+}
+
 void main() {
   test('attach → execute 转发内层,请求原样送达', () async {
     final router = PtpLinkRouter();
@@ -185,5 +212,29 @@ void main() {
         router.execute(const PtpRequest(opcode: 0x1001)),
         throwsA(isA<TimeoutException>()));
     expect(broken.closeCalls, 0);
+  });
+
+  group('取消-排水转发', () {
+    test('内层具备能力 → 透传(计数 + 返回值原样)', () async {
+      final router = PtpLinkRouter();
+      final wifi = CancelCapableFakeTransport();
+      router.attach(wifi);
+      expect(await router.cancelInFlight(), isTrue);
+      expect(wifi.cancelCalls, 1);
+      expect(await router.cancelInFlight(), isTrue);
+      expect(wifi.cancelCalls, 2);
+    });
+
+    test('内层为 USB(无能力)/ 未挂载 / 已 close → false no-op', () async {
+      final router = PtpLinkRouter();
+      expect(await router.cancelInFlight(), isFalse); // 未挂载
+
+      final usb = FakeTransport(); // 不实现 PtpCancelCapable
+      router.attach(usb);
+      expect(await router.cancelInFlight(), isFalse);
+
+      await router.close();
+      expect(await router.cancelInFlight(), isFalse);
+    });
   });
 }

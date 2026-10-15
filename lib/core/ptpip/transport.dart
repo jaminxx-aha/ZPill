@@ -18,6 +18,10 @@
 ///    (Zf 真机:~180s 空闲杀 command 通道、event 通道存活 —— 保守先全断,
 ///    Phase 3 观测后再考虑降级)。
 /// 4. StartData 的 u64 declared 与实收对账,不平即毒化。
+/// 5. 取消-排水:[PtpIpTransport.cancelInFlight] 发 Cancel 包后把在途
+///    事务的数据相吸干、读到它的 OperationResponse 才以
+///    PtpCancelledException 干净收场(会话不脱同步);墙钟 + 字节双阀
+///    兜底病态相机,超限走断链路径。
 ///
 /// 真机依据(Zf,2026-10-04 probe 13 步全过):tid 为 u32 宽度,
 /// GetDeviceInfo 与 OpenSession 均用 0、其后自 1 递增(OpenSession 重置
@@ -116,6 +120,15 @@ final class _Pending {
   final completer = Completer<PtpResult>();
   Timer? watchdog;
 
+  /// 取消-排水(Cancel-Drain)已请求:数据相只记账不交付(内存 O(1)),
+  /// 该事务的 OperationResponse 一到即以 [PtpCancelledException] 收场
+  /// (跳过对账 —— 取消语义下声明/实收不平不算链路故障)。
+  bool cancelRequested = false;
+
+  /// 排水墙钟阀:自 cancelInFlight 起一次性计时(不随帧重置),超时 =
+  /// 相机不理 Cancel 也不收口 → 按断链处理,不留死等。
+  Timer? drainTimer;
+
   /// StartData 声明的总字节数;null = 纯响应事务(无数据相)。
   int? declaredLength;
   int receivedLength = 0;
@@ -124,8 +137,12 @@ final class _Pending {
   bool get isStreaming => onData != null;
 
   /// 数据相分块(流式回调透传 / 非流式暂存,大文件不整体驻留内存)。
+  ///
+  /// 排水期([cancelRequested])只记账:既不回调也不暂存 —— 调用方已按
+  /// 取消收场,字节吸掉即丢。
   void feed(Uint8List chunk) {
     receivedLength += chunk.length;
+    if (cancelRequested) return;
     final sink = onData;
     if (sink == null) {
       _chunks.add(chunk);
@@ -150,12 +167,13 @@ final class _Pending {
 ///
 /// 每次无线连接新建一个实例(close 后不可复用);USB 路径的
 /// [PtpTransport] 另有实现,由连接层路由器选择挂载。
-final class PtpIpTransport implements PtpTransport {
+final class PtpIpTransport implements PtpTransport, PtpCancelCapable {
   PtpIpTransport({
     PtpIpChannel Function()? createChannel,
     Uint8List? clientGuid,
     this.hostname = 'Android Device',
     this.transactionTimeout = const Duration(seconds: 15),
+    this.drainTimeout,
     this.enableKeepalive = false,
     this.keepaliveInterval = const Duration(seconds: 15),
     this.keepaliveMaxMissed = 3,
@@ -182,6 +200,13 @@ final class PtpIpTransport implements PtpTransport {
 
   /// 整事务超时(发送 → 数据相 → 响应全程,每帧重置)。
   final Duration transactionTimeout;
+
+  /// 取消-排水墙钟上限:cancelInFlight 起**一次性**计时(不随帧重置),
+  /// 超时 = 相机既不收口也不理 Cancel → 判链路异常断链。null = 沿用
+  /// [transactionTimeout](64KB~1MB 分块在任何 Wi-Fi 速率下都远短于 15s,
+  /// 30 倍余量)。与看门狗分工:看门狗管「一字节不来」,本阀管「字节
+  /// 一直来但事务永不收口」。
+  final Duration? drainTimeout;
 
   /// 心跳保活开关:握手完成后在 event 通道周期真发 ProbeRequest(13)、
   /// 等 ProbeResponse(14) 回声(2026-10-04 probe 13 步真机已证有回声;
@@ -465,6 +490,16 @@ final class PtpIpTransport implements PtpTransport {
       // 空尾 EndData 不触发 onData / 不计入对账
       pending.feed(payload);
     }
+    // 排水字节阀:声明过数据相的事务,实收越过声明 = 相机既不理 Cancel
+    // 又不按声明收口(流已失序)→ 断链。墙钟阀(drainTimer)兜住
+    // 未声明数据相的同类病态。
+    final declared = pending.declaredLength;
+    if (pending.cancelRequested &&
+        declared != null &&
+        pending.receivedLength > declared) {
+      _onBreakage('取消排水超量(tid=$tid:声明 $declared B,'
+          '实收 ${pending.receivedLength} B)');
+    }
     _armWatchdog(pending);
   }
 
@@ -476,6 +511,15 @@ final class PtpIpTransport implements PtpTransport {
       return;
     }
     pending.watchdog?.cancel();
+    pending.drainTimer?.cancel();
+
+    // 取消收口:Cancel 已发、数据相已吸干、响应已到 —— 会话回同步,
+    // 连接照常复用。响应码无论是 OK 还是拒绝,对调用方一律是「取消
+    // 成功」;对账(声明 vs 实收)在此语义下无意义,跳过。
+    if (pending.cancelRequested) {
+      pending.completer.completeError(PtpCancelledException(tid));
+      return;
+    }
 
     // 对账:声明过数据相就必须收满(StartData u64 vs 实收)
     final declared = pending.declaredLength;
@@ -557,6 +601,64 @@ final class PtpIpTransport implements PtpTransport {
     return pending.completer.future;
   }
 
+  /// 取消-排水(Cancel-Drain,ISO 15740 附录 B + Camera_Bridge 思路):
+  /// 对全部在途事务发 PTP/IP Cancel 包(type 11,载荷 = tid u32),
+  /// 数据相照常吸干(只记账不交付)、一直读到该事务的 OperationResponse
+  /// 才以 [PtpCancelledException] 收场 —— 会话不脱同步,连接复用。
+  ///
+  /// 语义要点:
+  /// - **立即返回**:返回 true 只代表 Cancel 已发出;排水由 dispatcher
+  ///   异步收口(在途 execute 随后以 PtpCancelledException 完成)。
+  /// - **竞态**:响应先到且已被 dispatcher 处理 → 该事务不在 _pending,
+  ///   无包可发,返回 false(execute 已正常完成);Cancel 发出后才到的
+  ///   响应 → 取消语义确定性获胜(execute 以 PtpCancelledException
+  ///   完成)。两个方向都不悬挂、不脱同步。
+  /// - **安全阀**:墙钟 [drainTimeout](一次性,不随帧重置 —— 看门狗管
+  ///   「一字节不来」,本阀管「字节一直来但永不收口」)+ 字节阀
+  ///   (排水期实收越过 StartData 声明),超限判链路异常走 [PtpLinkException]
+  ///   断链路径。
+  /// - 无在途事务 / 已在排水(重复调用)/ 未连接 / 已毒化 → false,
+  ///   均为无害 no-op。
+  ///
+  /// 真机待验证:Zf 收到 Cancel 后是「提前掐数据相、立即回 Operation
+  /// Response」还是「无视 Cancel 继续把声明量发完」。后者也能排水收场
+  /// (分块 ≤ 声明量,墙钟阀兜底),只是取消不够「即时」—— 行为账见
+  /// 测试与 TODO。
+  @override
+  Future<bool> cancelInFlight() async {
+    if (_poisoned || _closed) return false;
+    final command = _command;
+    if (command == null) return false;
+    // 先记账再发包(同步段内完成,dispatcher 无交错窗口):此后到达的
+    // 该事务响应一律按取消收场。已在排水的事务不重复发、不重置墙钟阀
+    // (重复调用幂等)。
+    final targets =
+        _pending.values.where((p) => !p.cancelRequested).toList();
+    if (targets.isEmpty) return false;
+    final deadline = drainTimeout ?? transactionTimeout;
+    for (final pending in targets) {
+      pending.cancelRequested = true;
+      pending.drainTimer = Timer(deadline, () {
+        _onBreakage('取消排水超时(tid=${pending.transactionId},'
+            '${deadline.inSeconds}s 内未收到该事务响应,相机不理 Cancel?)');
+      });
+    }
+    try {
+      for (final pending in targets) {
+        await _send(
+            command, CancelPacket(transactionId: pending.transactionId));
+      }
+    } on Object catch (e) {
+      // 发送失败 = 链路已死:与 execute 发送失败同语义,走断链路径
+      // (在途事务已被 _failPending 以 PtpLinkException 失败)。
+      if (!_poisoned) {
+        _onBreakage('发送 Cancel 失败: $e');
+      }
+      return false;
+    }
+    return true;
+  }
+
   /// 意外断链统一入口:毒化 + fail 全部在途 + 广播 breakage + 关通道。
   /// 主动 close() 不走这里(不广播)。
   void _onBreakage(String reason) {
@@ -575,6 +677,7 @@ final class PtpIpTransport implements PtpTransport {
   void _failPending(PtpLinkException error) {
     for (final pending in _pending.values) {
       pending.watchdog?.cancel();
+      pending.drainTimer?.cancel();
       if (!pending.completer.isCompleted) {
         pending.completer.completeError(error);
       }

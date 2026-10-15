@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -231,6 +232,63 @@ void main() {
       downloader.download(_entry('DSC_0008.NEF', 100), targetDir: dir.path),
       throwsA(isA<PtpResponseException>()),
     );
+    expect(await dir.list().toList(), isEmpty);
+  });
+
+  // ── 分块在途取消(Cancel-Drain 接线)────────────────────────────
+
+  test('分块在途取消:轮询旗标 → 对在途块发 cancel,PtpCancelledException '
+      '按「取消成功」消费(非失败)', () async {
+    final fake = FakePtpTransport();
+    final downloader = chunkedDownloaderFor(fake);
+
+    fake.reply(deviceInfoWithPartial());
+    final gate = Completer<void>();
+    fake.failAfter(gate.future, const PtpCancelledException(0)); // 排水收口形
+
+    var flip = false;
+    final future = downloader.download(
+      _entry('DSC_0009.NEF', 120),
+      targetDir: dir.path,
+      isCancelled: () => flip,
+    );
+    // 门禁 + 第一块已发出,块挂在相机闸上
+    await pumpEventQueue();
+    await pumpEventQueue();
+    expect(fake.requests.map((r) => r.opcode).last,
+        PtpOperationCode.getPartialObject);
+    expect(fake.cancelInFlightCalls, 0); // 旗标未翻:不得乱发 Cancel
+
+    flip = true; // 用户取消
+    await Future<void>.delayed(
+        const Duration(milliseconds: 150)); // 轮询周期 50ms
+    expect(fake.cancelInFlightCalls, 1); // 一块只发一次
+
+    gate.complete(); // 相机排水收口:在途块以取消完成
+    await expectLater(future, throwsA(isA<DownloadCancelledException>()));
+    // 取消后不再发新块;半成品已删
+    expect(fake.requests.map((r) => r.opcode),
+        [PtpOperationCode.getDeviceInfo, PtpOperationCode.getPartialObject]);
+    expect(await dir.list().toList(), isEmpty);
+  });
+
+  test('整档 GetObject 路线不挂 Cancel-Drain:取消仍走排空旧语义', () async {
+    final fake = FakePtpTransport();
+    final downloader = downloaderFor(fake);
+
+    final payload = Uint8List.fromList(List.generate(100, (i) => i));
+    fake.reply(_okData(payload));
+
+    var flip = false;
+    final future = downloader.download(
+      _entry('DSC_0010.NEF', 100),
+      targetDir: dir.path,
+      onProgress: (_) => flip = true, // 第一块到即取消
+      isCancelled: () => flip,
+    );
+    await expectLater(future, throwsA(isA<DownloadCancelledException>()));
+    // GetObject 路线无取消轮询:全程零 Cancel 调用
+    expect(fake.cancelInFlightCalls, 0);
     expect(await dir.list().toList(), isEmpty);
   });
 }

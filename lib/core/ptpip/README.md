@@ -28,7 +28,7 @@ Zf「网络 → 连接至智能设备」模式按 **SnapBridge 的 MTP/IP 方言
 | `operation_codes.dart` | PTP-IP 独有的 DataPhase 取值;标准操作/响应/事件码已上移至 `core/ptp/operation_codes.dart`(PTP/USB 共用),此处转发导出 |
 | `object_format.dart` | ObjectFormatCode 节选 + `ObjectKind` 分类 + MIME 映射 |
 | `object_info.dart` | GetObjectInfo 数据集模型 |
-| `transport.dart` | `PtpIpTransport implements PtpTransport`:双通道握手、终身单订阅 dispatcher(握手与事务同一条订阅)、tid 表路由、整事务超时(每帧重置)、毒化(`PtpLinkException implements Exception`)、breakages 广播、DataPhaseInfo 私表、StartData u64 对账 |
+| `transport.dart` | `PtpIpTransport implements PtpTransport, PtpCancelCapable`:双通道握手、终身单订阅 dispatcher(握手与事务同一条订阅)、tid 表路由、整事务超时(每帧重置)、毒化(`PtpLinkException implements Exception`)、breakages 广播、DataPhaseInfo 私表、StartData u64 对账、取消-排水(`cancelInFlight`:Cancel 包 + 吸干数据相到 OperationResponse,`PtpCancelledException` 干净收口,墙钟+字节双阀) |
 
 原骨架 `session.dart`(与 `core/ptp/PtpSession` 平行的旧接口,零引用)
 已删 —— 无线复用既有 `PtpSession`,经 transport 级路由器切换链路。

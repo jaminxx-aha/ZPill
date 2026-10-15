@@ -20,7 +20,8 @@ import 'package:nikon_pill/core/transfer/transfer_task.dart';
 import 'package:nikon_pill/data/settings_store.dart' show WatermarkStyle;
 import 'package:nikon_pill/platform/gallery_saver.dart';
 
-import '../ptp/ptp_session_test.dart' show FakePtpTransport;
+import '../ptp/ptp_session_test.dart'
+    show FakePtpTransport, buildDeviceInfoDataset;
 
 /// 假相册:目录落在真实临时目录(验证落盘/清理),导入行为可配置。
 final class FakeGallerySaver implements GallerySaver {
@@ -328,6 +329,52 @@ void main() {
     await enqueue;
     await done;
 
+    expect(Directory('${gallery.root.path}/downloads').listSync(), isEmpty);
+  });
+
+  test('取消 running(分块在途):Cancel-Drain 即时收口,任务 cancelled 不重试',
+      () async {
+    final fake = FakePtpTransport();
+    final gallery = FakeGallerySaver();
+    final engine = TransferEngineImpl(
+      downloader: ObjectDownloader(
+        session: PtpSession(transport: fake),
+        partialChunkBytes: 64,
+      ),
+      gallery: gallery,
+      backoffFor: (_) => Duration.zero,
+    );
+    // 0x101B 在册 + 第一块挂闸(128B = 两块,第二块永不发出)
+    fake.reply(_okData(
+        buildDeviceInfoDataset(operations: const [0x1001, 0x1009, 0x101B])));
+    final gate = Completer<void>();
+    fake.failAfter(gate.future, const PtpCancelledException(0)); // 排水收口形
+
+    var aId = '';
+    engine.tasks.listen((ts) {
+      if (aId.isEmpty) aId = ts.single.id;
+    });
+    await engine.enqueue([_entry(1, 'A.NEF', 128)],
+        destination: TransferDestination.app);
+    // 等第一块真正挂进传输层(running 快照可能先于块请求到达,过早
+    // cancel 会走「块间旗标」短路,没有在途块可排水)
+    while (fake.requests.length < 2) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+
+    // 取消立即返回(闸未放,任务未落定)
+    await engine.cancel(aId);
+    await Future<void>.delayed(
+        const Duration(milliseconds: 150)); // 下载器轮询周期 50ms
+    expect(fake.cancelInFlightCalls, 1); // 已对在途块发 Cancel
+
+    final done = waitUntil(
+        engine, (ts) => ts.length == 1 && ts.single.state == TransferState.cancelled);
+    gate.complete(); // 相机排水收口
+    final tasks = await done;
+
+    // 取消成功:不是 failed、零重试、半成品已删
+    expect(tasks.single.attempts, 0);
     expect(Directory('${gallery.root.path}/downloads').listSync(), isEmpty);
   });
 
