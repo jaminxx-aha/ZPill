@@ -5,12 +5,15 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import android.net.wifi.WifiManager
 import android.net.wifi.WifiNetworkSpecifier
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import java.net.Inet4Address
 
 /**
  * 程序化加入 Wi-Fi(`nikonpill/network` 方法 join/release;Dart 契约
@@ -25,10 +28,15 @@ import io.flutter.plugin.common.MethodChannel
  * 系统可能弹「设备连接」确认框,用户拒绝走 onUnavailable,如实回报。
  * join 未定局前重复调用 = 旧请求先 release(结果以 superseded 收场),
  * 新请求顶上。
+ *
+ * join 成功 payload 增 `gateway`(点分 IPv4,拿不到不带键):specifier
+ * 网络是相机当热点的 AP,DHCP 网关即相机本机 IP —— Dart 侧据此替代
+ * 硬编码 192.168.1.1(不同相机网段不同;Camera_Bridge 思路)。
  */
 class NetworkPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
     private var channel: MethodChannel? = null
     private var connectivity: ConnectivityManager? = null
+    private var appContext: Context? = null
     private val mainHandler = Handler(Looper.getMainLooper())
 
     /// 一次性 join 结果(照 BlePlugin pending-Result 模式:只回一次)。
@@ -41,6 +49,7 @@ class NetworkPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
         channel = MethodChannel(binding.binaryMessenger, CHANNEL).also {
             it.setMethodCallHandler(this)
         }
+        appContext = binding.applicationContext
         connectivity = binding.applicationContext
             .getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
     }
@@ -48,6 +57,7 @@ class NetworkPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         channel?.setMethodCallHandler(null)
         channel = null
+        appContext = null
         releaseNetwork()
     }
 
@@ -96,7 +106,11 @@ class NetworkPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
                     // 不走相机网段(= SnapBridge 反编译里的「绑网卡」)。
                     cm.bindProcessToNetwork(network)
                     boundNetwork = network
-                    settleJoin(mapOf("ok" to true))
+                    // 网关随 join 定局一并回报(拿不到不带键,Dart 回落
+                    // 默认 IP —— 与不带网关的旧行为等价)。
+                    val payload = mutableMapOf<String, Any?>("ok" to true)
+                    readGateway(cm, network)?.let { payload["gateway"] = it }
+                    settleJoin(payload)
                 }
             }
 
@@ -129,6 +143,55 @@ class NetworkPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
         val pending = pendingJoin ?: return
         pendingJoin = null
         pending.success(payload)
+    }
+
+    /// 读 join 网络的 DHCP 网关(点分 IPv4;拿不到 null)。按健壮序两路:
+    /// ① API 30+ `LinkProperties.dhcpServerAddress` —— 直接管到刚 join
+    ///    上的 [network],不受系统默认 Wi-Fi 误导(minSdk 29,须运行时
+    ///    守卫);
+    /// ② 回落 `WifiManager.dhcpInfo.gateway` —— 系统 Wi-Fi 最近一次租约
+    ///    的快照,join 沿刚完成的就是相机 AP 的租约(时序上略竞态,
+    ///    尽力而为)。
+    private fun readGateway(cm: ConnectivityManager, network: Network): String? {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val addr = try {
+                cm.getLinkProperties(network)?.dhcpServerAddress
+            } catch (e: Exception) {
+                android.util.Log.w(TAG, "getLinkProperties: $e")
+                null
+            }
+            // 只收 IPv4(相机 PTP/IP 是点分 v4);hostAddress 即点分串。
+            if (addr is Inet4Address) {
+                val s = addr.hostAddress
+                if (!s.isNullOrEmpty()) {
+                    return s
+                }
+            }
+        }
+        return dhcpInfoGateway()
+    }
+
+    /// ② 的取法。`DhcpInfo.gateway` 是 int,四字节**小端**约定:点分首段
+    /// 压在最低位字节 —— 192.168.1.1 存 0x0101A8C0(字节 C0 A8 01 01
+    /// 倒压)。这与 `InetAddress.getAddress()` 的大端字节序恰好相反(经典
+    /// 坑:照 getAddress 的方向组字节会解出 1.0.168.192)。方向自证:
+    /// 0x0101A8C0 自低位起取字节 = C0·A8·01·01 = 192.168.1.1。0 = 无
+    /// 租约,负值 = 末段 ≥128 或全 1(-1 即 0xFFFFFFFF),对相机网关皆
+    /// 非可信值,一律当「拿不到」。
+    private fun dhcpInfoGateway(): String? {
+        val raw = try {
+            val wm = appContext?.getSystemService(Context.WIFI_SERVICE)
+                    as? WifiManager ?: return null
+            wm.dhcpInfo?.gateway ?: 0
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "dhcpInfo: $e")
+            return null
+        }
+        if (raw <= 0) {
+            return null
+        }
+        return "${raw and 0xff}.${(raw ushr 8) and 0xff}." +
+            "${(raw ushr 16) and 0xff}.${(raw ushr 24) and 0xff}"
     }
 
     /// 解绑进程路由 + 注销请求;幂等,未持有无操作。引擎脱离时 pending

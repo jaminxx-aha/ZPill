@@ -12,7 +12,8 @@
 /// 无线流程(2026-10-04):扫描(mDNS `_ptp._tcp`)→ 点选相机 → 连接;
 /// 未配对相机在连接中自动配对(验证码不回传相机),相机侧弹「配对
 /// 完成」等按 OK,应用保持重连等它(见 awaitingCameraConfirm);已
-/// 配对直连。AP 模式保留手动 IP 兜底(默认 192.168.1.1)。
+/// 配对直连。AP 模式相机 IP 候选序 = mDNS 发现 → join 网关(相机
+/// 热点的 DHCP 网关,native 读)→ 手填兜底(默认 192.168.1.1)。
 library;
 
 import 'dart:async';
@@ -56,6 +57,34 @@ enum ApJoinOutcome {
 
   /// 无法自动加入(凭据未解出 / joiner 未装配):维持手动指引。
   skipped,
+}
+
+/// AP 连接的相机 IP 候选序([ConnectionController.connectWireless]):
+/// 自定义手填 → mDNS 发现 → join 网关 → 默认 192.168.1.1。相机热点
+/// 网段因机型而异,网关是 join 定局沿 native 读出的 DHCP 网关(= 相机
+/// 本机 IP),默认 192.168.1.1 只兜网关缺席;手填框预填默认,与默认
+/// 相同即视为未自定义,顺势让位给网关(其余手填一律用户明示,直接
+/// 透传)。**STA 绝不消费此序**(STA 的网关是路由器,见
+/// [ConnectionController.manualIpController] 的教训注释)。
+String apCameraIp({
+  required String manual,
+  required List<DiscoveredIpCamera> discovered,
+  String? gateway,
+}) {
+  final typed = manual.trim();
+  if (typed.isNotEmpty && typed != kDefaultCameraIp) {
+    return typed;
+  }
+  // mDNS 候选(AP 路当前无扫描入口,为后续接入预留;旧 STA 网段的
+  // 结果切进 AP 分段即清 —— 跨网段连过去只会超时):取首个发现。
+  if (discovered.isNotEmpty) {
+    return discovered.first.host;
+  }
+  final gw = gateway?.trim() ?? '';
+  if (gw.isNotEmpty) {
+    return gw;
+  }
+  return typed.isNotEmpty ? typed : kDefaultCameraIp;
 }
 
 class ConnectionController extends ChangeNotifier {
@@ -116,13 +145,18 @@ class ConnectionController extends ChangeNotifier {
   /// 当前选中的连接方式(未连接视图分段;默认有线)。
   ConnectionMethod method = ConnectionMethod.usb;
 
-  /// 切换连接方式;离开 STA 时若在扫描顺手停掉(结果已不可见)。
+  /// 切换连接方式;离开 STA 时若在扫描顺手停掉(结果已不可见)。切进
+  /// AP 分段清 mDNS 结果:那是旧网络(路由器网段)的发现,拿去连相机
+  /// 热点只会得到跨网段的超时失败。
   void selectMethod(ConnectionMethod m) {
     if (m == method) {
       return;
     }
     if (scanning && m != ConnectionMethod.sta) {
       stopScan();
+    }
+    if (m == ConnectionMethod.ap) {
+      _cameras.clear();
     }
     method = m;
     notifyListeners();
@@ -210,13 +244,19 @@ class ConnectionController extends ChangeNotifier {
   /// 最近一次程序化加入失败原因(joinCameraAp 落账;终态文案如实用)。
   String? apJoinError;
 
+  /// 最近一次 join 相机热点的 DHCP 网关(= 相机 IP 候选;join 定局沿
+  /// native 读,拿不到/失败为 null,失败保留上次 —— 相机 AP 的网段不
+  /// 随连接轮次变)。**只有 AP 路(connectWireless)消费**:STA 的
+  /// 网关是路由器,连它只会得到莫名超时。
+  String? apGateway;
+
   /// 断链后程序化加入相机热点并自动接续 AP 连接(BLE→WiFi 交接最后
   /// 一段,SnapBridge 全程:0x2004 凭据 → 写 0x2005 断 BLE → join →
   /// PTP/IP)。凭据缺 / joiner 未装配(iOS/ohos/测试)→ skipped,UI
   /// 维持手动指引;join 成功沿切到 AP 分段并**发射** connectWireless
   /// (不等待 —— 连接进度/失败/重试全走既定连接卡状态机,与手点
   /// 「AP 连接」同路;进程路由已由 native 在 onAvailable 沿绑到相机
-  /// 网,socket 直达 192.168.1.1)。
+  /// 网,socket 直达网关(缺席回落默认 192.168.1.1))。
   Future<ApJoinOutcome> joinCameraAp() async {
     final joiner = wifiJoiner;
     final creds = cameraApCredentials;
@@ -232,6 +272,8 @@ class ConnectionController extends ChangeNotifier {
       apJoinError = r.reason;
       return ApJoinOutcome.failed;
     }
+    // join 定局沿的网关落账(候选序见 connectWireless;失败保留上次)
+    apGateway = r.gateway;
     selectMethod(ConnectionMethod.ap);
     unawaited(connectWireless());
     return ApJoinOutcome.joined;
@@ -480,20 +522,24 @@ class ConnectionController extends ChangeNotifier {
   }
 
   /// STA 手动 IP(扫描兜底):独立控制器,**不预填** —— AP 卡默认的
-  /// 192.168.1.1 在 STA 网段多半是路由器,预填即误拨。
+  /// 192.168.1.1 在 STA 网段多半是路由器,预填即误拨;网关同理
+  /// (join 网关只进 AP 路,STA 的网关是路由器)。
   final manualIpController = TextEditingController();
 
-  /// AP 连接(手动 IP 兜底):输入为空时回落默认网关地址。
+  /// AP 连接:相机 IP 候选序 = 自定义手填 → mDNS 发现 → join 网关 →
+  /// 默认 192.168.1.1(见 [apCameraIp];手填框预填默认,未自定义时
+  /// 顺势网关优先)。**绝不消费于 STA**(STA 网关是路由器)。
   Future<void> connectWireless() async {
     final c = connection;
     if (c == null) {
       return;
     }
     _lastAttempt = connectWireless;
-    var ip = ipController.text.trim();
-    if (ip.isEmpty) {
-      ip = kDefaultCameraIp;
-    }
+    final ip = apCameraIp(
+      manual: ipController.text,
+      discovered: cameras,
+      gateway: apGateway,
+    );
     activeIp = ip;
     await c.connect(ip: ip);
   }
