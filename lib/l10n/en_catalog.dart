@@ -399,9 +399,12 @@ const Map<String, String> enCatalog = {
       'Not paired: pair the camera first in Settings "BLE Pairing / GPS Injection"',
   '音量键快门': 'Volume Key Shutter',
   '音量上/下键兼作快门(拍摄页存续期生效);'
-          '仅 Android —— iOS 系统不放行音量键给应用,ohos 未做拦截':
+          'Android 拦键事件,iOS 观察系统音量(按键瞬时改音量并吸回,'
+          '音量条已藏),ohos 未做拦截':
       'Volume up/down keys double as the shutter (effective while the shooting page is open); '
-          'Android only — iOS does not pass volume keys to apps, and ohos has no native interception',
+          'Android intercepts key events, iOS observes system volume (a press nudges the '
+          'volume and pins it back, with the volume HUD hidden), and ohos has no native '
+          'interception',
   '自拍': 'Self-timer',
   '自拍 {s}s': 'Self-timer {s}s',
   '自拍定时:关/2s/5s/10s 点选;倒计时中再点取消':

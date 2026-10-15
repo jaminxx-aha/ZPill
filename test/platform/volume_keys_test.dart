@@ -4,8 +4,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:nikon_pill/platform/volume_keys.dart';
 
 /// `nikonpill/volume` 通道件单测:mock 拦截 Dart→原生('setEnabled'),
-/// handlePlatformMessage 反向推 'onVolumeKey' 模拟 MainActivity 的
-/// onKeyUp 命中。
+/// handlePlatformMessage 反向推 'onVolumeKey' 模拟原生按键命中
+/// (Android onKeyUp 拦截 / iOS 音量沿回推,载荷同契约)。
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -77,5 +77,23 @@ void main() {
     final host = MethodChannelVolumeKeys.instance;
     // 不抛即过:静默降级,音量键本就归系统
     await host.setEnabled(true);
+  });
+
+  group('平台分派(2026-10-15 iOS 接入)', () {
+    test('hostOn:Android/iOS 有原生实现 → 接线单例,其余 → null', () {
+      final host = MethodChannelVolumeKeys.instance;
+      expect(MethodChannelVolumeKeys.hostOn(android: true, ios: false),
+          same(host));
+      expect(MethodChannelVolumeKeys.hostOn(android: false, ios: true),
+          same(host));
+      expect(
+          MethodChannelVolumeKeys.hostOn(android: false, ios: false), isNull);
+    });
+
+    test('platformHost:无实现平台(ohos/桌面)→ null 不接线', () {
+      // Android/iOS 两分支由 hostOn 直测(测试宿主非移动端,Platform
+      // 静态不可注);iOS 原生侧由 flutter build ios 编译闸兜底。
+      expect(MethodChannelVolumeKeys.platformHost, isNull);
+    });
   });
 }

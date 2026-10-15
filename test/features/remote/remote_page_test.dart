@@ -2788,7 +2788,7 @@ void main() {
     expect(find.text('视频 ISO'), findsNothing);
   });
 
-  testWidgets('音量键快门(2026-10-14 Android):平台门禁 —— 无宿主(异端)'
+  testWidgets('音量键快门(2026-10-14 Android,10-15 iOS):平台门禁 —— 无宿主(异端)'
       '不出行,宿主在出行', (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
@@ -2796,7 +2796,7 @@ void main() {
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
     _scriptAutoStart(transport);
-    // 异端(测试宿主非 Android 且无注入):设置开着也不接线、行不出现
+    // 异端(测试宿主非 Android/iOS 且无注入):设置开着也不接线、行不出现
     final settings = ValueNotifier(
         const AppSettings().copyWith(volumeKeyShutter: true));
     addTearDown(settings.dispose);
@@ -2807,7 +2807,7 @@ void main() {
     await tester.tap(find.byIcon(Icons.tune));
     await tester.pumpAndSettle();
     expect(find.text('音量键快门'), findsNothing,
-        reason: 'iOS/ohos(无宿主)不出行 —— 系统不放行音量键/未做拦截');
+        reason: 'ohos/桌面(无宿主)不出行 —— 未做原生拦截');
     // 卸页再挂:同型 widget 复用 State(late final 宿主锁首值),换树
     // 才走新 initState
     await tester.pumpWidget(const MaterialApp(home: SizedBox()));
@@ -2832,7 +2832,8 @@ void main() {
     expect(keys.calls, [true], reason: '开关开 + 宿主在 → 进页即 setEnabled(true)');
     await tester.tap(find.byIcon(Icons.tune));
     await tester.pumpAndSettle();
-    expect(find.text('音量键快门'), findsOneWidget, reason: 'Android 出行');
+    expect(find.text('音量键快门'), findsOneWidget,
+        reason: '有宿主平台(Android/iOS,单测注入同型)出行');
   });
 
   testWidgets('音量键快门:芯片点选写设置 + 原生开关沿(开→关),选中态'
