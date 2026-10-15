@@ -1,13 +1,16 @@
 /// 监看辅助的帧分析(TODO §二 Live View 监看辅助):直方图 + 过曝斑马纹
-/// 掩码,从 Live View JPEG 帧解码降采样计算。
+/// 掩码 + 对焦峰值,从 Live View JPEG 帧解码降采样计算。
 ///
 /// 纯 Dart(image 包解码),链路/UI 无关可测;调用方按帧率抽帧(全帧
-/// 分析无必要,CPU 也扛不住 —— 见 [FrameAnalyzer])。
+/// 分析无必要,CPU 也扛不住 —— 见 [FrameAnalyzer])。峰值判定引擎
+/// (双尺度比值 = 默认 / 经典单尺度梯度)见 peaking_engines.dart。
 library;
 
 import 'dart:typed_data';
 
 import 'package:image/image.dart' as img;
+
+import 'peaking_engines.dart';
 
 final class FrameAnalysis {
   const FrameAnalysis({
@@ -45,8 +48,9 @@ final class FrameAnalysis {
   /// (见 [falseColorBandEdges];带色表在 UI 层)。
   final Uint8List falseColorCells;
 
-  /// 对焦峰值掩码:peakingRows × peakingCols 行主序,1 = 该格处于强
-  /// 亮度梯度(相邻格均值差 ≥ [peakingGradientThreshold])。
+  /// 对焦峰值掩码:peakingRows × peakingCols 行主序,1 = 该格判为
+  /// 合焦。引擎二选一(见 [PeakingEngine]):双尺度比值 = 原平面 vs
+  /// 再模糊副本的能量比过档;经典 = 相邻格均值差 ≥ 梯度阈值。
   final Uint8List peakingMask;
   final int peakingCols;
   final int peakingRows;
@@ -62,11 +66,12 @@ final class FrameAnalysis {
   /// 波形亮度桶数(与直方图同一分桶,采样环共用一次 bin 计算)。
   int get waveformBins => lumaHistogram.length;
 
-  /// 峰值判定的相邻格亮度梯度阈值(0-255):分析缺省档(= 监看灵敏度
-  /// 「中」档)。**调优值非协议常量** —— 用户可配档位(低/中/高)在
-  /// 监看桥接层映射(features/remote/monitor_toggles.dart 的
-  /// monitorPeakingThresholdOf),经 [analyzeJpegFrame] 的
-  /// peakingThreshold 参数传入。
+  /// 峰值判定的相邻格亮度梯度阈值(0-255):经典引擎(单尺度梯度)
+  /// 的分析缺省档(= 监看灵敏度「中」档)。**调优值非协议常量** ——
+  /// 用户可配档位(低/中/高)在监看桥接层映射
+  /// (features/remote/monitor_toggles.dart 的 monitorPeakingThresholdOf),
+  /// 经 [analyzeJpegFrame] 的 peakingThreshold 参数传入;双尺度引擎的
+  /// 档位映射见 peaking_engines.dart 的 peakingDualScaleParamsOf。
   static const int peakingGradientThreshold = 40;
 
   /// 伪色亮度带边界(升序;带索引 = luma 落入的区间序号,共
@@ -139,9 +144,11 @@ final class FrameAnalysis {
 ///
 /// 采样步长 = 一个掩码格的像素宽,保证每格至少被扫到;直方图/斑马纹/
 /// 伪色(格均值 → 亮度带)共用同一批采样;对焦峰值用更细的
-/// [peakingCols]×[peakingRows] 均值网格做相邻梯度,梯度阈值
-/// [peakingThreshold](缺省 = [FrameAnalysis.peakingGradientThreshold]
-/// 中档,用户可配)。luma = 0.299R + 0.587G + 0.114B(Rec.601)。
+/// [peakingCols]×[peakingRows] 均值网格,引擎 [peakingEngine] 二选一
+/// (缺省双尺度比值,散景/失焦不亮;经典 = 相邻格均值差,梯度阈值
+/// [peakingThreshold] 仅经典引擎读)。双尺度参数(比值阈值 + 噪声
+/// 门槛)缺省 = 灵敏度中档,档位映射见 peakingDualScaleParamsOf。
+/// luma = 0.299R + 0.587G + 0.114B(Rec.601)。
 FrameAnalysis? analyzeJpegFrame(
   Uint8List jpeg, {
   int histogramBins = 64,
@@ -150,7 +157,10 @@ FrameAnalysis? analyzeJpegFrame(
   int lumaThreshold = 250,
   int peakingCols = 64,
   int peakingRows = 48,
+  PeakingEngine peakingEngine = PeakingEngine.dualScale,
   int peakingThreshold = FrameAnalysis.peakingGradientThreshold,
+  double peakingRatioThreshold = peakingRatioThresholdMedium,
+  int peakingNoiseGate = peakingNoiseGateMedium,
   int waveformCols = 64,
 }) {
   // 解码器对畸形/截断字节可能抛 Error(image 包格式嗅探的越界读,
@@ -220,30 +230,31 @@ FrameAnalysis? analyzeJpegFrame(
     }
   }
 
-  // 峰值:细网格均值 → 相邻梯度(右/下);双方都有采样才比较
-  // (稀疏采样下的空格均值是 0,当真值比会满屏误报)
+  // 峰值:细网格均值(空格 0,引擎侧按 counts 跳过)→ 引擎分派
+  // (双尺度比值 = 缺省;经典 = 单尺度梯度回退)。两引擎产出同构
+  // 掩码,叠层消费方无感。
   final peakMeans = List<double>.filled(peakingCols * peakingRows, 0);
   for (var i = 0; i < peakMeans.length; i++) {
     final n = peakCounts[i];
     peakMeans[i] = n > 0 ? peakSums[i] / n : 0;
   }
-  final peaking = Uint8List(peakingCols * peakingRows);
-  final grad = peakingThreshold;
-  for (var row = 0; row < peakingRows; row++) {
-    for (var col = 0; col < peakingCols; col++) {
-      final i = row * peakingCols + col;
-      if (peakCounts[i] == 0) continue; // 空格不参与
-      final m = peakMeans[i];
-      final strong =
-          (col + 1 < peakingCols &&
-                  peakCounts[i + 1] > 0 &&
-                  (peakMeans[i + 1] - m).abs() >= grad) ||
-              (row + 1 < peakingRows &&
-                  peakCounts[i + peakingCols] > 0 &&
-                  (peakMeans[i + peakingCols] - m).abs() >= grad);
-      if (strong) peaking[i] = 1;
-    }
-  }
+  final peaking = switch (peakingEngine) {
+    PeakingEngine.dualScale => dualScalePeakingMask(
+        means: peakMeans,
+        counts: peakCounts,
+        cols: peakingCols,
+        rows: peakingRows,
+        ratioThreshold: peakingRatioThreshold,
+        noiseGate: peakingNoiseGate,
+      ),
+    PeakingEngine.gradient => gradientPeakingMask(
+        means: peakMeans,
+        counts: peakCounts,
+        cols: peakingCols,
+        rows: peakingRows,
+        threshold: peakingThreshold,
+      ),
+  };
 
   return FrameAnalysis(
     width: image.width,

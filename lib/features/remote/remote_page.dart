@@ -86,6 +86,7 @@ import 'package:flutter/services.dart';
 import '../../app_services.dart';
 import '../../core/ble/ble_camera_session.dart';
 import '../../core/browser/album.dart';
+import '../../core/remote/peaking_engines.dart';
 import '../../data/settings_store.dart';
 import '../../l10n/l10n.dart';
 import '../../platform/motion_host.dart';
@@ -307,7 +308,8 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   }
 
   /// 斑马纹/直方图/伪色/峰值/波形共享同一份帧分析:任一开启即启用分析
-  /// 器;峰值灵敏度档随同同步(梯度阈值,下一帧分析起生效)。
+  /// 器;峰值引擎(「峰值算法」档)与灵敏度档(经典引擎梯度阈值 +
+  /// 双尺度比值阈值/噪声门槛)随同同步,改档下一帧分析起生效。
   void _syncAnalyzerEnabled() {
     final want = _toggles.zebra ||
         _toggles.histogram ||
@@ -317,8 +319,12 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     if (controller.analyzer.enabled.value != want) {
       controller.analyzer.enabled.value = want;
     }
+    controller.analyzer.peakingEngine = peakingEngineOf(_toggles.peakingEngine);
     controller.analyzer.peakingThreshold =
         monitorPeakingThresholdOf(_toggles.peakingLevel);
+    final dual = peakingDualScaleParamsOf(_toggles.peakingLevel);
+    controller.analyzer.peakingRatioThreshold = dual.ratioThreshold;
+    controller.analyzer.peakingNoiseGate = dual.noiseGate;
   }
 
   /// 开关组落定(监看开关 + 帧分析器启停同步 + 持久化写回)。

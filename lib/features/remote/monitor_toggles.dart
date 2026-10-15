@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 
 import '../../core/media/cube_lut.dart';
 import '../../core/remote/frame_analysis.dart';
+import '../../core/remote/peaking_engines.dart';
 import '../../data/settings_store.dart';
 import '../edit/lut_presets.dart';
 
@@ -24,6 +25,7 @@ class MonitorToggles {
     this.peaking = false,
     this.peakingLevel = 1,
     this.peakingColor = 0,
+    this.peakingEngine = 0,
     this.focusDial = false,
     this.framingAspect = FramingAspect.off,
     this.framingSafeArea = false,
@@ -46,6 +48,10 @@ class MonitorToggles {
   /// 峰值高亮色档(0=金/1=白/2=红;默认金 = 旧行为,取色见
   /// live_view_overlays.dart 的 peakingColorOf)。
   final int peakingColor;
+
+  /// 峰值算法档(0=双尺度比值,默认;1=经典单尺度梯度,回退):
+  /// 引擎取值见 [peakingEngineOf],算法见 core/remote/peaking_engines.dart。
+  final int peakingEngine;
 
   /// 屏上对焦滚轮(取景画面右缘竖条,拖动 = 0x9204 连续拉焦)。
   final bool focusDial;
@@ -74,6 +80,7 @@ class MonitorToggles {
     bool? peaking,
     int? peakingLevel,
     int? peakingColor,
+    int? peakingEngine,
     bool? focusDial,
     FramingAspect? framingAspect,
     bool? framingSafeArea,
@@ -90,6 +97,7 @@ class MonitorToggles {
         peaking: peaking ?? this.peaking,
         peakingLevel: peakingLevel ?? this.peakingLevel,
         peakingColor: peakingColor ?? this.peakingColor,
+        peakingEngine: peakingEngine ?? this.peakingEngine,
         focusDial: focusDial ?? this.focusDial,
         framingAspect: framingAspect ?? this.framingAspect,
         framingSafeArea: framingSafeArea ?? this.framingSafeArea,
@@ -111,6 +119,7 @@ class MonitorToggles {
       other.peaking == peaking &&
       other.peakingLevel == peakingLevel &&
       other.peakingColor == peakingColor &&
+      other.peakingEngine == peakingEngine &&
       other.focusDial == focusDial &&
       other.framingAspect == framingAspect &&
       other.framingSafeArea == framingSafeArea &&
@@ -128,6 +137,7 @@ class MonitorToggles {
       peaking,
       peakingLevel,
       peakingColor,
+      peakingEngine,
       focusDial,
       framingAspect,
       framingSafeArea,
@@ -146,6 +156,7 @@ MonitorToggles monitorTogglesFromSettings(AppSettings s) => MonitorToggles(
     peaking: s.monitorPeaking,
     peakingLevel: s.monitorPeakingLevel,
     peakingColor: s.monitorPeakingColor,
+    peakingEngine: s.monitorPeakingEngine,
     focusDial: s.monitorFocusDial,
     framingAspect: s.framingAspect,
     framingSafeArea: s.framingSafeArea,
@@ -164,6 +175,7 @@ AppSettings applyMonitorToggles(AppSettings s, MonitorToggles t) =>
         monitorPeaking: t.peaking,
         monitorPeakingLevel: t.peakingLevel,
         monitorPeakingColor: t.peakingColor,
+        monitorPeakingEngine: t.peakingEngine,
         monitorFocusDial: t.focusDial,
         framingAspect: t.framingAspect,
         framingSafeArea: t.framingSafeArea,
@@ -179,6 +191,12 @@ int monitorPeakingThresholdOf(int level) => switch (level) {
       2 => 64,
       _ => FrameAnalysis.peakingGradientThreshold,
     };
+
+/// 峰值算法档 → 引擎:0 = 双尺度比值(默认,散景/失焦不亮)/
+/// 1 = 经典单尺度梯度(2026-10-14 前唯一路径,手感回退);表外档
+/// 回落双尺度(旧档/手改文件兜底)。
+PeakingEngine peakingEngineOf(int tier) =>
+    tier == 1 ? PeakingEngine.gradient : PeakingEngine.dualScale;
 
 /// 当前监看 LUT(设置索引 → 内置风格表):表外/越界索引 = null = 关
 /// (旧档/手改文件不做范围钳制,消费侧按关,面板芯片亦无选中态)。

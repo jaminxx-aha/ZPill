@@ -15,6 +15,7 @@ import 'package:nikon_pill/core/ptp/ptp_transport.dart';
 import 'package:nikon_pill/core/remote/intervalometer.dart';
 import 'package:nikon_pill/core/remote/live_view_engine.dart';
 import 'package:nikon_pill/core/remote/live_view_header.dart';
+import 'package:nikon_pill/core/remote/peaking_engines.dart';
 import 'package:nikon_pill/core/utils/byte_writer.dart';
 import 'package:nikon_pill/data/settings_store.dart';
 import 'package:nikon_pill/design/app_theme.dart';
@@ -1171,19 +1172,42 @@ void main() {
         reason: '默认中档 = 旧写死阈值');
     expect(find.text('峰值灵敏度'), findsOneWidget);
     expect(find.text('峰值颜色'), findsOneWidget);
+    expect(find.text('峰值算法'), findsOneWidget);
+    // 缺省引擎 = 双尺度(2026-10-15 新默认),参数 = 中档 2.10/450
+    expect(controller.analyzer.peakingEngine, PeakingEngine.dualScale);
+    expect(controller.analyzer.peakingRatioThreshold, 2.10);
+    expect(controller.analyzer.peakingNoiseGate, 450);
     expect(tester.widget<PeakingOverlay>(find.byType(PeakingOverlay)).color,
         const Color(0xFFE9AC35),
         reason: '默认金 = 旧行为');
 
-    // 选「高」→「低」:设置落档,阈值 64 / 24 同步分析器
+    // 选「高」→「低」:设置落档,阈值 64 / 24 同步分析器;双尺度
+    // 参数随档同向(高 2.30/1200 → 低 1.90/160)
     await tester.tap(find.text('高'));
     await tester.pumpAndSettle();
     expect(settings.value.monitorPeakingLevel, 2);
     expect(controller.analyzer.peakingThreshold, 64);
+    expect(controller.analyzer.peakingRatioThreshold, 2.30);
+    expect(controller.analyzer.peakingNoiseGate, 1200);
     await tester.tap(find.text('低'));
     await tester.pumpAndSettle();
     expect(settings.value.monitorPeakingLevel, 0);
     expect(controller.analyzer.peakingThreshold, 24);
+    expect(controller.analyzer.peakingRatioThreshold, 1.90);
+    expect(controller.analyzer.peakingNoiseGate, 160);
+
+    // 选「经典」:引擎切回单尺度梯度(手感回退),灵敏度档照旧生效
+    await tester.tap(find.text('经典'));
+    await tester.pumpAndSettle();
+    expect(settings.value.monitorPeakingEngine, 1);
+    expect(controller.analyzer.peakingEngine, PeakingEngine.gradient);
+    expect(controller.analyzer.peakingThreshold, 24,
+        reason: '经典引擎仍吃灵敏度档(低档 24)');
+    // 切回「双尺度」:缺省引擎回归
+    await tester.tap(find.text('双尺度'));
+    await tester.pumpAndSettle();
+    expect(settings.value.monitorPeakingEngine, 0);
+    expect(controller.analyzer.peakingEngine, PeakingEngine.dualScale);
 
     // 选「红」:设置落档,叠层换色
     await tester.tap(find.text('红'));

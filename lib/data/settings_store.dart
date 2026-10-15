@@ -100,6 +100,7 @@ final class AppSettings {
     this.monitorPeaking = false,
     this.monitorPeakingLevel = 1,
     this.monitorPeakingColor = 0,
+    this.monitorPeakingEngine = 0,
     this.monitorFocusDial = false,
     this.framingAspect = FramingAspect.off,
     this.framingSafeArea = false,
@@ -182,6 +183,12 @@ final class AppSettings {
   /// (features/remote/live_view_overlays.dart 的 peakingColorOf)。
   final int monitorPeakingColor;
 
+  /// 峰值算法档(0=双尺度比值,默认;1=经典单尺度梯度,2026-10-14
+  /// 前唯一路径,保留手感回退)。引擎映射在监看桥接层
+  /// (features/remote/monitor_toggles.dart 的 peakingEngineOf),
+  /// 算法在 core/remote/peaking_engines.dart。
+  final int monitorPeakingEngine;
+
   /// 构图框(OpenZCine 差集):遮幅画幅 + 安全框 + 中心标;门框数学
   /// 与绘制见 live_view_overlays.dart 的 FramingOverlay。
   final FramingAspect framingAspect;
@@ -253,6 +260,7 @@ final class AppSettings {
     bool? monitorPeaking,
     int? monitorPeakingLevel,
     int? monitorPeakingColor,
+    int? monitorPeakingEngine,
     bool? monitorFocusDial,
     FramingAspect? framingAspect,
     bool? framingSafeArea,
@@ -292,6 +300,8 @@ final class AppSettings {
         monitorPeaking: monitorPeaking ?? this.monitorPeaking,
         monitorPeakingLevel: monitorPeakingLevel ?? this.monitorPeakingLevel,
         monitorPeakingColor: monitorPeakingColor ?? this.monitorPeakingColor,
+        monitorPeakingEngine:
+            monitorPeakingEngine ?? this.monitorPeakingEngine,
         monitorFocusDial: monitorFocusDial ?? this.monitorFocusDial,
         framingAspect: framingAspect ?? this.framingAspect,
         framingSafeArea: framingSafeArea ?? this.framingSafeArea,
@@ -338,6 +348,7 @@ final class AppSettings {
       other.monitorPeaking == monitorPeaking &&
       other.monitorPeakingLevel == monitorPeakingLevel &&
       other.monitorPeakingColor == monitorPeakingColor &&
+      other.monitorPeakingEngine == monitorPeakingEngine &&
       other.monitorFocusDial == monitorFocusDial &&
       other.framingAspect == framingAspect &&
       other.framingSafeArea == framingSafeArea &&
@@ -360,7 +371,7 @@ final class AppSettings {
         autoRotateFeed, deSqueeze,
         monitorGrid, monitorZebra, monitorHistogram, monitorLevel,
         monitorFalseColor, monitorPeaking, monitorPeakingLevel,
-        monitorPeakingColor, monitorFocusDial,
+        monitorPeakingColor, monitorPeakingEngine, monitorFocusDial,
         framingAspect, framingSafeArea, framingCenterMark,
         monitorWaveform, monitorLutIndex, liveViewOn,
         liveViewImageSize, liveViewImageCompression, sdramCapture,
@@ -393,6 +404,7 @@ final class AppSettings {
         'monitorPeaking': monitorPeaking,
         'monitorPeakingLevel': monitorPeakingLevel,
         'monitorPeakingColor': monitorPeakingColor,
+        'monitorPeakingEngine': monitorPeakingEngine,
         'monitorFocusDial': monitorFocusDial,
         'framingAspect': framingAspect.name,
         'framingSafeArea': framingSafeArea,
@@ -451,6 +463,9 @@ final class AppSettings {
             _pickEnumIndex(json['monitorPeakingLevel'], const [0, 1, 2], 1),
         monitorPeakingColor:
             _pickEnumIndex(json['monitorPeakingColor'], const [0, 1, 2], 0),
+        // 旧版本文件无此键 → 默认双尺度;表外值回落同档。
+        monitorPeakingEngine:
+            _pickEnumIndex(json['monitorPeakingEngine'], const [0, 1], 0),
         monitorFocusDial: json['monitorFocusDial'] == true,
         framingAspect: _enumByName(FramingAspect.values, json['framingAspect']) ??
             FramingAspect.off,
