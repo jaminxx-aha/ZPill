@@ -46,6 +46,7 @@ import 'features/remote/remote_controller.dart';
 import 'features/settings/settings_page.dart';
 import 'features/settings/snapshot_controller.dart';
 import 'features/transfers/transfers_page.dart';
+import 'platform/background_transfer.dart';
 import 'platform/location_host.dart';
 import 'platform/services.dart';
 import 'platform/usb/usb_host.dart';
@@ -201,8 +202,14 @@ final class AppServices {
     // 后台档 —— 只影响下一拍到点判定,无副作用。监听器随
     // WidgetsBinding 强引用存活(单例 app 期不拆)。
     AppLifecycleListener(
-      onStateChange: (s) =>
-          bleSession.setForeground(s == AppLifecycleState.resumed),
+      onStateChange: (s) {
+        bleSession.setForeground(s == AppLifecycleState.resumed);
+        // 回前台沿重申后台持有(ohos 系统静默吊销后的重申请路;
+        // native 端「已申请」按成功收场,不会叠加 —— 幂等无害)。
+        if (s == AppLifecycleState.resumed) {
+          unawaited(PlatformServices.background.reassert());
+        }
+      },
     );
     connectionController = ConnectionController(
       connection: connection,
@@ -296,19 +303,27 @@ final class AppServices {
       gallery: PlatformServices.gallery,
     );
 
-    // 后台传输保活:队列非空 → 申请后台执行权(iOS ~30s 宽限 /
-    // Android 前台服务 / ohos 长时任务,各端 native 幂等);队列清空 →
-    // 释放。native 未实现的端静默降级为仅前台传输。tasks 每个进度
-    // 快照都发事件,只在 active 边沿上过通道。
+    // 后台保活(持有式,2026-10-15 扩双模式动态切换):各业务按 tag
+    // 持有,有效模式 = 全部持有者并集,并集变化沿才过通道(协调器与
+    // 决策表见 background_transfer.dart;ohos native 按 modes 换装)。
+    // 传输队列非空 → dataTransfer;BLE 会话就绪 → bluetoothInteraction
+    // (GPS 注入采样期并 location,见 _syncBleBackgroundHold)。native
+    // 未实现的端静默降级为仅前台传输。tasks 每个进度快照都发事件,
+    // 只在 active 边沿上过通道。
     var bgHeld = false;
     transferEngine.tasks.listen((ts) {
       final active = ts.any((t) => !t.isTerminal);
       if (active == bgHeld) return;
       bgHeld = active;
-      unawaited(active
-          ? PlatformServices.background.ensureRunning()
-          : PlatformServices.background.stop());
+      unawaited(
+          active
+              ? PlatformServices.background.ensureRunning(
+                  'transfer', const <BgMode>{BgMode.dataTransfer})
+              : PlatformServices.background.stop('transfer'));
     });
+    // BLE 持有独立订阅(广播流;注入驱动的 _bleStateSub 只在驱动在跑
+    // 期存活,配对页挂起期链路仍在 —— 持有须全程跟随会话状态)。
+    bleSession.states.listen((_) => _syncBleBackgroundHold());
 
     // 尼康事件轮询(GetEventEx 0x941C):重要事件走厂商轮询通道而非
     // 异步事件通道(OpenZCine/libgphoto2 口径)—— 连接期间定时拉取
@@ -371,6 +386,24 @@ final class AppServices {
   StreamSubscription<LocationSample>? _bleFixSub;
   StreamSubscription<BleSessionState>? _bleStateSub;
   bool _bleRunning = false;
+
+  /// BLE 持有式后台保活同步(调用点:会话状态沿/设置沿/挂起沿,均
+  /// 幂等):会话 ready → hold('ble', bluetoothInteraction);GPS 注入
+  /// 驱动在跑(_bleRunning = 开关+已配对+未挂起)再并 location。
+  /// 模式须有真实业务背书 —— location 挂着但 GPS 不采样,系统可能按
+  /// 「未使用」吊销整个长时任务(HarmoNiLink 实证口径)。
+  void _syncBleBackgroundHold() {
+    if (bleSession.state != BleSessionState.ready) {
+      unawaited(PlatformServices.background.stop('ble'));
+      return;
+    }
+    final modes = <BgMode>{BgMode.bluetoothInteraction};
+    if (_bleRunning) {
+      modes.add(BgMode.location);
+    }
+    unawaited(PlatformServices.background.ensureRunning('ble', modes));
+  }
+
   /// 配对页手动流程期间挂起(驱动自动重连/ GEO tick 会与手动配对撞车:
   /// 扫描互踩 + 拆链沿 GEO 写 notFound 污染 lastError —— 真机实证)。
   bool _bleSuspended = false;
@@ -385,6 +418,9 @@ final class AppServices {
       _bleRunning = false;
       _stopBleDriverLoop();
     }
+    // 挂起期 GPS 不再采样:location 模式撤出(防系统按「location
+    // 未使用」吊销整个长时任务)。
+    _syncBleBackgroundHold();
   }
 
   void resumeBleDriver() {
@@ -401,6 +437,9 @@ final class AppServices {
         bleSession.identity != null;
     if (enabled == _bleRunning) return;
     _bleRunning = enabled;
+    // 翻面后再同步:_bleRunning 决定 location 是否并入并集(挂起恢复
+    // 沿链路仍是 ready、无状态沿可蹭,必须在此对齐)。
+    _syncBleBackgroundHold();
     if (enabled) {
       _startBleInjection();
     } else {
