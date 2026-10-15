@@ -53,8 +53,8 @@ final class FakeGallerySaver implements GallerySaver {
 }
 
 /// 裸 JPEG(SOI + APP0 JFIF,无 EXIF)—— 相机缩略的原型形状。
-final Uint8List _jpeg =
-    Uint8List.fromList([0xFF, 0xD8, 0xFF, 0xE0, 0, 0x10, 0x4A, 0x46, 0x49, 0x46]);
+final Uint8List _jpeg = Uint8List.fromList(
+    [0xFF, 0xD8, 0xFF, 0xE0, 0, 0x10, 0x4A, 0x46, 0x49, 0x46]);
 
 /// 手搓 TIFF 头(II*\0,IFD0@8,单 Orientation 条目)—— NEF 文件头形状。
 /// 与实现互为独立来源(不调被测代码拼)。
@@ -201,7 +201,7 @@ Future<void> _until(bool Function() cond) async {
 void main() {
   test('未命中拉取落盘;命中后不再发请求', () async {
     final fake = FakePtpTransport()
-      ..reply(_okData(_jpeg))
+      ..reply(_okData(_jpeg)) // 0x90C4 高清(裸)
       ..reply(_okData(_jpgHead(1))); // 横拍:无注入(字节不变)
     final cache = ThumbnailCache(
         session: PtpSession(transport: fake), gallery: FakeGallerySaver());
@@ -211,7 +211,7 @@ void main() {
     expect(File(path).existsSync(), isTrue);
     expect(File(path).readAsBytesSync(), _jpeg);
     expect(fake.requests.map((r) => r.opcode),
-        [PtpOperationCode.getThumb, PtpOperationCode.getPartialObject]);
+        [NikonOperationCode.getLargeThumb, PtpOperationCode.getPartialObject]);
 
     final again = await cache.pathFor(entry, ThumbSource.grid);
     expect(again, path);
@@ -240,12 +240,14 @@ void main() {
       ..reply(_okData(_jpeg))
       ..reply(_okData(_jpgHead(1)));
     final entry = _entry(0x12);
-    await ThumbnailCache(session: PtpSession(transport: fake1), gallery: gallery)
+    await ThumbnailCache(
+            session: PtpSession(transport: fake1), gallery: gallery)
         .pathFor(entry, ThumbSource.grid);
 
     // 新实例(内存索引为空)→ 磁盘命中,零请求。
     final fake2 = FakePtpTransport();
-    final path = await ThumbnailCache(session: PtpSession(transport: fake2), gallery: gallery)
+    final path = await ThumbnailCache(
+            session: PtpSession(transport: fake2), gallery: gallery)
         .pathFor(entry, ThumbSource.grid);
     expect(fake2.requests, isEmpty);
     expect(File(path).existsSync(), isTrue);
@@ -269,7 +271,9 @@ void main() {
   test('LRU:超出上限按最久未访问驱逐删盘', () async {
     final gallery = FakeGallerySaver();
     final fake = FakePtpTransport();
-    final bytes = Uint8List.fromList(List.generate(60, (i) => i));
+    // SOI 开头的 60B(0x90C4 高清档收下的最小 JPEG 形状)
+    final bytes =
+        Uint8List.fromList([0xFF, 0xD8, ...List.generate(58, (i) => i)]);
     // 每张 60B,上限 130B(恰好装两张):第 3 张进来时最久未访问的
     // 第 1 张被驱逐,两张留存。
     final cache = ThumbnailCache(
@@ -277,7 +281,8 @@ void main() {
       gallery: gallery,
       gridLimitBytes: 130,
     );
-    // 拉一张 = 缩略 + 头读两步(头回 Orientation=1 → 不注入,60B 不变)
+    // 拉一张 = 0x90C4 高清 + 头读两步(头回 Orientation=1 → 不注入,
+    // 60B 不变;三条都不降级 —— 0x90C4 全成功)
     Future<String> fetch(String name) {
       fake.reply(_okData(bytes));
       fake.reply(_okData(_jpgHead(1)));
@@ -306,7 +311,7 @@ void main() {
 
   test('网格缩略:竖拍裸 JPEG 注入原文件头方向(落盘即转正)', () async {
     final fake = FakePtpTransport()
-      ..reply(_okData(_jpeg)) // 网格缩略(裸,无 EXIF)
+      ..reply(_okData(_jpeg)) // 0x90C4 高清(裸,无 EXIF)
       ..reply(_okData(_jpgHead(8))); // 原文件头:竖拍 Orientation=8
     final cache = ThumbnailCache(
         session: PtpSession(transport: fake), gallery: FakeGallerySaver());
@@ -316,11 +321,10 @@ void main() {
     expect(jpegHasExif(written), isTrue);
     expect(jpegExifOrientation(written), 8); // 引擎解码即转正
     expect(fake.requests.map((r) => r.opcode),
-        [PtpOperationCode.getThumb, PtpOperationCode.getPartialObject]);
+        [NikonOperationCode.getLargeThumb, PtpOperationCode.getPartialObject]);
   });
 
-  test('方向头读按内容键记忆:网格与预览只读一次头,预览同享转正',
-      () async {
+  test('方向头读按内容键记忆:网格与预览只读一次头,预览同享转正', () async {
     final fake = FakePtpTransport()
       ..reply(_okData(_jpeg)) // 网格缩略(裸)
       ..reply(_okData(_jpgHead(8))) // 头读 → 8(记忆)
@@ -334,9 +338,10 @@ void main() {
     final preview = await cache.pathFor(entry, ThumbSource.preview);
     expect(jpegExifOrientation(File(preview).readAsBytesSync()), 8);
 
-    // 无第二次头读(方向已按内容键记忆)
+    // 无第二次头读(方向已按内容键记忆;网格与预览各自目录,预览的
+    // 0x90C4 也要真发)
     expect(fake.requests.map((r) => r.opcode), [
-      PtpOperationCode.getThumb,
+      NikonOperationCode.getLargeThumb,
       PtpOperationCode.getPartialObject,
       NikonOperationCode.getLargeThumb,
     ]);
@@ -351,7 +356,7 @@ void main() {
     final path = await cache.pathFor(_entry(0x12), ThumbSource.grid);
     expect(File(path).readAsBytesSync(), withExif); // 原样落盘
     expect(fake.requests.map((r) => r.opcode),
-        [PtpOperationCode.getThumb]); // 无头读
+        [NikonOperationCode.getLargeThumb]); // 无头读
   });
 
   test('视频条目:不读头不注入(海报无 EXIF 语义)', () async {
@@ -363,22 +368,138 @@ void main() {
         _entry(0x12, name: 'DSC_0001.MOV', kind: ObjectKind.video),
         ThumbSource.grid);
     expect(File(path).readAsBytesSync(), _jpeg); // 原样落盘
-    expect(fake.requests.map((r) => r.opcode),
-        [PtpOperationCode.getThumb]); // 无头读
+    expect(
+        fake.requests.map((r) => r.opcode), [PtpOperationCode.getThumb]); // 无头读
   });
 
   test('头读失败(旧机身拒 0x101B)→ 不注入,缩略照常', () async {
     final fake = FakePtpTransport()
-      ..reply(_okData(_jpeg))
-      ..reply(PtpResult(
-          responseCode: PtpResponseCode.operationNotSupported));
+      ..reply(_okData(_jpeg)) // 0x90C4 高清(裸)
+      ..reply(PtpResult(responseCode: PtpResponseCode.operationNotSupported));
     final cache = ThumbnailCache(
         session: PtpSession(transport: fake), gallery: FakeGallerySaver());
 
     final path = await cache.pathFor(_entry(0x12), ThumbSource.grid);
     expect(File(path).readAsBytesSync(), _jpeg); // 裸缩略照常(不转正)
     expect(fake.requests.map((r) => r.opcode),
+        [NikonOperationCode.getLargeThumb, PtpOperationCode.getPartialObject]);
+  });
+
+  // ── 0x90C4 高清缩略(N-link 手法:网格 JPG 高清优先,诚实降级)──
+
+  test('网格 JPG:0x90C4 成功出高清,lt_ 键落盘;旧小图缓存不挡高清', () async {
+    final gallery = FakeGallerySaver();
+    final thumbsDir = await gallery.thumbsDir();
+    // 旧版小图缓存(plain 键)+ 格式标记(免被清空闸扫掉):键不分档
+    // 的话这里会被当成高清档直接命中
+    File('$thumbsDir/.fmt-v2').writeAsStringSync('cleared');
+    final smallJpeg = Uint8List.fromList([0xFF, 0xD8, 0xFF, 0xD9]);
+    File('$thumbsDir/DSC_0001.JPG_100.jpg').writeAsBytesSync(smallJpeg);
+
+    final fake = FakePtpTransport()
+      ..reply(_okData(_jpeg)) // 0x90C4 高清(裸)
+      ..reply(_okData(_jpgHead(1))); // 头读(横拍不注入)
+    final cache =
+        ThumbnailCache(session: PtpSession(transport: fake), gallery: gallery);
+
+    final path = await cache.pathFor(_entry(0x12), ThumbSource.grid);
+    // 高清档独立键(lt_):不是旧小图档的路径,内容是 0x90C4 回包
+    expect(path, endsWith('lt_DSC_0001.JPG_100.jpg'));
+    expect(File(path).readAsBytesSync(), _jpeg);
+    expect(fake.requests.map((r) => r.opcode),
+        [NikonOperationCode.getLargeThumb, PtpOperationCode.getPartialObject]);
+    // 旧小图档已清(免孤儿档占盘不进 LRU 账)
+    expect(File('$thumbsDir/DSC_0001.JPG_100.jpg').existsSync(), isFalse);
+
+    // 再取:内存命中高清档,零新请求
+    final again = await cache.pathFor(_entry(0x12), ThumbSource.grid);
+    expect(again, path);
+    expect(fake.requests.length, 2);
+  });
+
+  test('网格 JPG:0x90C4 回非 JPEG(NEF 条带形态)→ 回落 0x100A,垃圾不落盘', () async {
+    final gallery = FakeGallerySaver();
+    final strip = Uint8List.fromList(List.filled(40, 0x77)); // 整段无 SOI
+    final fake = FakePtpTransport()
+      ..reply(_okData(strip)) // 0x90C4 OK 但非 JPEG
+      ..reply(_okData(_jpeg)) // 回落 getThumb
+      ..reply(_okData(_jpgHead(1)));
+    final session = PtpSession(transport: fake);
+    final cache = ThumbnailCache(session: session, gallery: gallery);
+
+    final path = await cache.pathFor(_entry(0x12), ThumbSource.grid);
+    expect(File(path).readAsBytesSync(), _jpeg);
+    expect(path, endsWith('DSC_0001.JPG_100.jpg')); // 小图档保持旧制键
+    expect(fake.requests.map((r) => r.opcode), [
+      NikonOperationCode.getLargeThumb,
+      PtpOperationCode.getThumb,
+      PtpOperationCode.getPartialObject,
+    ]);
+    // 非 JPEG 载荷也置会话降级旗标(视为不支持)
+    expect(session.largeThumbDegraded, isTrue);
+    // 高清档未落盘(垃圾字节不进 .jpg 缓存)
+    final thumbsDir = await gallery.thumbsDir();
+    expect(File('$thumbsDir/lt_DSC_0001.JPG_100.jpg').existsSync(), isFalse);
+  });
+
+  test('会话级降级:首个 JPG 失败(错误应答)后,后续 JPG 不再发 0x90C4', () async {
+    final fake = FakePtpTransport();
+    final session = PtpSession(transport: fake);
+    final cache = ThumbnailCache(session: session, gallery: FakeGallerySaver());
+    final a = _entry(0x12, name: 'A.JPG');
+    final b = _entry(0x13, name: 'B.JPG');
+    fake
+      ..reply(PtpResult(
+          responseCode: PtpResponseCode.operationNotSupported)) // A 的 0x90C4 被拒
+      ..reply(_okData(_jpeg)) // A 回落 getThumb
+      ..reply(_okData(_jpgHead(1))) // A 头读
+      ..reply(_okData(_jpeg)) // B 直走 getThumb(降级:不试 0x90C4)
+      ..reply(_okData(_jpgHead(1))); // B 头读
+
+    final pa = await cache.pathFor(a, ThumbSource.grid);
+    final pb = await cache.pathFor(b, ThumbSource.grid);
+    expect(File(pa).existsSync(), isTrue);
+    expect(File(pb).existsSync(), isTrue);
+    expect(session.largeThumbDegraded, isTrue);
+    expect(fake.requests.map((r) => r.opcode), [
+      NikonOperationCode.getLargeThumb, // A 首试(失败,置旗标)
+      PtpOperationCode.getThumb, // A 回落小图
+      PtpOperationCode.getPartialObject, // A 头读
+      PtpOperationCode.getThumb, // B 直走小图
+      PtpOperationCode.getPartialObject, // B 头读
+    ]);
+  });
+
+  test('网格 JPG:0x90C4 超时(USB 单事务形态)→ 回落 0x100A 小图', () async {
+    final fake = FakePtpTransport()
+      ..fail(TimeoutException('bulkRead 窗口内未收到数据'))
+      ..reply(_okData(_jpeg)) // 回落 getThumb
+      ..reply(_okData(_jpgHead(1)));
+    final cache = ThumbnailCache(
+        session: PtpSession(transport: fake), gallery: FakeGallerySaver());
+
+    final path = await cache.pathFor(_entry(0x12), ThumbSource.grid);
+    expect(File(path).readAsBytesSync(), _jpeg);
+    expect(fake.requests.map((r) => r.opcode), [
+      NikonOperationCode.getLargeThumb,
+      PtpOperationCode.getThumb,
+      PtpOperationCode.getPartialObject,
+    ]);
+  });
+
+  test('网格 NEF:不试 0x90C4,照旧 0x100A 小图', () async {
+    final fake = FakePtpTransport()
+      ..reply(_okData(_jpeg)) // getThumb
+      ..reply(_okData(_tiffHead(6))); // NEF 头读(TIFF 头即 IFD0)
+    final session = PtpSession(transport: fake);
+    final cache = ThumbnailCache(session: session, gallery: FakeGallerySaver());
+
+    final path = await cache.pathFor(
+        _entry(0x12, name: 'DSC_0001.NEF'), ThumbSource.grid);
+    expect(jpegExifOrientation(File(path).readAsBytesSync()), 6);
+    expect(fake.requests.map((r) => r.opcode),
         [PtpOperationCode.getThumb, PtpOperationCode.getPartialObject]);
+    expect(session.largeThumbDegraded, isFalse); // 没碰过 0x90C4
   });
 
   // ── exifCardOf:查看器信息栏的 EXIF 头读 ──
@@ -407,8 +528,8 @@ void main() {
         session: PtpSession(transport: fake), gallery: FakeGallerySaver());
 
     expect((await cache.exifCardOf(_entry(0x12)))?.model, 'Zf');
-    expect(fake.requests.map((r) => r.params[2]),
-        [64 * 1024, 16 * 1024], reason: '先 64KB 再 16KB');
+    expect(fake.requests.map((r) => r.params[2]), [64 * 1024, 16 * 1024],
+        reason: '先 64KB 再 16KB');
   });
 
   test('exifCardOf:协议全败 → null 且不驻留(下次点开重试成功)', () async {
@@ -451,9 +572,9 @@ void main() {
 
   // ── preview 分流 ──
 
-  test('preview:0x90C4 直发不查能力表(op 表不含也走大图;'
-      '无线 STA 的小表是假门,查表会把大图拒成 160×120 回落)',
-      () async {
+  test(
+      'preview:0x90C4 直发不查能力表(op 表不含也走大图;'
+      '无线 STA 的小表是假门,查表会把大图拒成 160×120 回落)', () async {
     final fake = FakePtpTransport()
       ..reply(_okData(_jpeg))
       ..reply(_okData(_jpgHead(1)));
@@ -478,11 +599,28 @@ void main() {
 
     final path = await cache.pathFor(_entry(0x12), ThumbSource.preview);
     expect(File(path).readAsBytesSync(), _jpeg);
-    expect(fake.requests.map((r) => r.opcode),
-        [NikonOperationCode.getLargeThumb, PtpOperationCode.getThumb, PtpOperationCode.getPartialObject]);
+    expect(fake.requests.map((r) => r.opcode), [
+      NikonOperationCode.getLargeThumb,
+      PtpOperationCode.getThumb,
+      PtpOperationCode.getPartialObject
+    ]);
   });
 
-  test('preview:NEF 中档 = 0x920F FHD 直发(不查能力表),方向注入后先显;'
+  test('preview:视频海报直走 GetThumb(不试 0x90C4,不拖垮降级旗标)', () async {
+    final fake = FakePtpTransport()..reply(_okData(_jpeg));
+    final session = PtpSession(transport: fake);
+    final cache = ThumbnailCache(session: session, gallery: FakeGallerySaver());
+
+    final path = await cache.pathFor(
+        _entry(0x12, name: 'DSC_0001.MOV', kind: ObjectKind.video),
+        ThumbSource.preview);
+    expect(File(path).readAsBytesSync(), _jpeg); // 视频不读头不注入
+    expect(fake.requests.map((r) => r.opcode), [PtpOperationCode.getThumb]);
+    expect(session.largeThumbDegraded, isFalse); // 视频失败不连累 JPG
+  });
+
+  test(
+      'preview:NEF 中档 = 0x920F FHD 直发(不查能力表),方向注入后先显;'
       'warm 后整档解码换高清', () async {
     final fake = FakePtpTransport()
       ..reply(_okData(_jpeg)) // 0x920F FHD(裸)
@@ -522,8 +660,7 @@ void main() {
     expect(fake.requests.length, 2);
   });
 
-  test('preview:NEF 0x920F 拒(0xA00F 无 FHD 数据)→ 回落 GetThumb 小图',
-      () async {
+  test('preview:NEF 0x920F 拒(0xA00F 无 FHD 数据)→ 回落 GetThumb 小图', () async {
     final fake = FakePtpTransport()
       ..reply(PtpResult(
           responseCode: NikonResponseCode.noFullHdPresent)) // 0x920F 拒
@@ -532,17 +669,17 @@ void main() {
     final cache = ThumbnailCache(
         session: PtpSession(transport: fake), gallery: FakeGallerySaver());
 
-    final path =
-        await cache.pathFor(_entry(0x12, name: 'DSC_0001.NEF'),
-            ThumbSource.preview);
+    final path = await cache.pathFor(
+        _entry(0x12, name: 'DSC_0001.NEF'), ThumbSource.preview);
     expect(File(path).existsSync(), isTrue);
-    expect(fake.requests.map((r) => r.opcode),
-        [NikonOperationCode.getFhdPicture, PtpOperationCode.getThumb,
-         PtpOperationCode.getPartialObject]);
+    expect(fake.requests.map((r) => r.opcode), [
+      NikonOperationCode.getFhdPicture,
+      PtpOperationCode.getThumb,
+      PtpOperationCode.getPartialObject
+    ]);
   });
 
-  test('preview:JPG 高清席位 —— 0x90C4 小图先显,warm 整档解码换高清',
-      () async {
+  test('preview:JPG 高清席位 —— 0x90C4 小图先显,warm 整档解码换高清', () async {
     final fake = FakePtpTransport()
       ..reply(_okData(_jpeg)) // 小图 0x90C4(裸)
       ..reply(_okData(_jpgHead(1))); // 头读(横拍不注入)
@@ -574,8 +711,7 @@ void main() {
     expect(again, isNot(small));
   });
 
-  test('preview:NEF 无解码器平台(Android/ohos)→ 只有小图席位',
-      () async {
+  test('preview:NEF 无解码器平台(Android/ohos)→ 只有小图席位', () async {
     final fake = FakePtpTransport()
       ..reply(_okData(_jpeg))
       ..reply(_okData(_tiffHead(6)));
@@ -594,8 +730,7 @@ void main() {
     expect(fake.requests.length, 2);
   });
 
-  test('preview:NEF warm 下载/解码失败 → 小图保留无事件,本会话不重试',
-      () async {
+  test('preview:NEF warm 下载/解码失败 → 小图保留无事件,本会话不重试', () async {
     for (final (which, downloader, decoder) in [
       ('下载失败', _FakeDownloader()..failNext = true, _FakeRawDecoder()),
       ('解码失败', _FakeDownloader(), _FakeRawDecoder()..fail = true),
@@ -625,8 +760,7 @@ void main() {
     }
   });
 
-  test('warmPreview 单槽排队:在途不顶,排队只留最新(快速翻页只暖停留页)',
-      () async {
+  test('warmPreview 单槽排队:在途不顶,排队只留最新(快速翻页只暖停留页)', () async {
     final gallery = FakeGallerySaver();
     final gate = Completer<void>();
     final downloader = _FakeDownloader()..gate = gate;
@@ -670,8 +804,7 @@ void main() {
 
   // ── 格式清空闸(2026-10-09:方向注入上线,旧缓存一次性重建)──
 
-  test('格式清空闸:旧版本缓存(未注入方向)一次性清,不再命中旧档',
-      () async {
+  test('格式清空闸:旧版本缓存(未注入方向)一次性清,不再命中旧档', () async {
     final gallery = FakeGallerySaver();
     final entry = _entry(0x12);
     // 旧版本写的同内容键缓存(裸、无注入)—— 升级前的浏览留存
@@ -681,8 +814,8 @@ void main() {
     final fake = FakePtpTransport()
       ..reply(_okData(_jpeg))
       ..reply(_okData(_jpgHead(8))); // 竖拍:注入 8
-    final cache = ThumbnailCache(
-        session: PtpSession(transport: fake), gallery: gallery);
+    final cache =
+        ThumbnailCache(session: PtpSession(transport: fake), gallery: gallery);
 
     final path = await cache.pathFor(entry, ThumbSource.grid);
     expect(jpegExifOrientation(File(path).readAsBytesSync()), 8); // 新档带注入

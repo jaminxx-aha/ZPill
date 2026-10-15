@@ -238,6 +238,7 @@ final class PtpSession {
     }
     _sessionOpen = true;
     _remoteModeActive = false; // 新链新账:旧链的 remote 模式持有态不带来
+    _largeThumbDegraded = false; // 新链新账:0x90C4 重新探测
     connectLadder.clear(); // 一连接一账:新连接的梯从零记
   }
 
@@ -245,6 +246,7 @@ final class PtpSession {
   /// 设备级断开由连接层调 transport.close()。
   Future<void> close() async {
     _remoteModeActive = false; // 链将亡:remote 持有态一律作废(含未开会话的旁路持有)
+    _largeThumbDegraded = false; // 链将亡:0x90C4 降级态作废,新链重探
     if (!_sessionOpen) return;
     _sessionOpen = false;
     await _serialized(() async {
@@ -347,7 +349,9 @@ final class PtpSession {
           PtpRequest(opcode: PtpOperationCode.getThumb, params: [handle]),
         ));
     _ensureOk(result, PtpOperationCode.getThumb);
-    return _sniffJpegStart(result.data ?? Uint8List(0));
+    final data = result.data ?? Uint8List(0);
+    // 找不到 SOI 原样返回(旧机身怪布局防御):交上层解码器报错占位。
+    return _sniffJpegStart(data) ?? data;
   }
 
   /// GetPartialObject(0x101B):从 [offset] 起最多 [maxBytes] 字节,
@@ -366,13 +370,23 @@ final class PtpSession {
     return result.data ?? Uint8List(0);
   }
 
-  /// Nikon GetLargeThumb(0x90C4):大图预览 JPEG(NEF 也能看)。
-  /// 相机不支持时抛 [UnsupportedError](上层回落 GetThumb 放大)。
-  /// [force] 跳过能力检查直发 —— **生产路径**(缩略图缓存预览取大图
-  /// 即 force):无线 STA 的 operationsSupported 是假门(9 op 小表常态
+  /// Nikon GetLargeThumb(0x90C4):高清缩略 JPEG(N-link 口径约 1024px,
+  /// 单张数百 KB)。相机不支持时抛 [UnsupportedError](上层回落
+  /// GetThumb)。
+  /// [force] 跳过能力检查直发 —— **生产路径**(缩略图缓存取大图即
+  /// force):无线 STA 的 operationsSupported 是假门(9 op 小表常态
   /// 人设,在册校验会拒掉 0x90C4,直发相机却正常回 JPEG —— 2026-10-01
-  /// 真机诊断⑥实证;见 memory zf-wifi-mode-gate「勿按表拒连」)。相机
-  /// 真不支持时回错误码,调用方按 [PtpResponseException] 回落。
+  /// 真机诊断⑥实证;见 memory zf-wifi-mode-gate「勿按表拒连」)。
+  ///
+  /// 响应字节先做 JPEG SOI 嗅探:非 FFD8 开头时在前 512B 内剥头找
+  /// SOI(防御「头 + JPEG」形态);整段无 SOI = 非 JPEG 载荷(如 Zf
+  /// 对 NEF 回 320×212 压缩条带,TODO §同日续五定案)→ 视为不支持抛
+  /// [UnsupportedError],垃圾字节不进 .jpg 缓存。
+  ///
+  /// 会话级降级([largeThumbDegraded]):真发一次失败(错误应答/非
+  /// SOI/超时断链)即置位,本会话后续调用秒拒 [UnsupportedError] 不再
+  /// 逐张浪费 RTT;[open()] 开新会话复位重探(同 [_remoteModeActive]
+  /// 「新链新账」纪律)。码表不在册(假门)不置位 —— 真发证据才算数。
   Future<Uint8List> getLargeThumb(int handle, {bool force = false}) async {
     if (!force) {
       // 能力检查走缓存的 GetDeviceInfo(命中时无锁,不会与本方法的锁嵌套)。
@@ -381,18 +395,43 @@ final class PtpSession {
         throw UnsupportedError('相机不支持 Nikon GetLargeThumb(0x90C4)');
       }
     }
-    final result = await _serialized(() => transport.execute(
-          PtpRequest(
-              opcode: NikonOperationCode.getLargeThumb, params: [handle]),
-        ));
-    _ensureOk(result, NikonOperationCode.getLargeThumb);
-    return _sniffJpegStart(result.data ?? Uint8List(0));
+    if (_largeThumbDegraded) {
+      throw UnsupportedError('Nikon GetLargeThumb(0x90C4) 本会话已降级');
+    }
+    final PtpResult result;
+    try {
+      result = await _serialized(() => transport.execute(
+            PtpRequest(
+                opcode: NikonOperationCode.getLargeThumb, params: [handle]),
+          ));
+      _ensureOk(result, NikonOperationCode.getLargeThumb);
+    } on Exception {
+      // 错误应答(PtpResponseException)/ 超时(USB 单事务
+      // TimeoutException、PTP-IP 看门狗断链 PtpLinkException):一次
+      // 失败即降级本会话;原异常上抛(诊断要真相),调用方回落 GetThumb。
+      _largeThumbDegraded = true;
+      rethrow;
+    }
+    final data = result.data ?? Uint8List(0);
+    final jpeg = _sniffJpegStart(data);
+    if (jpeg == null) {
+      _largeThumbDegraded = true;
+      throw UnsupportedError(
+          'Nikon GetLargeThumb(0x90C4) 返回非 JPEG 数据(${data.length}B)');
+    }
+    return jpeg;
   }
 
+  /// 0x90C4 会话级降级旗标:本会话内 GetLargeThumb 已被真发证实不可用
+  /// (错误应答/非 SOI/超时),缩略管线据此直走 0x100A。[open()] /
+  /// [close()] 复位 —— 新连接重新探测。
+  bool _largeThumbDegraded = false;
+  bool get largeThumbDegraded => _largeThumbDegraded;
+
   /// JPEG SOI(FFD8)嗅探:数据非 FFD8 开头时在前 512B 内找 SOI 并剥头
-  /// (Nikon 0x90C4 数据布局真机验证中,防御性处理「头 + JPEG」形态;
-  /// 找不到则原样返回,交由上层解码器报错占位)。
-  static Uint8List _sniffJpegStart(Uint8List data) {
+  /// (Nikon 0x90C4 数据布局真机验证中,防御性处理「头 + JPEG」形态);
+  /// 找不到返回 null = 非 JPEG 载荷(0x90C4 对 NEF 回压缩条带的形态)。
+  static Uint8List? _sniffJpegStart(Uint8List data) {
     if (data.length >= 2 && data[0] == 0xFF && data[1] == 0xD8) {
       return data;
     }
@@ -401,7 +440,7 @@ final class PtpSession {
         return Uint8List.sublistView(data, i);
       }
     }
-    return data;
+    return null;
   }
 
   /// 事件流 = 异步通道(USB interrupt / PTP-IP 事件 socket)+ 轮询注入
@@ -409,8 +448,8 @@ final class PtpSession {
   /// 事件(ObjectAdded/CaptureComplete/0x4006)可能只走 GetEventEx
   /// 0x941C 轮询通道(OpenZCine/libgphoto2 实测口径),两路并存、
   /// 消费端幂等。
-  late final Stream<PtpEvent> _events = _mergedStreams(
-      [transport.events, _eventInjections.stream]);
+  late final Stream<PtpEvent> _events =
+      _mergedStreams([transport.events, _eventInjections.stream]);
   final _eventInjections = StreamController<PtpEvent>.broadcast();
 
   Stream<PtpEvent> get events => _events;
@@ -430,11 +469,9 @@ final class PtpSession {
     ctrl = StreamController<T>.broadcast(
       onListen: () {
         for (final s in streams) {
-          subs.add(s.listen(ctrl.add,
-              onError: ctrl.addError,
-              onDone: () {
-                if (--pending == 0) ctrl.close();
-              }));
+          subs.add(s.listen(ctrl.add, onError: ctrl.addError, onDone: () {
+            if (--pending == 0) ctrl.close();
+          }));
         }
       },
       onCancel: () {
@@ -477,8 +514,8 @@ final class PtpSession {
               (data[offset + p * 4 + 3] << 24),
       ];
       offset += paramCount * 4;
-      events.add(PtpEvent(
-          code: code, transactionId: 0xFFFFFFFF, params: params));
+      events
+          .add(PtpEvent(code: code, transactionId: 0xFFFFFFFF, params: params));
     }
     return events;
   }
@@ -493,8 +530,8 @@ final class PtpSession {
   Future<String?> getPairingCode() async {
     late final PtpResult result;
     try {
-      result = await _serialized(() => transport.execute(const PtpRequest(
-          opcode: NikonOperationCode.getPtpIpPairingCode)));
+      result = await _serialized(() => transport.execute(
+          const PtpRequest(opcode: NikonOperationCode.getPtpIpPairingCode)));
       _ensureOk(result, NikonOperationCode.getPtpIpPairingCode);
     } on PtpResponseException {
       return null;
@@ -839,7 +876,8 @@ final class PtpSession {
           const PtpRequest(opcode: NikonOperationCode.getLiveViewImage),
         ));
     _ensureOk(result, NikonOperationCode.getLiveViewImage);
-    return _sniffJpegStart(result.data ?? Uint8List(0));
+    final data = result.data ?? Uint8List(0);
+    return _sniffJpegStart(data) ?? data;
   }
 
   /// 同取帧,但**不剥头**返回原始 LiveViewObject —— display-info 头
@@ -974,7 +1012,11 @@ final class PtpSession {
       final h = int.tryParse(s.substring(9, 11));
       final mi = int.tryParse(s.substring(11, 13));
       final sec = int.tryParse(s.substring(13, 15));
-      if (y == null || mo == null || d == null || h == null || mi == null ||
+      if (y == null ||
+          mo == null ||
+          d == null ||
+          h == null ||
+          mi == null ||
           sec == null) {
         return null;
       }
@@ -988,7 +1030,8 @@ final class PtpSession {
   /// OpenZCine 口径:**只在漂移超过阈值时写**(事务延迟 + 线格式 1 秒
   /// 粒度让小修正抖动;5 秒高于任何监看用途又必抓到抽屉里放一年的
   /// 机身),且不await影响连接主流程(尽力而为)。
-  Future<void> syncCameraClock({DateTime? now, Duration threshold = const Duration(seconds: 5)}) async {
+  Future<void> syncCameraClock(
+      {DateTime? now, Duration threshold = const Duration(seconds: 5)}) async {
     final phone = (now ?? DateTime.now());
     final camera = await getCameraClock();
     if (camera == null) return;
@@ -1036,8 +1079,8 @@ final class PtpSession {
   /// 半按)。需取景开启(0xA00B notLiveView = 未开取景的应答形态);
   /// 未合焦回 0xA002 OutOfFocus,状态不允许回 0xA004。
   Future<void> afDrive() async {
-    final result = await _serialized(() => transport.execute(
-          const PtpRequest(opcode: NikonOperationCode.afDrive)));
+    final result = await _serialized(() => transport
+        .execute(const PtpRequest(opcode: NikonOperationCode.afDrive)));
     _ensureOk(result, NikonOperationCode.afDrive);
   }
 
@@ -1045,8 +1088,8 @@ final class PtpSession {
   /// 自动对焦。注意:PtpSession 事务全局串行,afDrive 的响应未回前本
   /// 操作只能排队 —— 能否真的打断长对焦待真机核对,先入库备用。
   Future<void> afDriveCancel() async {
-    final result = await _serialized(() => transport.execute(
-          const PtpRequest(opcode: NikonOperationCode.afDriveCancel)));
+    final result = await _serialized(() => transport
+        .execute(const PtpRequest(opcode: NikonOperationCode.afDriveCancel)));
     _ensureOk(result, NikonOperationCode.afDriveCancel);
   }
 
@@ -1082,7 +1125,9 @@ final class PtpSession {
               opcode: NikonOperationCode.getFhdPicture, params: [handle]),
         ));
     _ensureOk(result, NikonOperationCode.getFhdPicture);
-    return _sniffJpegStart(result.data ?? Uint8List(0));
+    final data = result.data ?? Uint8List(0);
+    // 与 GetThumb 同款宽收:无 SOI 原样返回,交上层解码器报错占位。
+    return _sniffJpegStart(data) ?? data;
   }
 
   /// ChangeAELock(0x9426,官方 §6.2.4.5):AE/AWB 锁开关。
@@ -1175,8 +1220,8 @@ final class PtpSession {
     var name = '';
     if (data.length >= 64) {
       final end = data.indexWhere((b) => b == 0, 0);
-      name = String.fromCharCodes(
-          data.sublist(0, end < 0 || end > 63 ? 63 : end));
+      name =
+          String.fromCharCodes(data.sublist(0, end < 0 || end > 63 ? 63 : end));
       return (name: name, data: Uint8List.sublistView(data, 64));
     }
     return (name: name, data: data);
@@ -1280,7 +1325,8 @@ final class PtpSession {
         handle: objectHandle,
         code: code,
         dataType: type,
-        rawValue: Uint8List.sublistView(data, valueStart, valueStart + consumed),
+        rawValue:
+            Uint8List.sublistView(data, valueStart, valueStart + consumed),
         value: value,
       ));
     }

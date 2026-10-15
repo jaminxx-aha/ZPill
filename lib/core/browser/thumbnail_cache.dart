@@ -1,11 +1,14 @@
 /// 缩略图缓存:GetThumb / Nikon GetLargeThumb → 落盘 + LRU 容量控制。
 ///
-/// 两档来源([ThumbSource]):grid = 网格小图(0x100A,小而快),
+/// 两档来源([ThumbSource]):grid = 网格小图(JPG = Nikon 0x90C4 高清
+/// ~1024px 优先,失败/不支持回落 0x100A 小图 —— N-link 手法,网格
+/// 自动受益;NEF/视频 = 0x100A,0x90C4 对 NEF 回压缩条带非 JPEG),
 /// preview = 大图预览(两席位):
 /// - 小图席位(先显,即时):JPG = Nikon 0x90C4(实测 640×424,
 ///   **直发不查能力表** —— 无线 STA 的 op 小表是假门,查表会把大图
 ///   无谓拒成 160×120 回落,2026-10-09 装机复报「点进去很小」根因;
-///   相机拒绝时回落 GetThumb);NEF = 0x920F FHD JPEG 中档直发
+///   失败回落 GetThumb —— 2026-10-15 起网格档 JPG 同路,并加会话级
+///   降级旗标防逐张浪费 RTT);NEF = 0x920F FHD JPEG 中档直发
 ///   (2026-10-13 接线:档内无大 JPEG 的旧定案被官方 FHD 通道推翻,
 ///   相机拒 0xA00F 等回落 GetThumb)。
 /// - 高清席位([warmPreview],查看器页 settle 触发):整档下载 →
@@ -35,7 +38,8 @@ import '../../platform/gallery_saver.dart';
 import '../../platform/raw_decoder.dart';
 import '../media/jpeg_orientation.dart';
 import '../media/watermark.dart' show ExifCardData, exifCardFromHead;
-import '../ptpip/object_format.dart' show ObjectKind;
+import '../ptpip/object_format.dart' show ObjectFormatCode, ObjectKind;
+import '../ptpip/transport.dart' show PtpLinkException;
 import '../ptp/ptp_session.dart';
 import '../transfer/object_downloader.dart';
 import 'object_entry.dart';
@@ -181,23 +185,30 @@ class ThumbnailCache {
   Future<String> pathFor(ObjectEntry entry, ThumbSource source) {
     final key = _keyFor(entry);
     final lru = _lruFor(source);
+    // 命中即刷到 LRU 尾部(最新端)。
+    _CachedThumb? refresh(String k) {
+      final c = lru[k];
+      if (c == null) return null;
+      lru.remove(k);
+      lru[k] = c;
+      return c;
+    }
+
     // 高清席位优先(预览档):升级档一旦就位,同会话重开直接给高清
     // (小图条目还在索引里,普通命中会永远回小图;warmPreview 又因
     // 「本会话已试」不再发事件)。
     if (source == ThumbSource.preview) {
-      final hq = lru['hq_$key'];
-      if (hq != null) {
-        lru.remove('hq_$key');
-        lru['hq_$key'] = hq;
-        return Future.value(hq.path);
-      }
+      final hq = refresh('hq_$key');
+      if (hq != null) return Future.value(hq.path);
     }
-    final cached = lru[key];
-    if (cached != null) {
-      lru.remove(key);
-      lru[key] = cached;
-      return Future.value(cached.path);
+    // JPG 的 0x90C4 高清档(lt_ 键)先于小图档:本会话已取到高清的
+    // 直接给(见 [_fetchJpg] 的双键设计)。
+    if (_isJpgObject(entry)) {
+      final lt = refresh('lt_$key');
+      if (lt != null) return Future.value(lt.path);
     }
+    final cached = refresh(key);
+    if (cached != null) return Future.value(cached.path);
     final pendingKey = (source, key);
     final inFlight = _pending[pendingKey];
     if (inFlight != null) {
@@ -261,6 +272,17 @@ class ThumbnailCache {
         return hqPath;
       }
     }
+    // JPG(非 RAW 照片):0x90C4 高清档优先,双键分流见 [_fetchJpg];
+    // NEF/视频不试 0x90C4 —— 对 NEF 回 320×212 压缩条带非 JPEG(TODO
+    // §同日续五定案),单个失败还会置会话降级旗标连累 JPG 的高清。
+    if (_isJpgObject(entry)) {
+      try {
+        return await _fetchJpg(entry, source, key, dir);
+      } catch (e) {
+        _logFetchError(entry, source, e);
+        rethrow;
+      }
+    }
     final path = '$dir/$key.jpg';
     final file = File(path);
     if (await file.exists()) {
@@ -275,10 +297,7 @@ class ThumbnailCache {
           ? await _orientThumb(entry, await _session.getThumb(entry.handle))
           : await _fetchPreview(entry);
     } catch (e) {
-      // 真机诊断辅助:缩略图拉取失败的原因进 hilog(不改变行为,
-      // 异常原样上抛,UI 显示占位)。
-      debugPrint('[缩略图] $source ${entry.name}'
-          '(0x${entry.handle.toRadixString(16)}) 失败: $e');
+      _logFetchError(entry, source, e);
       rethrow;
     }
     await file.writeAsBytes(data, flush: true);
@@ -287,14 +306,94 @@ class ThumbnailCache {
     return path;
   }
 
-  /// 大图预览的**小图席位**(先显,即时):JPG = Nikon 0x90C4 **直发
-  /// 不查能力表**(无线 STA 的 op 小表是假门,查表会把大图无谓拒成
-  /// 160×120 回落);相机拒绝(错误码)回落标准 GetThumb。NEF =
-  /// 0x920F FHD JPEG 中档直发(官方 §6.2.3.7:P1=ObjectHandle,RAW
+  /// 真机诊断辅助:缩略图拉取失败的原因进 hilog(不改变行为,异常
+  /// 原样上抛,UI 显示占位)。
+  void _logFetchError(ObjectEntry entry, ThumbSource source, Object e) {
+    debugPrint('[缩略图] $source ${entry.name}'
+        '(0x${entry.handle.toRadixString(16)}) 失败: $e');
+  }
+
+  /// JPG 取数(网格档与大图预览小图席位共用):Nikon 0x90C4 高清缩略
+  /// (~1024px)优先,失败(错误应答/非 SOI/超时)回落标准 GetThumb
+  /// (0x100A,Zf 160×120)。会话级降级在 [PtpSession]:首个失败即置
+  /// 旗标,本会话后续 JPG 直走小图不逐张浪费 RTT。
+  ///
+  /// 缓存键分尺寸档:高清 = `lt_<内容键>`、小图 = `<内容键>`(旧制)—
+  /// 旧版小图缓存不挡高清重取;降级会话的小图也不冒充高清档,来日
+  /// 支持的会话照常升级(「能拿到高清就高清」跨会话成立)。
+  Future<String> _fetchJpg(
+      ObjectEntry entry, ThumbSource source, String key, String dir) async {
+    // ① 高清档:磁盘命中(前会话产物)即用 —— 内容键做主,与相机无关
+    final ltKey = 'lt_$key';
+    final ltPath = '$dir/$ltKey.jpg';
+    final ltFile = File(ltPath);
+    if (await ltFile.exists()) {
+      _remember(source, ltKey, ltPath, await ltFile.length());
+      await _evictIfNeeded(source);
+      return ltPath;
+    }
+    // ② 未降级:试 0x90C4(已降级时 session 层也会秒拒,这里直查免
+    //    一次异常开销)
+    if (!_session.largeThumbDegraded) {
+      try {
+        final data = await _orientThumb(
+            entry, await _session.getLargeThumb(entry.handle, force: true));
+        await ltFile.writeAsBytes(data, flush: true);
+        _remember(source, ltKey, ltPath, data.length);
+        await _evictIfNeeded(source);
+        // 高清档就位,同键旧小图档成了不进 LRU 账的孤儿档:顺手清掉
+        _lruFor(source).remove(key);
+        try {
+          await File('$dir/$key.jpg').delete();
+        } on FileSystemException {
+          // 本无此档/删失败:不挡
+        }
+        return ltPath;
+      } on UnsupportedError {
+        // 码表不在册 / 非 SOI 载荷 / 本会话已降级:回落小图
+      } on PtpResponseException {
+        // 相机拒绝:回落小图
+      } on TimeoutException {
+        // USB 单事务超时(链路未毒化):回落小图
+      } on PtpLinkException {
+        // PTP-IP 看门狗超时/断链:回落小图(链已死时 getThumb 同败,
+        // 占位由上层兜)
+      }
+    }
+    // ③ 小图档:磁盘命中(旧版/降级会话缓存)即用,键保持旧制
+    final path = '$dir/$key.jpg';
+    final file = File(path);
+    if (await file.exists()) {
+      _remember(source, key, path, await file.length());
+      await _evictIfNeeded(source);
+      return path;
+    }
+    final data =
+        await _orientThumb(entry, await _session.getThumb(entry.handle));
+    await file.writeAsBytes(data, flush: true);
+    _remember(source, key, path, data.length);
+    await _evictIfNeeded(source);
+    return path;
+  }
+
+  /// JPG 对象判定(0x90C4 高清缩略的目标):照片类且非 RAW(NEF/NRW
+  /// 的 0x90C4 是压缩条带);格式码已知时仅认 JPEG 族(0x3801/0x3808)
+  /// —— 单个怪对象失败会拖垮整会话降级旗标,不值得为他格式冒险。
+  static bool _isJpgObject(ObjectEntry entry) {
+    if (entry.kind != ObjectKind.image || isRawFile(entry)) return false;
+    final fmt = entry.formatCode;
+    return fmt == null ||
+        fmt == ObjectFormatCode.exifJpeg ||
+        fmt == ObjectFormatCode.jfif;
+  }
+
+  /// 大图预览的**小图席位**取数(NEF 与视频;JPG 已分流 [_fetchJpg]):
+  /// NEF = 0x920F FHD JPEG 中档直发(官方 §6.2.3.7:P1=ObjectHandle,RAW
   /// 对象合法;0xA00F 无 FHD 数据回落 GetThumb 小图)—— 不查 op 能力表
-  /// (0x90C4 无线假门同款教训),真机核对:0x920F 对卡上 NEF 的在册性。
-  /// 小图撑满是糊的 —— 高清席位见 [warmPreview](整档下载 + 原生
-  /// 解码,先显后换)。
+  /// (0x90C4 无线假门同款教训)。视频/其他 = GetThumb 直取:不试
+  /// 0x90C4(海报无高清缩略语义,单对象失败还会置会话降级旗标连累
+  /// JPG)。小图撑满是糊的 —— 高清席位见 [warmPreview](整档下载 +
+  /// 原生解码,先显后换)。
   Future<Uint8List> _fetchPreview(ObjectEntry entry) async {
     if (isRawFile(entry)) {
       try {
@@ -304,12 +403,7 @@ class ThumbnailCache {
         return _orientThumb(entry, await _session.getThumb(entry.handle));
       }
     }
-    try {
-      return await _orientThumb(
-          entry, await _session.getLargeThumb(entry.handle, force: true));
-    } on PtpResponseException {
-      return _orientThumb(entry, await _session.getThumb(entry.handle));
-    }
+    return _orientThumb(entry, await _session.getThumb(entry.handle));
   }
 
   /// 缩略方向规整:相机回的缩略是裸 JPEG(竖拍像素横置、无 EXIF ——
@@ -400,8 +494,7 @@ class ThumbnailCache {
   /// 内容键:文件名(去非法字符)+ 字节数。同名同大小的两张照片
   /// 即便存在也字节级几乎不可能同内容,碰撞风险可忽略。
   static String _keyFor(ObjectEntry entry) {
-    final safe =
-        entry.name.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
+    final safe = entry.name.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
     return '${safe}_${entry.sizeInBytes}';
   }
 }
