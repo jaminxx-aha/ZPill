@@ -660,6 +660,8 @@ final class RemoteController extends ChangeNotifier {
   /// 持有态起景为真。接管态机身停「已连接到计算机」屏 + 拨盘锁定,
   /// 解除即还(影控台同款);USB 不走此路(连接流已开闩,失败另有因)。
   /// 重试仍失败落既有占位(取景开启失败带梯),不吞错。
+  /// 同日深夜起降为**兜底**:AP 连接沿已主动接管([_onConnectedChain]),
+  /// 落到本引导 = 连接沿开闩被拒/总闸关,用户手动补一拍。
   Future<void> enableTakeoverAndRetryLiveView() async {
     if (!await enableTakeover()) return;
     await toggleLiveView();
@@ -1865,6 +1867,15 @@ final class RemoteController extends ChangeNotifier {
   /// 录像被 liveViewActive 门拦住,唯退出拍摄页重进才恢复。由持有
   /// _linkUp 的本控制器自驱,顺序不再寄望装配序。
   Future<void> _onConnectedChain() async {
+    // AP 直连主动接管(2026-10-15 用户定案,取代「失败后引导」两步流):
+    // 点连接 = 接管同意 —— 连上先持 remote 模式(机身停「已连接到计算
+    // 机」屏 + 拨盘锁定,连接页 AP 卡有提示),0x9201 取景门随之开,
+    // 连接即取景一步到位。尽力而为:被拒不拦链,落取景失败占位的引导
+    // 兜底;总闸关不接管(取景不开就不锁机身);重连沿同样重进(防御
+    // 性解除先行,会话串行门保序 0→1)。
+    if (apMode && autoLiveViewEnabled) {
+      await enableTakeover();
+    }
     // 模式读打头(2026-10-11 真机反馈:视频档进页要等整条刷参链跑完
     // 才跟到视频档,几秒观感延迟)—— 单请求先行,再起景、刷参。
     // triggerRefresh=false:链尾 refreshParams 统一刷,这里补刷即双刷。

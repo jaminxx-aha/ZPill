@@ -664,6 +664,10 @@ void main() {
       await tester.pump();
       expect(find.text('AP 连接(相机当热点)'), findsOneWidget);
       expect(controller.ipController.text, kDefaultCameraIp);
+      // 接管预告(2026-10-15 主动接管定案):连接动作即锁盘,卡上如实告知
+      expect(
+          find.textContaining('点「AP 连接」后 app 将自动接管相机'),
+          findsOneWidget);
 
       // 预填默认 IP:直接透传
       await tester.tap(find.widgetWithText(FilledButton, 'AP 连接'));
