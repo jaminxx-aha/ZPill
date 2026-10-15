@@ -474,9 +474,10 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea> {
                   ),
                 ),
               ),
-            // 波形示波器:与直方图同锚(左下),双开时上移让位
-            // (直方图盒 64 + 贴边 8 + 间隙 4)。
-            if (widget.toggles.waveform)
+            // 示波器族(波形/RGB Parade/矢量/红绿灯四选一):与直方图
+            // 同锚(左下),双开时上移让位(直方图盒 64 + 贴边 8 + 间隙 4;
+            // 红绿灯盒 58 较矮,同让位口径从简,不差那 4px)。
+            if (widget.toggles.scope != ScopeKind.off)
               Align(
                 alignment: Alignment.bottomLeft,
                 child: Padding(
@@ -489,8 +490,16 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea> {
                           (widget.toggles.histogram ? 76 : 0)),
                   child: ValueListenableBuilder(
                     valueListenable: controller.analyzer.analysis,
-                    builder: (context, FrameAnalysis? analysis, _) =>
-                        WaveformView(analysis: analysis),
+                    builder: (context, FrameAnalysis? analysis, _) => ScopeView(
+                      kind: widget.toggles.scope,
+                      analysis: analysis,
+                      nLogScale: widget.toggles.scopeNLog,
+                      bandLabels: [
+                        context.t('上部'),
+                        context.t('中部'),
+                        context.t('下部'),
+                      ],
+                    ),
                   ),
                 ),
               ),

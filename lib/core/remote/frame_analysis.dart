@@ -1,9 +1,11 @@
 /// 监看辅助的帧分析(TODO §二 Live View 监看辅助):直方图 + 过曝斑马纹
-/// 掩码 + 对焦峰值,从 Live View JPEG 帧解码降采样计算。
+/// 掩码 + 对焦峰值 + 示波器族(波形/RGB Parade/矢量/红绿灯),从 Live
+/// View JPEG 帧解码降采样计算。
 ///
 /// 纯 Dart(image 包解码),链路/UI 无关可测;调用方按帧率抽帧(全帧
 /// 分析无必要,CPU 也扛不住 —— 见 [FrameAnalyzer])。峰值判定引擎
-/// (双尺度比值 = 默认 / 经典单尺度梯度)见 peaking_engines.dart。
+/// (双尺度比值 = 默认 / 经典单尺度梯度)见 peaking_engines.dart;
+/// 示波器族的数学与派生见 scopes.dart。
 library;
 
 import 'dart:typed_data';
@@ -11,6 +13,7 @@ import 'dart:typed_data';
 import 'package:image/image.dart' as img;
 
 import 'peaking_engines.dart';
+import 'scopes.dart';
 
 final class FrameAnalysis {
   const FrameAnalysis({
@@ -27,6 +30,10 @@ final class FrameAnalysis {
     required this.peakingRows,
     required this.waveform,
     required this.waveformCols,
+    required this.parade,
+    required this.vector,
+    required this.vectorN,
+    required this.trafficBandCounts,
   });
 
   final int width;
@@ -62,6 +69,29 @@ final class FrameAnalysis {
 
   /// 波形列数(与画面等宽分列;0 = 无波形数据)。
   final int waveformCols;
+
+  /// RGB Parade:3 通道 × waveformCols × 直方图桶数(通道 R=0/G=1/B=2
+  /// 最外,通道内与 [waveform] 同构),值 = 该列该通道该亮度桶采样数
+  /// —— 三联波形,白平衡偏色/单通道削顶(彩色斑马纹)一眼可读。
+  final Uint32List parade;
+
+  /// 矢量示波器:vectorN × vectorN 的 Cb/Cr 密度网格(行主序,行 0 =
+  /// Cb 正端/蓝),值 = 落格采样数 —— 角度 = 色相、半径 = 饱和度;
+  /// 数学与 75% 目标框见 scopes.dart(与采样同源自洽)。
+  final Uint32List vector;
+
+  /// 矢量网格边长。
+  final int vectorN;
+
+  /// 红绿灯三横带计数:带 0(上)/1(中)/2(下)× [欠, 合, 过]
+  /// (欠 < 16 / 过 ≥ 250,阈值见 scopes.dart),行主序;派生读数走
+  /// [trafficLights]。
+  final Uint32List trafficBandCounts;
+
+  /// 三横带红绿灯读数(纯派生,阈值判定见 scopes.dart 的
+  /// [trafficLightsOf])。
+  List<ScopeTrafficBand> get trafficLights =>
+      trafficLightsOf(trafficBandCounts);
 
   /// 波形亮度桶数(与直方图同一分桶,采样环共用一次 bin 计算)。
   int get waveformBins => lumaHistogram.length;
@@ -143,12 +173,14 @@ final class FrameAnalysis {
 /// 解码 JPEG 帧并分析。解码失败/空帧返回 null(调用方保持上次结果)。
 ///
 /// 采样步长 = 一个掩码格的像素宽,保证每格至少被扫到;直方图/斑马纹/
-/// 伪色(格均值 → 亮度带)共用同一批采样;对焦峰值用更细的
-/// [peakingCols]×[peakingRows] 均值网格,引擎 [peakingEngine] 二选一
-/// (缺省双尺度比值,散景/失焦不亮;经典 = 相邻格均值差,梯度阈值
-/// [peakingThreshold] 仅经典引擎读)。双尺度参数(比值阈值 + 噪声
-/// 门槛)缺省 = 灵敏度中档,档位映射见 peakingDualScaleParamsOf。
-/// luma = 0.299R + 0.587G + 0.114B(Rec.601)。
+/// 伪色(格均值 → 亮度带)/波形(列-亮度桶)/Parade(三通道列-亮度桶)/
+/// 矢量(Cb/Cr 密度格)/红绿灯(横带欠/合/过计数)共用同一批采样;
+/// 对焦峰值用更细的 [peakingCols]×[peakingRows] 均值网格,引擎
+/// [peakingEngine] 二选一(缺省双尺度比值,散景/失焦不亮;经典 =
+/// 相邻格均值差,梯度阈值 [peakingThreshold] 仅经典引擎读)。双尺度
+/// 参数(比值阈值 + 噪声门槛)缺省 = 灵敏度中档,档位映射见
+/// peakingDualScaleParamsOf。luma = 0.299R + 0.587G + 0.114B
+/// (Rec.601);Cb/Cr 同族(scopes.dart 的 rec601Cb/rec601Cr)。
 FrameAnalysis? analyzeJpegFrame(
   Uint8List jpeg, {
   int histogramBins = 64,
@@ -162,6 +194,7 @@ FrameAnalysis? analyzeJpegFrame(
   double peakingRatioThreshold = peakingRatioThresholdMedium,
   int peakingNoiseGate = peakingNoiseGateMedium,
   int waveformCols = 64,
+  int vectorN = scopeVectorGridN,
 }) {
   // 解码器对畸形/截断字节可能抛 Error(image 包格式嗅探的越界读,
   // 实测 4B 垃圾触发 RangeError)—— 任何失败一律 null,不上抛。
@@ -176,6 +209,12 @@ FrameAnalysis? analyzeJpegFrame(
 
   final histogram = List<int>.filled(histogramBins, 0);
   final waveform = Uint32List(waveformCols * histogramBins);
+  // Parade:3 通道 × 列 × 桶(与波形同分桶,通道最外维)。
+  final parade = Uint32List(3 * waveformCols * histogramBins);
+  // 矢量:Cb/Cr 密度格(数学/目标框见 scopes.dart)。
+  final vector = Uint32List(vectorN * vectorN);
+  // 红绿灯:3 横带 × [欠, 合, 过]。
+  final trafficCounts = Uint32List(9);
   final mask = Uint8List(maskCols * maskRows);
   // 伪色:格内 luma 累加(采样数不定,最后取均值)
   final lumaSums = List<int>.filled(maskCols * maskRows, 0);
@@ -188,6 +227,7 @@ FrameAnalysis? analyzeJpegFrame(
   final peakCellW = image.width / peakingCols;
   final peakCellH = image.height / peakingRows;
   final waveCellW = image.width / waveformCols;
+  final bandCellH = image.height / 3;
   // 采样步长取两网格较细者:峰值网格(64×48)比斑马纹(32×24)细时,
   // 按粗网格采样会在峰值格间留空(空格不参与梯度 → 边缘漏检)。
   final stepX =
@@ -195,6 +235,7 @@ FrameAnalysis? analyzeJpegFrame(
   final stepY =
       (cellH < peakCellH ? cellH : peakCellH).ceil().clamp(1, image.height);
   final binScale = histogramBins / 256;
+  final paradePlane = waveformCols * histogramBins;
 
   for (var y = 0; y < image.height; y += stepY) {
     for (var x = 0; x < image.width; x += stepX) {
@@ -205,6 +246,21 @@ FrameAnalysis? analyzeJpegFrame(
       // 波形:列-亮度桶计数(bin 与直方图同一次计算,零额外遍历)。
       final wcol = (x / waveCellW).floor().clamp(0, waveformCols - 1);
       waveform[wcol * histogramBins + bin]++;
+      // Parade:三通道同分桶列-亮度密度(bin 值 = 通道码,通道间独立)。
+      final rBin = (p.r * binScale).floor().clamp(0, histogramBins - 1);
+      final gBin = (p.g * binScale).floor().clamp(0, histogramBins - 1);
+      final bBin = (p.b * binScale).floor().clamp(0, histogramBins - 1);
+      parade[wcol * histogramBins + rBin]++;
+      parade[paradePlane + wcol * histogramBins + gBin]++;
+      parade[2 * paradePlane + wcol * histogramBins + bBin]++;
+      // 矢量:Cb/Cr → 归一 → 密度格(越盘钳边)。
+      vector[vectorCellIndexOf(p.r, p.g, p.b, vectorN)]++;
+      // 红绿灯:横带(上/中/下)× 欠/合/过计数(阈值常量在 scopes)。
+      final band = (y / bandCellH).floor().clamp(0, 2);
+      trafficCounts[band * 3 +
+          (luma < scopeTrafficUnderLuma
+              ? 0
+              : luma >= scopeTrafficOverLuma ? 2 : 1)]++;
       final col = (x / cellW).floor().clamp(0, maskCols - 1);
       final row = (y / cellH).floor().clamp(0, maskRows - 1);
       final cell = row * maskCols + col;
@@ -270,5 +326,9 @@ FrameAnalysis? analyzeJpegFrame(
     peakingRows: peakingRows,
     waveform: waveform,
     waveformCols: waveformCols,
+    parade: parade,
+    vector: vector,
+    vectorN: vectorN,
+    trafficBandCounts: trafficCounts,
   );
 }

@@ -22,6 +22,7 @@ import 'package:nikon_pill/design/app_theme.dart';
 import 'package:nikon_pill/features/remote/feed_quality.dart';
 import 'package:nikon_pill/features/remote/live_design.dart';
 import 'package:nikon_pill/features/remote/live_view_overlays.dart';
+import 'package:nikon_pill/features/remote/monitor_toggles.dart';
 import 'package:nikon_pill/features/remote/remote_banner.dart';
 import 'package:nikon_pill/features/remote/remote_controller.dart';
 import 'package:nikon_pill/features/remote/remote_feed_area.dart';
@@ -1116,31 +1117,110 @@ void main() {
     expect(find.byType(ShaderFeed), findsNothing);
   });
 
-  testWidgets('波形示波器:开关同步分析器启停,小盒上屏;关闭即退场',
+  testWidgets('示波器族:芯片循环四档随小盒分派,刻度行门控,分析器启停同步',
       (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
     final conn = _FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
+    final settings = ValueNotifier(const AppSettings());
+    addTearDown(settings.dispose);
     _scriptAutoStart(transport);
-    await tester
-        .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
+    await tester.pumpWidget(MaterialApp(
+        home: RemotePage(
+            controller: controller, settingsListenable: settings)));
     await tester.pumpAndSettle();
-    expect(find.byType(WaveformView), findsNothing);
+    expect(find.byType(ScopeView), findsNothing);
 
     await tester.tap(find.byIcon(Icons.tune));
     await tester.pumpAndSettle();
-    await tester.tap(find.byIcon(Icons.stacked_line_chart)); // 波形
+
+    // 关 → 波形:分析器启用(共享帧分析),波形小盒上屏 + 刻度行现
+    await tester.tap(find.text('示波器'));
     await tester.pumpAndSettle();
     expect(controller.analyzer.enabled.value, isTrue,
-        reason: '波形共享帧分析,必须同步启用分析器,否则永远无数据');
+        reason: '示波器共享帧分析,必须同步启用分析器,否则永远无数据');
     expect(find.byType(WaveformView), findsOneWidget);
+    expect(find.text('波形'), findsOneWidget, reason: '芯片标签随档换字');
+    expect(find.text('示波器刻度'), findsOneWidget, reason: '波形档吃 Y 轴刻度');
+    expect(find.text('全幅'), findsOneWidget);
+    expect(settings.value.monitorScope, ScopeKind.waveform.index);
 
-    await tester.tap(find.byIcon(Icons.stacked_line_chart));
+    // 波形 → RGB:Parade 小盒上屏,刻度行仍在(Parade 同吃)
+    await tester.tap(find.text('波形'));
+    await tester.pumpAndSettle();
+    expect(find.byType(ParadeView), findsOneWidget);
+    expect(find.text('示波器刻度'), findsOneWidget);
+
+    // RGB → 矢量
+    await tester.tap(find.text('RGB'));
+    await tester.pumpAndSettle();
+    expect(find.byType(VectorView), findsOneWidget);
+    expect(find.text('示波器刻度'), findsNothing,
+        reason: '矢量盘无 Y 轴,刻度行收');
+
+    // 矢量 → 红绿灯
+    await tester.tap(find.text('矢量'));
+    await tester.pumpAndSettle();
+    expect(find.byType(TrafficLightsView), findsOneWidget);
+    // 带标签经 t() 注入(画布绘制,find.text 不可见,查 widget 参数)
+    expect(
+        tester
+            .widget<TrafficLightsView>(find.byType(TrafficLightsView))
+            .bandLabels,
+        const ['上部', '中部', '下部'],
+        reason: '带标签注入(可译:显示点包 t())');
+
+    // 红绿灯 → 关:分析器停(无其他监看开关在开),小盒退场
+    await tester.tap(find.text('红绿灯'));
     await tester.pumpAndSettle();
     expect(controller.analyzer.enabled.value, isFalse);
-    expect(find.byType(WaveformView), findsNothing);
+    expect(find.byType(ScopeView), findsNothing);
+    expect(find.text('示波器'), findsOneWidget, reason: '芯片回到关档标签');
+    expect(settings.value.monitorScope, ScopeKind.off.index);
+  });
+
+  testWidgets('示波器 N-Log 刻度:波形档双芯片落盘 + 小盒换刻度(手动档)',
+      (tester) async {
+    _portrait(tester);
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = _directRemoteController(transport, conn: conn);
+    addTearDown(controller.dispose);
+    final settings = ValueNotifier(const AppSettings());
+    addTearDown(settings.dispose);
+    _scriptAutoStart(transport);
+    await tester.pumpWidget(MaterialApp(
+        home: RemotePage(
+            controller: controller, settingsListenable: settings)));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('示波器')); // 开波形
+    await tester.pumpAndSettle();
+    expect(settings.value.monitorScopeNLog, isFalse, reason: '默认全幅刻度');
+    expect(
+        tester.widget<WaveformView>(find.byType(WaveformView)).nLogScale,
+        isFalse);
+
+    // 切 N-Log:落盘 + 小盒刻度参数跟切(IRE 线 + 18% 灰虚线路径)
+    await tester.tap(find.text('N-Log'));
+    await tester.pumpAndSettle();
+    expect(settings.value.monitorScopeNLog, isTrue);
+    expect(
+        tester.widget<WaveformView>(find.byType(WaveformView)).nLogScale,
+        isTrue);
+    expect(tester.takeException(), isNull);
+
+    // 切回全幅
+    await tester.tap(find.text('全幅'));
+    await tester.pumpAndSettle();
+    expect(settings.value.monitorScopeNLog, isFalse);
+    expect(
+        tester.widget<WaveformView>(find.byType(WaveformView)).nLogScale,
+        isFalse);
   });
 
   testWidgets('峰值档位:开关门控选项行,灵敏度同步分析器阈值,颜色入叠层',

@@ -333,6 +333,20 @@ const Map<String, String> enCatalog = {
   '伪色': 'False Color',
   '峰值': 'Peaking',
   '波形': 'Waveform',
+  // 示波器族(2026-10-15):循环芯片档名 + 红绿灯带名 + N-Log 刻度行
+  // (「RGB」/「N-Log」为拉丁串不译;「矢量」/「红绿灯」档名)。
+  '示波器': 'Scope',
+  '矢量': 'Vector',
+  '红绿灯': 'Traffic Lights',
+  '示波器:关→波形→RGB Parade→矢量→红绿灯 循环切换':
+      'Scope: cycles Off → Waveform → RGB Parade → Vector → Traffic Lights',
+  '上部': 'Top',
+  '中部': 'Mid',
+  '下部': 'Bot',
+  '示波器刻度': 'Scope Scale',
+  '全幅': 'Full Range',
+  'N-Log 刻度:波形 Y 轴按合法量程 64-940 码 ↔ 0-100 IRE 标注,带 18% 灰线;须相机菜单开 N-Log 才对得上':
+      'N-Log scale: waveform Y axis labeled by legal range 64-940 code ↔ 0-100 IRE with an 18% grey line; matches only when N-Log is enabled in the camera menu',
   '遮幅': 'Matte',
   '遮幅 {v}': 'Matte {v}',
   '构图遮幅:2.39/2.35/1.85 循环;画幅外压暗(变宽还原已计入)':

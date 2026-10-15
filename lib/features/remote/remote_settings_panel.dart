@@ -286,8 +286,8 @@ class CaptureSettingsPanel extends StatelessWidget {
 
   /// 监看开关组(原辅助浮层迁移,拉焦轮除外 —— 在上方对焦段):取景
   /// 打头(十二轮总开关,当前态跟 liveViewActive,录制中禁点 —— 视频
-  /// 模式停录门依赖取景在跑);网格等六项走 [toggles]。斑马纹/直方图/
-  /// 伪色/峰值四项共享一份帧分析 —— 开关落定后由页面同步
+  /// 模式停录门依赖取景在跑);网格等走 [toggles]。斑马纹/直方图/伪色/
+  /// 峰值/示波器族共享一份帧分析 —— 开关落定后由页面同步
   /// RemoteController.analyzer 启停(见 RemotePage._syncAnalyzerEnabled)。
   Widget _monitorToggles(BuildContext context) {
     final live = LiveDesign.of(context);
@@ -370,9 +370,22 @@ class CaptureSettingsPanel extends StatelessWidget {
             (v) => onTogglesChanged(toggles.copyWith(falseColor: v))),
         toggle(Icons.blur_on, context.t('峰值'), toggles.peaking,
             (v) => onTogglesChanged(toggles.copyWith(peaking: v))),
-        // 波形示波器(帧分析路:开关落定由页面同步分析器启停)。
-        toggle(Icons.stacked_line_chart, context.t('波形'), toggles.waveform,
-            (v) => onTogglesChanged(toggles.copyWith(waveform: v))),
+        // 示波器族芯片(帧分析路):循环切档 关→波形→RGB Parade→矢量→
+        // 红绿灯(遮幅同款循环芯片);开关落定由页面同步分析器启停。
+        _smallChip(
+          live: live,
+          label: switch (toggles.scope) {
+            ScopeKind.off => context.t('示波器'),
+            ScopeKind.waveform => context.t('波形'),
+            ScopeKind.parade => context.t('RGB'),
+            ScopeKind.vector => context.t('矢量'),
+            ScopeKind.traffic => context.t('红绿灯'),
+          },
+          selected: toggles.scope != ScopeKind.off,
+          onTap: () => onTogglesChanged(
+              toggles.copyWith(scope: toggles.scope.next)),
+          tooltip: context.t('示波器:关→波形→RGB Parade→矢量→红绿灯 循环切换'),
+        ),
         // 构图框三件(纯显示层,不占分析器):遮幅循环芯片 + 安全框 +
         // 中心标。
         _smallChip(
@@ -410,12 +423,56 @@ class CaptureSettingsPanel extends StatelessWidget {
         chips,
         const SizedBox(height: 4),
         _monitorLutRow(context),
+        // 示波器刻度行:波形/Parade 档才出现(矢量/红绿灯不吃 Y 轴刻度)。
+        if (toggles.scope == ScopeKind.waveform ||
+            toggles.scope == ScopeKind.parade) ...[
+          const SizedBox(height: 4),
+          _scopeOptionRows(context),
+        ],
         // 峰值选项行:峰值开着才出现(关了藏行,少占面板高)。
         if (toggles.peaking) ...[
           const SizedBox(height: 4),
           _peakingOptionRows(context),
         ],
       ],
+    );
+  }
+
+  /// 示波器 Y 轴刻度行:全幅(均分网格,旧观感)/ N-Log(legal-range
+  /// 64-940 码 ↔ 0-100 IRE 刻度 + 18% 灰线,数学见 core/remote/
+  /// scopes.dart)。**手动档常闭**:相机 N-Log 态(0xD0BB)不推事件须
+  /// 轮询,自动跟随留账;波形/Parade 消费,矢量/红绿灯无 Y 轴不吃。
+  Widget _scopeOptionRows(BuildContext context) {
+    final live = LiveDesign.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(top: 2),
+      child: Wrap(
+        spacing: 2,
+        runSpacing: 2,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          Tooltip(
+            message: context.t('N-Log 刻度:波形 Y 轴按合法量程 64-940 码 ↔ 0-100 IRE 标注,带 18% 灰线;须相机菜单开 N-Log 才对得上'),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: Text(context.t('示波器刻度'),
+                  style: TextStyle(fontSize: 11, color: live.faint)),
+            ),
+          ),
+          _smallChip(
+            live: live,
+            label: context.t('全幅'),
+            selected: !toggles.scopeNLog,
+            onTap: () => onTogglesChanged(toggles.copyWith(scopeNLog: false)),
+          ),
+          _smallChip(
+            live: live,
+            label: context.t('N-Log'),
+            selected: toggles.scopeNLog,
+            onTap: () => onTogglesChanged(toggles.copyWith(scopeNLog: true)),
+          ),
+        ],
+      ),
     );
   }
 
