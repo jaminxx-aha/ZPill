@@ -396,10 +396,10 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea> {
                     ],
                     if (status.value == LiveViewStatus.failed) ...[
                       const SizedBox(height: 10),
-                      // AP 失败 + 接管未开:引导开启接管(2026-10-15 三轮
-                      // 真机 —— AP 人设取景门随接管开,连接括号退闩即关,
-                      // 未持有 0x9201 假成;STA 门天然开、USB 连接流已开
-                      // 闩,失败另有因,均不出此引导)。
+                      // AP 失败 + 接管未开:引导兜底(2026-10-15 深夜起
+                      // 连接沿已主动接管 —— 落到此处 = 连接沿开闩被拒/
+                      // 取景总闸关;STA 门天然开、USB 连接流已开闩,均不
+                      // 出此引导)。
                       if (controller.apMode &&
                           !controller.takeoverActive) ...[
                         Text(

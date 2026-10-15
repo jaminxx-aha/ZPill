@@ -357,7 +357,8 @@ Future<void> _parkedDelay(Duration _) => Completer<void>().future;
 /// 沿 + 模式读打头);引擎轮询首帧后驻停于门控/parked delay,不与后续
 /// 脚本抢位。0xD1A6 模式镜像应答([d1a6]:0=照片/1=视频)在链首 ——
 /// 测试追加的 0x90CC 等刷参中段应答仍按追加序被 refreshParams 消费。
-void _emitConnected(_ScriptTransport t, _FakeConnection c, {int d1a6 = 0}) {
+void _emitConnected(_ScriptTransport t, _FakeConnection c,
+    {int d1a6 = 0, bool apTakeover = false}) {
   t.script
     ..addFirst(PtpResult(
         responseCode: PtpResponseCode.ok, data: _fakeFrame())) // 首帧
@@ -365,6 +366,12 @@ void _emitConnected(_ScriptTransport t, _FakeConnection c, {int d1a6 = 0}) {
     ..addFirst(PtpResult(
         responseCode: PtpResponseCode.ok,
         data: Uint8List.fromList([d1a6]))); // 0xD1A6(链首读)
+  // [apTakeover] = AP 连接沿主动接管的链首 0x90C2(1) 应答(_onConnected
+  // Chain 起在模式读之前)—— 级联之后 addFirst 才真在队首。
+  if (apTakeover) {
+    t.script
+        .addFirst(PtpResult(responseCode: PtpResponseCode.ok)); // 0x90C2(1)
+  }
   c.statesCtrl.add(CameraLinkState.connected);
 }
 
@@ -841,6 +848,68 @@ void main() {
             [1]
           ],
           reason: '连接括号 [1][0] + 用户接管 [1]');
+    });
+
+    test('AP 连接沿主动接管:connected 即持 remote + 起景(点连接 = 接管'
+        '同意,2026-10-15 用户定案)', () async {
+      // 独立假连接:setUp 的默认控制器也订阅 conn.states,共用会把两条
+      // connected 链 interleaved 进同一份脚本(参读/起景错位,全假警报)。
+      final apConn = _FakeConnection();
+      final apController = RemoteController(
+        session: PtpSession(transport: transport),
+        connection: apConn,
+        engine: LiveViewEngine(
+          session: PtpSession(transport: transport),
+          delay: delay.call,
+        ),
+        delay: delay.call,
+        isApMode: () => true,
+      );
+      addTearDown(apController.dispose);
+      _scriptParams(transport);
+      _emitConnected(transport, apConn, apTakeover: true);
+      await pumpEventQueue();
+      expect(apController.takeoverActive, isTrue,
+          reason: '连接沿主动持有:机身停「已连接到计算机」屏 + 拨盘锁定');
+      expect(apController.session.remoteModeActive, isTrue);
+      expect(apController.engine.remoteHeld, isTrue,
+          reason: '接管沿同步引擎旗标(自愈梯不再碰 0x90C2)');
+      expect(apController.liveViewActive, isTrue,
+          reason: '持有态起景为真 —— 连接即取景,不再两步引导');
+      expect(
+          transport.requests
+              .where((r) => r.opcode == NikonOperationCode.changeCameraMode)
+              .map((r) => r.params),
+          [[1]],
+          reason: '链首只发接管那一发(连接括号的 1→0 在更早的连接流)');
+      expect(apController.exposure?.fNumber, 280, reason: '照常刷参');
+    });
+
+    test('AP 连接沿开闩被拒 → 不拦链:接管 OFF、起景照发、刷参照常'
+        '(引导占位兜底)', () async {
+      final apConn = _FakeConnection();
+      final apController = RemoteController(
+        session: PtpSession(transport: transport),
+        connection: apConn,
+        engine: LiveViewEngine(
+          session: PtpSession(transport: transport),
+          delay: delay.call,
+        ),
+        delay: delay.call,
+        isApMode: () => true,
+      );
+      addTearDown(apController.dispose);
+      _scriptParams(transport);
+      _emitConnected(transport, apConn);
+      transport.script.addFirst(
+          PtpResult(responseCode: NikonResponseCode.changeCameraModeFailed));
+      await pumpEventQueue();
+      expect(apController.takeoverActive, isFalse,
+          reason: '开闩被拒:接管 OFF,取景失败落引导占位');
+      expect(apController.error, contains('启用 APP 接管失败'));
+      expect(apController.liveViewActive, isTrue,
+          reason: '被拒不拦链:起景照发(真机形态 = 0x9201 假成、帧取失败)');
+      expect(apController.exposure?.fNumber, 280, reason: '照常刷参');
     });
 
     test('AP 取景失败引导:enableTakeoverAndRetryLiveView = 接管持有 + '

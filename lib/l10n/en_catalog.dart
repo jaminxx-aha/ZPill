@@ -230,6 +230,8 @@ const Map<String, String> enCatalog = {
       'Camera menu: Network → Connect to Smart Device → Wi-Fi Connection (hotspot mode). Join the camera hotspot in system Wi-Fi settings first, then come back to connect.',
   '相机 IP(默认 192.168.1.1)': 'Camera IP (default 192.168.1.1)',
   'AP 连接': 'AP Connect',
+  '点「AP 连接」后 app 将自动接管相机:机身屏幕停在「已连接到计算机」、拨盘锁定,断开连接后恢复。':
+      'After tapping "AP Connect", the app takes over the camera: its screen shows "Connected to Computer" and the dials lock; released on disconnect.',
   '相机热点凭据(蓝牙通道解出)': 'Camera Hotspot Credentials (decoded via Bluetooth)',
   '密码': 'Password',
   '安全:{s} · 加入热点后回此卡点「AP 连接」':

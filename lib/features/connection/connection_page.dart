@@ -1236,6 +1236,12 @@ class _ConnectionPageState extends State<ConnectionPage>
                 child: Text(context.t('AP 连接')),
               ),
             ),
+            const SizedBox(height: 8),
+            Text(
+              context.t('点「AP 连接」后 app 将自动接管相机:机身屏幕停在'
+                  '「已连接到计算机」、拨盘锁定,断开连接后恢复。'),
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
           ],
         ),
       ),
