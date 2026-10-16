@@ -182,21 +182,23 @@ class _SettingsPageState extends State<SettingsPage> {
                 title: Text(context.t('settings.darkMode')),
                 subtitle: Text(context.t('settings.darkModeSubtitle')),
               ),
-              // 主题三段(跟随系统/浅色/深色)刻意不包 t():i18n-1 的
-              // settings_page_test 在 en scope 下断言全树恰一处
-              // 'Follow System'(语言行 system 段),主题段同键再译即
-              // 两处,findsOneWidget 翻车 —— 测试期望零改动纪律优先,
-              // 此三段留待测试断言同步后再包(结构冲突,见 i18n-2 记录)。
+              // 主题三段走 t()(2026-10-16 真机 EN 抽查补漏;i18n-1 期
+              // 刻意不包 —— settings_page_test 曾全树断言恰一处
+              // 'Follow System',主题段同键再译即两处。现断言已收窄到
+              // 各行子树,system 段撞义复用 common.followSystem)。
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
                 child: SegmentedButton<AppThemeMode>(
-                  segments: const [
+                  segments: [
                     ButtonSegment(
-                        value: AppThemeMode.system, label: Text('跟随系统')),
+                        value: AppThemeMode.system,
+                        label: Text(context.t('common.followSystem'))),
                     ButtonSegment(
-                        value: AppThemeMode.light, label: Text('浅色')),
+                        value: AppThemeMode.light,
+                        label: Text(context.t('theme.light'))),
                     ButtonSegment(
-                        value: AppThemeMode.dark, label: Text('深色')),
+                        value: AppThemeMode.dark,
+                        label: Text(context.t('theme.dark'))),
                   ],
                   selected: {controller.settings.themeMode},
                   onSelectionChanged: (s) =>

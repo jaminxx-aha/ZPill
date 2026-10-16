@@ -108,10 +108,10 @@ void main() {
         _param(PtpDevicePropCode.exposureBiasCompensation).display(0), '0.0');
   });
 
-  test('display:表外值裸显 + 未读占位', () {
-    expect(_param(PtpDevicePropCode.exposureMeteringMode).display(7), '值 7',
-        reason: '测光表外值(2/3/4/0x8010 在表)');
-    expect(_param(PtpDevicePropCode.whiteBalance).display(3), '值 3'); // 表外枚举
+  test('display:表外值裸显(语言中性)+ 未读占位', () {
+    expect(_param(PtpDevicePropCode.exposureMeteringMode).display(7), '7',
+        reason: '测光表外值(2/3/4/0x8010 在表),兜底裸值与 ISO 同口径');
+    expect(_param(PtpDevicePropCode.whiteBalance).display(3), '3'); // 表外枚举
     expect(_param(PtpDevicePropCode.exposureProgramMode).display(null), '--');
     expect(kShootingParams.any((p) => p.code == PtpDevicePropCode.imageSize),
         isFalse,
@@ -195,7 +195,7 @@ void main() {
   test('曝光三要素标记 prominent(大芯片行),其余进横滚行', () {
     expect(kShootingParams
         .where((p) => p.prominent)
-        .map((p) => p.label), ['info.aperture', '快门', 'ISO']);
+        .map((p) => p.label), ['info.aperture', 'param.shutter', 'ISO']);
     expect(kShootingParams.where((p) => p.prominent), hasLength(3));
   });
 

@@ -193,7 +193,7 @@ void _scriptParams(_ScriptTransport t,
         PtpDataType.uint16, 0x8010,
         enums: [0x8010, 0x8011, 0x8017, 0x8018, 0x8019, 0x801E, 0x801F]))
     ..ok(data: Uint8List.fromList([0])) // 主体检测 u8(Ex 码 0x0001D006)
-    ..ok(data: Uint8List.fromList([1])) // 色调 u8(Ex 码 0x0001D01C)
+    ..ok(data: Uint8List.fromList([0])) // 色调 u8(Ex 码 0x0001D01C;真域 [0,2],0=SDR)
     // 优化校准:FORM 驱动(pickValues 已撤,2026-10-07)→ desc 应答;
     // 枚举全静态表内 → 不触发 0x90CC 名字拉取
     ..ok(data: _propDescDataset(PtpDevicePropCode.activePicCtrlItem,

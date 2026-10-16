@@ -151,7 +151,7 @@ const _kParamSpecs = <_ParamSpec>[
   (code: PtpDevicePropCode.captureAreaCrop, type: PtpDataType.uint8, value: 0, enums: [0, 2, 4, 5]),
   (code: PtpDevicePropCode.stillFocusMeteringMode, type: PtpDataType.uint16, value: 0x8010, enums: null),
   (code: 0x0001D006, type: PtpDataType.uint8, value: 0, enums: null), // 主体检测(Ex 扩展码)
-  (code: 0x0001D01C, type: PtpDataType.uint8, value: 1, enums: null), // 色调(Ex 扩展码)
+  (code: 0x0001D01C, type: PtpDataType.uint8, value: 0, enums: null), // 色调(Ex 扩展码;真域 [0,2])
   (code: PtpDevicePropCode.activePicCtrlItem, type: PtpDataType.uint16, value: 1, enums: [1, 2, 3, 4]),
 ];
 
@@ -1321,7 +1321,8 @@ void main() {
       expect(controller.propWritable(PtpDevicePropCode.exposureTime), isFalse);
 
       await controller.setParam(PtpDevicePropCode.exposureTime, 1 << 16 | 100);
-      expect(controller.error, contains('param.modeA'));
+      // 模式名经 _zh 取渲染形态(键名不再上屏,2026-10-16)
+      expect(controller.error, contains('光圈优先 A'));
       expect(controller.error, contains('由相机自动控制'));
       expect(
           transport.requests
@@ -1337,7 +1338,7 @@ void main() {
       expect(controller.apertureAdjustable, isFalse);
       expect(controller.shutterAdjustable, isTrue);
       await controller.setParam(PtpDevicePropCode.fNumber, 320);
-      expect(controller.error, contains('param.modeS'));
+      expect(controller.error, contains('快门优先 S'));
       expect(controller.error, contains('光圈由相机自动控制'));
     });
 

@@ -102,12 +102,13 @@ final class ShootingParam {
   /// 照片档不占面板)。官方 §6.5.3/§6.5.12 视频拍摄菜单族。
   final bool videoOnly;
 
-  /// 当前值展示:null = 未读;枚举表外 → 格式化 → 原始数字。
+  /// 当前值展示:null = 未读;枚举表外 → 格式化 → 裸值(语言中性,
+  /// 与 ISO 裸值同款口径;2026-10-16 前「值 N」中文兜底在 EN 直通)。
   String display(int? value) {
     if (value == null) {
       return '--';
     }
-    return enumLabels[value] ?? format?.call(value) ?? '值 $value';
+    return enumLabels[value] ?? format?.call(value) ?? '$value';
   }
 }
 
@@ -186,7 +187,7 @@ String _formatPicCtrl(int v) {
   if (v >= 101 && v <= 120) return '创意 ${v - 100}';
   if (v >= 201 && v <= 209) return '自定义 ${v - 200}';
   if (v >= 301 && v <= 309) return '云 ${v - 300}';
-  return '值 $v';
+  return '$v';
 }
 
 /// 白平衡值空间标签(静照 0x5005 与视频 0xD23A 共用 —— 官方 §6.5.3.9:
@@ -254,7 +255,9 @@ final kShootingParams = <ShootingParam>[
   // 影控台同款)。
   ShootingParam(
       code: PtpDevicePropCode.exposureTime,
-      label: '快门',
+      // label 即 t() 键(zh「快门」/en 'Shutter';2026-10-16 EN 抽查:
+      // 此前中文原文直通,是全目录唯一漏键的静态 label)。
+      label: 'param.shutter',
       format: _formatShutterRaw,
       prominent: true,
       readCode: PtpDevicePropCode.stillShutterSpeed,
@@ -450,15 +453,18 @@ final kShootingParams = <ShootingParam>[
       6: 'param.airplanes',
     },
   ),
-  // 色调模式(0x0001D01C,u8;OpenZCine:2 = HLG,其余 SDR)。此前因
-  // 超出 u16 属性码位宽不敢编码(截断会静默写错值),Ex ops 落地后
-  // 解锁。待真机核对值域。
+  // 色调模式(0x0001D01C,u8)。静照真值域 = [0,2](OpenZCine 手册 ZR
+  // 页:StillToneMode 0 SDR,2 HLG);Zf 的 FORM 却枚举 H.265 视频族
+  // 整表 0/1/2(§6.5.3.3:0 SDR/1 N-Log/2 HLG)—— 1(N-Log)在静照
+  // 不可写,写之 0x201C InvalidDevicePropValue(2026-10-16 真机;该码
+  // 因此入册)。标签 1 = N-Log 照实显,面板列表跟随相机 FORM,点击被
+  // 相机拒属域真值。
   ShootingParam(
     code: 0x0001D01C,
     label: 'param.toneMode',
     writeType: PtpDataType.uint8,
-    pickValues: [1, 2],
-    enumLabels: {1: 'SDR', 2: 'HLG'},
+    pickValues: [0, 2],
+    enumLabels: {0: 'SDR', 1: 'N-Log', 2: 'HLG'},
   ),
   // 优化校准 0xD200(u16):相机 FORM 枚举驱动(真机 46 项全在 FORM,
   // 静态表只有内置 11 项 —— pickValues 曾把 desc 读短路,值域被砍到
