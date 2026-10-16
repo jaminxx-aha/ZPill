@@ -105,6 +105,9 @@ final class _FakeConnection implements CameraConnection {
   String? deviceName;
 
   @override
+  String? deviceModel;
+
+  @override
   CameraLinkState get state => CameraLinkState.disconnected;
 
   @override

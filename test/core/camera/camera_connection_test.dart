@@ -365,7 +365,10 @@ void main() {
     await conn.connect();
 
     expect(conn.state, CameraLinkState.connected);
-    expect(conn.deviceName, 'TestModel');
+    expect(conn.deviceName, 'TestModel_12345678901',
+        reason: 'USB 无实例名:型号_序列号答「哪一台」(2026-10-16 定案)');
+    expect(conn.deviceModel, 'TestModel',
+        reason: '型号单列:拍摄页胶囊只答机型不答哪一台(2026-10-17 定案)');
     expect(conn.error, isNull);
     expect(conn.isWireless, isFalse);
     expect(usb.openedIdentifiers, ['1-2']);
@@ -496,7 +499,7 @@ void main() {
     fake.reply(_ok()); // 0x90C2(1) 进 remote
     await conn.connect();
     expect(conn.state, CameraLinkState.connected);
-    expect(conn.deviceName, 'TestModel');
+    expect(conn.deviceName, 'TestModel_12345678901');
   });
 
   test('断链事件(breakages):connected → reconnecting(自动恢复),清理会话与 USB',
@@ -580,7 +583,8 @@ void main() {
 
       expect(conn.state, CameraLinkState.connected);
       expect(conn.isWireless, isTrue);
-      expect(conn.deviceName, 'TestModel');
+      expect(conn.deviceName, 'TestModel_12345678901',
+          reason: '无线无实例名(手动 IP):同 USB 口径拼型号_序列号');
       expect(conn.error, isNull);
       expect(session.isSessionOpen, isTrue);
       expect(command.host, '192.168.1.1');
@@ -594,8 +598,8 @@ void main() {
       ]);
     });
 
-    test('设备名取 mDNS 实例名(型号_序列号;无实例名退型号,见上例)',
-        () async {
+    test('设备名取 mDNS 实例名(型号_序列号;手动 IP 无实例名同款拼装,'
+        '序列号缺失才退纯型号)', () async {
       final usb = FakeUsbHostChannel(const []);
       final (conn, _, session, command, event, _) = wireWireless(usb);
 
@@ -603,7 +607,10 @@ void main() {
           conn.connect(ip: '192.168.1.1', instanceName: 'Z_f_8014411'));
 
       expect(conn.state, CameraLinkState.connected);
+      expect(conn.isWireless, isTrue);
       expect(conn.deviceName, 'Z_f_8014411');
+      expect(conn.deviceModel, 'TestModel',
+          reason: '型号与实例名分列:胶囊用型号,相机页设备行用实例名');
       expect(session.isSessionOpen, isTrue);
     });
 
@@ -628,7 +635,8 @@ void main() {
 
       expect(conn.state, CameraLinkState.connected);
       expect(conn.isWireless, isTrue);
-      expect(conn.deviceName, 'TestModel');
+      expect(conn.deviceName, 'TestModel_12345678901',
+          reason: '手动 IP 无实例名:型号_序列号拼装(非纯型号)');
       expect(session.isSessionOpen, isTrue);
     });
 

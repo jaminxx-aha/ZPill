@@ -73,6 +73,12 @@ abstract final class NikonOperationCode {
   static const int afDriveCancel = 0x9206;
   static const int mfDrive = 0x9204; // 手动对焦步进:params [方向(1=近/2=远), 脉冲数 1..32767](OpenZCine 同款;相对量,无绝对位置读出)
   static const int initiateCaptureRecInMedia = 0x9207;
+  // 真卡 StorageID 列表(§6.2.3.1,三连接模式在册):application 模式下
+  // 标准 0x1004 GetStorageIDs **恒回无卡幻影 ID**(0x00010000/0x00020000,
+  // 与实际插卡无关 —— 官方明文「the StorageID that can be obtained by
+  // GetStorageIDs is the one without the card installed」),有效卡 ID
+  // 只能走本码;0x1005 对幻影 ID 回 0x2008(2026-10-16 真机探针实证)。
+  static const int getVendorStorageIds = 0x9209;
   static const int startMovieRecInCard = 0x920A // 开始卡上录制(无参无数据;OpenZCine 同款)
       ;
   static const int endMovieRec = 0x920B; // 结束卡上录制(无参无数据)
@@ -283,6 +289,9 @@ abstract final class PtpDevicePropCode {
   static const int stillFocusMeteringMode = 0xD05D; // 静照 AF 区域模式,u16(Zf FORM 七值:单点/自动/精确/宽S/宽L/宽C1/宽C2 —— 无 动态区域/3D 追踪,2026-10-07 USB 实证;标签见 shooting_param_catalog)
   static const int exposureRemaining = 0xD1F1 // 剩余可拍张数(OpenZCine exposureRemaining;读出用)
       ;
+  // 记录目的地一族(§6.5.7):0xD1F1 数的是 ActiveSlot 所指槽的张数。
+  static const int recordingMedia = 0xD10B; // 记录目的地,u8 枚举(0=卡/1=SDRAM/2=卡+SDRAM)
+  static const int activeSlot = 0xD1F2; // 当前记录槽,u8 枚举(0=无卡/1=槽1/2=槽2/3=双槽)
   // 曝光写路径(Z 系真机口径,OpenZCine:静照 ISO/快门的标准码 0x500F/
   // 0x500D 只读不可写 —— 写要走厂商码;真机核对):
   static const int exposureIndexEx = 0xD0B4; // ISO 写,u32(值 = ISO 数)

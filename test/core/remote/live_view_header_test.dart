@@ -29,6 +29,8 @@ Uint8List _frame({
   ({int peakL, int peakR, int curL, int curR})? sound,
   ({bool on, int h, int m, int s, int f})? tc,
   int? countdown, // @836-837 BE u16 秒(null = 不写)
+  int? videoRemaining, // @816-819 BE u32 毫秒(null = 不写)
+  int? videoElapsed, // @820-823 BE u32 毫秒(null = 不写)
   int? spotWb, // @838(null = 不写)
   int? overheat, // @853(null = 不写)
   int tailLen = 8,
@@ -78,6 +80,8 @@ Uint8List _frame({
     b[835] = tc.f;
   }
   if (countdown != null && b.length >= 838) be16(836, countdown);
+  if (videoRemaining != null && b.length >= 820) be32(816, videoRemaining);
+  if (videoElapsed != null && b.length >= 824) be32(820, videoElapsed);
   if (spotWb != null && b.length > 838) b[838] = spotWb;
   if (overheat != null && b.length > 853) b[853] = overheat;
   if (b.length >= 852) {
@@ -268,6 +272,32 @@ void main() {
     expect(onlyOverheat!.recordingCountdownSeconds, 0);
     expect(onlyOverheat.spotWbRaw, 0);
     expect(onlyOverheat.overheatRaw, 1);
+  });
+
+  test('视频录制时长族:816/820 毫秒解析,0 透出 / 越界弃 / 短头 null', () {
+    // 官方 §9.7.1:剩余/已录各 BE u32 毫秒,范围 0–7500000。
+    final h = parseLiveViewHeader(_frame(
+      videoRemaining: 61234,
+      videoElapsed: 5000,
+    ));
+    expect(h, isNotNull);
+    expect(h!.videoRemainingMs, 61234);
+    expect(h.videoElapsedMs, 5000);
+
+    // 0 是合法值原样透出(消费方按 >0 认有效);>7500000(含
+    // 0xFFFFFFFF 式无效填充)按 null 弃。
+    final zero = parseLiveViewHeader(_frame(videoRemaining: 0));
+    expect(zero!.videoRemainingMs, 0);
+    final garbage = parseLiveViewHeader(_frame(videoRemaining: 0xFFFFFFFF));
+    expect(garbage!.videoRemainingMs, isNull);
+    expect(garbage.videoElapsedMs, 0,
+        reason: '@820-823 未写 = 0 是合法值照读,越界弃只针对越界域');
+
+    // 一代 512B 头:域不存在 → null。
+    final g1 = parseLiveViewHeader(
+        _frame(headerLen: 512, videoRemaining: 61234));
+    expect(g1!.videoRemainingMs, isNull);
+    expect(g1.videoElapsedMs, isNull);
   });
 
   test('未知头长(SOI 位置定头长):域读取以头长为界,不读 JPEG 载荷', () {

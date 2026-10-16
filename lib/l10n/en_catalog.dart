@@ -376,7 +376,6 @@ const Map<String, String> enCatalog = {
   'remote.autofocus': 'Autofocus',
   'common.autoSuffix': '(auto)',
   'remote.notConnected': 'Camera not connected',
-  'remote.shotCount': '{n} shots',
   'remote.cleanMonitoring':
       'Clean Monitoring (hide all controls, image only)',
   'remote.shootingMode': 'Shooting Mode',

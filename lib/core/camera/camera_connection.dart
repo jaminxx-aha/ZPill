@@ -53,6 +53,11 @@ abstract interface class CameraConnection {
   /// 未连接为 null。
   String? get deviceName;
 
+  /// 已连接设备的型号(GetDeviceInfo model,如 Zf):拍摄页胶囊左上
+  /// 角只答「什么机型」,不答「哪一台」(2026-10-17 用户定案);未连接
+  /// 为 null。
+  String? get deviceModel;
+
   /// 当前(或最近一次)连接是否走无线(PTP-IP);false = USB。
   /// 相机页据此区分提示文案。
   bool get isWireless;
@@ -221,6 +226,7 @@ final class CameraConnectionImpl implements CameraConnection {
   CameraLinkState _state = CameraLinkState.disconnected;
   String? _error;
   String? _deviceName;
+  String? _deviceModel;
 
   /// 配对等待门:true = 用户确认,false = 跳过/外部收口。
   Completer<bool>? _pairingGate;
@@ -240,6 +246,9 @@ final class CameraConnectionImpl implements CameraConnection {
 
   @override
   String? get deviceName => _deviceName;
+
+  @override
+  String? get deviceModel => _deviceModel;
 
   @override
   bool get isWireless => _wireless;
@@ -317,10 +326,11 @@ final class CameraConnectionImpl implements CameraConnection {
           .timeout(_wirelessConnectBudget);
       _wireless = true;
       // 设备名取 mDNS 实例名(型号_序列号,答「哪一台」,与 SnapBridge
-      // 同口径);手动 IP 无实例名退型号。UI 型号行另由 GetDeviceInfo 出,
-      // 两行不再同源(2026-10-16:原先两行都显示 Zf)。USB 路无实例名,
-      // 仍取型号(见 _openSessionOrReject 沿)。
-      _deviceName = instanceName ?? info.model;
+      // 同口径);无实例名(手动 IP)按 GetDeviceInfo 拼同款。UI 型号行
+      // 另由 GetDeviceInfo 出,两行不再同源(2026-10-16:原先两行都显示
+      // Zf)。USB 路无实例名,同样拼装(见 _openSessionOrReject 沿)。
+      _deviceName = _deviceLabel(info, instanceName);
+      _deviceModel = info.model;
       if (await _needsPairing(info)) {
         switch (await _runPairing(info, ip, instanceName)) {
           case _PairResult.newlyPaired:
@@ -517,6 +527,18 @@ final class CameraConnectionImpl implements CameraConnection {
   static String _cameraId(PtpDeviceInfo info) =>
       info.serialNumber ?? info.model;
 
+  /// 设备名(答「哪一台」):mDNS 实例名优先;无实例名(手动 IP/USB)
+  /// 按 GetDeviceInfo 拼「型号_序列号」同款口径,序列号缺失才退纯型号
+  /// (2026-10-16 用户定案)。相机页设备行消费;拍摄页胶囊另取型号
+  /// [deviceModel](2026-10-17 定案:胶囊只答机型不答哪一台)。
+  static String _deviceLabel(PtpDeviceInfo info, String? instanceName) {
+    if (instanceName != null) return instanceName;
+    final serial = info.serialNumber;
+    return (serial == null || serial.isEmpty)
+        ? info.model
+        : '${info.model}_$serial';
+  }
+
   /// USB 专属:GetDeviceInfo(受限画像检查)→ OpenSession → connected。
   /// 无线路径不走这里(有配对相,见 [_connectWireless])。
   ///
@@ -555,7 +577,8 @@ final class CameraConnectionImpl implements CameraConnection {
       return;
     }
     _lastGood = (ip: null, instanceName: null);
-    _deviceName = info.model;
+    _deviceName = _deviceLabel(info, null);
+    _deviceModel = info.model;
     _error = null;
     _transition(CameraLinkState.connected);
   }
@@ -641,6 +664,7 @@ final class CameraConnectionImpl implements CameraConnection {
   /// 链路与会话清理(尽力而为:链路已死时各步必然失败,不能互相吞)。
   Future<void> _teardown() async {
     _deviceName = null;
+    _deviceModel = null;
     await _wirelessBreakageSub?.cancel();
     _wirelessBreakageSub = null;
     // remote 持有的镜像收尾:连接流的开闩括号(enableAppControl

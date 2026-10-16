@@ -23,6 +23,9 @@
 /// - 录制倒计时 @836-837(BE u16 秒;官方 §9.7.1:3600s 起秒倒数,
 ///   过热 30s 起 —— 机身「即将自动停止录制」倒计时的官方来源;
 ///   展示只跟过热状态走,宁缺不错);
+/// - 视频录制时长族 @816/820(BE u32 毫秒,剩余/已录;官方 §9.7.1
+///   「valid during the video recording state」,录制态外取值待真机
+///   核对)—— 视频档胶囊「可录时长」的机身权威来源;
 /// - 点测 WB 状态 @838(0 关/1 待机未采/2 采集中/3 成功待机/4 失败
 ///   待机;官方 §9.7.1,暂只解析不上屏 —— 点测 WB 采集流程未接);
 /// - 过热状态 @853(0 正常/1 中温低/2 中温高/3 高温/4 倒计时显示,
@@ -143,6 +146,8 @@ final class LiveViewHeader {
     required this.sound,
     required this.timecode,
     required this.recordingCountdownSeconds,
+    required this.videoRemainingMs,
+    required this.videoElapsedMs,
     required this.spotWbRaw,
     required this.overheatRaw,
   });
@@ -175,6 +180,16 @@ final class LiveViewHeader {
   /// 过热 30s 起;null = 头太短。展示只跟 [overheatRaw] 的「倒计时
   /// 显示」态走,字段本身恒读)。
   final int? recordingCountdownSeconds;
+
+  /// 视频剩余可录时长毫秒(@816-819 BE u32,官方 §9.7.1 范围
+  /// 0–7500000;null = 头太短/越界值。官方标「valid during the video
+  /// recording state」—— 录制态外是否恒 0 待真机核对,展示策略在
+  /// 消费方按 >0 认有效)。
+  final int? videoRemainingMs;
+
+  /// 已录时长毫秒(@820-823 BE u32;null = 头太短/越界值。REC 秒表现
+  /// 走本地计时,此域暂只解析备用)。
+  final int? videoElapsedMs;
 
   /// 点测白平衡状态(@838:0 关/1 待机未采/2 采集中/3 成功待机/
   /// 4 失败待机;null = 头太短。点测 WB 采集流程未接,暂不上屏)。
@@ -292,6 +307,17 @@ LiveViewHeader? parseLiveViewHeader(Uint8List object) {
   final spotWb = headerLen >= 839 ? object[838] : null;
   final overheat = headerLen >= 854 ? object[853] : null;
 
+  // 视频录制时长族(@816/820,BE u32 毫秒):越界(>7500000,含
+  // 0xFFFFFFFF 式无效填充)按 null 弃,0 原样透出由消费方定夺。
+  int? videoMs(int o) => headerLen >= o + 4
+      ? () {
+          final v = _be32(object, o);
+          return v > 7500000 ? null : v;
+        }()
+      : null;
+  final videoRemaining = videoMs(816);
+  final videoElapsed = videoMs(820);
+
   LiveViewLevelAngles? level;
   if (headerLen >= 852) {
     double? angle(int o) {
@@ -326,6 +352,8 @@ LiveViewHeader? parseLiveViewHeader(Uint8List object) {
     sound: sound,
     timecode: timecode,
     recordingCountdownSeconds: countdown,
+    videoRemainingMs: videoRemaining,
+    videoElapsedMs: videoElapsed,
     spotWbRaw: spotWb,
     overheatRaw: overheat,
   );
