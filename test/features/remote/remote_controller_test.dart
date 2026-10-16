@@ -166,7 +166,8 @@ const _kVendorReadValues = <int, int>{
 Uint8List _u32Bytes(int v) => Uint8List.fromList(
     [for (var i = 0; i < 4; i++) (v >> (8 * i)) & 0xFF]);
 
-/// 目录序全量应答:PropDesc(取值域直供表参数跳过 —— 快门不读标准码
+/// 目录序全量应答:链首张数裸读(0xD1F1,refreshParams 打头,2026-10-16
+/// 改制)+ PropDesc(取值域直供表参数跳过 —— 快门不读标准码
 /// PropDesc)+ 值回读(路由参数读厂商码裸值)+ 末尾自动 ISO 状态
 /// (0xD054 裸读,u8)。[mode] 参数化曝光模式值(默认 M=1:快门/光圈/
 /// ISO 都可调;[modeUnreadable] 模拟模式读不到 → 不猜锁);
@@ -183,6 +184,9 @@ void _scriptParams(_ScriptTransport t,
     List<int>? picCtrlEnums,
     int picCtrlValue = 1,
     bool tail = true}) {
+  if (tail) {
+    t.ok(data: _u32Bytes(1234)); // 0xD1F1 剩余张数(链首读)
+  }
   for (final s in _kParamSpecs) {
     var value = s.value;
     if (s.code == PtpDevicePropCode.exposureProgramMode) value = mode;
@@ -215,18 +219,17 @@ void _scriptParams(_ScriptTransport t,
   }
   if (tail) {
     t.ok(data: Uint8List.fromList([0])); // 0xD054 自动 ISO:关
-    t.ok(data: _u32Bytes(1234)); // 0xD1F1 剩余张数
   }
 }
 
-/// 视频档全量刷参块(照片参数无尾 + 视频参数族 + 自动 ISO + 剩余张数
-/// —— 消费序 = refreshParams 的 [照片参数 → 视频参数 → 0xD054 →
-/// 0xD1F1],视频档追加视频族,尾两读永远在最后)。
+/// 视频档全量刷参块(张数链首读 + 照片参数无尾 + 视频参数族 + 自动 ISO
+/// —— 消费序 = refreshParams 的 [0xD1F1 → 照片参数 → 视频参数 →
+/// 0xD054],视频档追加视频族,张数永远在最前)。
 void _scriptParamsVideo(_ScriptTransport t) {
+  t.ok(data: _u32Bytes(1234)); // 0xD1F1 剩余张数(链首读)
   _scriptParams(t, tail: false);
   _scriptVideoParams(t);
   t.ok(data: Uint8List.fromList([0])); // 0xD054 自动 ISO:关
-  t.ok(data: _u32Bytes(1234)); // 0xD1F1 剩余张数
 }
 
 /// 0x90CC GetPictCtrlData 应答数据集(digiCamControl 布局:[0]未知
@@ -290,8 +293,10 @@ void _scriptVideoParams(_ScriptTransport t, {int logOutput = 0}) {
   }
 }
 
-/// PropDesc 全拒的回退应答(值走裸读;路由参数读厂商码)。
+/// PropDesc 全拒的回退应答(值走裸读;路由参数读厂商码)。张数链首读
+/// 同 _scriptParams 口径。
 void _scriptParamsRawFallback(_ScriptTransport t, {int mode = 1}) {
+  t.ok(data: _u32Bytes(1234)); // 0xD1F1 剩余张数(链首读)
   for (final s in _kParamSpecs) {
     final value = s.code == PtpDevicePropCode.exposureProgramMode ? mode : s.value;
     final param = shootingParamByCode[s.code]!;
@@ -306,7 +311,6 @@ void _scriptParamsRawFallback(_ScriptTransport t, {int mode = 1}) {
     }
   }
   t.ok(data: Uint8List.fromList([0])); // 0xD054 自动 ISO:关
-  t.ok(data: _u32Bytes(1234)); // 0xD1F1 剩余张数
 }
 
 /// 裸值应答字节(按类型宽度:u8 一字节 / u16 两字节 / u32 四字节)。
@@ -1017,7 +1021,7 @@ void main() {
       // 拨杆拨到视频档:事件 → 定向读跟随(+ 模式翻转沿补刷参数:
       // 照片块 + 视频块,拨到视频档要拉整条视频参数链)
       transport.ok(data: Uint8List.fromList([1]));
-      _scriptParamsVideo(transport); // 照片参数 + 视频参数族 + 尾两读
+      _scriptParamsVideo(transport); // 张数链首 + 照片参数 + 视频参数族 + 0xD054
       transport.eventCtrl.add(const PtpEvent(
           code: PtpEventCode.devicePropChanged,
           transactionId: 0xFFFFFFFF,
@@ -1025,6 +1029,27 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 250));
       expect(controller.cameraMode, CaptureMode.video);
       expect(controller.dialMode, CaptureMode.video);
+    });
+
+    test('0x4006(0xD1F1)事件 → 张数轻量刷新(官方推送通道,150ms 合并)',
+        () async {
+      _scriptParams(transport);
+      _emitConnected(transport, conn);
+      await pumpEventQueue();
+      expect(controller.shotsRemaining, 1234);
+
+      // 机身侧计数变化(拍摄/改画质/换卡)→ 相机 1s 巡检推 0x4006 →
+      // 合并窗后单笔裸读跟值(不落参数目录的丢弃哨兵)。
+      final before = transport.count(PtpOperationCode.getDevicePropValue);
+      transport.ok(data: _u32Bytes(999));
+      transport.eventCtrl.add(const PtpEvent(
+          code: PtpEventCode.devicePropChanged,
+          transactionId: 0xFFFFFFFF,
+          params: [PtpDevicePropCode.exposureRemaining]));
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+      expect(controller.shotsRemaining, 999);
+      expect(transport.count(PtpOperationCode.getDevicePropValue), before + 1,
+          reason: '合并窗内只发一笔裸读');
     });
 
     test('switchMode(视频→照片):接管 + 停景 + 写 0xD1A6=0 + 起景 + 刷参',
@@ -1381,13 +1406,10 @@ void main() {
 
     test('自动 ISO 开:写 ISO 直发 0xD0B4(开关与手动值互不干扰,不联动)',
         () async {
-      // 倒数第二个应答(0xD054 自动 ISO)改 [1](自动开);末尾是 0xD1F1
+      // 末位应答(0xD054 自动 ISO)改 [1](自动开);张数链首读不动
       _scriptParams(transport);
-      final last = transport.script.removeLast(); // 0xD1F1 剩余张数
       transport.script.removeLast(); // 0xD054
-      transport
-        ..ok(data: Uint8List.fromList([1])) // 0xD054 自动开
-        ..script.add(last); // 0xD1F1 摆回
+      transport.ok(data: Uint8List.fromList([1])); // 0xD054 自动开
       _emitConnected(transport, conn);
       await pumpEventQueue();
       expect(controller.isoAuto, isTrue);

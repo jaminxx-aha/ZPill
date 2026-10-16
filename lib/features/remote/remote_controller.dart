@@ -234,6 +234,10 @@ final class RemoteController extends ChangeNotifier {
   /// 剩余可拍张数(0xD1F1;null = 未读/拒答)。
   int? shotsRemaining;
 
+  /// 0x4006(0xD1F1)合并窗在途旗标:相机 1s 巡检逢变化即发,连拍
+  /// 一串 —— 与参数事件同窗(150ms)合并成一次裸读。
+  bool _shotsRefreshScheduled = false;
+
   /// 即拍即览:最近一张的缩略图(0x100A,几秒后清;null = 无)。
   Uint8List? reviewThumb;
 
@@ -2320,7 +2324,42 @@ final class RemoteController extends ChangeNotifier {
   /// PropDesc 拒答的退回路径会二次入队,并发时与脚本应答交错易错位。
   /// 视频档追加视频参数族 [kVideoShootingParams](照片档零流量 ——
   /// 拨杆照片档下这些属性枚举塌 1 值,刷了也是噪声)。
-  Future<void> refreshParams() async {
+  ///
+  /// **单飞合流**([joinInFlight]):进页/回台沿对表与连接沿刷参常同拍
+  /// 到达 —— 连接沿整链(照片档 ~35 事务,视频档翻倍)还在跑,进页又
+  /// 起一条,两条全链在 Wi-Fi 每事务一次往返下把取景帧压成幻灯片
+  /// (2026-10-16 真机「进页卡很久、无实时取景」)。仅显式 [joinInFlight]
+  /// 的调用方(进页/回台对表)并入在途全链;连接沿/模式翻转沿/拍摄沿
+  /// 等语义要求**新鲜**全链的调用方默认 false 照旧直发。
+  /// 在途的全量刷参([refreshParams] 单飞槽)。
+  Future<void>? _paramSweepInFlight;
+
+  Future<void> refreshParams({bool joinInFlight = false}) {
+    final inFlight = _paramSweepInFlight;
+    if (joinInFlight && inFlight != null) return inFlight;
+    final completer = Completer<void>();
+    _paramSweepInFlight = completer.future;
+    () async {
+      try {
+        await _refreshParamsSweep();
+        completer.complete();
+      } catch (error, stackTrace) {
+        // 与直呼同形:错误经返回的 Future 交给各调用方(全链自身逐项
+        // 兜底,走到这里只有意外形态)。
+        completer.completeError(error, stackTrace);
+      } finally {
+        if (identical(_paramSweepInFlight, completer.future)) {
+          _paramSweepInFlight = null;
+        }
+      }
+    }();
+    return completer.future;
+  }
+
+  Future<void> _refreshParamsSweep() async {
+    // 张数读打头(2026-10-16):进页/拍摄沿的整条链 30+ 笔事务要跑几秒,
+    // 排尾的话胶囊挂旧值几秒才对上;单笔裸读放链首,第二笔即对上。
+    await _refreshShotsRemaining();
     for (final param in kShootingParams) {
       await _refreshProp(param.code);
     }
@@ -2330,7 +2369,6 @@ final class RemoteController extends ChangeNotifier {
       }
     }
     await _refreshIsoAuto();
-    await _refreshShotsRemaining();
     await _maybeFetchPicCtrlNames();
     _paramsRefreshedOnce = true;
     if (!_linkUp) return;
@@ -2386,17 +2424,39 @@ final class RemoteController extends ChangeNotifier {
     return shootingParamByCode[code]?.display(value) ?? '--';
   }
 
-  /// 剩余可拍张数(0xD1F1 裸读;拒答 null 不猜)。
+  /// 剩余可拍张数(0xD1F1 裸读;拒答 null 不猜)。on Object 收口:
+  /// 断链沿 transport 关闭抛的是 Error(StateError),会逃逸 on Exception
+  /// (autoLiveViewOnConnect 同款「transport 已关」口径)。
   Future<void> _refreshShotsRemaining() async {
     try {
       final v =
           await session.getDevicePropValue(PtpDevicePropCode.exposureRemaining);
       if (!_linkUp) return;
       shotsRemaining = v.value as int?;
-    } on Exception {
+    } on Object {
       if (!_linkUp) return;
       shotsRemaining = null;
     }
+  }
+
+  /// 轻量张数刷新(单笔裸读 + 变化沿上屏):进页沿/0x4006 事件路径用,
+  /// 不等整条刷参链(链尾同读是确认,首读是「进页即对」)。
+  Future<void> refreshShotsRemaining() async {
+    final prev = shotsRemaining;
+    await _refreshShotsRemaining();
+    if (_disposed || !_linkUp || shotsRemaining == prev) return;
+    notifyListeners();
+  }
+
+  /// 0x4006(0xD1F1)事件 → 合并窗后轻量刷新(机身拍摄/改画质/换卡都
+  /// 走这条官方推送通道;不合并连拍会一串裸读)。
+  void _scheduleShotsRemainingRefresh() {
+    if (_shotsRefreshScheduled) return;
+    _shotsRefreshScheduled = true;
+    Timer(_propRefreshDebounce, () {
+      _shotsRefreshScheduled = false;
+      unawaited(refreshShotsRemaining());
+    });
   }
 
   /// 静照自动 ISO 状态(0xD054,u8 裸读;拒答 null 不猜)。
@@ -2669,6 +2729,11 @@ final class RemoteController extends ChangeNotifier {
   bool _propRefreshScheduled = false;
 
   void _schedulePropRefresh(int propCode) {
+    if (propCode == PtpDevicePropCode.exposureRemaining) {
+      // 0xD1F1 不在参数目录(上面哨兵会丢),专路轻量刷张数
+      _scheduleShotsRemainingRefresh();
+      return;
+    }
     if (!shootingParamByCode.containsKey(propCode)) return;
     _pendingPropRefreshes.add(propCode);
     if (_propRefreshScheduled) return;

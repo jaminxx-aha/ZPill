@@ -236,10 +236,14 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     // 侧拨盘/菜单改动的事件不一定送达,同 didUpdateWidget 的兜底口径)。
     // 门 = 取景在跑:连接即取景使真连接必然如此,而 linkUp 是冷启乐观
     // 门闩(恒真)不能作凭;直挂/未连接场景引擎 idle,零请求。
+    // 张数对表住 refreshParams 链首(2026-10-16):进页第二笔即对上,
+    // 不再挂整条链尾等几秒。
     if (widget.active && controller.liveViewActive) {
       unawaited(() async {
         await controller.refreshCameraMode(triggerRefresh: false);
-        await controller.refreshParams();
+        // joinInFlight:连接沿刷参全链常还在跑,并入不另起一条(两条
+        // 全链在 Wi-Fi 上把取景帧压成幻灯片,2026-10-16 真机反馈)。
+        await controller.refreshParams(joinInFlight: true);
       }());
     }
   }
@@ -263,7 +267,9 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         }
         if (controller.linkUp) {
           await controller.refreshCameraMode(triggerRefresh: false);
-          await controller.refreshParams();
+          // joinInFlight:连接沿刷参全链常还在跑,并入不另起一条(同
+          // initState 沿口径,2026-10-16 真机反馈)。
+          await controller.refreshParams(joinInFlight: true);
         }
       }());
     }
