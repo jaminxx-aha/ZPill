@@ -82,9 +82,11 @@ Widget captureParamTileOf(
 }
 
 /// 拍摄读出条的单个 tile(OpenZCine CaptureSettingButton 同款;2026-10-10
-/// 随设置面板复用公开):小标签(9pt,faint;面板打开时金色)+ 大号
-/// 等宽数字值(自动变量加「(自动)」后缀并置灰)。不可调(总闸关断/
-/// 模式门锁定/相机只读)时整体降透明度且不可点。
+/// 随设置面板复用公开;2026-10-17 面板参数区改等宽格子,值文本 FittedBox
+/// 缩放 —— 变宽 Wrap 时代 tile 无宽度上限,优化校准槽位真名等长值超出
+/// 面板宽直接被裁,格子定宽后缩放适配不丢字)。小标签(10pt,faint;
+/// 面板打开时金色)+ 等宽数字值(自动变量加「(自动)」后缀并置灰)。
+/// 不可调(总闸关断/模式门锁定/相机只读)时整体降透明度且不可点。
 class CaptureParamTile extends StatelessWidget {
   const CaptureParamTile({
     super.key,
@@ -119,7 +121,7 @@ class CaptureParamTile extends StatelessWidget {
       child: Opacity(
         opacity: writable ? 1 : 0.38,
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
           decoration: BoxDecoration(
             color: active ? live.accentDim : Colors.transparent,
             borderRadius: BorderRadius.circular(10),
@@ -136,15 +138,21 @@ class CaptureParamTile extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   // 目录 label(shooting_param_catalog 产出)原文即
-                  // t() 键,显示点包 t()。
-                  Text(
-                    context.t(param.label),
-                    style: TextStyle(
-                      fontSize: 9,
-                      fontWeight: FontWeight.w600,
-                      color: active
-                          ? live.accent.withValues(alpha: 0.85)
-                          : live.faint,
+                  // t() 键,显示点包 t()。Flexible 截断:等宽格子定宽后,
+                  // 长标签(H.265 色调/视频白平衡)不再溢出 —— 全名在
+                  // 编辑底单标题可见。
+                  Flexible(
+                    child: Text(
+                      context.t(param.label),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                        color: active
+                            ? live.accent.withValues(alpha: 0.85)
+                            : live.faint,
+                      ),
                     ),
                   ),
                   if (locked) ...[
@@ -156,14 +164,19 @@ class CaptureParamTile extends StatelessWidget {
               const SizedBox(height: 2),
               // 值文本(displayValue 经控制器路由 displayParamValue 产出)
               // 原文即 t() 键,显示点包 t();「(自动)」后缀同查目录。
-              Text(
-                '${context.t(value)}${auto ? context.t('common.autoSuffix') : ''}',
-                maxLines: 1,
-                style: TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w500,
-                  color: auto ? live.muted : live.text,
-                  fontFeatures: const [FontFeature.tabularFigures()],
+              // FittedBox 只缩不放:常规值(800/f/2.0/AF-C)原字号,
+              // 长值(槽位真名/1/160s(自动))整串缩到格宽内。
+              FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Text(
+                  '${context.t(value)}${auto ? context.t('common.autoSuffix') : ''}',
+                  maxLines: 1,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                    color: auto ? live.muted : live.text,
+                    fontFeatures: const [FontFeature.tabularFigures()],
+                  ),
                 ),
               ),
             ],

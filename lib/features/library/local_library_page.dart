@@ -290,11 +290,6 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
               ] else ...[
                 // 传输徽标:进行中任务数角标,点击进传输页看任务列表。
                 _transfersBadge(context, activeCount),
-                IconButton(
-                  tooltip: context.t('common.refresh'),
-                  onPressed: _controller.refreshAppFiles,
-                  icon: const Icon(Icons.refresh),
-                ),
                 _filterMenuAnchor(context),
                 if (files.isNotEmpty)
                   TextButton(

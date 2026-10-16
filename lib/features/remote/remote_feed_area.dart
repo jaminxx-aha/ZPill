@@ -14,7 +14,8 @@
 /// 快门柱贴右缘时把贴右叠层(录制读出/拉焦轮)左移让位。[fit] 为适配
 /// 模式(竖屏满宽/横屏满高,2026-10-12「不留黑边」定案,见 [FeedFit])。
 /// [onTapFocus] 点按取景画面 = 触控对焦:第二参为该点的**归一化图像
-/// 坐标**(已含缩放/旋转/变宽逆映射;null = 无画面)。
+/// 坐标**(已含缩放/旋转/变宽逆映射;null = 无画面/点在画面外 ——
+/// 页面侧以 null 分流纯净监看的「点空白隐藏/恢复」,2026-10-17)。
 /// [settingsListenable] 提供画面自动旋转/变宽还原设置(null = AppServices
 /// 单例);[dialAlignment] 为拉焦轮锚位(横屏右上角让给录制读出、右缘
 /// 被快门柱占用 → 页面传 bottomRight)。
@@ -134,7 +135,11 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea> {
     final lastPos = _lastTapPos;
     _lastTapAt = now;
     _lastTapPos = d.localPosition;
-    if (last != null &&
+    // 纯净监看隐藏中不走双击检测:任意点按都须送达页面恢复 chrome
+    // (2026-10-17 「再点击出现」—— 隐藏态连点两下同位若被双击吞掉,
+    // chrome 就再也回不来);隐藏态无缩放,双击复位本无从谈起。
+    if (!widget.hideChrome &&
+        last != null &&
         lastPos != null &&
         now.difference(last) <= const Duration(milliseconds: 300) &&
         (d.localPosition - lastPos).distance <= 48) {

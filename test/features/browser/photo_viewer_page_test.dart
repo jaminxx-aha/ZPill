@@ -20,6 +20,7 @@ import 'package:nikon_pill/core/transfer/transfer_task.dart';
 import 'package:nikon_pill/core/utils/byte_writer.dart';
 import 'package:nikon_pill/features/browser/photo_viewer_page.dart';
 import 'package:nikon_pill/features/common/widgets/embedded_video_player.dart';
+import 'package:nikon_pill/features/transfers/transfers_page.dart';
 import 'package:nikon_pill/platform/gallery_saver.dart';
 import 'package:nikon_pill/platform/video_player.dart';
 
@@ -271,14 +272,20 @@ PhotoGroup _videoGroup() => PhotoGroup([
     ]);
 
 /// 推入查看器路由(home 直挂是栈底路由没有返回钮,pageBack 无从收)。
-/// 路由动画收口后返回。
+/// 路由动画收口后返回。入口页带 Scaffold:与生产一致(否则 pop 后
+/// ScaffoldMessenger 的在显 SnackBar 无处挂载,下载提示回归用例测不出
+/// 「挂到上一页」的真实行为)。
 Future<void> _openViewer(WidgetTester tester, PhotoViewerPage page) async {
   await tester.pumpWidget(MaterialApp(
     home: Builder(
-      builder: (context) => TextButton(
-        onPressed: () => Navigator.of(context)
-            .push(MaterialPageRoute(builder: (_) => page)),
-        child: const Text('打开查看器'),
+      builder: (context) => Scaffold(
+        body: Center(
+          child: TextButton(
+            onPressed: () => Navigator.of(context)
+                .push(MaterialPageRoute(builder: (_) => page)),
+            child: const Text('打开查看器'),
+          ),
+        ),
       ),
     ),
   ));
@@ -350,7 +357,8 @@ final class _FakePtpTransport implements PtpTransport {
 }
 
 void main() {
-  testWidgets('双格式组:下载前弹格式选择,仅 RAW 只入队 NEF', (tester) async {
+  testWidgets('双格式组:「下载」展开目的地后弹格式选择,仅 RAW 只入队 NEF',
+      (tester) async {
     final engine = _FakeEngine();
     final group = PhotoGroup([
       _file(101, 'DSC_0001.JPG'),
@@ -367,6 +375,10 @@ void main() {
           onOpenTransfers: () => transfersTapped = true,
         ));
 
+    expect(find.text('下载'), findsOneWidget);
+    expect(find.text('下载到相册'), findsNothing); // 两段式:默认单「下载」钮
+    await tester.tap(find.text('下载'));
+    await tester.pump();
     await tester.tap(find.text('下载到相册'));
     await tester.pumpAndSettle();
     expect(find.text('选择下载格式'), findsOneWidget);
@@ -386,6 +398,45 @@ void main() {
     expect(transfersTapped, isTrue, reason: 'SnackBar 动作直通传输页');
 
     await _drainSnackBar(tester);
+  });
+
+  testWidgets('下载后立即返回:「查看进度」仍可跳传输页,提示自动消失',
+      (tester) async {
+    // 网格页同款回归(2026-10-17 真机):pop 后动作闭包沿 State.context
+    // 找 Navigator 抛 defunct;SDK #173084 起带 action 默认 persist=true
+    // 永不消失。生产默认路径(不注入 onOpenTransfers)。
+    final engine = _FakeEngine();
+    final group = PhotoGroup([_file(101, 'DSC_0001.JPG')]);
+    await _openViewer(
+        tester,
+        PhotoViewerPage(
+          items: [group],
+          initialIndex: 0,
+          thumbnails: _FakeThumbs(),
+          engine: engine,
+        ));
+
+    // 两段式:先点「下载」换出目的地,再点「下载到相册」。
+    await tester.tap(find.text('下载'));
+    await tester.pump();
+    await tester.tap(find.text('下载到相册'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('已开始下载到相册'), findsOneWidget);
+
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    expect(find.text('打开查看器'), findsOneWidget);
+    expect(find.textContaining('已开始下载'), findsOneWidget,
+        reason: 'dismiss 窗口内提示随 messenger 挂在上一页');
+
+    await tester.tap(find.text('查看进度'));
+    await tester.pumpAndSettle();
+    expect(find.byType(TransfersPage), findsOneWidget,
+        reason: '展示时刻捕获的 Navigator 跨 pop 存活');
+
+    await _drainSnackBar(tester);
+    expect(find.textContaining('已开始下载'), findsNothing,
+        reason: 'persist=false 恢复自动消失,不永久滞留');
   });
 
   testWidgets('信息底单:照片组 EXIF 头读出机身/镜头/参数/拍摄时间,'
@@ -454,7 +505,8 @@ void main() {
     expect(find.byType(CircularProgressIndicator), findsNothing);
   });
 
-  testWidgets('单格式组:不弹面板直接整组入队', (tester) async {
+  testWidgets('单格式组:「下载」展开目的地后不弹面板直接整组入队',
+      (tester) async {
     final engine = _FakeEngine();
     final group = PhotoGroup([_file(101, 'IMG_0101.JPG')]);
     await _openViewer(
@@ -466,6 +518,8 @@ void main() {
           engine: engine,
         ));
 
+    await tester.tap(find.text('下载'));
+    await tester.pump();
     await tester.tap(find.text('下载到相册'));
     await tester.pumpAndSettle();
 
@@ -473,6 +527,64 @@ void main() {
     final (entries, destination) = engine.calls.single;
     expect(entries.single.name, 'IMG_0101.JPG');
     expect(destination, TransferDestination.gallery);
+
+    await _drainSnackBar(tester);
+  });
+
+  testWidgets('筛选预定格式(仅 RAW):跳过面板直接入队 NEF,入队后复位「下载」',
+      (tester) async {
+    final engine = _FakeEngine();
+    final group = PhotoGroup([
+      _file(101, 'DSC_0001.JPG'),
+      _file(102, 'DSC_0001.NEF', format: 0x3000),
+    ]);
+    await _openViewer(
+        tester,
+        PhotoViewerPage(
+          items: [group],
+          initialIndex: 0,
+          thumbnails: _FakeThumbs(),
+          engine: engine,
+          downloadFormat: PhotoDownloadFormat.raw,
+        ));
+
+    await tester.tap(find.text('下载'));
+    await tester.pump();
+    await tester.tap(find.text('下载到相册'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('选择下载格式'), findsNothing,
+        reason: '相册页筛选已定格式:不再弹格式面板');
+    final (entries, destination) = engine.calls.single;
+    expect(entries.single.name, 'DSC_0001.NEF');
+    expect(destination, TransferDestination.gallery);
+    expect(find.text('下载到相册'), findsNothing,
+        reason: '入队完成:两段式复位回单「下载」钮');
+
+    await _drainSnackBar(tester);
+  });
+
+  testWidgets('筛选预定格式但组内缺该格式(纯 JPG × 仅 RAW):提示不下',
+      (tester) async {
+    final engine = _FakeEngine();
+    final group = PhotoGroup([_file(101, 'IMG_0101.JPG')]);
+    await _openViewer(
+        tester,
+        PhotoViewerPage(
+          items: [group],
+          initialIndex: 0,
+          thumbnails: _FakeThumbs(),
+          engine: engine,
+          downloadFormat: PhotoDownloadFormat.raw,
+        ));
+
+    await tester.tap(find.text('下载'));
+    await tester.pump();
+    await tester.tap(find.text('下载到相册'));
+    await tester.pumpAndSettle();
+
+    expect(engine.calls, isEmpty);
+    expect(find.text('没有符合「仅 RAW」的文件,未开始下载'), findsOneWidget);
 
     await _drainSnackBar(tester);
   });
@@ -754,7 +866,7 @@ void main() {
     ]);
     expect(chromeCalls.any((c) => c.method.contains('SystemUIMode')), isTrue);
     expect(find.text('1 / 2'), findsNothing); // AppBar 收
-    expect(find.text('下载到相册'), findsNothing); // 底栏收
+    expect(find.text('下载'), findsNothing); // 底栏收
     // 同一播放器:无二次装载
     expect(player.loads, hasLength(1));
     expect(find.byTooltip('退出全屏'), findsOneWidget);

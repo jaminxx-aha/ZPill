@@ -183,6 +183,8 @@ void main() {
 
       final storages = await live.session.getStorageIds();
       expect(storages, [0x00010001]);
+      // application 模式方言:真卡 ID 走 0x9209(mock 与 0x1004 同人设)。
+      expect(await live.session.getVendorStorageIds(), [0x00010001]);
       final storage = await live.session.getStorageInfo(0x00010001);
       expect(storage.maxCapacityBytes, 64 * 1024 * 1024 * 1024);
       expect(storage.freeSpaceBytes, 32 * 1024 * 1024 * 1024);

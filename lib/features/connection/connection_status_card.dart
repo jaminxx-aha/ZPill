@@ -10,6 +10,7 @@ import '../../core/camera/camera_connection.dart';
 import '../../design/app_colors.dart';
 import '../../design/app_dimens.dart';
 import '../../l10n/l10n.dart';
+import '../browser/storage_overview_controller.dart';
 import '../common/format.dart';
 
 /// 连接状态卡:状态色一行 + 阶段文案;connecting/pairing/detecting
@@ -146,21 +147,30 @@ class _HintText extends StatelessWidget {
   }
 }
 
-/// 双卡槽余量卡:每槽一行(名 + 剩余/总容量 + 余量进度条)。相机未上报
-/// 容量只显示名字;无槽不占位。(相册页删除后随相机信息卡组落户此处。)
+/// 双卡槽余量卡(读卡器信息):每槽一行(名 + 剩余/总容量 + 余量进度
+/// 条 + 写入中徽标),卡尾可拍张数一行。相机未上报容量只显示名字;
+/// 无槽不占位。(相册页删除后随相机信息卡组落户此处。)
 class StoragePanel extends StatelessWidget {
-  const StoragePanel({super.key});
+  const StoragePanel({super.key, this.overview});
+
+  /// 测试缝:缺省走 AppServices 全局单例。
+  final StorageOverviewController? overview;
 
   @override
   Widget build(BuildContext context) {
-    final overview = AppServices.instance.storageOverview;
+    final source = overview ?? AppServices.instance.storageOverview;
     return ListenableBuilder(
-      listenable: overview,
+      listenable: source,
       builder: (context, _) {
-        final storages = overview.storages;
+        final storages = source.storages;
         if (storages.isEmpty) {
           return const SizedBox.shrink();
         }
+        final slot = source.activeSlot;
+        // 可拍张数真机两卡沿严格相等(0x1005 自报值),取首个 >0 卡尾一行。
+        final shots = storages
+            .map((s) => s.freeSpaceImages)
+            .firstWhere((n) => n > 0, orElse: () => 0);
         return Card(
           margin: EdgeInsets.zero,
           child: Padding(
@@ -168,11 +178,33 @@ class StoragePanel extends StatelessWidget {
                 horizontal: AppSpacing.md, vertical: AppSpacing.sm),
             child: Column(
               children: [
-                for (final storage in storages)
+                for (var i = 0; i < storages.length; i++)
                   Padding(
                     padding:
                         const EdgeInsets.symmetric(vertical: AppSpacing.xs),
-                    child: _StorageRow(storage: storage),
+                    child: _StorageRow(
+                      storage: storages[i],
+                      ordinal: i,
+                      // 记录槽 0xD1F2:1=槽1/2=槽2/3=双槽(0/未知不标)。
+                      writing: slot != null && (slot == i + 1 || slot == 3),
+                    ),
+                  ),
+                if (shots > 0)
+                  Padding(
+                    padding: const EdgeInsets.only(top: AppSpacing.xs),
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        context.t('conn.shotsLeft', {'n': '$shots'}),
+                        style: Theme.of(context)
+                            .textTheme
+                            .bodySmall
+                            ?.copyWith(
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .onSurfaceVariant),
+                      ),
+                    ),
                   ),
               ],
             ),
@@ -184,9 +216,27 @@ class StoragePanel extends StatelessWidget {
 }
 
 class _StorageRow extends StatelessWidget {
-  const _StorageRow({required this.storage});
+  const _StorageRow({
+    required this.storage,
+    required this.ordinal,
+    required this.writing,
+  });
 
   final CameraStorage storage;
+  final int ordinal;
+
+  /// 当前记录槽命中本行(写卡中)。
+  final bool writing;
+
+  /// 展示名:相机描述 → 卷标 → 「插槽 n」按行序兜底(不走模型 hex
+  /// 兜底,真机 description/volumeLabel 均空时键名兜底)。
+  String _label(BuildContext context) {
+    final d = storage.description;
+    if (d != null && d.isNotEmpty) return d;
+    final v = storage.volumeLabel;
+    if (v != null && v.isNotEmpty) return v;
+    return context.t('conn.slot', {'n': '${ordinal + 1}'});
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -204,10 +254,35 @@ class _StorageRow extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(storage.label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.bodyMedium),
+              Row(
+                children: [
+                  Flexible(
+                    child: Text(_label(context),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodyMedium),
+                  ),
+                  if (writing) ...[
+                    const SizedBox(width: AppSpacing.xs),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 6, vertical: 1),
+                      decoration: BoxDecoration(
+                        color: colorScheme.secondaryContainer,
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Text(
+                        context.t('conn.writing'),
+                        style: Theme.of(context)
+                            .textTheme
+                            .labelSmall
+                            ?.copyWith(
+                                color: colorScheme.onSecondaryContainer),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
               if (ratio != null) ...[
                 const SizedBox(height: AppSpacing.xs),
                 LinearProgressIndicator(
