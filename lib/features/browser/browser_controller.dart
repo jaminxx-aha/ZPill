@@ -1,4 +1,5 @@
-/// 相册浏览控制器:连接成功自动加载、断连清空、渐进同步进度上报。
+/// 相册浏览控制器:相册页打开沿按需加载(懒枚举)、断连清空、渐进同步
+/// 进度上报。
 library;
 
 import 'dart:async';
@@ -18,14 +19,16 @@ final class BrowserController extends ChangeNotifier {
   }) {
     // 渐进发布:每块一次(约 25 次/602 对象,非逐对象)。
     _updatesSub = repository.updates.listen(_onUpdate);
-    // 连接成功 → 自动加载(浏览页处于后台 tab 时也能就绪)。
+    // 连接沿不再自动枚举(2026-10-17 真机日志定案):全库批量 0x9805
+    // 单笔 3.8s 独占会话串行锁,曾插队到起景 0x9201 之前,首帧与信息卡
+    // 整体被拖慢 4s。枚举改懒触发(相册页 initState 调 load();仓库已
+    // 载入时瞬回),连接沿只管门闩与清态。
     connection?.states.listen((s) {
       if (s == CameraLinkState.connected) {
         _linkUp = true;
-        load();
       } else if (s == CameraLinkState.reconnecting) {
         // 自动重连期:门闩挡迟到的块事件,数据冻结不清 —— 重连成功沿
-        // load() 照旧重载(connected 分支在上)。
+        // 不自动重枚举(懒加载),重开相册页即取新枚举。
         _linkUp = false;
       } else if (s == CameraLinkState.disconnected ||
           s == CameraLinkState.failed) {

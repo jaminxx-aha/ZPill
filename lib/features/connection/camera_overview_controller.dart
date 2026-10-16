@@ -89,7 +89,7 @@ final class CameraOverviewController extends ChangeNotifier {
     required this.session,
     required this.connection,
     this.propResyncDebounce = const Duration(milliseconds: 500),
-    this.connectRefreshDelay = Duration.zero,
+    this.connectRefreshGate,
   }) {
     _statesSub = connection.states.listen((s) {
       if (s == CameraLinkState.connected) {
@@ -115,23 +115,26 @@ final class CameraOverviewController extends ChangeNotifier {
   /// 可注入(测试零等待)。
   final Duration propResyncDebounce;
 
-  /// 连接沿刷新让路(生产装配传 2s,测试默认零等待):概览整链 8 事务
-  /// 与起景链在会话串行锁上轮转,曾把 0x9201 压到十几事务深 —— 拍摄页
-  /// 「取景未开启」卡好几秒(2026-10-16 真机定案)。让起景链先独跑,
-  /// 首帧上屏后概览再上路。
-  final Duration connectRefreshDelay;
+  /// 连接沿刷新放行门(生产装配传「起景段落定门」,测试默认 null 直刷):
+  /// 概览整链 8 事务与起景链在会话串行锁上轮转,曾把 0x9201 压到十几
+  /// 事务深 —— 拍摄页「取景未开启」卡好几秒(2026-10-16 真机定案)。
+  /// 事件驱动:起景段(0x9201 含自愈梯)落定即放行,不再死等固定窗,
+  /// 起景快信息卡就早亮。
+  final Future<void> Function()? connectRefreshGate;
 
   void _refreshWhenDue() {
-    if (connectRefreshDelay == Duration.zero) {
+    final gate = connectRefreshGate;
+    if (gate == null) {
       unawaited(refresh());
       return;
     }
-    unawaited(Future<void>.delayed(connectRefreshDelay, () {
-      // 延迟窗里沿翻篇(断开/重连)不追;重连沿有自己的新定时。
+    unawaited(() async {
+      await gate();
+      // 门等窗里沿翻篇(断开/重连)不追;重连沿有自己的新定时。
       if (connection.state == CameraLinkState.connected) {
         unawaited(refresh());
       }
-    }));
+    }());
   }
 
   /// 机身信息(GetDeviceInfo);null = 未连接/未读到。
