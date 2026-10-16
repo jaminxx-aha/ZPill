@@ -13,6 +13,7 @@ import '../../data/settings_store.dart';
 import '../../l10n/l10n.dart';
 import 'ble_pair_page.dart';
 import 'snapshot_controller.dart' show buildSnapshotSection;
+import 'log_section.dart' show buildLogSection;
 
 /// 取景页/取景区消费设置(autoRotateFeed/deSqueeze)时把本控制器当
 /// [ValueListenable] 直挂:监听即 ChangeNotifier,值即 [settings]。
@@ -424,6 +425,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 ),
               ),
               buildSnapshotSection(context),
+              buildLogSection(context),
             ],
           ),
         ),

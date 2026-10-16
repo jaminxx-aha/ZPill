@@ -16,6 +16,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
+import com.aha.nikonpill.log.NativeLog
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
@@ -460,6 +461,7 @@ class UsbHostPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHandl
                         clearHalt(s, s.bulkOut.address)
                         n = s.connection.bulkTransfer(s.bulkOut, chunk, chunk.size, BULK_OUT_TIMEOUT_MS)
                         if (n < 0) {
+                            NativeLog.e("usb", "bulkOut 失败:ret=$n(共 ${bytes.size}B,已写 ${off}B)")
                             postError(result, "usb_error", "bulkTransfer out ret=$n")
                             return@execute
                         }
@@ -600,6 +602,7 @@ class UsbHostPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHandl
                         postSuccess(result, buffer.copyOf(filled))
                     }
                 } else if (failed) {
+                    NativeLog.e("usb", "bulkRead 失败:负值返回(max=${maxLen}B,窗=${timeoutMs}ms)")
                     if (timeoutMs > 0) {
                         // 窗口内无数据(含清 halt 重读仍败):对齐 Dart 的
                         // TimeoutException 语义 —— 可恢复的普通失败,不断链。
@@ -611,6 +614,7 @@ class UsbHostPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHandl
                     postError(result, "usb_timeout", "bulkRead ${timeoutMs}ms 窗口内无数据")
                 }
             } catch (e: Exception) {
+                NativeLog.e("usb", "bulkRead 异常:$e")
                 postError(result, "usb_error", "bulkRead: $e")
             }
         }
@@ -660,6 +664,7 @@ class UsbHostPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHandl
                 }
                 postSuccess(result, drained)
             } catch (e: Exception) {
+                NativeLog.e("usb", "drainIn 异常:$e")
                 postError(result, "usb_error", "drainIn: $e")
             }
         }

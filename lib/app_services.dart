@@ -9,12 +9,14 @@
 library;
 
 import 'dart:async';
-import 'dart:io' show Platform;
+import 'dart:io' show Directory, File, FileMode, Platform;
 
+import 'package:flutter/foundation.dart' show debugPrint, kDebugMode;
 import 'package:flutter/widgets.dart' show AppLifecycleListener, AppLifecycleState;
 
 import 'core/ble/ble_camera_session.dart';
 import 'core/ble/geo_payload.dart';
+import 'core/log/app_log.dart';
 import 'core/browser/camera_file_ops.dart';
 import 'core/browser/object_repository.dart';
 import 'core/browser/thumbnail_cache.dart';
@@ -56,6 +58,7 @@ final class AppServices {
   AppServices._() {
     // 幂等:测试直接 pumpWidget 不经 main(),这里保证平台服务就绪。
     PlatformServices.bootstrap();
+    _wireAppLog();
 
     // 无线身份与配对档案(dataDir = applicationSupport,持久):
     // 客户端 GUID 跨启动复用,相机按它记忆已配对设备;换 GUID = 新客户端。
@@ -374,6 +377,69 @@ final class AppServices {
         repository.reset();
       }
     });
+  }
+
+  // ------------------------------------------------------------------
+  // 日志装配(AppLog 的出口注入面,core 零 IO 约定的另一半)
+  // ------------------------------------------------------------------
+
+  static const int _tailCapBytes = 256 * 1024;
+
+  /// 控制台镜像(debug 构建接 debugPrint → hilog,release 无出口)+
+  /// error 尾巴文件:环形缓冲之外的崩溃保险,error 级即时追加
+  /// `dataDir/logs/tail.log`,超 256KB 裁半。dataDir 是异步通道调用:
+  /// resolve 前的行先缓冲,到位后补落;通道不可用(测试/异端)置
+  /// failed 放弃落盘,内存环照常兜底 —— 落盘永不反噬日志主链路。
+  void _wireAppLog() {
+    final buffered = <String>[];
+    Directory? logsDir;
+    var resolving = false;
+    var failed = false;
+    AppLog.configure(
+      mirror: kDebugMode ? debugPrint : null,
+      errorTail: (line) {
+        if (failed) return;
+        final dir = logsDir;
+        if (dir != null) {
+          unawaited(_appendTail(dir, line));
+          return;
+        }
+        buffered.add(line);
+        if (resolving) return;
+        resolving = true;
+        unawaited(() async {
+          try {
+            final dataDir = await PlatformServices.gallery.dataDir();
+            final d = Directory('$dataDir/logs');
+            await d.create(recursive: true);
+            logsDir = d;
+            final pending = buffered.toList();
+            buffered.clear();
+            for (final l in pending) {
+              await _appendTail(d, l);
+            }
+          } on Object {
+            failed = true;
+            buffered.clear();
+          } finally {
+            resolving = false;
+          }
+        }());
+      },
+    );
+  }
+
+  Future<void> _appendTail(Directory logsDir, String line) async {
+    try {
+      final f = File('${logsDir.path}/tail.log');
+      await f.writeAsString('$line\n', mode: FileMode.append);
+      if (await f.length() > _tailCapBytes) {
+        final bytes = await f.readAsBytes();
+        await f.writeAsBytes(bytes.sublist(_tailCapBytes ~/ 2), flush: true);
+      }
+    } on Object {
+      // 落盘失败(盘满等):静默,内存环仍是完整账本
+    }
   }
 
   // ------------------------------------------------------------------

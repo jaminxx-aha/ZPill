@@ -28,6 +28,7 @@ import 'dart:typed_data';
 
 import '../../platform/ble_scanner.dart';
 
+import '../log/app_log.dart';
 import 'ble_keepalive.dart';
 import 'gatt_uuids.dart';
 import 'geo_payload.dart';
@@ -336,7 +337,14 @@ final class BleCameraSession {
     }
     try {
       final blob = await _host.read(kNikonCharConfig);
-      _trace('0x2004 ← ${blob == null ? 'null' : '${blob.length}B ${hex(blob)}'}');
+      if (blob == null) {
+        _trace('0x2004 ← null');
+      } else {
+        // AppLog 分支脱敏(加密凭据 blob);onTrace 保持全 hex 供方言核对。
+        _trace('0x2004 ← ${blob.length}B ${hex(blob)}',
+            masked: '0x2004 ← ${blob.length}B '
+                '${AppLog.hex(blob, sensitive: true)}');
+      }
       if (blob == null || blob.isEmpty) {
         lastError = '相机未下发 AP 凭据(0x2004 空)';
         return null;
@@ -708,5 +716,11 @@ final class BleCameraSession {
     }
   }
 
-  void _trace(String line) => onTrace?.call(line);
+  /// trace 双发:原样进 [onTrace](配对页 UI 保持全 hex 供方言核对),
+  /// 同时进 AppLog ble 域 —— [masked] 给敏感载荷行(AppLog 环形缓冲会
+  /// 随导出外流,凭据只留头尾对拍帧,中段打码)。
+  void _trace(String line, {String? masked}) {
+    onTrace?.call(line);
+    AppLog.d(AppLog.ble, masked ?? line);
+  }
 }
