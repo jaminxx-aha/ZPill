@@ -18,6 +18,14 @@
 ///
 /// 输出走 debugPrint → hilog(标签 [PTP诊断])。
 /// 诊断用完不删:后续协议层改动(0x9434、断点续传等)真机首验可复用。
+///
+/// **连接沿自动运行已收闸**(2026-10-16 真机定案):本序列含全卡枚举
+/// (限定视图探针逐句柄 GetObjectInfo,相当于把整卡再翻三遍)+ 两次整图
+/// GetObject 下载 + CloseSession→OpenSession,全部挤在会话串行锁上。
+/// 早年只在 USB 回归调试期连,无感;如今 Wi-Fi 每事务一次往返,连接沿
+/// 自动跑会把取景首帧/进页刷参/信息卡全部压到分钟级 —— 拍摄页「进页
+/// 卡很久、无实时取景」的主因。需要时
+/// `flutter run --dart-define=PTP_DIAG=true` 显式打开。
 library;
 
 import 'package:flutter/foundation.dart';
@@ -26,6 +34,10 @@ import '../core/browser/object_repository.dart';
 import '../core/browser/photo_group.dart';
 import '../core/ptp/ptp_session.dart';
 import '../core/ptpip/object_format.dart';
+
+/// 连接成功沿自动运行诊断的总闸(默认关,见库注;显式开 =
+/// `--dart-define=PTP_DIAG=true`)。
+const bool kPtpDiagnosticsOnConnect = bool.fromEnvironment('PTP_DIAG');
 
 final class PtpDiagnostics {
   PtpDiagnostics._();
