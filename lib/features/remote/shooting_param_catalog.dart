@@ -132,17 +132,18 @@ String _formatEv(int v) {
   return ev > 0 ? '+$s' : s;
 }
 
-/// 快门(0xD100 打包分数)展示:哨兵 Bulb/X 同步/Time;分数
+/// 快门(0xD100 打包分数)展示:哨兵 B 门/X 同步/T 门;分数
 /// num<<16|den → 「1/Ns」/「Ns」/「n/ds」(OpenZCine stillShutterLabel
-/// 同款口径)。
+/// 同款口径)。哨兵串原文即 t() 键(中文显「B 门」,英文经 en_catalog
+/// 回 'Bulb')。
 String _formatShutterRaw(int raw) {
   switch (raw) {
     case 0xFFFFFFFF:
-      return 'Bulb';
+      return 'B 门';
     case 0xFFFFFFFE:
       return 'X 同步';
     case 0xFFFFFFFD:
-      return 'Time';
+      return 'T 门';
   }
   final n = (raw >> 16) & 0xFFFF;
   final d = raw & 0xFFFF;

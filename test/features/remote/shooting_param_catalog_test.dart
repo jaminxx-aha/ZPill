@@ -94,9 +94,9 @@ void main() {
     expect(_param(PtpDevicePropCode.exposureTime).display(4 << 16 | 1), '4s');
     expect(_param(PtpDevicePropCode.exposureTime).display(13 << 16 | 10),
         '13/10s');
-    expect(_param(PtpDevicePropCode.exposureTime).display(0xFFFFFFFF), 'Bulb');
+    expect(_param(PtpDevicePropCode.exposureTime).display(0xFFFFFFFF), 'B 门');
     expect(_param(PtpDevicePropCode.exposureTime).display(0xFFFFFFFE), 'X 同步');
-    expect(_param(PtpDevicePropCode.exposureTime).display(0xFFFFFFFD), 'Time');
+    expect(_param(PtpDevicePropCode.exposureTime).display(0xFFFFFFFD), 'T 门');
     // ISO 裸数值(2026-10-08 竖屏内联读出行起,值不再内嵌前缀)
     expect(_param(PtpDevicePropCode.exposureIndex).display(200), '200');
     expect(
