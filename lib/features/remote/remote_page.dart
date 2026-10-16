@@ -19,9 +19,11 @@
 /// - 取景画面**全幅铺底恒满宽**(2026-10-12 用户定案:竖拍画面两侧
 ///   不留黑边 —— [FeedFit.widthFill],比屏更高的内容上下裁;底部两行
 ///   按钮改浮层压画面下沿,「按钮整体往下移」):信息胶囊(链路点 +
-///   设备名 + 接管徽标 + REC + 纯净监看隐藏钮)浮在画面顶部;隐藏后
-///   恢复钮在**同一处**(右上角,与胶囊行尾隐藏钮同位 —— 旧版隐藏在
-///   快门行右/恢复在顶部两处不一,用户点名);
+///   设备名 + REC + APP 接管钮)浮在画面顶部。纯净监看(2026-10-17
+///   用户定案改制):点页面**空白处**(信箱带/按钮间空档/取景盒外
+///   让位带)隐去全部控制浮层,**再点任意处恢复** —— 胶囊隐藏钮与
+///   恢复钮同日撤除,行尾位由 APP 接管钮接替(设置浮层接管芯片一并
+///   撤除,配置项不再出现接管);
 /// - **取景默认打开**(十二轮起可持久关:设置浮层「取景」钮,关 =
 ///   进页/回台/连接沿都不自动起景):进页/回页沿未跑则自动起景(失败
 ///   态占位里「重试取景」兜底);
@@ -45,7 +47,7 @@
 /// 右移 30):顶栏一条(信息胶囊定宽 [kLandscapePillWidth]
 /// **居中于取景盒**,与贴底模式条同轴线 —— 八轮用户定案「上方按钮和
 /// 下方拍照/视频按钮基于取景居中对齐」;十轮顶距 6 + 胶囊高 38,
-/// 与贴底条 6+38 上下镜像;纯净监看隐藏钮入胶囊行尾);
+/// 与贴底条 6+38 上下镜像;APP 接管钮入胶囊行尾);
 /// 快门柱**距物理屏右缘 [kScreenEdgePadding]**(六轮破安全区;
 /// 灵动岛在侧缘中点,岛侧快门右段入岛)全高居中,自上而下
 /// **旋转 / 设置 / 大圆环快门(78,同竖屏)/ 对焦 / 相册**(2026-10-12
@@ -54,7 +56,7 @@
 /// 用户「以拍照按钮居中对齐,而不是右边对齐」);贴底条 = 模式条
 /// 独占(居中于画面子盒);设置浮层让位快门柱;拉焦轮 bottomRight
 /// (右上角留给录制读出)。纯净监看隐去全部控制浮层,只留画面与监看
-/// 叠层,恢复钮在右上角。方向按钮(恒显转屏图标,点按横↔竖直切,
+/// 叠层,再点任意空白恢复。方向按钮(恒显转屏图标,点按横↔竖直切,
 /// 初始态跟随系统)经 SystemChrome 强制,系统转屏锁开着也能切,不
 /// 依赖系统自动横竖屏设置。
 ///
@@ -574,16 +576,18 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   /// 竖屏 iPhone 相机式排版(2026-10-10 重排;2026-10-12 三轮:画面
   /// 全幅铺底恒满宽,底部两行改浮层压画面下沿;九轮:四缘统一 20):
   /// 取景画面占整页([FeedFit.widthFill] —— 竖拍内容两侧不留黑边,
-  /// 比屏更高裁上下),信息胶囊(含纯净监看隐藏钮)浮在画面顶部(顶距
+  /// 比屏更高裁上下),信息胶囊(含 APP 接管钮)浮在画面顶部(顶距
   /// 补 notch,六轮破安全区后手动补偿;左右 20);底部两行浮层压画面
   /// 下沿、距**物理屏缘 20**([kScreenEdgePadding] 破手势条安全区,
   /// 参照 iOS 相机底部按钮距离;左右同为 20 —— 九轮用户「左右两侧按钮
   /// 离边的距离和离下方的距离保持一致」)
   /// —— 控制行(对焦 | 快门 | 设置)→ 底行(相册 | 模式条 |
   /// 旋转,参数读出行已删,参数入口 = 设置浮层);行内空白自吃
-  /// (opaque 吸收层垫在按钮下,不落到画面手势)。设置为非模态浮层,
-  /// 底锚浮在底区两行上方。纯净监看隐去顶部浮层与底部两行(恢复钮
-  /// 在右上角同位),监看叠层/横幅保留。
+  /// (opaque 吸收层垫在按钮下,不落到画面手势;浮层关时纯吸收 ——
+  /// 底区是控件区不是页面空白,锁住的钮落下的点按不能收 chrome)。
+  /// 设置为非模态浮层,
+  /// 底锚浮在底区两行上方。纯净监看隐去顶部浮层与底部两行(点取景
+  /// 画面空白隐藏/再点任意处恢复),监看叠层/横幅保留。
   ///
   /// 监听拆两层(同横屏):feed 区 merge(controller+frame+status)
   /// 逐帧刷;chrome 层只听 controller —— 帧到达只写 ValueNotifier 不
@@ -609,7 +613,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
           builder: (context, _) => RemoteFeedArea(
             controller: controller,
             toggles: _toggles,
-            onTapFocus: _handleTapFocus,
+            onTapFocus: _handleFeedTap,
             topInset: pad.top + kPortraitTopInset,
             // 贴底叠层(横幅/直方图)让位底区两行浮层(含物理屏缘 20)。
             bottomInset: kScreenEdgePadding + kPortraitBottomChromeHeight,
@@ -618,7 +622,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
             hideChrome: _chromeHidden,
           ),
         ),
-        // 顶部浮层:信息胶囊(链路/张数/REC/接管 + 隐藏钮)+ 设置浮层
+        // 顶部浮层:信息胶囊(链路/张数/REC + APP 接管钮)+ 设置浮层
         // (底锚居中,浮在底栏上方);经 IgnorePointer + AnimatedOpacity
         // 支持纯净监看淡出。key 供测试定位(全树按类型找不到「chrome
         // 这一层」,同横屏)。
@@ -651,7 +655,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                       right: kScreenEdgePadding,
                       child: RemoteInfoPill(
                         controller: controller,
-                        onHideChrome: _hideChrome,
+                        onTakeoverRequest: _confirmTakeover,
                         margin: EdgeInsets.zero,
                       ),
                     ),
@@ -673,7 +677,6 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                               onEditParam: _editParam,
                               onTogglesChanged: _updateToggles,
                               onLiveViewToggle: _setLiveView,
-                              onTakeoverRequest: _confirmTakeover,
                               onLiveViewQualityChanged: _updateLiveViewQuality,
                               onSdramCaptureChanged: _updateSdramCapture,
                               onBleGpsInjectChanged: _updateBleGpsInject,
@@ -723,11 +726,15 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                     Positioned.fill(
                       child: GestureDetector(
                         behavior: HitTestBehavior.opaque,
-                        // 空白吸收:浮层关 = 无回调纯吸收(点到空白不落到
-                        // 画面手势,不把对焦点钳到画面底缘);浮层开 =
-                        // 这一拍转为收浮层(同点画面空白,2026-10-12
-                        // 「底区空白也收」口径 —— 吸收层在其上,须自带
-                        // 收起,不能指望其下的垫层)。
+                        // 空白吸收:点到空白不落到画面手势(不把对焦点钳
+                        // 到画面底缘)。浮层开 = 这一拍转为收浮层(同点
+                        // 画面空白,2026-10-12 「底区空白也收」口径 ——
+                        // 吸收层在其上,须自带收起,不能指望其下的垫层)。
+                        // 浮层关 = 纯吸收不放行:底区是控件区不是页面
+                        // 空白,禁用件的点按(录制中锁模式条)会落到这
+                        // 一层,不能让锁住的钮把 chrome 收掉(2026-10-17
+                        // 点空白纯净监看不覆盖底区;隐藏入口在取景画面
+                        // 信箱空白/横屏让位带)。
                         onTap: _settingsOpen ? _dismissSettings : null,
                       ),
                     ),
@@ -779,18 +786,8 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
             ),
           ),
         ),
-        // 纯净监看恢复钮:chrome 全隐后唯一入口(监看叠层/横幅仍在),
-        // 与胶囊行尾隐藏钮同位(右上角,顶距补 notch;右距九轮统一 20)。
-        if (_chromeHidden)
-          Positioned(
-            top: pad.top + 8,
-            right: kScreenEdgePadding,
-            child: ChromeIconButton(
-              icon: Icons.visibility,
-              tooltip: context.t('remote.showControls'),
-              onTap: () => setState(() => _chromeHidden = false),
-            ),
-          ),
+        // 纯净监看恢复:无独立恢复钮(2026-10-17 撤)—— 竖屏画面全幅
+        // 铺底,隐藏中任意点按落进取景手势层([_handleFeedTap] = 恢复)。
       ],
     );
   }
@@ -811,12 +808,20 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   }
 
   /// 纯净监看(竖横屏共用):隐去全部控制浮层,同步收起设置浮层
-  /// (不留一个看不见却开着的面板态)。恢复钮在右上角同位。
+  /// (不留一个看不见却开着的面板态)。恢复 = 再点任意空白
+  /// ([_showChrome];2026-10-17 用户定案「再点击出现」,恢复钮同日
+  /// 撤除)。
   void _hideChrome() {
     setState(() {
       _chromeHidden = true;
       _settingsOpen = false;
     });
+  }
+
+  /// 纯净监看恢复:任意点按(画面内/外)回 chrome —— 入口见
+  /// [_handleFeedTap] 与横屏取景盒外让位带垫层。
+  void _showChrome() {
+    setState(() => _chromeHidden = false);
   }
 
   /// 横屏监看(2026-10-12 三轮定案;六轮破安全区;八轮轴线对齐;九轮
@@ -848,6 +853,16 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     return Stack(
       fit: StackFit.expand,
       children: [
+        // 取景盒外的左右让位带(左 60/右 118)= 页面空白:点按切换
+        // chrome 显隐(2026-10-17 点空白纯净监看 —— 显示中隐藏、隐藏中
+        // 恢复)。垫在 feed 之下:盒内点按仍归取景手势(触控对焦/盒内
+        // 信箱空白由 [_handleFeedTap] 收口),只有让位带落到这里。
+        Positioned.fill(
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: _chromeHidden ? _showChrome : _hideChrome,
+          ),
+        ),
         // feed 区不能裸放:帧到达只写 ValueNotifier 不 notifyListeners,
         // 没有这层 merge 监听,首屏永远停在「等待首帧」。取景盒**左缩 60
         // + 右缩 118**(右 = 快门柱让位:柱右距物理屏缘 30
@@ -867,7 +882,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
             builder: (context, _) => RemoteFeedArea(
               controller: controller,
               toggles: _toggles,
-              onTapFocus: _handleTapFocus,
+              onTapFocus: _handleFeedTap,
               topInset: kLandscapeTopInset,
               bottomInset: kLandscapeBottomInset,
               fit: FeedFit.heightFill,
@@ -907,9 +922,9 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                     // 「这一个按钮居中」;八轮定案与贴底模式条同轴线 ——
                     // 顶栏与取景盒同缩(左 60/右 118),胶囊心随盒走;
                     // 九轮定宽 [kLandscapePillWidth],内容不变、内部
-                    // Spacer 拉开、隐藏钮贴行尾;十轮顶距 6 + 栏高 38 +
+                    // Spacer 拉开、接管钮贴行尾;十轮顶距 6 + 栏高 38 +
                     // 胶囊高 38,与贴底条 6+38 上下镜像「和底部一致」);
-                    // 纯净监看钮入胶囊行尾(与竖屏同款单入口)。
+                    // APP 接管钮入胶囊行尾(与竖屏同款单入口)。
                     Positioned(
                       top: 6,
                       left: 60,
@@ -923,7 +938,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                             margin: EdgeInsets.zero,
                             compact: true,
                             fixedWidth: kLandscapePillWidth,
-                            onHideChrome: _hideChrome,
+                            onTakeoverRequest: _confirmTakeover,
                           ),
                         ),
                       ),
@@ -989,7 +1004,6 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                           onEditParam: _editParam,
                           onTogglesChanged: _updateToggles,
                           onLiveViewToggle: _setLiveView,
-                          onTakeoverRequest: _confirmTakeover,
                           onLiveViewQualityChanged: _updateLiveViewQuality,
                           onSdramCaptureChanged: _updateSdramCapture,
                           onBleGpsInjectChanged: _updateBleGpsInject,
@@ -1010,26 +1024,8 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
             ),
           ),
         ),
-        // 纯净监看恢复钮:chrome 全隐后唯一入口(监看叠层/横幅仍在),
-        // 摆在顶栏胶囊同位(居中于取景盒 —— 与盒同缩 60/118 轴线、
-        // 顶距 6 同款,十轮与贴底镜像)。
-        if (_chromeHidden)
-          Positioned(
-            top: 6,
-            left: 60,
-            right: 118,
-            height: kLandscapeTopBarHeight,
-            child: Padding(
-              padding: const EdgeInsets.only(left: 10, right: 10),
-              child: Center(
-                child: ChromeIconButton(
-                  icon: Icons.visibility,
-                  tooltip: context.t('remote.showControls'),
-                  onTap: () => setState(() => _chromeHidden = false),
-                ),
-              ),
-            ),
-          ),
+        // 纯净监看恢复:无独立恢复钮(2026-10-17 撤)—— 盒内点按落取景
+        // 手势层、盒外让位带落垫层,任意点按 = [_showChrome]。
       ],
     );
   }
@@ -1073,15 +1069,26 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         .catchError((Object _) {}));
   }
 
-  // ── 触控对焦 ───────────────────────────────────────────────────
+  // ── 取景点按(触控对焦 + 纯净监看切换)────────────────────────
 
-  /// 点按 → 触控对焦:取景区已把屏幕点逆映射为**归一化图像坐标**
-  /// (缩放/旋转/变宽一次收口,见 FeedTransform.screenToNorm;null =
-  /// 无画面或点在画面外 —— 框外点按不挪对焦框)。设置浮层开着时收浮层
-  /// 由垫层手势承担(见 _dismissSettings)
-  /// —— 这里的点按必然已越过垫层 = 浮层已收,径直对焦。
-  void _handleTapFocus(TapUpDetails d, Offset? norm) {
-    if (norm == null) return;
+  /// 取景画面点按三分流(2026-10-17 纯净监看改制):
+  /// - chrome 隐藏中:**任意点按恢复**([_showChrome],「再点击出现」;
+  ///   隐藏态不触控对焦,先回 chrome 再对焦);
+  /// - norm = null(无画面/点在画面外信箱空白):**点空白隐藏**
+  ///   ([_hideChrome],2026-10-16 定案的「框外点按不挪对焦框」沿此
+  ///   收口为显式动作);设置浮层开着时点不到这里(满铺垫层先吃,
+  ///   见 _dismissSettings);
+  /// - norm 非空:触控对焦 —— 取景区已把屏幕点逆映射为**归一化图像
+  ///   坐标**(缩放/旋转/变宽一次收口,见 FeedTransform.screenToNorm)。
+  void _handleFeedTap(TapUpDetails d, Offset? norm) {
+    if (_chromeHidden) {
+      _showChrome();
+      return;
+    }
+    if (norm == null) {
+      _hideChrome();
+      return;
+    }
     unawaited(controller.touchFocus(norm.dx, norm.dy));
   }
 
@@ -1099,7 +1106,8 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     }
   }
 
-  /// 专用「APP 接管」芯片的确认对话框路径(不进参数面板)。
+  /// 信息胶囊「APP 接管」钮的确认对话框路径(不进参数面板;原设置
+  /// 浮层专用芯片 2026-10-17 撤除,钮移胶囊行尾)。
   Future<bool> _confirmTakeover(BuildContext context) =>
       confirmTakeover(context, controller);
 }

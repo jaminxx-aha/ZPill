@@ -18,7 +18,8 @@ import 'shooting_param_catalog.dart';
 /// **双层跳合一**:拨盘拥有参数(快门/模式/ISO/光圈)且未接管时,面板
 /// 先出接管区(原「启用 APP 接管控制?」确认对话框的两行文案 + 启用
 /// 钮搬进面板头),点按启用后 AnimatedSwitcher 换出值列表 —— 不再
-/// 对话框跳一层。专用「APP 接管」芯片仍走 [confirmTakeover] 对话框。
+/// 对话框跳一层。信息胶囊行尾「APP 接管」钮仍走 [confirmTakeover]
+/// 对话框(2026-10-17 自设置浮层芯片迁来)。
 Future<void> showParamEditSheet(
     BuildContext context, RemoteController controller, ShootingParam p) async {
   final state = controller.paramProps[p.code];
