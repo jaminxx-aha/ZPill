@@ -1883,6 +1883,22 @@ final class RemoteController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 连接沿「起景段」落定门(2026-10-16,侧链放行信号):[_onConnectedChain]
+  /// 的接管→模式读→画质→0x9201(含自愈梯)段落走完即放行,链尾刷参
+  /// 不计 —— 概览/双卡槽/清事件/对时/事件轮询等这门而非死等固定窗,
+  /// 起景快侧链就早走(相机页信息卡不再白扛整段让路窗)。
+  ///
+  /// **预置下一沿的空门**:概览两控制器订阅序在本控制器之前(AppServices
+  /// 装配序),connected 事件先到它们手里 —— 它们取到的必须是本沿的门
+  /// (上一沿落定时预建的新门,尚未完成),完成于本沿起景段落定;构造期
+  /// 即备好首沿门。complete 与换门之间无 await,同同步块原子,并发的
+  /// 两条连接链各完成当时的现门,不会双完成。
+  Completer<void> _startSettledGate = Completer<void>();
+
+  /// 侧链放行门(见 [_startSettledGate])。消费方自带超时兜底 —— 门永不
+  /// 落定也不押死侧链(理论不至:连接沿必经落定点)。
+  Future<void> get connectedStartSettled => _startSettledGate.future;
+
   /// connected 沿串链:自动起景(0x9201 + 首帧入队)先行,再对表刷参
   /// —— 回台沿(41c6bba)同款序,请求序恒 [0x9201, 首帧, 参数…];两个
   /// 并发 unawaited 会让引擎帧请求穿插进刷参链。
@@ -1915,6 +1931,11 @@ final class RemoteController extends ChangeNotifier {
     // 分辨率,0x9428 帧尺寸随 0xD1AC)。
     await _applyLiveViewQuality();
     await autoLiveViewOnConnect();
+    // 起景段落定(0x9201 成败已分,含自愈梯):放行侧链(概览/双卡槽/
+    // 清事件/对时/轮询),再进链尾刷参 —— 侧链此后与刷参链轮转,不再
+    // 与起景段争锁;固定让路窗由此退役(2026-10-16)。
+    _startSettledGate.complete();
+    _startSettledGate = Completer<void>();
     await refreshParams();
   }
 

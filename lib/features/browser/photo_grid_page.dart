@@ -18,6 +18,7 @@
 /// 查看器仍按打开时刻的快照浏览(同步继续不追新,重进本页即刷新)。
 library;
 
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -119,6 +120,15 @@ final class _DateSection {
 }
 
 class _PhotoGridPageState extends State<PhotoGridPage> {
+  @override
+  void initState() {
+    super.initState();
+    // 懒枚举触发点:连接沿全库枚举已撤(0x9805 单笔 3.8s 曾插队起景、
+    // 拖慢首帧与信息卡),进页才发起;仓库已载入(重开页)时 load() 瞬回
+    // 不重枚举,断连期调用静默失败不上屏。
+    unawaited(widget.controller.load());
+  }
+
   /// 选中集按组身份键(PhotoGroup.key):RAW+JPG 合并组算一项,
   /// 下载格式由选择面板决定(见 _downloadSelected)。
   final Set<int> _selected = {};

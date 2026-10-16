@@ -17,6 +17,7 @@ final class _FakeRepo implements ObjectRepository {
   final updatesCtrl = StreamController<AlbumsUpdate>.broadcast(sync: true);
   Completer<List<CameraAlbum>>? _pending;
   int resetCalls = 0;
+  int loadCalls = 0;
 
   /// 完成当前在途的 loadAlbums(已完成的 completer 自动轮换新的一轮)。
   void completeLoad(List<CameraAlbum> albums) => _fresh().complete(albums);
@@ -31,7 +32,10 @@ final class _FakeRepo implements ObjectRepository {
   }
 
   @override
-  Future<List<CameraAlbum>> loadAlbums() => _fresh().future;
+  Future<List<CameraAlbum>> loadAlbums() {
+    loadCalls++;
+    return _fresh().future;
+  }
 
   @override
   Stream<AlbumsUpdate> get updates => updatesCtrl.stream;
@@ -203,18 +207,45 @@ void main() {
     expect(controller.syncing, isFalse);
   });
 
-  test('重连:门闩重新放行,自动加载新枚举', () async {
+  test('连接沿不自动枚举:connected 只翻门闩,枚举随页面 load() 触发',
+      () async {
     final repo = _FakeRepo();
     final conn = _FakeConnection();
     final controller = BrowserController(repository: repo, connection: conn);
 
     conn.statesCtrl.add(CameraLinkState.connected);
     await pumpEventQueue();
-    expect(controller.syncing, isTrue); // 自动加载已发起
-    expect(repo.resetCalls, 0);
+    expect(controller.syncing, isFalse);
+    expect(repo.loadCalls, 0,
+        reason: '连接沿零枚举请求 —— 0x9805 全库批量单笔 3.8s,'
+            '插队起景曾把首帧与信息卡拖慢 4s(2026-10-17 真机日志定案)');
 
+    // 相册页打开沿触发:门闩已放行,load 正常起枚举并上屏。
+    final loading = controller.load();
+    expect(controller.syncing, isTrue);
     repo.completeLoad([_album([_entry(1)])]);
+    await loading;
+    expect(controller.albums, hasLength(1));
+  });
+
+  test('断连沿 load 静默不上屏,重连后页面 load 恢复新枚举', () async {
+    final repo = _FakeRepo();
+    final conn = _FakeConnection();
+    final controller = BrowserController(repository: repo, connection: conn);
+
+    conn.statesCtrl.add(CameraLinkState.disconnected);
     await pumpEventQueue();
+    final loading = controller.load();
+    repo.failLoad(TimeoutException('USB 链路已中断'));
+    await loading;
+    expect(controller.albums, isEmpty);
+    expect(controller.error, isNull, reason: '门闩闩上:断连期失败不上屏');
+
+    conn.statesCtrl.add(CameraLinkState.connected);
+    await pumpEventQueue();
+    final reload = controller.load();
+    repo.completeLoad([_album([_entry(1)])]);
+    await reload;
     expect(controller.albums, hasLength(1));
   });
 

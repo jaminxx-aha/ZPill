@@ -24,6 +24,10 @@ final class _ScriptTransport implements PtpTransport {
   final Queue<Object> script = Queue();
   final eventCtrl = StreamController<PtpEvent>.broadcast();
 
+  /// 观察钩子(起景段落定门用例):每笔请求入队时回调 —— 采样「门已放行」
+  /// 在刷参链首笔入队时点上的真值,判别「门挂起景段落定」还是「门挂链尾」。
+  void Function(PtpRequest request)? onRequest;
+
   void ok({Uint8List? data}) =>
       script.add(PtpResult(responseCode: PtpResponseCode.ok, data: data));
   void reply(int responseCode) =>
@@ -34,6 +38,7 @@ final class _ScriptTransport implements PtpTransport {
   Future<PtpResult> execute(PtpRequest request,
       {void Function(Uint8List chunk)? onData}) async {
     requests.add(request);
+    onRequest?.call(request);
     if (script.isEmpty) {
       throw StateError('脚本耗尽:未预置 0x${request.opcode.toRadixString(16)}');
     }
@@ -538,6 +543,33 @@ void main() {
         1, reason: '模式 = 手动 M(默认脚本:快门/光圈/ISO 都可调)');
     expect(controller.paramProps[PtpDevicePropCode.whiteBalance]?.value, 2);
     expect(controller.linkUp, isTrue);
+  });
+
+  test('起景段落定门:0x9201 落定即放行(先于链尾刷参),落定后预换下一沿新门',
+      () async {
+    _scriptParams(transport);
+    var gateDone = false;
+    unawaited(controller.connectedStartSettled.then((_) => gateDone = true));
+    // 刷参链首笔 = 张数裸读(0x1014 [0xD1F1]):入队时点上采样门真值。
+    // 门挂起景段落定 ⇒ 此刻必已放行;误挂链尾 ⇒ 必未放行,一采样即判别。
+    var gateDoneAtFirstParam = false;
+    transport.onRequest = (r) {
+      if (r.opcode == PtpOperationCode.getDevicePropValue &&
+          r.params.single == PtpDevicePropCode.exposureRemaining) {
+        gateDoneAtFirstParam = gateDone;
+      }
+    };
+    _emitConnected(transport, conn);
+    await pumpEventQueue();
+    expect(controller.engine.status.value, LiveViewStatus.running);
+    expect(gateDone, isTrue);
+    expect(gateDoneAtFirstParam, isTrue,
+        reason: '门在起景段落定即完成,先于刷参链首笔入队');
+    // 本沿门已决;此刻取门 = 下一沿预建新门(不携本沿已决,等窗不空放)。
+    var nextEdgeDone = false;
+    unawaited(controller.connectedStartSettled.then((_) => nextEdgeDone = true));
+    await pumpEventQueue();
+    expect(nextEdgeDone, isFalse);
   });
 
   test('capture:CaptureComplete 事件先到 → 提前收口,轮询不到 10 次', () async {

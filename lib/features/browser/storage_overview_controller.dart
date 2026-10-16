@@ -19,7 +19,7 @@ final class StorageOverviewController extends ChangeNotifier {
   StorageOverviewController({
     required this.session,
     required this.connection,
-    this.connectRefreshDelay = Duration.zero,
+    this.connectRefreshGate,
   }) {
     _statesSub = connection.states.listen((s) {
       if (s == CameraLinkState.connected) {
@@ -35,22 +35,25 @@ final class StorageOverviewController extends ChangeNotifier {
   final PtpSession session;
   final CameraConnection connection;
 
-  /// 连接沿刷新让路(生产装配传 2s,测试默认零等待):双卡槽枚举与
-  /// 起景链在会话串行锁上轮转,曾把 0x9201 压深 —— 拍摄页「取景未开
-  /// 启」卡好几秒(2026-10-16 真机定案)。同概览卡,首帧上屏后再上路。
-  final Duration connectRefreshDelay;
+  /// 连接沿刷新放行门(生产装配传「起景段落定门」,测试默认 null 直刷):
+  /// 双卡槽枚举与起景链在会话串行锁上轮转,曾把 0x9201 压深 —— 拍摄页
+  /// 「取景未开启」卡好几秒(2026-10-16 真机定案)。同概览卡,事件驱动:
+  /// 起景段(0x9201 含自愈梯)落定即放行,不再死等固定窗。
+  final Future<void> Function()? connectRefreshGate;
 
   void _refreshWhenDue() {
-    if (connectRefreshDelay == Duration.zero) {
+    final gate = connectRefreshGate;
+    if (gate == null) {
       unawaited(refresh());
       return;
     }
-    unawaited(Future<void>.delayed(connectRefreshDelay, () {
-      // 延迟窗里沿翻篇(断开/重连)不追;重连沿有自己的新定时。
+    unawaited(() async {
+      await gate();
+      // 门等窗里沿翻篇(断开/重连)不追;重连沿有自己的新定时。
       if (connection.state == CameraLinkState.connected) {
         unawaited(refresh());
       }
-    }));
+    }());
   }
 
   /// 按槽序展示(按 ID 升序稳定)。
