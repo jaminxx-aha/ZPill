@@ -226,11 +226,24 @@ void main() {
       }
     });
 
-    test('screenToNorm:画面外钳到边', () {
-      final c = t();
-      expect(c.screenToNorm(const Offset(-500, -500)), const Offset(0, 0));
-      expect(
-          c.screenToNorm(const Offset(9999, 9999)), const Offset(1, 1));
+    test('screenToNorm:画面外回 null,边界点含在画面内', () {
+      final c = t(); // 640×480 在 800×600 同比例:画面整盒,盒内皆画面
+      expect(c.screenToNorm(const Offset(-500, -500)), isNull);
+      expect(c.screenToNorm(const Offset(9999, 9999)), isNull);
+      // 真 letterbox:640×480 在 800×400 → contain 533.33×400,左右各留
+      // 133.33 空白(框外点按不挪对焦框,2026-10-16 用户定案)。
+      final lb = FeedTransform(
+          imageSize: const Size(640, 480), boxSize: const Size(800, 400));
+      expect(lb.displayRect.left, closeTo(400 / 3, 0.01));
+      expect(lb.screenToNorm(const Offset(50, 200)), isNull,
+          reason: '画面左缘外');
+      expect(lb.screenToNorm(const Offset(750, 200)), isNull,
+          reason: '画面右缘外');
+      final edge = lb.screenToNorm(const Offset(400 / 3, 200));
+      expect(edge!.dx, closeTo(0, 1e-9), reason: '角点恰在画面上:含在画面内');
+      expect(edge.dy, closeTo(0.5, 1e-9));
+      expect(lb.screenToNorm(const Offset(400, 200))!.dx, closeTo(0.5, 1e-9));
+      expect(lb.screenToNorm(const Offset(400, 200))!.dy, closeTo(0.5, 1e-9));
     });
 
     test('imageRectToScreen:中心与尺寸按 quarter 对调', () {

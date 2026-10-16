@@ -1728,8 +1728,8 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byIcon(Icons.grid_on), findsOneWidget, reason: '面板开');
 
-    // 点空白即收浮层(满铺手势层贪吃这一拍,不触发触控对焦);再点画面
-    // 照常触控对焦(点画幅左沿外的 letterbox 空白;AF 两应答在队)。
+    // 点空白即收浮层(满铺手势层贪吃这一拍,不触发触控对焦);AF 应答
+    // 在队但尚未消费。
     await tester.tapAt(const Offset(200, 400));
     await tester.pumpAndSettle();
     expect(find.byIcon(Icons.grid_on), findsNothing, reason: '点画面收起面板');
@@ -1738,12 +1738,22 @@ void main() {
             .where((r) => r.opcode == NikonOperationCode.changeAfArea),
         isEmpty,
         reason: '收浮层这一拍被垫层贪吃');
+    // 画幅左沿外的 letterbox 空白再点:出界点不挪对焦框(2026-10-16
+    // 用户定案),不发 0x9205。
     await tester.tapAt(const Offset(200, 400));
+    await tester.pumpAndSettle();
+    expect(
+        transport.requests
+            .where((r) => r.opcode == NikonOperationCode.changeAfArea),
+        isEmpty,
+        reason: '框外点按不触控对焦');
+    // 点画面中心照常触控对焦:heightFill 纵向满高线性,横向盒内居中
+    // (画面中心即盒心 771)→ 归一 (0.5, 0.5) → whole-size 32×24 → [16,12]。
+    await tester.tapAt(const Offset(771, 400));
     await tester.pumpAndSettle();
     final af = transport.requests.singleWhere(
         (r) => r.opcode == NikonOperationCode.changeAfArea);
-    // heightFill 映射照常:画面左缘外钳到 0,纵向满高线性
-    expect(af.params, [0, 12]);
+    expect(af.params, [16, 12]);
   });
 
   testWidgets('横屏纯净监看:控制浮层淡出放行点击,可一键恢复',

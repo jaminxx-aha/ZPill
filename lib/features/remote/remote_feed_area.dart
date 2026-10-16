@@ -220,7 +220,8 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea> {
         pan: _pan,
       );
       return GestureDetector(
-        // opaque:letterbox 空白区也要收点按(对焦坐标钳到画面边)。
+        // opaque:letterbox 空白区点按也收下(不落穿透),出界点
+        // screenToNorm 回 null —— 不挪对焦框(2026-10-16 用户定案)。
         behavior: HitTestBehavior.opaque,
         // 点按取景画面 = 触控对焦(无帧/未取景时控制器内静默忽略)
         onTapUp: (d) => _handleTapUp(d, t),
