@@ -2710,7 +2710,9 @@ void main() {
       // 锁定期余量不爆发(恰一步 = 恰一条 0x9204)。
       controller.paramProps[PtpDevicePropCode.stillFocusMode] =
           const PropState(value: 0);
-      transport.ok(); // 0x9204
+      transport
+        ..ok() // 0x9204 激活
+        ..ok(); // 0x90C8 就绪探:完成
       controller.focusDialDrag(24);
       await pumpEventQueue();
       expect(transport.count(NikonOperationCode.mfDrive), 1);
@@ -2770,17 +2772,21 @@ void main() {
           reason: '近端已锁:向近增量静默丢弃');
 
       // 反向(向远)拖:一步即解锁 + 续发照常。
-      transport.ok(); // 向远 0x9204 成功
+      transport
+        ..ok() // 向远 0x9204 激活
+        ..ok(); // 0x90C8 就绪探:完成
       controller.focusDialDrag(-24);
       await pumpEventQueue();
       expect(transport.count(NikonOperationCode.mfDrive), 2);
       expect(controller.mfNearEnd, isFalse, reason: '反向请求即解锁');
       final far = transport.requests
           .lastWhere((r) => r.opcode == NikonOperationCode.mfDrive);
-      expect(far.params, [2, 60], reason: '向远一步 60 脉冲');
+      expect(far.params, [2, 300], reason: '向远一步 300 脉冲(真机可见量)');
 
       // 解锁后向近拖动恢复发送;驱动成功双清端点态。
-      transport.ok();
+      transport
+        ..ok() // 0x9204 激活
+        ..ok(); // 0x90C8 就绪探
       controller.focusDialDrag(24);
       await pumpEventQueue();
       expect(transport.count(NikonOperationCode.mfDrive), 3);
@@ -2800,14 +2806,109 @@ void main() {
 
       // 陈旧 +20 近向余量已被落锁清空:向远恰一步(-24)即发(1 条步进
       // + 1 条向远),不被抵成「不足一步」。
-      transport.ok();
+      transport
+        ..ok() // 向远 0x9204 激活
+        ..ok(); // 0x90C8 就绪探:完成
       controller.focusDialDrag(-24);
       await pumpEventQueue();
       expect(transport.count(NikonOperationCode.mfDrive), 2,
           reason: '步进 1 条 + 向远 1 条(陈旧余量未抵消反向一步)');
       final far = transport.requests
           .lastWhere((r) => r.opcode == NikonOperationCode.mfDrive);
-      expect(far.params, [2, 60]);
+      expect(far.params, [2, 300]);
+    });
+
+    test('拉焦轮拒答重排队:激活即忙 → 原量归还退避续发,不横幅不清账',
+        () async {
+      await startLiveView();
+      transport.reply(PtpResponseCode.deviceBusy); // 激活即忙(瞬时 AF 收敛)
+      controller.focusDialDrag(48); // 两步量 = 600 脉冲
+      await pumpEventQueue();
+      expect(transport.count(NikonOperationCode.mfDrive), 1);
+      expect(controller.notice, isNull, reason: '瞬时拒答静默不提示');
+      expect(controller.error, isNull);
+
+      // 退避到点续发:原脉冲量归还不折损;就绪探完成。
+      transport
+        ..ok() // 续发激活
+        ..ok(); // 0x90C8 就绪探:完成
+      delay.release();
+      await pumpEventQueue();
+      final drives = transport.requests
+          .where((r) => r.opcode == NikonOperationCode.mfDrive)
+          .toList();
+      expect(drives, hasLength(2), reason: '拒答不弃单,退避后续发');
+      expect(drives.first.params, [1, 600]);
+      expect(drives.last.params, [1, 600], reason: '原量归还重发');
+      expect(controller.notice, isNull);
+    });
+
+    test('拉焦轮连续拒答:宽限墙钟内逐拍退避静默重试不弃单', () async {
+      await startLiveView();
+      // 四连拒答(退避门逐拍放行):宽限(4s 墙钟)内一律静默续发,
+      // 余量保留;超宽限暂停沿走 DateTime 真钟,桩测不造假钟不覆盖。
+      transport
+        ..reply(PtpResponseCode.deviceBusy)
+        ..reply(PtpResponseCode.deviceBusy)
+        ..reply(PtpResponseCode.deviceBusy)
+        ..reply(PtpResponseCode.deviceBusy);
+      controller.focusDialDrag(24);
+      await pumpEventQueue();
+      for (var i = 0; i < 3; i++) {
+        delay.release();
+        await pumpEventQueue();
+      }
+      expect(transport.count(NikonOperationCode.mfDrive), 4,
+          reason: '宽限内退避重试不弃单');
+      expect(controller.notice, isNull, reason: '宽限内不出提示');
+      expect(controller.error, isNull);
+    });
+
+    test('刻度鼓净脉冲:滚轮派发即入账,按钮按结果入账,重置归零,'
+        'AF 抢占不回卷', () async {
+      await startLiveView();
+
+      // 滚轮:向近一步撞尽头(0xA00C)——派发即 +300,驱动结果不回卷。
+      transport.reply(NikonResponseCode.mfDriveStepEnd);
+      controller.focusDialDrag(24);
+      await pumpEventQueue();
+      expect(controller.dialNetPulses.value, 300, reason: '派发即入账(乐观跟手)');
+      expect(controller.mfNearEnd, isTrue);
+
+      // 滚轮反向一步完成:300 - 300 = 0(端点锁内的同向拖动不派发不入账)。
+      transport
+        ..ok() // 0x9204 激活
+        ..ok(); // 0x90C8 就绪探:完成
+      controller.focusDialDrag(-24);
+      await pumpEventQueue();
+      expect(controller.dialNetPulses.value, 0, reason: '向远一步等量对冲');
+
+      // 按钮路径:完成入账;0xA00E 步进过小(镜头未动)不入账。
+      transport
+        ..ok()
+        ..ok();
+      await controller.mfDriveStep(towardNear: true);
+      expect(controller.dialNetPulses.value, 300, reason: '按钮完成入账');
+      transport.reply(NikonResponseCode.mfDriveStepInsufficiency);
+      await controller.mfDriveStep(towardNear: true);
+      expect(controller.dialNetPulses.value, 300, reason: '步进过小镜头未动不入账');
+
+      // 按钮拒答(弃单)不入账。
+      transport.reply(PtpResponseCode.deviceBusy);
+      await controller.mfDriveStep(towardNear: false);
+      expect(controller.dialNetPulses.value, 300, reason: '拒答弃单不入账');
+
+      // AF 移焦抢占:鼓面不回卷(避免视觉跳变;镜头新位置不回推账本)。
+      transport
+        ..ok() // changeAfArea
+        ..ok(); // afDrive
+      await controller.touchFocus(0.5, 0.5);
+      await pumpEventQueue();
+      expect(controller.dialNetPulses.value, 300, reason: 'AF 抢占不回卷鼓面');
+
+      // 重置(轮子开关重开)归零。
+      controller.resetFocusDial();
+      expect(controller.dialNetPulses.value, 0);
     });
 
     test('AF 驱动移焦 → 端点态作废(nico clearMfLimits 同款)', () async {

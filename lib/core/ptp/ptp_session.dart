@@ -13,6 +13,7 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import '../browser/storage_info.dart';
+import '../log/app_log.dart';
 import '../ptpip/object_info.dart';
 import '../utils/byte_reader.dart';
 import '../utils/byte_writer.dart';
@@ -152,9 +153,18 @@ enum MfDriveOutcome {
 /// 上层可放心并发调用;单文件下载在整个事务期间持锁)。
 /// 锁不可重入:加锁段内不得再调用本类的其他加锁方法。
 final class PtpSession {
-  PtpSession({required this.transport});
+  PtpSession({
+    required this.transport,
+    this.mfReadyPolls = 25,
+    this.mfReadyPollInterval = const Duration(milliseconds: 80),
+  });
 
   final PtpTransport transport;
+
+  /// MfDrive(0x9204)激活后完成态就绪轮询的拍数与间隔(官方 §6.2.5.3);
+  /// 测试注入收窄(拍数/间隔归零)免真钟等待。
+  final int mfReadyPolls;
+  final Duration mfReadyPollInterval;
 
   Future<void> _gate = Future<void>.value();
 
@@ -1020,10 +1030,16 @@ final class PtpSession {
 
   /// Nikon MfDrive(0x9204):手动对焦步进(相对量,跟焦环语义 ——
   /// 无绝对位置读出)。[towardNear] true = 向近对焦(参数 1)/false
-  /// = 向远(参数 2);[pulses] 步进量,钳到 1..32767。OpenZCine 同款:
-  /// 步进行程尽头(0xA00C)与步进量过小(0xA00E)是**结果而非错误**,
-  /// 以 [MfDriveOutcome] 返回;镜头不可遥控(机械环)回 invalid-status
-  /// 类 → refused。
+  /// = 向远(参数 2);[pulses] 步进量,钳到 1..32767。
+  ///
+  /// **激活型命令**(官方 §6.2.5.3 定案):0x9204 的 OK 只代表「已
+  /// 开始」,完成态经 0x90C8 DeviceReady 读回 —— OK=完成 / 0x2019=仍
+  /// 在驱动(继续等)/ 0xA00C 行程尽头 / 0xA00E 步进过小 / 其余=失败
+  /// (OpenZCine「activation + bounded readiness poll」同款)。有界:
+  /// 超时乐观按已派出(complete)—— 端点归因靠下一拍自愈,不算失败。
+  /// 激活即拒(机身 MF Invalid_Status / AF-F·AF 忙 0x2019 / 参数类)与
+  /// 链路异常 → refused;0xA00C/A00E 理论上不走激活路,兼容兜底照旧
+  /// 归因(他机身方言)。
   Future<MfDriveOutcome> mfDrive(
       {required bool towardNear, required int pulses}) async {
     final clamped = pulses.clamp(1, 32767);
@@ -1036,14 +1052,42 @@ final class PtpSession {
     } on Exception {
       return MfDriveOutcome.refused;
     }
-    if (result.responseCode == PtpResponseCode.ok) {
-      return MfDriveOutcome.complete;
+    if (result.responseCode != PtpResponseCode.ok) {
+      return switch (result.responseCode) {
+        NikonResponseCode.mfDriveStepEnd => MfDriveOutcome.endOfTravel,
+        NikonResponseCode.mfDriveStepInsufficiency =>
+          MfDriveOutcome.stepTooSmall,
+        _ => MfDriveOutcome.refused,
+      };
     }
-    return switch (result.responseCode) {
-      NikonResponseCode.mfDriveStepEnd => MfDriveOutcome.endOfTravel,
-      NikonResponseCode.mfDriveStepInsufficiency => MfDriveOutcome.stepTooSmall,
-      _ => MfDriveOutcome.refused,
-    };
+    for (var i = 0; i < mfReadyPolls; i++) {
+      // 首探立即:短驱动(百毫秒级)一步到位;其后隔 [mfReadyPollInterval]
+      // 再探,间隔外让帧事务照常插队(轮询不锁命令通道)。
+      if (i > 0) {
+        await Future<void>.delayed(mfReadyPollInterval);
+      }
+      final PtpResult probe;
+      try {
+        probe = await _serialized(() => transport.execute(
+              const PtpRequest(opcode: NikonOperationCode.deviceReady),
+            ));
+      } on Exception {
+        AppLog.w(AppLog.protocol, '9204 就绪轮询链路异常 → refused');
+        return MfDriveOutcome.refused;
+      }
+      final outcome = switch (probe.responseCode) {
+        PtpResponseCode.ok => MfDriveOutcome.complete,
+        PtpResponseCode.deviceBusy => null, // 仍在驱动,继续等
+        NikonResponseCode.mfDriveStepEnd => MfDriveOutcome.endOfTravel,
+        NikonResponseCode.mfDriveStepInsufficiency =>
+          MfDriveOutcome.stepTooSmall,
+        _ => MfDriveOutcome.refused,
+      };
+      if (outcome != null) return outcome;
+    }
+    AppLog.w(AppLog.protocol,
+        '9204 就绪轮询超时($mfReadyPolls 拍)→ 乐观 complete');
+    return MfDriveOutcome.complete;
   }
 
   /// Nikon StartMovieRecInCard(0x920A,无参无数据):开始卡上录制

@@ -577,6 +577,8 @@ void main() {
     test('mfDrive:0x9204 params [方向, 脉冲](钳 1..32767);结果分类', () async {
       final fake = FakePtpTransport()
         ..reply(const PtpResult(responseCode: PtpResponseCode.ok))
+        ..reply(const PtpResult(
+            responseCode: PtpResponseCode.ok)) // 0x90C8 就绪探:完成
         ..reply(const PtpResult(responseCode: NikonResponseCode.mfDriveStepEnd))
         ..reply(const PtpResult(
             responseCode: NikonResponseCode.mfDriveStepInsufficiency))
@@ -584,16 +586,72 @@ void main() {
       final session = PtpSession(transport: fake);
       expect(await session.mfDrive(towardNear: true, pulses: 999999),
           MfDriveOutcome.complete,
-          reason: 'OK:完成');
+          reason: '激活 OK + 就绪探 OK:完成');
       expect(fake.requests.first.params, [1, 32767], reason: '钳到上限');
       expect(await session.mfDrive(towardNear: false, pulses: 300),
-          MfDriveOutcome.endOfTravel);
+          MfDriveOutcome.endOfTravel,
+          reason: '激活即回 0xA00C(他机身方言兼容路径),无需就绪探');
       expect(fake.requests.last.params, [2, 300], reason: '向远 = 2');
       expect(await session.mfDrive(towardNear: true, pulses: 1),
           MfDriveOutcome.stepTooSmall);
       expect(await session.mfDrive(towardNear: true, pulses: 0),
           MfDriveOutcome.refused,
           reason: '0 钳到 1,但响应 invalidStatus → refused');
+    });
+
+    test('mfDrive 收尾:激活 OK 后完成态经 0x90C8 就绪轮询读回(§6.2.5.3)',
+        () async {
+      final fake = FakePtpTransport()
+        ..reply(const PtpResult(responseCode: PtpResponseCode.ok)) // 激活:已开始
+        ..reply(const PtpResult(
+            responseCode: PtpResponseCode.deviceBusy)) // 驱动中
+        ..reply(const PtpResult(
+            responseCode: PtpResponseCode.deviceBusy)) // 驱动中
+        ..reply(const PtpResult(responseCode: PtpResponseCode.ok)); // 完成
+      final session = PtpSession(
+          transport: fake, mfReadyPollInterval: Duration.zero);
+      expect(await session.mfDrive(towardNear: true, pulses: 300),
+          MfDriveOutcome.complete);
+      expect(fake.requests.map((r) => r.opcode), [
+        NikonOperationCode.mfDrive,
+        NikonOperationCode.deviceReady,
+        NikonOperationCode.deviceReady,
+        NikonOperationCode.deviceReady,
+      ], reason: '首探立即,忙两拍后完成');
+    });
+
+    test('mfDrive 收尾:就绪探回 0xA00C 尽头 / 0xA00E 过小,按结果归因',
+        () async {
+      final fake = FakePtpTransport()
+        ..reply(const PtpResult(responseCode: PtpResponseCode.ok))
+        ..reply(const PtpResult(responseCode: NikonResponseCode.mfDriveStepEnd))
+        ..reply(const PtpResult(responseCode: PtpResponseCode.ok))
+        ..reply(const PtpResult(
+            responseCode: NikonResponseCode.mfDriveStepInsufficiency));
+      final session = PtpSession(
+          transport: fake, mfReadyPollInterval: Duration.zero);
+      expect(await session.mfDrive(towardNear: true, pulses: 300),
+          MfDriveOutcome.endOfTravel, reason: '就绪探 0xA00C = 行程尽头');
+      expect(await session.mfDrive(towardNear: false, pulses: 300),
+          MfDriveOutcome.stepTooSmall, reason: '就绪探 0xA00E = 步进过小');
+    });
+
+    test('mfDrive 收尾:就绪轮询拍数用尽 → 乐观按已派出(complete)', () async {
+      final fake = FakePtpTransport()
+        ..reply(const PtpResult(responseCode: PtpResponseCode.ok))
+        ..reply(const PtpResult(responseCode: PtpResponseCode.deviceBusy))
+        ..reply(const PtpResult(responseCode: PtpResponseCode.deviceBusy));
+      final session = PtpSession(
+          transport: fake,
+          mfReadyPolls: 2,
+          mfReadyPollInterval: Duration.zero);
+      expect(await session.mfDrive(towardNear: true, pulses: 300),
+          MfDriveOutcome.complete,
+          reason: '超时不判失败:驱动已接受,端点归因下一拍自愈');
+      expect(
+          fake.requests
+              .where((r) => r.opcode == NikonOperationCode.deviceReady),
+          hasLength(2));
     });
 
     test('录制双 op:0x920A 无参起录 / 0x920B 无参停录', () async {

@@ -631,7 +631,8 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea> {
                         // 锁定方向增量被控制器静默丢弃,反向拖动照常
                         // 驱动、首步请求即解锁(压暗随之解除)。
                         dimmed: controller.mfNearEnd || controller.mfFarEnd,
-                        onDrag: controller.focusDialDrag),
+                        onDrag: controller.focusDialDrag,
+                        netPulses: controller.dialNetPulses),
                   ),
                 ),
               ),
@@ -715,51 +716,94 @@ class _ZoomBadge extends StatelessWidget {
 /// 自吃(松手漏给缩放手势反而更怪)。[dimmed](端点态:近端/远端已到)
 /// 仅压暗轮身 —— 反向拖动仍须能驱动(那是解锁路径),方向过滤在
 /// 控制器端点锁。压暗同款 0.35(既有 MF 门控形态)。
-class _FocusDialRail extends StatelessWidget {
+/// [netPulses] 驱动刻度鼓(净脉冲乐观账本,见
+/// RemoteController.dialNetPulses):刻度随驱动滚动,拖动中轮身高亮
+/// (OpenZCine MFDriveStrip 同款)。
+class _FocusDialRail extends StatefulWidget {
   const _FocusDialRail(
-      {super.key, this.enabled = true, this.dimmed = false, required this.onDrag});
+      {super.key,
+      this.enabled = true,
+      this.dimmed = false,
+      required this.onDrag,
+      required this.netPulses});
 
   final bool enabled;
   final bool dimmed;
   final ValueChanged<double> onDrag;
+  final ValueListenable<int> netPulses;
+
+  @override
+  State<_FocusDialRail> createState() => _FocusDialRailState();
+}
+
+class _FocusDialRailState extends State<_FocusDialRail> {
+  bool _dragging = false;
 
   @override
   Widget build(BuildContext context) {
+    final dark = LiveDesign.dark;
+    final enabled = widget.enabled;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: () {}, // 自吃点按:点轮子不触发对焦
-      onVerticalDragUpdate: enabled ? (d) => onDrag(d.delta.dy) : null,
+      onVerticalDragStart:
+          enabled ? (_) => setState(() => _dragging = true) : null,
+      onVerticalDragUpdate: enabled ? (d) => widget.onDrag(d.delta.dy) : null,
+      onVerticalDragEnd: enabled ? (_) => setState(() => _dragging = false) : null,
+      onVerticalDragCancel:
+          enabled ? () => setState(() => _dragging = false) : null,
       child: Opacity(
-        opacity: enabled && !dimmed ? 1 : 0.35,
+        opacity: enabled && !widget.dimmed ? 1 : 0.35,
         child: Container(
           width: 44,
           height: 180,
+          clipBehavior: Clip.hardEdge, // 滚动刻度出圆角即裁(不溢出轮身)
           decoration: BoxDecoration(
-            color: LiveDesign.dark.glass,
+            color: _dragging
+                ? Color.alphaBlend(const Color(0x24FFFFFF), dark.glass)
+                : dark.glass,
             borderRadius: BorderRadius.circular(22),
-            border: Border.all(color: LiveDesign.dark.hairline),
+            border: Border.all(
+                color: _dragging ? dark.accent : dark.hairline,
+                width: _dragging ? 1.5 : 1),
           ),
-          child: CustomPaint(painter: _DialTicksPainter()),
+          child: ValueListenableBuilder<int>(
+            valueListenable: widget.netPulses,
+            builder: (context, net, _) =>
+                CustomPaint(painter: _DialDrumPainter(netPulses: net)),
+          ),
         ),
       ),
     );
   }
 }
 
-/// 拉焦轮刻度:中线 + 均匀横档,中心的金色双档 = 拖动把手暗示。
-final class _DialTicksPainter extends CustomPainter {
-  const _DialTicksPainter();
+/// 拉焦轮刻度鼓:刻度随净脉冲滚动 —— 标定 24px 拖动 = 300 脉冲,刻度
+/// 间距取 24px(300 脉冲滚一档,跟手 1:1);中心金色双档固定作指针,
+/// 刻度从其下滚过。滚轮路径派发即入账(乐观),鼓面跟手不空转;按钮
+/// 路径按结果入账(拒答/步进过小 = 镜头未动,鼓面不动)。
+final class _DialDrumPainter extends CustomPainter {
+  const _DialDrumPainter({required this.netPulses});
+
+  final int netPulses;
+
+  static const double _spacing = 24.0;
+  static const double _pxPerPulse = _spacing / 300;
 
   @override
   void paint(Canvas canvas, Size size) {
     final dark = LiveDesign.dark;
     final cx = size.width / 2;
+    final offset = (netPulses * _pxPerPulse) % _spacing;
     final paint = Paint()
       ..color = dark.muted.withValues(alpha: 0.6)
       ..strokeWidth = 1;
-    for (var i = 0; i <= 8; i++) {
-      final y = 14 + (size.height - 28) * i / 8;
-      final half = (i % 4 == 0) ? 9.0 : 5.0;
+    // 绝对档号 k:长短档花式跟刻度一起滚(不是屏幕位置定式样)。
+    final kStart = ((-offset - _spacing) / _spacing).floor();
+    final kEnd = ((size.height + _spacing - offset) / _spacing).ceil();
+    for (var k = kStart; k <= kEnd; k++) {
+      final y = offset + k * _spacing;
+      final half = (k % 4 == 0) ? 9.0 : 5.0;
       canvas.drawLine(Offset(cx - half, y), Offset(cx + half, y), paint);
     }
     final grip = Paint()
@@ -773,5 +817,6 @@ final class _DialTicksPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_DialTicksPainter oldDelegate) => false;
+  bool shouldRepaint(_DialDrumPainter oldDelegate) =>
+      oldDelegate.netPulses != netPulses;
 }
