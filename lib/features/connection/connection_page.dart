@@ -1,8 +1,10 @@
 /// 相机页(底部导航首 tab):连接入口 + 已连接相机信息总览。
 ///
-/// 未连接:连接方式分段切换(有线 USB / AP 热点 / 同一 Wi-Fi / 蓝牙)
-/// —— 切到哪种方式,下方只出该方式的连接卡;蓝牙是**工具通道**(不建
-/// 立相机 PTP 连接,不传图不遥控),只承载 GPS 注入与唤醒相机 WiFi
+/// 未连接(2026-10-17 SnapBridge 式重排):主视图只留状态卡 + 居中
+/// 「连接相机」大按钮 —— 按当前方式直连(USB/AP 直接发起;STA 弹扫描
+/// 面板;蓝牙弹工具面板),右上角 AppBar 按钮弹底部弹层切换连接方式
+/// (有线 USB / AP 热点 / 同一 Wi-Fi / 蓝牙)。蓝牙是**工具通道**(不
+/// 建立相机 PTP 连接,不传图不遥控),只承载 GPS 注入与唤醒相机 WiFi
 /// (2026-10-14)。已连接:信息卡组(连接/机身/镜头/存储卡)+「进入
 /// 拍摄」(主操作,全屏 push 遥控监看页 —— 2026-10-08 拍摄页从底栏
 /// tab 改制,置状态卡正下方不滚动即可见)+「相册」入口 +「断开连接」。
@@ -13,7 +15,8 @@
 /// 未配对相机在连接中自动配对(验证码不回传相机),相机侧弹「配对
 /// 完成」等按 OK,应用保持重连等它(见 awaitingCameraConfirm);已
 /// 配对直连。AP 模式相机 IP 候选序 = mDNS 发现 → join 网关(相机
-/// 热点的 DHCP 网关,native 读)→ 手填兜底(默认 192.168.1.1)。
+/// 热点的 DHCP 网关,native 读)→ 默认 192.168.1.1(手填已砍,候选
+/// 序自动兜底)。
 library;
 
 import 'dart:async';
@@ -47,7 +50,7 @@ import '../settings/settings_page.dart';
 import 'camera_overview_controller.dart';
 import 'connection_status_card.dart';
 
-/// 连接方式(未连接视图的分段选择;切到哪种出哪种卡)。
+/// 连接方式(未连接视图;右上角弹层选择,中央按钮按方式直连)。
 enum ConnectionMethod { usb, ap, sta, ble }
 
 /// 程序化加入相机热点的结局([ConnectionController.joinCameraAp])。
@@ -63,23 +66,17 @@ enum ApJoinOutcome {
 }
 
 /// AP 连接的相机 IP 候选序([ConnectionController.connectWireless]):
-/// 自定义手填 → mDNS 发现 → join 网关 → 默认 192.168.1.1。相机热点
-/// 网段因机型而异,网关是 join 定局沿 native 读出的 DHCP 网关(= 相机
-/// 本机 IP),默认 192.168.1.1 只兜网关缺席;手填框预填默认,与默认
-/// 相同即视为未自定义,顺势让位给网关(其余手填一律用户明示,直接
-/// 透传)。**STA 绝不消费此序**(STA 的网关是路由器,见
-/// [ConnectionController.manualIpController] 的教训注释)。
+/// mDNS 发现 → join 网关 → 默认 192.168.1.1(2026-10-17 砍手填:候选
+/// 序自动兜底)。相机热点网段因机型而异,网关是 join 定局沿 native
+/// 读出的 DHCP 网关(= 相机本机 IP),默认只兜网关缺席。**STA 绝不
+/// 消费此序**(STA 的网关是路由器,STA 手填 IP 是另一条路
+/// [ConnectionController.connectManualIp])。
 String apCameraIp({
-  required String manual,
   required List<DiscoveredIpCamera> discovered,
   String? gateway,
 }) {
-  final typed = manual.trim();
-  if (typed.isNotEmpty && typed != kDefaultCameraIp) {
-    return typed;
-  }
   // mDNS 候选(AP 路当前无扫描入口,为后续接入预留;旧 STA 网段的
-  // 结果切进 AP 分段即清 —— 跨网段连过去只会超时):取首个发现。
+  // 结果切进 AP 方式即清 —— 跨网段连过去只会超时):取首个发现。
   if (discovered.isNotEmpty) {
     return discovered.first.host;
   }
@@ -87,7 +84,7 @@ String apCameraIp({
   if (gw.isNotEmpty) {
     return gw;
   }
-  return typed.isNotEmpty ? typed : kDefaultCameraIp;
+  return kDefaultCameraIp;
 }
 
 class ConnectionController extends ChangeNotifier {
@@ -140,21 +137,18 @@ class ConnectionController extends ChangeNotifier {
   /// Injection,驱动按开关起停;测试注入可空)。
   final void Function()? onBleInjectChanged;
 
-  final ipController = TextEditingController(text: kDefaultCameraIp);
-
   CameraLinkState state = CameraLinkState.disconnected;
-
   /// 配对后的机身确认等待窗:pairing → connecting 沿置位(连接层此窗
   /// 保持 connecting 安静重试),离开 connecting 即清。真机(2026-10-06):
   /// 0x935A 后相机弹「配对完成」等机身上按 OK,按之前重连全被拒 ——
   /// UI 用此旗出「请在相机上按 OK」指引,不闪失败横幅。
   bool awaitingCameraConfirm = false;
 
-  /// 当前选中的连接方式(未连接视图分段;默认有线)。
+  /// 当前选中的连接方式(未连接视图右上角弹层选择;默认有线)。
   ConnectionMethod method = ConnectionMethod.usb;
 
   /// 切换连接方式;离开 STA 时若在扫描顺手停掉(结果已不可见)。切进
-  /// AP 分段清 mDNS 结果:那是旧网络(路由器网段)的发现,拿去连相机
+  /// AP 方式清 mDNS 结果:那是旧网络(路由器网段)的发现,拿去连相机
   /// 热点只会得到跨网段的超时失败。
   void selectMethod(ConnectionMethod m) {
     if (m == method) {
@@ -627,20 +621,16 @@ class ConnectionController extends ChangeNotifier {
   /// (join 网关只进 AP 路,STA 的网关是路由器)。
   final manualIpController = TextEditingController();
 
-  /// AP 连接:相机 IP 候选序 = 自定义手填 → mDNS 发现 → join 网关 →
-  /// 默认 192.168.1.1(见 [apCameraIp];手填框预填默认,未自定义时
-  /// 顺势网关优先)。**绝不消费于 STA**(STA 网关是路由器)。
+  /// AP 连接:相机 IP 候选序 = mDNS 发现 → join 网关 → 默认 192.168.1.1
+  /// (见 [apCameraIp];手填已砍,候选序自动兜底)。**绝不消费于 STA**
+  /// (STA 网关是路由器)。
   Future<void> connectWireless() async {
     final c = connection;
     if (c == null) {
       return;
     }
     _lastAttempt = connectWireless;
-    final ip = apCameraIp(
-      manual: ipController.text,
-      discovered: cameras,
-      gateway: apGateway,
-    );
+    final ip = apCameraIp(discovered: cameras, gateway: apGateway);
     activeIp = ip;
     await c.connect(ip: ip);
   }
@@ -691,7 +681,6 @@ class ConnectionController extends ChangeNotifier {
 
   @override
   void dispose() {
-    ipController.dispose();
     manualIpController.dispose();
     super.dispose();
   }
@@ -799,7 +788,28 @@ class _ConnectionPageState extends State<ConnectionPage>
   Widget build(BuildContext context) {
     final controller = _controller;
     return Scaffold(
-      appBar: AppBar(title: Text(context.t('shell.camera'))),
+      appBar: AppBar(
+        title: Text(context.t('shell.camera')),
+        // 右上角连接方式选择(未连接视图专属;已连接后方式无意义)。
+        actions: [
+          ListenableBuilder(
+            listenable: controller,
+            builder: (context, _) {
+              if (controller.state == CameraLinkState.connected) {
+                return const SizedBox.shrink();
+              }
+              final busy = _busyState(controller);
+              return IconButton(
+                tooltip: context.t('conn.chooseMethod'),
+                icon: Icon(_methodIcon(controller.method)),
+                onPressed: busy
+                    ? null
+                    : () => _showModePickerSheet(context, controller),
+              );
+            },
+          ),
+        ],
+      ),
       body: ListenableBuilder(
         listenable: controller,
         builder: (context, _) {
@@ -812,113 +822,274 @@ class _ConnectionPageState extends State<ConnectionPage>
     );
   }
 
-  // ── 未连接:连接方式分段切换 ─────────────────────────────────────
+  // ── 未连接:SnapBridge 式主视图(状态卡 + 居中连接按钮) ─────────
+
+  /// 连接中/配对/重连 = busy(方式切换与发起新连接被锁)。
+  static bool _busyState(ConnectionController controller) =>
+      switch (controller.state) {
+        CameraLinkState.connecting ||
+        CameraLinkState.pairing ||
+        CameraLinkState.reconnecting =>
+          true,
+        _ => false,
+      };
+
+  static IconData _methodIcon(ConnectionMethod m) => switch (m) {
+        ConnectionMethod.usb => Icons.usb,
+        ConnectionMethod.ap => Icons.wifi_tethering,
+        ConnectionMethod.sta => Icons.wifi,
+        ConnectionMethod.ble => Icons.bluetooth,
+      };
+
+  /// 方式短名(状态副文/弹层条目用;键即中文原文)。
+  static String _methodLabel(ConnectionMethod m) => switch (m) {
+        ConnectionMethod.usb => 'conn.wired',
+        ConnectionMethod.ap => 'conn.apHotspot',
+        ConnectionMethod.sta => 'conn.sameWifi',
+        ConnectionMethod.ble => 'conn.bluetooth',
+      };
+
+  /// 方式一句说明(弹层条目副文)。
+  static String _methodDesc(ConnectionMethod m) => switch (m) {
+        ConnectionMethod.usb => 'conn.descUsb',
+        ConnectionMethod.ap => 'conn.descAp',
+        ConnectionMethod.sta => 'conn.descSta',
+        ConnectionMethod.ble => 'conn.descBle',
+      };
+
+  /// 中央按钮按当前方式直连:USB/AP 直接发起;STA 弹扫描面板;蓝牙弹
+  /// 工具面板(蓝牙不建相机连接,无「直连」可言)。
+  void _connectPressed(BuildContext context, ConnectionController controller) {
+    switch (controller.method) {
+      case ConnectionMethod.usb:
+        controller.connect();
+      case ConnectionMethod.ap:
+        controller.connectWireless();
+      case ConnectionMethod.sta:
+        _showStaScanSheet(context, controller);
+      case ConnectionMethod.ble:
+        _showBleToolsSheet(context, controller);
+    }
+  }
 
   Widget _methodsView(BuildContext context, ConnectionController controller) {
-    final busy = switch (controller.state) {
-      CameraLinkState.connecting ||
-      CameraLinkState.pairing ||
-      CameraLinkState.reconnecting => true,
-      _ => false,
-    };
-    return GestureDetector(
-      // 点空白散焦收键盘:AP IP 输入框点开后,页面里没有任何收起手段
-      onTap: () => FocusManager.instance.primaryFocus?.unfocus(),
-      child: ListView(
-        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-        padding: AppSpacing.screenPadding,
-        children: [
-          // 状态着色:disconnected 灰 / connecting 红 / pairing 金 /
-          // connected 绿 / failed 红;busy 态尾槽 spinner;失败原因并入
-          // 副文(首句加粗)+ 重试钮。配对后的机身确认等待窗显示专属
-          // 文案(不闪失败)。蓝牙分段下不出 PTP 状态卡(蓝牙不建
-          // 立相机连接,PTP 链路态与本卡无关,防误导)。
-          if (controller.method != ConnectionMethod.ble)
-            ConnectionStatusCard(
-              state: controller.state,
-              waitingConfirm: controller.awaitingCameraConfirm,
-              hint: controller.hint,
-              onRetry: controller.retry,
-            ),
-          // connecting/reconnecting 逃生口:输入框/按钮全禁用期间(死 IP
-          // 的 TCP 超时最长 ~3s,建链/开会话/切模式另有 10s 总预算;自动
-          // 重连的退避可拖到分钟级),用户得有取消手段,否则像「卡死」。
-          if (controller.method != ConnectionMethod.ble &&
-              (controller.state == CameraLinkState.connecting ||
-                  controller.state == CameraLinkState.reconnecting))
-            Padding(
-              padding: const EdgeInsets.only(top: 8),
-              child: OutlinedButton.icon(
-                icon: const Icon(Icons.close),
-                label: controller.state == CameraLinkState.reconnecting
-                    ? Text(context.t('conn.cancelReconnect'))
-                    : Text(context.t('conn.cancelConnect')),
-                onPressed: controller.disconnect,
-              ),
-            ),
-          const SizedBox(height: 16),
-
-          // 分段切换:切到哪种方式,下方只出该方式的连接卡。蓝牙分段
-          // 仅在 BLE 通道装配时出现(未装配平台不出)。
-          SegmentedButton<ConnectionMethod>(
-            segments: [
-              ButtonSegment(
-                  value: ConnectionMethod.usb,
-                  icon: const Icon(Icons.usb),
-                  label: Text(context.t('conn.wired'))),
-              ButtonSegment(
-                  value: ConnectionMethod.ap,
-                  icon: const Icon(Icons.wifi_tethering),
-                  label: Text(context.t('conn.apHotspot'))),
-              ButtonSegment(
-                  value: ConnectionMethod.sta,
-                  icon: const Icon(Icons.wifi),
-                  label: Text(context.t('conn.sameWifi'))),
-              if (controller.bleEnabled)
-                ButtonSegment(
-                    value: ConnectionMethod.ble,
-                    icon: const Icon(Icons.bluetooth),
-                    label: Text(context.t('conn.bluetooth'))),
-            ],
-            selected: {controller.method},
-            onSelectionChanged: busy
-                ? null
-                : (selection) => controller.selectMethod(selection.first),
-          ),
-          const SizedBox(height: 12),
-
-          switch (controller.method) {
-            ConnectionMethod.usb => _usbCard(context, controller, busy: busy),
-            ConnectionMethod.ap => _apCard(context, controller, busy: busy),
-            ConnectionMethod.sta => _staCard(context, controller, busy: busy),
-            ConnectionMethod.ble => _bleCard(context, controller),
-          },
-          if (controller.method != ConnectionMethod.ble) ...[
-            const SizedBox(height: AppSpacing.md),
-            Container(
-              padding: const EdgeInsets.all(AppSpacing.md),
-              decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.surfaceContainerLow,
-                borderRadius: BorderRadius.circular(AppRadius.sm),
-              ),
-              child: Text(
-                context.t(
-                  'conn.wirelessNotes',
+    final theme = Theme.of(context);
+    final busy = _busyState(controller);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // 状态区:disconnected 灰 / connecting 红 / pairing 金 / failed
+        // 红;busy 态尾槽 spinner;失败原因并入副文(首句加粗)+ 重试
+        // 钮;connecting/reconnecting 逃生口(死 IP 超时/退避期间可取
+        // 消)。配对后的机身确认等待窗显示专属文案(不闪失败)。蓝牙
+        // 方式下不出 PTP 状态卡(蓝牙不建立相机连接,PTP 链路态与本
+        // 视图无关,防误导)。
+        if (controller.method != ConnectionMethod.ble)
+          Padding(
+            padding: AppSpacing.screenPadding,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                ConnectionStatusCard(
+                  state: controller.state,
+                  waitingConfirm: controller.awaitingCameraConfirm,
+                  hint: controller.hint,
+                  onRetry: controller.retry,
                 ),
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant),
+                if (controller.state == CameraLinkState.connecting ||
+                    controller.state == CameraLinkState.reconnecting)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: OutlinedButton.icon(
+                      icon: const Icon(Icons.close),
+                      label: controller.state == CameraLinkState.reconnecting
+                          ? Text(context.t('conn.cancelReconnect'))
+                          : Text(context.t('conn.cancelConnect')),
+                      onPressed: controller.disconnect,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        // 居中主操作(SnapBridge 式):相机图标 + 「连接相机」大按钮 +
+        // 当前方式副文。AP 方式附接管预告(连接动作即锁盘,如实告知)。
+        Expanded(
+          child: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.photo_camera_outlined,
+                    size: 96, color: theme.colorScheme.outline),
+                const SizedBox(height: AppSpacing.xl),
+                SizedBox(
+                  width: 260,
+                  height: 52,
+                  child: FilledButton(
+                    onPressed: busy
+                        ? null
+                        : () => _connectPressed(context, controller),
+                    child: Text(
+                      context.t('conn.connectCamera'),
+                      style: const TextStyle(
+                          fontSize: 16, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.md),
+                Text(
+                  context.t('conn.currentMethod', {
+                    'm': context.t(_methodLabel(controller.method)),
+                  }),
+                  style: theme.textTheme.bodySmall
+                      ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                ),
+                if (controller.method == ConnectionMethod.ap)
+                  Padding(
+                    padding: const EdgeInsets.only(
+                        top: AppSpacing.sm,
+                        left: AppSpacing.xl,
+                        right: AppSpacing.xl),
+                    child: Text(
+                      context.t('conn.apTakeoverNote'),
+                      textAlign: TextAlign.center,
+                      style: theme.textTheme.bodySmall
+                          ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+        // AP 方式的热点凭据卡(蓝牙通道解出才显示):SSID/密码/安全 +
+        // 复制 —— 系统设置加入热点用(取代原 AP 卡)。
+        if (controller.method == ConnectionMethod.ap &&
+            controller.cameraApCredentials != null)
+          Padding(
+            padding: AppSpacing.screenPadding.copyWith(top: 0),
+            child: Card(
+              child: Padding(
+                padding: const EdgeInsets.all(AppSpacing.lg),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: _apCredentialBlock(context, controller),
+                ),
               ),
             ),
+          ),
+      ],
+    );
+  }
+
+  /// 右上角连接方式弹层:图标 + 短名 + 一句说明 + 当前项打勾。busy 时
+  /// 条目禁用(连接进行中不可换方式,原分段语义)。蓝牙仅在 BLE 通道
+  /// 装配时出现(未装配平台不出)。
+  Future<void> _showModePickerSheet(
+    BuildContext context,
+    ConnectionController controller,
+  ) {
+    final busy = _busyState(controller);
+    return showModalBottomSheet<void>(
+      context: context,
+      builder: (sheetContext) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          padding: const EdgeInsets.only(bottom: AppSpacing.md),
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                  AppSpacing.lg, AppSpacing.lg, AppSpacing.lg, AppSpacing.xs),
+              child: Text(context.t('conn.chooseMethod'),
+                  style: Theme.of(context).textTheme.titleMedium),
+            ),
+            for (final m in ConnectionMethod.values)
+              if (m != ConnectionMethod.ble || controller.bleEnabled)
+                ListTile(
+                  leading: Icon(_methodIcon(m)),
+                  title: Text(context.t(_methodLabel(m))),
+                  subtitle: Text(context.t(_methodDesc(m))),
+                  trailing: controller.method == m
+                      ? const Icon(Icons.check)
+                      : null,
+                  onTap: busy
+                      ? null
+                      : () {
+                          controller.selectMethod(m);
+                          Navigator.pop(sheetContext);
+                        },
+                ),
           ],
-        ],
+        ),
       ),
     );
   }
 
-  /// 蓝牙工具卡:连接(配对/重连/断开)+ GPS 注入开关 + 唤醒/关闭
-  /// 相机 WiFi。蓝牙**不建立相机连接**(不传图不遥控)—— PTP 链路
-  /// 状态卡在本分段下隐藏,防把工具通道误读成已连接。
-  Widget _bleCard(BuildContext context, ConnectionController controller) {
+  /// 蓝牙工具面板(中央按钮在蓝牙方式下的去向):连接(配对/重连/
+  /// 断开)+ GPS 注入开关 + 唤醒/关闭相机 WiFi。蓝牙**不建立相机连接**
+  /// (不传图不遥控)。joiner 全程(唤醒→自动加入→发射 AP 连接)发起
+  /// PTP 连接沿自动收面板 —— 连接进度/取消在主视图状态卡,面板不该
+  /// 盖住它。
+  Future<void> _showBleToolsSheet(
+    BuildContext context,
+    ConnectionController controller,
+  ) {
+    BuildContext? sheetContext;
+    var closing = false;
+    void onControllerChanged() {
+      final s = controller.state;
+      if (closing ||
+          (s != CameraLinkState.connecting &&
+              s != CameraLinkState.connected)) {
+        return;
+      }
+      final sc = sheetContext;
+      if (sc == null || !sc.mounted) {
+        return;
+      }
+      final route = ModalRoute.of(sc);
+      // 弹层不在栈顶(用户又开了配对页等)不代收;只 pop 弹层自己的路
+      // 由,不碰底下页面。
+      if (route == null || !route.isCurrent) {
+        return;
+      }
+      closing = true;
+      // notifyListeners 可能发生在 build 期,pop 挪到帧尾再走。
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (sc.mounted) {
+          Navigator.of(sc).pop();
+        }
+      });
+    }
+
+    controller.addListener(onControllerChanged);
+    return showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (sc) {
+        sheetContext = sc;
+        return Padding(
+          padding: EdgeInsets.only(
+              bottom: MediaQuery.of(sc).viewInsets.bottom),
+          child: SizedBox(
+            height: MediaQuery.of(sc).size.height * 0.85,
+            child: ListenableBuilder(
+              listenable: controller,
+              builder: (context, _) => ListView(
+                keyboardDismissBehavior:
+                    ScrollViewKeyboardDismissBehavior.onDrag,
+                padding: AppSpacing.screenPadding,
+                children: _bleToolsSheetContents(context, controller),
+              ),
+            ),
+          ),
+        );
+      },
+    ).whenComplete(() => controller.removeListener(onControllerChanged));
+  }
+
+  List<Widget> _bleToolsSheetContents(
+    BuildContext context,
+    ConnectionController controller,
+  ) {
     final theme = Theme.of(context);
     final ready = controller.bleReady;
     final hasIdentity = controller.bleIdentity != null;
@@ -928,113 +1099,105 @@ class _ConnectionPageState extends State<ConnectionPage>
       BleSessionState.idle =>
         hasIdentity ? theme.colorScheme.outline : Colors.grey,
     };
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _methodTitle(context, Icons.bluetooth, 'conn.btTools'),
-            const SizedBox(height: 4),
-            Text(context.t('conn.btToolsHint')),
-            const SizedBox(height: 8),
-            Row(children: [
-              Icon(Icons.circle, size: 10, color: stateColor),
-              const SizedBox(width: 6),
-              Text(context.t(bleStateLabel(controller))),
-              if (hasIdentity)
-                Text('  ·  ${controller.bleIdentity!.controllerName}',
-                    style: theme.textTheme.bodySmall),
-            ]),
-            if (controller.bleHint != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: Text(controller.bleHint!,
-                    style: theme.textTheme.bodySmall
-                        ?.copyWith(color: theme.colorScheme.error)),
-              ),
-            const SizedBox(height: 12),
-            // 状态动作行:未配对 → 配对;已配对未连 → 重连;就绪 → 断开。
-            SizedBox(
-              width: double.infinity,
-              child: !hasIdentity
-                  ? FilledButton.icon(
-                      icon: const Icon(Icons.bluetooth_searching),
-                      label: Text(context.t('conn.pairCamera')),
-                      onPressed: () => _openBlePairPage(controller),
-                    )
-                  : (ready
-                      ? OutlinedButton(
-                          onPressed: controller.bleDisconnect,
-                          child: Text(context.t('conn.disconnectBt')),
-                        )
-                      : OutlinedButton(
-                          onPressed: controller.bleState ==
-                                  BleSessionState.pairing
-                              ? null
-                              : () => unawaited(controller.bleReconnect()),
-                          child: Text(
-                              controller.bleState == BleSessionState.pairing
-                                  ? context.t('ble.handshaking')
-                                  : context.t('conn.reconnect')),
-                        )),
-            ),
-            const SizedBox(height: 8),
-            // GPS 注入开关(就绪才可用;开着时驱动自动维持重连与注入)。
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              dense: true,
-              value: controller.bleGpsInject,
-              // 门禁:已配对即可开 —— 开关注入驱动自己会连(重连退避),
-              // 不必先手动重连成功(与拍摄浮层「GPS」芯片同语义)。
-              onChanged: hasIdentity
-                  ? (on) => unawaited(controller.setBleGpsInject(on))
-                  : null,
-              title: Text(context.t('conn.gpsInjection')),
-              subtitle: Text(context.t('conn.gpsInjectionHint')),
-            ),
-            // WiFi 唤起(就绪才可用):先读 0x2004 凭据(SnapBridge 序)
-            // 再写 0x2005,成功沿断 BLE —— 相机等链路释放才开热点;关闭
-            // = 反义 op(0x80),不断链。
-            Row(children: [
-              Expanded(
-                child: FilledButton.tonalIcon(
-                  icon: const Icon(Icons.wifi_tethering),
-                  label: Text(context.t('conn.wakeCameraWifi')),
-                  onPressed: ready
-                      ? () => unawaited(_wakeWifiWithCredentials(controller))
-                      : null,
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: OutlinedButton(
-                  // 门禁 = 有身份(传图后 BLE 断开是常态,方法内先补链
-                  // 再写 0x80);握手/relink 中禁用。
-                  onPressed: hasIdentity &&
-                          controller.bleState != BleSessionState.pairing
-                      ? () => unawaited(_bleWifiAction(
-                          controller, controller.closeCameraWifi,
-                          success: context.t('conn.wifiOffRequested')))
-                      : null,
-                  child: Text(context.t('common.off')),
-                ),
-              ),
-            ]),
-            TextButton(
-              onPressed: ready
-                  ? () => unawaited(_loadApCredentials(controller))
-                  : null,
-              child: Text(context.t('conn.readCredentials')),
-            ),
-            TextButton(
-              onPressed: () => _openBlePairPage(controller),
-              child: Text(context.t('conn.pairingManage')),
-            ),
-          ],
+    return [
+      _methodTitle(context, Icons.bluetooth, 'conn.btTools'),
+      const SizedBox(height: 4),
+      Text(context.t('conn.btToolsHint')),
+      const SizedBox(height: 8),
+      Row(children: [
+        Icon(Icons.circle, size: 10, color: stateColor),
+        const SizedBox(width: 6),
+        Text(context.t(bleStateLabel(controller))),
+        if (hasIdentity)
+          Text('  ·  ${controller.bleIdentity!.controllerName}',
+              style: theme.textTheme.bodySmall),
+      ]),
+      if (controller.bleHint != null)
+        Padding(
+          padding: const EdgeInsets.only(top: 4),
+          child: Text(controller.bleHint!,
+              style: theme.textTheme.bodySmall
+                  ?.copyWith(color: theme.colorScheme.error)),
         ),
+      const SizedBox(height: 12),
+      // 状态动作行:未配对 → 配对;已配对未连 → 重连;就绪 → 断开。
+      SizedBox(
+        width: double.infinity,
+        child: !hasIdentity
+            ? FilledButton.icon(
+                icon: const Icon(Icons.bluetooth_searching),
+                label: Text(context.t('conn.pairCamera')),
+                onPressed: () => _openBlePairPage(controller),
+              )
+            : (ready
+                ? OutlinedButton(
+                    onPressed: controller.bleDisconnect,
+                    child: Text(context.t('conn.disconnectBt')),
+                  )
+                : OutlinedButton(
+                    onPressed: controller.bleState ==
+                            BleSessionState.pairing
+                        ? null
+                        : () => unawaited(controller.bleReconnect()),
+                    child: Text(
+                        controller.bleState == BleSessionState.pairing
+                            ? context.t('ble.handshaking')
+                            : context.t('conn.reconnect')),
+                  )),
       ),
-    );
+      const SizedBox(height: 8),
+      // GPS 注入开关(就绪才可用;开着时驱动自动维持重连与注入)。
+      SwitchListTile(
+        contentPadding: EdgeInsets.zero,
+        dense: true,
+        value: controller.bleGpsInject,
+        // 门禁:已配对即可开 —— 开关注入驱动自己会连(重连退避),
+        // 不必先手动重连成功(与拍摄浮层「GPS」芯片同语义)。
+        onChanged: hasIdentity
+            ? (on) => unawaited(controller.setBleGpsInject(on))
+            : null,
+        title: Text(context.t('conn.gpsInjection')),
+        subtitle: Text(context.t('conn.gpsInjectionHint')),
+      ),
+      // WiFi 唤起(就绪才可用):先读 0x2004 凭据(SnapBridge 序)
+      // 再写 0x2005,成功沿断 BLE —— 相机等链路释放才开热点;关闭
+      // = 反义 op(0x80),不断链。
+      Row(children: [
+        Expanded(
+          child: FilledButton.tonalIcon(
+            icon: const Icon(Icons.wifi_tethering),
+            label: Text(context.t('conn.wakeCameraWifi')),
+            onPressed: ready
+                ? () => unawaited(_wakeWifiWithCredentials(controller))
+                : null,
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: OutlinedButton(
+            // 门禁 = 有身份(传图后 BLE 断开是常态,方法内先补链
+            // 再写 0x80);握手/relink 中禁用。
+            onPressed: hasIdentity &&
+                    controller.bleState != BleSessionState.pairing
+                ? () => unawaited(_bleWifiAction(
+                    controller, controller.closeCameraWifi,
+                    success: context.t('conn.wifiOffRequested')))
+                : null,
+            child: Text(context.t('common.off')),
+          ),
+        ),
+      ]),
+      TextButton(
+        onPressed: ready
+            ? () => unawaited(_loadApCredentials(controller))
+            : null,
+        child: Text(context.t('conn.readCredentials')),
+      ),
+      TextButton(
+        onPressed: () => _openBlePairPage(controller),
+        child: Text(context.t('conn.pairingManage')),
+      ),
+    ];
   }
 
   /// 唤醒相机 WiFi(BLE→WiFi 交接):[ConnectionController.wakeCameraWifi]
@@ -1154,84 +1317,9 @@ class _ConnectionPageState extends State<ConnectionPage>
     ));
   }
 
-  /// 方式一:有线(USB C-to-C 数据线直连)。
-  Widget _usbCard(
-    BuildContext context,
-    ConnectionController controller, {
-    required bool busy,
-  }) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _methodTitle(context, Icons.usb, 'conn.methodUsb'),
-            const SizedBox(height: 4),
-            Text(context.t('conn.usbHint')),
-            const SizedBox(height: 12),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton(
-                onPressed: busy ? null : controller.connect,
-                child: Text(context.t('conn.usbConnect')),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// 方式二:AP(相机当热点,手机加入后连固定网段)。
-  Widget _apCard(
-    BuildContext context,
-    ConnectionController controller, {
-    required bool busy,
-  }) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _methodTitle(context, Icons.wifi_tethering, 'conn.methodAp'),
-            const SizedBox(height: 4),
-            Text(context.t('conn.apMenuHint')),
-            ..._apCredentialBlock(context, controller),
-            const SizedBox(height: 12),
-            TextField(
-              controller: controller.ipController,
-              keyboardType: TextInputType.url,
-              enabled: !busy,
-              decoration: InputDecoration(
-                labelText: context.t('conn.cameraIpDefault'),
-                hintText: kDefaultCameraIp,
-                border: const OutlineInputBorder(),
-                isDense: true,
-              ),
-            ),
-            const SizedBox(height: 12),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton(
-                onPressed: busy ? null : controller.connectWireless,
-                child: Text(context.t('conn.apConnect')),
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              context.t('conn.apTakeoverNote'),
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// AP 卡凭据块(蓝牙通道解出才显示):SSID/密码/安全 + 复制钮 ——
-  /// 系统设置加入热点用;密码空(开放网络)不渲染行。
+  /// AP 方式凭据块(蓝牙通道解出才显示):SSID/密码/安全 + 复制钮 ——
+  /// 系统设置加入热点用;密码空(开放网络)不渲染行。显示在未连接
+  /// 主视图下方(原 AP 卡凭据区,2026-10-17 随卡撤销迁此)。
   List<Widget> _apCredentialBlock(
     BuildContext context,
     ConnectionController controller,
@@ -1241,7 +1329,6 @@ class _ConnectionPageState extends State<ConnectionPage>
       return const [];
     }
     return [
-      const SizedBox(height: 12),
       Text(context.t('conn.hotspotCred'),
           style: Theme.of(context).textTheme.labelMedium),
       _credentialRow(context, 'SSID', creds.ssid),
@@ -1287,172 +1374,241 @@ class _ConnectionPageState extends State<ConnectionPage>
     );
   }
 
-  /// 方式三:STA(相机与手机加入同一 Wi-Fi,扫描发现)。
-  Widget _staCard(
+  /// STA 扫描面板(中央按钮在同一 Wi-Fi 方式下的去向):打开沿自动
+  /// 扫描,内容 = mDNS 扫描/结果 + 网段扫描兜底 + 手填 IP + 已存相机
+  /// 快连。点选相机/手填连接后收面板 —— 连接进度/取消走主视图状态卡。
+  /// dismiss 沿停扫(等价原「离开 STA 分段停扫」)。
+  Future<void> _showStaScanSheet(
     BuildContext context,
-    ConnectionController controller, {
-    required bool busy,
-  }) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _methodTitle(context, Icons.wifi, 'conn.methodSta'),
-            const SizedBox(height: 4),
-            Text(context.t('conn.staHint')),
-            const SizedBox(height: 12),
-            SizedBox(
-              width: double.infinity,
-              child: OutlinedButton.icon(
-                // 扫描中 icon 槽换 spinner(标签文案不变):
-                // mDNS 发现是慢活,转圈才有进度感。
-                icon: controller.scanning
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.wifi_find),
-                label: Text(controller.scanning
-                    ? context.t('conn.scanningStop')
-                    : context.t('conn.scanCameras')),
-                onPressed: busy
-                    ? null
-                    : (controller.scanning
-                        ? controller.stopScan
-                        : controller.startScan),
-              ),
-            ),
-            // 空扫指引:相机只在「等待连接」画面广播(退出即停),刚
-            // 配对完的相机还停在确认画面 —— 两种都不广播,是「有时候
-            // 扫不出来」的主因(2026-10-06 真机)。
-            if (controller.scanning && controller.cameras.isEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Text(
-                  context.t('conn.scanNothingHint'),
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              ),
-            for (final camera in controller.cameras)
-              ListTile(
-                dense: true,
-                contentPadding: EdgeInsets.zero,
-                leading: const Icon(Icons.photo_camera_outlined),
-                title: Text(camera.name),
-                subtitle: Text(camera.host),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: busy ? null : () => controller.connectDiscovered(camera),
-              ),
-            // /24 网段扫描兜底(mDNS 无结果时;用户显式触发,不自动):
-            // 端口检查 + InitCommandRequest 轻探测(约束与真机教训见
-            // core/ptpip/probe.dart 库注)。mDNS 已有结果时不出 —— 探测
-            // 连接是对相机单连接槽位的打扰,能免则免。
-            if (controller.cameras.isEmpty) ...[
-              const SizedBox(height: 8),
-              SizedBox(
-                width: double.infinity,
-                child: OutlinedButton.icon(
-                  // 扫描中 icon 槽换 spinner(全网段一轮最坏 ~10s)。
-                  icon: controller.scanningSubnet
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.travel_explore),
-                  label: Text(controller.scanningSubnet
-                      ? context.t('conn.scanningSubnet')
-                      : context.t('conn.scanSubnet')),
-                  onPressed: busy || controller.scanningSubnet
-                      ? null
-                      : controller.scanSubnet,
-                ),
-              ),
-              for (final camera in controller.subnetCameras)
-                ListTile(
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  leading: const Icon(Icons.photo_camera_outlined),
-                  // name 空(InitFail 被拒)→ 显示 IP;被拒相机也照连,
-                  // 占用指引由连接层失败文案给出。
-                  title: Text(
-                      camera.name.isNotEmpty ? camera.name : camera.host),
-                  subtitle: Text(camera.rejected
-                      ? context.t('conn.probeRejected')
-                      : camera.host),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: busy
-                      ? null
-                      : () => controller.connectProbed(camera),
-                ),
-              if (controller.subnetScanCompleted &&
-                  controller.subnetCameras.isEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: Text(
-                    context.t('conn.subnetNothing'),
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                ),
-            ],
-            // 扫描兜底:mDNS 发现依赖相机主动广播(菜单在「等待连接」
-            // 状态才广播);已知 IP 时手填直连(独立控制器,不预填 ——
-            // 预填 AP 默认地址会误拨路由器)。
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: controller.manualIpController,
-                    keyboardType: TextInputType.url,
-                    enabled: !busy,
-                    decoration: InputDecoration(
-                      labelText: context.t('conn.cameraIpManual'),
-                      hintText: context.t('conn.ipExample'),
-                      border: const OutlineInputBorder(),
-                      isDense: true,
+    ConnectionController controller,
+  ) async {
+    unawaited(controller.startScan());
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheetContext) => Padding(
+        padding:
+            EdgeInsets.only(bottom: MediaQuery.of(sheetContext).viewInsets.bottom),
+        child: SizedBox(
+          height: MediaQuery.of(sheetContext).size.height * 0.85,
+          child: ListenableBuilder(
+            listenable: controller,
+            builder: (context, _) {
+              final busy = _busyState(controller);
+              return ListView(
+                keyboardDismissBehavior:
+                    ScrollViewKeyboardDismissBehavior.onDrag,
+                padding: AppSpacing.screenPadding,
+                children: [
+                  _methodTitle(context, Icons.wifi, 'conn.methodSta'),
+                  const SizedBox(height: 4),
+                  Text(context.t('conn.staHint')),
+                  const SizedBox(height: 12),
+                  ..._staScanContents(context, sheetContext, controller,
+                      busy: busy),
+                  const SizedBox(height: AppSpacing.md),
+                  // 无线注意事项(原未连接主视图常显,随重排收进面板)。
+                  Container(
+                    padding: const EdgeInsets.all(AppSpacing.md),
+                    decoration: BoxDecoration(
+                      color:
+                          Theme.of(context).colorScheme.surfaceContainerLow,
+                      borderRadius: BorderRadius.circular(AppRadius.sm),
+                    ),
+                    child: Text(
+                      context.t('conn.wirelessNotes'),
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color:
+                              Theme.of(context).colorScheme.onSurfaceVariant),
                     ),
                   ),
-                ),
-                const SizedBox(width: 8),
-                FilledButton(
-                  onPressed: busy ? null : controller.connectManualIp,
-                  child: Text(context.t('conn.connect')),
-                ),
-              ],
-            ),
-            if (controller.savedCameras.isNotEmpty)
-              for (final saved in controller.savedCameras)
-                ListTile(
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  leading: const Icon(Icons.history),
-                  title: Text(context.t('conn.lastCamera', {'name': saved.name})),
-                  subtitle: Text(saved.lastIp ?? ''),
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      // 删除 = 忘记这台相机:清档案;配对过的同时换新
-                      // 客户端身份,下次连接走全新配对(无感)。
-                      IconButton(
-                        icon: const Icon(Icons.delete_outline),
-                        tooltip: context.t('conn.forgetCamera'),
-                        onPressed: busy
-                            ? null
-                            : () => _confirmRemoveSaved(context, controller, saved),
-                      ),
-                      const Icon(Icons.chevron_right),
-                    ],
-                  ),
-                  onTap: busy ? null : () => controller.connectSaved(saved),
-                ),
-          ],
+                ],
+              );
+            },
+          ),
         ),
       ),
     );
+    if (controller.scanning) {
+      await controller.stopScan();
+    }
+  }
+
+  /// STA 面板主体:扫描钮 + 结果 + 网段兜底 + 手填 IP + 已存相机。
+  /// 点选连接先连后 pop(sheetContext 用于收面板)。
+  List<Widget> _staScanContents(
+    BuildContext context,
+    BuildContext sheetContext,
+    ConnectionController controller, {
+    required bool busy,
+  }) {
+    void closeSheet() => Navigator.of(sheetContext).pop();
+    return [
+      SizedBox(
+        width: double.infinity,
+        child: OutlinedButton.icon(
+          // 扫描中 icon 槽换 spinner(标签文案不变):
+          // mDNS 发现是慢活,转圈才有进度感。
+          icon: controller.scanning
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.wifi_find),
+          label: Text(controller.scanning
+              ? context.t('conn.scanningStop')
+              : context.t('conn.scanCameras')),
+          onPressed: busy
+              ? null
+              : (controller.scanning
+                  ? controller.stopScan
+                  : controller.startScan),
+        ),
+      ),
+      // 空扫指引:相机只在「等待连接」画面广播(退出即停),刚
+      // 配对完的相机还停在确认画面 —— 两种都不广播,是「有时候
+      // 扫不出来」的主因(2026-10-06 真机)。
+      if (controller.scanning && controller.cameras.isEmpty)
+        Padding(
+          padding: const EdgeInsets.only(top: 8),
+          child: Text(
+            context.t('conn.scanNothingHint'),
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ),
+      for (final camera in controller.cameras)
+        ListTile(
+          dense: true,
+          contentPadding: EdgeInsets.zero,
+          leading: const Icon(Icons.photo_camera_outlined),
+          title: Text(camera.name),
+          subtitle: Text(camera.host),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: busy
+              ? null
+              : () {
+                  controller.connectDiscovered(camera);
+                  closeSheet();
+                },
+        ),
+      // /24 网段扫描兜底(mDNS 无结果时;用户显式触发,不自动):
+      // 端口检查 + InitCommandRequest 轻探测(约束与真机教训见
+      // core/ptpip/probe.dart 库注)。mDNS 已有结果时不出 —— 探测
+      // 连接是对相机单连接槽位的打扰,能免则免。
+      if (controller.cameras.isEmpty) ...[
+        const SizedBox(height: 8),
+        SizedBox(
+          width: double.infinity,
+          child: OutlinedButton.icon(
+            // 扫描中 icon 槽换 spinner(全网段一轮最坏 ~10s)。
+            icon: controller.scanningSubnet
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.travel_explore),
+            label: Text(controller.scanningSubnet
+                ? context.t('conn.scanningSubnet')
+                : context.t('conn.scanSubnet')),
+            onPressed: busy || controller.scanningSubnet
+                ? null
+                : controller.scanSubnet,
+          ),
+        ),
+        for (final camera in controller.subnetCameras)
+          ListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.photo_camera_outlined),
+            // name 空(InitFail 被拒)→ 显示 IP;被拒相机也照连,
+            // 占用指引由连接层失败文案给出。
+            title: Text(
+                camera.name.isNotEmpty ? camera.name : camera.host),
+            subtitle: Text(camera.rejected
+                ? context.t('conn.probeRejected')
+                : camera.host),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: busy
+                ? null
+                : () {
+                    controller.connectProbed(camera);
+                    closeSheet();
+                  },
+          ),
+        if (controller.subnetScanCompleted &&
+            controller.subnetCameras.isEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Text(
+              context.t('conn.subnetNothing'),
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ),
+      ],
+      // 扫描兜底:mDNS 发现依赖相机主动广播(菜单在「等待连接」
+      // 状态才广播);已知 IP 时手填直连(独立控制器,不预填 ——
+      // 预填 AP 默认地址会误拨路由器)。
+      const SizedBox(height: 8),
+      Row(
+        children: [
+          Expanded(
+            child: TextField(
+              controller: controller.manualIpController,
+              keyboardType: TextInputType.url,
+              enabled: !busy,
+              decoration: InputDecoration(
+                labelText: context.t('conn.cameraIpManual'),
+                hintText: context.t('conn.ipExample'),
+                border: const OutlineInputBorder(),
+                isDense: true,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          FilledButton(
+            onPressed: busy
+                ? null
+                : () {
+                    controller.connectManualIp();
+                    closeSheet();
+                  },
+            child: Text(context.t('conn.connect')),
+          ),
+        ],
+      ),
+      if (controller.savedCameras.isNotEmpty)
+        for (final saved in controller.savedCameras)
+          ListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.history),
+            title: Text(context.t('conn.lastCamera', {'name': saved.name})),
+            subtitle: Text(saved.lastIp ?? ''),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // 删除 = 忘记这台相机:清档案;配对过的同时换新
+                // 客户端身份,下次连接走全新配对(无感)。
+                IconButton(
+                  icon: const Icon(Icons.delete_outline),
+                  tooltip: context.t('conn.forgetCamera'),
+                  onPressed: busy
+                      ? null
+                      : () => _confirmRemoveSaved(context, controller, saved),
+                ),
+                const Icon(Icons.chevron_right),
+              ],
+            ),
+            onTap: busy
+                ? null
+                : () {
+                    controller.connectSaved(saved);
+                    closeSheet();
+                  },
+          ),
+    ];
   }
 
   /// 删除确认:忘记这台相机(清档案 + 配对过的换新身份 → 全新配对)。
