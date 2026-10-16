@@ -17,6 +17,7 @@ import 'package:nikon_pill/core/transfer/transfer_engine.dart';
 import 'package:nikon_pill/core/transfer/transfer_task.dart';
 import 'package:nikon_pill/features/browser/browser_controller.dart';
 import 'package:nikon_pill/features/browser/photo_grid_page.dart';
+import 'package:nikon_pill/features/transfers/transfers_page.dart';
 
 /// 手动驱动的伪仓库(同 browser_controller_test:块事件逐个发,
 /// loadAlbums 挂在 Completer 上由测试择机完成)。
@@ -67,6 +68,9 @@ final class _FakeConnection implements CameraConnection {
 
   @override
   String? get deviceName => null;
+
+  @override
+  String? get deviceModel => null;
 
   @override
   bool get isWireless => false;
@@ -402,10 +406,14 @@ void main() {
     ], loaded: 2, total: 2, complete: true));
     await tester.pump();
 
-    // 只渲染 0x11 相册的内容;标题取活相册名。
+    // 只渲染 0x11 相册的内容;标题用兜底名,相册名收在筛选弹层。
     expect(find.byKey(ValueKey(5)), findsOneWidget);
     expect(find.byKey(ValueKey(1)), findsNothing);
+    expect(find.text('文件夹'), findsOneWidget);
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
     expect(find.text('100NIKON'), findsOneWidget);
+    expect(find.text('全部照片'), findsOneWidget);
 
     repo.completeLoad([folder]);
     await loading;
@@ -484,10 +492,13 @@ void main() {
     return (controller, engine);
   }
 
-  testWidgets('多选含双格式组:弹格式面板,仅 JPG 时纯 RAW 组跳过', (tester) async {
+  testWidgets('多选含双格式组:先「下载」展开目的地,弹格式面板,仅 JPG 时纯 RAW 组跳过',
+      (tester) async {
     final (_, engine) =
         await selectGroups(tester, [_pair(101, 102), _rawPhoto(201)]);
 
+    await tester.tap(find.text('下载'));
+    await tester.pump();
     await tester.tap(find.text('下载到相册'));
     await tester.pumpAndSettle();
     expect(find.text('选择下载格式'), findsOneWidget);
@@ -509,6 +520,8 @@ void main() {
     final (_, engine) =
         await selectGroups(tester, [_pair(101, 102), _rawPhoto(201)]);
 
+    await tester.tap(find.text('下载'));
+    await tester.pump();
     await tester.tap(find.text('下载到相册'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('JPG + RAW'));
@@ -527,6 +540,8 @@ void main() {
     final (_, engine) =
         await selectGroups(tester, [_pair(101, 102), _rawPhoto(201)]);
 
+    await tester.tap(find.text('下载'));
+    await tester.pump();
     await tester.tap(find.text('下载到相册'));
     await tester.pumpAndSettle();
     // 点面板外遮罩取消。
@@ -555,6 +570,8 @@ void main() {
         tester, [_photo(1), _rawPhoto(201), _photo(3)],
         onOpenTransfers: () => transfersTapped = true);
 
+    await tester.tap(find.text('下载'));
+    await tester.pump();
     await tester.tap(find.text('下载到应用'));
     await tester.pumpAndSettle();
 
@@ -572,9 +589,157 @@ void main() {
     await _drainSnackBar(tester);
   });
 
-  // ── 文件夹筛选 chips(独立相机相册页) ─────────────────────────
+  testWidgets('底栏两段式下载:默认单「下载」钮,点按换出双目的地;'
+      '下载完成清空选择复位', (tester) async {
+    final (_, engine) = await selectGroups(tester, [_photo(1)]);
 
-  testWidgets('文件夹 chips:双相册亮出,点选切换过滤并清空跨相册选择',
+    expect(find.text('下载'), findsOneWidget);
+    expect(find.text('下载到相册'), findsNothing);
+    expect(find.text('下载到应用'), findsNothing);
+
+    await tester.tap(find.text('下载'));
+    await tester.pump();
+    expect(find.text('下载到相册'), findsOneWidget);
+    expect(find.text('下载到应用'), findsOneWidget);
+
+    await tester.tap(find.text('下载到应用'));
+    await tester.pumpAndSettle();
+    final (_, destination) = engine.calls.single;
+    expect(destination, TransferDestination.app);
+    expect(find.text('已选 1 项'), findsNothing); // 下载后清空选择
+    expect(find.byType(BottomAppBar), findsNothing); // 底栏随选择收起
+
+    await _drainSnackBar(tester);
+  });
+
+  testWidgets('筛选定格式仅 JPG:下载跳过面板直接收集,缺格式组跳过',
+      (tester) async {
+    final repo = _FakeRepo();
+    final engine = _FakeEngine();
+    final controller = BrowserController(repository: repo);
+    await tester.pumpWidget(_host(PhotoGridPage(
+      controller: controller,
+      folderHandle: CameraAlbum.allPhotosHandle,
+      fallbackName: '全部照片',
+      thumbnails: _FakeThumbs(),
+      engine: engine,
+    )));
+    final loading = controller.load();
+    final album = CameraAlbum.allPhotos([_pair(101, 102), _rawPhoto(201)]);
+    repo.updatesCtrl.add(AlbumsUpdate(
+        albums: [album], loaded: 2, total: 2, complete: true));
+    await tester.pump();
+    repo.completeLoad([album]);
+    await loading;
+    await tester.pump(); // await loading 留下脏树:交互前先落一帧
+
+    // 先在筛选弹层定格式(多选中弹层不可达,须先设后选)
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('仅 JPG'));
+    await tester.pumpAndSettle();
+
+    await tester.longPress(find.byKey(ValueKey(102)));
+    await tester.pump();
+    await tester.tap(find.byKey(ValueKey(201)));
+    await tester.pump();
+    expect(find.text('已选 2 项'), findsOneWidget);
+
+    await tester.tap(find.text('下载'));
+    await tester.pump();
+    await tester.tap(find.text('下载到相册'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('选择下载格式'), findsNothing,
+        reason: '筛选已定格式:不再弹格式面板');
+    final (entries, destination) = engine.calls.single;
+    expect(entries.map((e) => e.name), ['DSC_0001.JPG']);
+    expect(destination, TransferDestination.gallery);
+    expect(find.textContaining('跳过 1 项无 JPG'), findsOneWidget);
+
+    await _drainSnackBar(tester);
+  });
+
+  testWidgets('下载后立即返回:提示自动消失,「查看进度」仍可跳传输页',
+      (tester) async {
+    // 真实导航栈(入口页 push 相册页)+ 生产默认跳转路径(不注入
+    // onOpenTransfers)。复现盘:2026-10-17 真机 —— SDK #173084 起带
+    // action 的 SnackBar 默认 persist=true 永不消失,且 pop 后动作闭包
+    // 沿 State.context 找 Navigator 抛 defunct。
+    final repo = _FakeRepo();
+    final controller = BrowserController(repository: repo);
+    final engine = _FakeEngine();
+    final g1 = _photo(1);
+    final g2 = _photo(2);
+
+    await tester.pumpWidget(MaterialApp(
+      home: Builder(
+        builder: (context) => Scaffold(
+          body: Center(
+            child: FilledButton(
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => PhotoGridPage(
+                    controller: controller,
+                    folderHandle: CameraAlbum.allPhotosHandle,
+                    fallbackName: '相机相册',
+                    thumbnails: _FakeThumbs(),
+                    engine: engine,
+                  ),
+                ),
+              ),
+              child: const Text('打开相册'),
+            ),
+          ),
+        ),
+      ),
+    ));
+    await tester.tap(find.text('打开相册'));
+    await tester.pumpAndSettle();
+
+    final loading = controller.load();
+    final album = CameraAlbum.allPhotos([g1, g2]);
+    repo.updatesCtrl.add(AlbumsUpdate(
+        albums: [album], loaded: 2, total: 2, complete: true));
+    await tester.pump();
+    repo.completeLoad([album]);
+    await loading;
+    await tester.pumpAndSettle();
+
+    await tester.longPress(find.byKey(ValueKey(g1.key)));
+    await tester.pump();
+    await tester.tap(find.byKey(ValueKey(g2.key)));
+    await tester.pump();
+    // 两段式:先点「下载」换出目的地,再点「下载到应用」。
+    await tester.tap(find.text('下载'));
+    await tester.pump();
+    await tester.tap(find.text('下载到应用'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('已开始下载'), findsOneWidget);
+
+    // 马上返回:提示挂到上一页(仍可见、仍可点)。
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    expect(find.text('打开相册'), findsOneWidget);
+    expect(find.textContaining('已开始下载'), findsOneWidget,
+        reason: 'dismiss 窗口内提示随 messenger 挂在上一页');
+
+    // 窗口期内点「查看进度」:本页已 unmount,动作须仍能推传输页。
+    await tester.tap(find.text('查看进度'));
+    await tester.pumpAndSettle();
+    expect(find.byType(TransfersPage), findsOneWidget,
+        reason: '展示时刻捕获的 Navigator 跨 pop 存活');
+
+    // 提示不滞留:persist 关闭后随 duration 自动消失(messenger 上的
+    // 定时器与页面 pop 无关)。
+    await _drainSnackBar(tester);
+    expect(find.textContaining('已开始下载'), findsNothing,
+        reason: 'persist=false 恢复自动消失,不永久滞留');
+  });
+
+  // ── 右上筛选弹层(相册区 + 图片下载格式区) ─────────────────────
+
+  testWidgets('筛选弹层:双相册出相册区,点选切换过滤;格式区三档常在',
       (tester) async {
     final repo = _FakeRepo();
     final controller = BrowserController(repository: repo);
@@ -594,29 +759,35 @@ void main() {
         albums: [aggregate, folder], loaded: 3, total: 3, complete: true));
     await tester.pump();
 
-    // chips:全部照片 + 文件夹名;标题用兜底名(过滤态由 chip 表达)
+    // 筛选收进右上弹层(旧 chips sliver 撤除);标题用兜底名
     expect(find.text('相机相册'), findsOneWidget);
-    expect(find.text('全部照片'), findsOneWidget);
-    expect(find.text('100NIKON'), findsOneWidget);
+    expect(find.text('全部照片'), findsNothing);
     // 默认过滤 = 全部:三个组都在格
     expect(find.byKey(ValueKey(1)), findsOneWidget);
     expect(find.byKey(ValueKey(5)), findsOneWidget);
 
-    // 长按进入多选,再切 chip:选择必须清空(跨相册选择无意义)
-    await tester.longPress(find.byKey(ValueKey(1)));
-    await tester.pump();
-    expect(find.text('已选 1 项'), findsOneWidget);
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
+    expect(find.text('相册'), findsOneWidget);
+    expect(find.text('全部照片'), findsOneWidget);
+    expect(find.text('100NIKON'), findsOneWidget);
+    expect(find.text('图片下载格式'), findsOneWidget);
+    expect(find.text('全部'), findsOneWidget);
+    expect(find.text('仅 JPG'), findsOneWidget);
+    expect(find.text('仅 RAW'), findsOneWidget);
 
+    // 点文件夹名:弹层收,网格只剩该夹内容
     await tester.tap(find.text('100NIKON'));
-    await tester.pump();
+    await tester.pumpAndSettle();
     expect(find.byKey(ValueKey(5)), findsOneWidget);
     expect(find.byKey(ValueKey(1)), findsNothing);
-    expect(find.text('已选 1 项'), findsNothing);
     expect(find.text('相机相册'), findsOneWidget); // 标题回常态
 
-    // 切回汇总:两组回归
+    // 重开弹层切回汇总:两组回归
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('全部照片'));
-    await tester.pump();
+    await tester.pumpAndSettle();
     expect(find.byKey(ValueKey(1)), findsOneWidget);
     expect(find.byKey(ValueKey(5)), findsOneWidget);
 
@@ -624,7 +795,32 @@ void main() {
     await loading;
   });
 
-  testWidgets('单相册:chips 不占位(无分类可言)', (tester) async {
+  testWidgets('筛选弹层:多选中不可达(actions 换全选/退出)', (tester) async {
+    final repo = _FakeRepo();
+    final controller = BrowserController(repository: repo);
+    await tester.pumpWidget(_host(PhotoGridPage(
+      controller: controller,
+      folderHandle: CameraAlbum.allPhotosHandle,
+      fallbackName: '相机相册',
+      thumbnails: _FakeThumbs(),
+    )));
+
+    final loading = controller.load();
+    final aggregate = CameraAlbum.allPhotos([_photo(1), _photo(2)]);
+    repo.updatesCtrl.add(AlbumsUpdate(
+        albums: [aggregate], loaded: 2, total: 2, complete: true));
+    await tester.pump();
+
+    await tester.longPress(find.byKey(ValueKey(1)));
+    await tester.pump();
+    expect(find.byIcon(Icons.tune), findsNothing,
+        reason: '多选中弹层入口换场不可达(图库页同规矩)');
+
+    repo.completeLoad([aggregate]);
+    await loading;
+  });
+
+  testWidgets('单相册:弹层无相册区,格式区常在', (tester) async {
     final repo = _FakeRepo();
     final controller = BrowserController(repository: repo);
     await tester.pumpWidget(_host(PhotoGridPage(
@@ -641,7 +837,12 @@ void main() {
     await tester.pump();
 
     expect(find.byType(ChoiceChip), findsNothing);
-    expect(find.byKey(ValueKey(1)), findsOneWidget);
+    expect(find.byIcon(Icons.tune), findsOneWidget);
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
+    expect(find.text('相册'), findsNothing);
+    expect(find.text('全部照片'), findsNothing);
+    expect(find.text('图片下载格式'), findsOneWidget);
 
     repo.completeLoad([aggregate]);
     await loading;

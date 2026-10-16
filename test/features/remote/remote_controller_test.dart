@@ -72,6 +72,9 @@ final class _FakeConnection implements CameraConnection {
   String? get deviceName => null;
 
   @override
+  String? get deviceModel => null;
+
+  @override
   bool get isWireless => false;
 
   @override
@@ -395,14 +398,21 @@ Uint8List _fakeFrame({int width = 32, int height = 24}) =>
       0x01, 0x00, 0x00, 0x00, // 1 分量(占位,尺寸解析不读)
     ]);
 
-/// 最小 display-info 头(坐标系 6048×3400、单框;[recording] 写 @828):
-/// 头按真机形态补 1024B 定长 + SOI JPEG 尾(头长靠 SOI 位置定位),
-/// 控制器测试直接注到 engine.header。
-Uint8List _minimalHeaderFrame({required bool recording}) {
+/// 最小 display-info 头(坐标系 6048×3400、单框;[recording] 写 @828,
+/// [videoRemainingMs] 写 @816-819 BE u32):头按真机形态补 1024B 定长 +
+/// SOI JPEG 尾(头长靠 SOI 位置定位),控制器测试直接注到 engine.header。
+Uint8List _minimalHeaderFrame({required bool recording, int? videoRemainingMs}) {
   final b = Uint8List(1024 + 4);
   void be16(int o, int v) {
     b[o] = (v >> 8) & 0xFF;
     b[o + 1] = v & 0xFF;
+  }
+
+  void be32(int o, int v) {
+    b[o] = (v >> 24) & 0xFF;
+    b[o + 1] = (v >> 16) & 0xFF;
+    b[o + 2] = (v >> 8) & 0xFF;
+    b[o + 3] = v & 0xFF;
   }
 
   be16(16, 6048);
@@ -413,6 +423,7 @@ Uint8List _minimalHeaderFrame({required bool recording}) {
   be16(50, 240);
   be16(52, 3024);
   be16(54, 1700);
+  if (videoRemainingMs != null) be32(816, videoRemainingMs);
   if (recording) b[828] = 1;
   b[1024] = 0xFF;
   b[1025] = 0xD8;
@@ -1082,6 +1093,39 @@ void main() {
       expect(controller.shotsRemaining, 999);
       expect(transport.count(PtpOperationCode.getDevicePropValue), before + 1,
           reason: '合并窗内只发一笔裸读');
+    });
+
+    test('模式翻转沿作废旧档口径张数/可录时长(0xD1F1 视频档被录像估算'
+        '污染,切回照片沿先闪旧值 4197 再被链首新鲜读纠正 → 清空等新鲜读)',
+        () async {
+      _scriptParams(transport);
+      _emitConnected(transport, conn); // d1a6=0 照片档,链首张数 1234
+      await pumpEventQueue();
+      expect(controller.shotsRemaining, 1234);
+      expect(controller.cameraMode, CaptureMode.photo);
+
+      // 视频档帧头 @816 带剩余可录 → 胶囊口径就位。
+      controller.engine.header.value = parseLiveViewHeader(
+          _minimalHeaderFrame(recording: false, videoRemainingMs: 61234));
+      expect(controller.videoRemainingMs, 61234);
+
+      // 拨杆翻到视频档:定向读 0xD1A6=1 → 换档沿把张数/可录一并作废
+      // (张数是旧档口径,视频档的 0xD1F1 是录像估算假张数,宁缺不错)。
+      transport.ok(data: Uint8List.fromList([1]));
+      await controller.refreshCameraMode(triggerRefresh: false);
+      expect(controller.cameraMode, CaptureMode.video);
+      expect(controller.shotsRemaining, isNull,
+          reason: '旧档张数不得带进视频档');
+      expect(controller.videoRemainingMs, isNull,
+          reason: '照片档遗留的时长同沿作废');
+
+      // 同档复读零动作:回填值不被误清(_setCameraMode 只在翻转沿动)。
+      controller.shotsRemaining = 4197;
+      transport.ok(data: Uint8List.fromList([1]));
+      await controller.refreshCameraMode(triggerRefresh: false);
+      expect(controller.cameraMode, CaptureMode.video);
+      expect(controller.shotsRemaining, 4197,
+          reason: '同档复读不触发换档沿,已回填值保留');
     });
 
     test('switchMode(视频→照片):接管 + 停景 + 写 0xD1A6=0 + 起景 + 刷参',
@@ -1956,6 +2000,22 @@ void main() {
           parseLiveViewHeader(_minimalHeaderFrame(recording: false));
       expect(controller.recording, isFalse);
       expect(controller.recordingSince, isNull);
+    });
+
+    test('帧头视频剩余可录(@816)同步:>0 认有效,0/缺席清空', () async {
+      controller.engine.header.value = parseLiveViewHeader(
+          _minimalHeaderFrame(recording: false, videoRemainingMs: 61234));
+      expect(controller.videoRemainingMs, 61234);
+
+      // 0 = 本帧无效 → 清空(官方标录制态有效,态外可能恒 0)。
+      controller.engine.header.value =
+          parseLiveViewHeader(_minimalHeaderFrame(recording: false));
+      expect(controller.videoRemainingMs, isNull);
+
+      // >7500000 越界在解析层已弃 → 同清空。
+      controller.engine.header.value = parseLiveViewHeader(
+          _minimalHeaderFrame(recording: false, videoRemainingMs: 0xFFFFFFFF));
+      expect(controller.videoRemainingMs, isNull);
     });
   });
 

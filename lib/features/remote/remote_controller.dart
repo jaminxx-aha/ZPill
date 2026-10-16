@@ -66,6 +66,7 @@ import '../../core/remote/intervalometer.dart';
 import '../../core/remote/mf_travel_ends.dart';
 import '../../core/transfer/transfer_engine.dart';
 import '../../core/transfer/transfer_task.dart';
+import '../../debug/ptp_diagnostics.dart';
 import '../../l10n/zh_catalog.dart';
 import 'bulb_close_policy.dart';
 import 'shooting_param_catalog.dart';
@@ -234,6 +235,11 @@ final class RemoteController extends ChangeNotifier {
   /// 剩余可拍张数(0xD1F1;null = 未读/拒答)。
   int? shotsRemaining;
 
+  /// 视频剩余可录时长(帧头 @816 机身自报,毫秒;null/0 = 头没带或
+  /// 本帧无效 —— 官方标录制态有效,录制态外是否恒 0 待真机核对)。
+  /// 视频档胶囊以它替代张数(张数在该档被相机录像估算污染)。
+  int? videoRemainingMs;
+
   /// 0x4006(0xD1F1)合并窗在途旗标:相机 1s 巡检逢变化即发,连拍
   /// 一串 —— 与参数事件同窗(150ms)合并成一次裸读。
   bool _shotsRefreshScheduled = false;
@@ -255,6 +261,16 @@ final class RemoteController extends ChangeNotifier {
   /// 跟随([_onEvent])、切换链定态([switchMode])三处更新。
   CaptureMode? _cameraMode;
   CaptureMode? get cameraMode => _cameraMode;
+
+  /// 换档落位(唯一入口):翻转沿把张数/可录时长一并作废 —— 它们是
+  /// 旧档口径(0xD1F1 在视频档被录像估算污染,切回照片沿会先闪旧值
+  /// 再被链首新鲜读纠正),清空等新鲜读,胶囊宁缺不错。
+  void _setCameraMode(CaptureMode? m) {
+    if (m == _cameraMode) return;
+    _cameraMode = m;
+    shotsRemaining = null;
+    videoRemainingMs = null;
+  }
 
   /// 拨杆真档(非覆写期 0xD1A6 读值的落点):与 [cameraMode] 同步更新;
   /// 覆写期读值被软件态遮蔽、真档不可见,不再跟随 —— 释放接管后的读回
@@ -1471,6 +1487,14 @@ final class RemoteController extends ChangeNotifier {
     if (h.coordinateWidth > 0 && h.coordinateHeight > 0) {
       _lastHeaderSpace = (width: h.coordinateWidth, height: h.coordinateHeight);
     }
+    // 视频剩余可录(帧头 @816,机身权威):>0 才认有效,变化沿才
+    // notify(每帧都到,倒计时秒级游走,不能逐帧 notify)。
+    final remain = h.videoRemainingMs;
+    final valid = remain != null && remain > 0 ? remain : null;
+    if (valid != videoRemainingMs) {
+      videoRemainingMs = valid;
+      notifyListeners();
+    }
     if (h.recording == recording) return;
     recording = h.recording;
     recordingSince = h.recording ? DateTime.now() : null;
@@ -1936,7 +1960,7 @@ final class RemoteController extends ChangeNotifier {
       final m = value == 1 ? CaptureMode.video : CaptureMode.photo;
       if (_modeOverridden && m == _cameraMode) return;
       final changed = m != _cameraMode;
-      _cameraMode = m;
+      _setCameraMode(m);
       _dialMode = m;
       _modeOverridden = false;
       if (changed && !_disposed) {
@@ -1995,7 +2019,7 @@ final class RemoteController extends ChangeNotifier {
         notifyListeners();
         return false;
       }
-      _cameraMode = target;
+      _setCameraMode(target);
       // 写过即覆写期:拨杆真档被软件态遮蔽(哪怕切回 believed 拨杆档
       // —— 拨杆可能已被拨过,真相只在释放后的读回里)。
       _modeOverridden = true;
@@ -2454,6 +2478,11 @@ final class RemoteController extends ChangeNotifier {
           await session.getDevicePropValue(PtpDevicePropCode.exposureRemaining);
       if (!_linkUp) return;
       shotsRemaining = v.value as int?;
+      // 诊断开闸时沿张数刷新打语义时间线(真机行为与官方语义背离排查,
+      // 2026-10-16;测试/常规运行恒关零开销)
+      if (kPtpDiagnosticsOnConnect && shotsRemaining != null) {
+        unawaited(PtpDiagnostics.shotsSemanticsProbe(session, shotsRemaining!));
+      }
     } on Object {
       if (!_linkUp) return;
       shotsRemaining = null;
@@ -2813,7 +2842,7 @@ final class RemoteController extends ChangeNotifier {
     // 齐它(不变式:非覆写 ⇒ cameraMode == dialMode);重连沿
     // _onConnectedChain 重读对表。
     if (_modeOverridden) {
-      _cameraMode = _dialMode;
+      _setCameraMode(_dialMode);
       _modeOverridden = false;
     }
     _switchingMode = false;

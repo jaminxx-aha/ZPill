@@ -118,62 +118,6 @@ class CaptureShutterColumn extends StatelessWidget {
   }
 }
 
-/// 玻璃圆角图标钮(横屏 chrome 专用):玻璃底 + 描边 + Tooltip;
-/// [selected] 金 accent 高亮(辅助面板开等),[dimmed] 随可用性置灰。
-class ChromeIconButton extends StatelessWidget {
-  const ChromeIconButton({
-    super.key,
-    required this.icon,
-    required this.tooltip,
-    this.onTap,
-    this.size = 36,
-    this.selected = false,
-    this.dimmed = false,
-  });
-
-  final IconData icon;
-  final String tooltip;
-  final VoidCallback? onTap;
-  final double size;
-  final bool selected;
-  final bool dimmed;
-
-  @override
-  Widget build(BuildContext context) {
-    final live = LiveDesign.of(context);
-    return Tooltip(
-      message: tooltip,
-      child: SizedBox(
-        width: size,
-        height: size,
-        child: Material(
-          color: selected ? live.accentDim : live.glass,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(10),
-            side: BorderSide(
-              color: selected
-                  ? live.accent.withValues(alpha: 0.5)
-                  : live.hairline,
-            ),
-          ),
-          child: InkWell(
-            onTap: onTap,
-            customBorder:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-            child: Icon(icon,
-                size: size * 0.5,
-                color: dimmed
-                    ? live.faint
-                    : selected
-                        ? live.accent
-                        : live.text),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 /// 圆形玻璃功能钮(控制行/右列非主操作位,2026-10-10 公开供页面横屏
 /// 底条旋转钮复用):默认 54px 圆 + 图标 + Tooltip;无 onTap 时置灰。
 /// [tooltip] 可空 —— 方向旋转钮单列不包 Tooltip(2026-10-08 用户点名

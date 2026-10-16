@@ -1,8 +1,11 @@
-/// 大图预览:PageView 左右滑 + 双指缩放;底部单张下载到相册/应用,
-/// 顶栏打星(本地评分,1-5 星/清除)。
+/// 大图预览:PageView 左右滑 + 双指缩放;底部单「下载」钮,点按换出
+/// 到相册/到应用双目的地(翻页/入队完成复位);顶栏打星(本地评分,
+/// 1-5 星/清除)。
 ///
 /// 双格式(RAW+JPG)组下载前弹格式选择(仅 JPG/仅 RAW/两者);单格式
-/// 组与视频直接下载。预览走 ThumbnailCache preview 档的**小图先显 +
+/// 组与视频直接下载;相册页筛选弹层预定的下载格式([PhotoViewerPage
+/// .downloadFormat] 非 null)跟随进页,跳过面板直接按该格式收集。
+/// 预览走 ThumbnailCache preview 档的**小图先显 +
 /// 高清换图**(2026-10-09 复报「点进去很小/模糊」):打开即显小图
 /// (JPG = 0x90C4 直发 640×424,NEF = GetThumb;缓存层注入 EXIF 方向,
 /// 见 jpeg_orientation.dart),页 settle 后 warmPreview 后台拉整档 +
@@ -60,10 +63,16 @@ class PhotoViewerPage extends StatefulWidget {
     this.embeddedVideoView,
     this.session,
     this.onOpenTransfers,
+    this.downloadFormat,
   });
 
   final List<PhotoGroup> items;
   final int initialIndex;
+
+  /// 相册页筛选弹层预定的下载格式(仅 JPG/仅 RAW;null = 全部):
+  /// 非 null 时下载跳过格式面板直接按该格式收集,组内缺该格式提示
+  /// 不下。网格显示不受影响,仅下载口径跟随相册页筛选。
+  final PhotoDownloadFormat? downloadFormat;
 
   /// 测试注入;缺省用 AppServices 单例。
   final ThumbnailCache? thumbnails;
@@ -103,6 +112,10 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
   late final PageController _controller =
       PageController(initialPage: widget.initialIndex);
   late int _index = widget.initialIndex;
+
+  /// 底栏两段式下载:「下载」钮点按后换出「到相册/到应用」双目的地;
+  /// 翻页沿与入队完成沿复位(下张照片重新从「下载」起)。
+  bool _revealDownload = false;
 
   /// 视频全屏(原地旋转):锁横屏 + 沉浸 + 收 AppBar/底栏。平台视图
   /// 不能搬家,但查看器自身布局可以 —— 同一 UiKitView 随 Scaffold 转横
@@ -311,12 +324,24 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
     );
   }
 
-  /// 下载:双格式组先选格式(取消即放弃);单格式/视频直接整组。
+  /// 下载:筛选弹层预定格式(widget.downloadFormat 非 null)直接按该
+  /// 格式收集,组内缺该格式(纯 JPG 组 × 仅 RAW 等)提示不下;「全部」
+  /// 维持现状 —— 双格式组先选格式(取消即放弃),单格式/视频直接整组。
   Future<void> _download(
       PhotoGroup group, TransferDestination destination) async {
     var entries = group.members;
-    PhotoDownloadFormat? format;
-    if (!group.isVideo && group.hasJpg && group.hasRaw) {
+    PhotoDownloadFormat? format = widget.downloadFormat;
+    if (format != null) {
+      entries = group.membersFor(format);
+      if (entries.isEmpty) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(SnackBar(
+              content: Text(context.t('grid.noMatchNoDownload',
+                  {'label': context.t(format.label)}))));
+        return;
+      }
+    } else if (!group.isVideo && group.hasJpg && group.hasRaw) {
       format = await showDownloadFormatSheet(context,
           subtitle: context.t('viewer.dualFormat'));
       if (format == null) {
@@ -328,27 +353,31 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
     if (!mounted) {
       return;
     }
+    setState(() => _revealDownload = false);
     // 目的地片段键「到相册/到应用」带介词(不立裸键「应用」,与网格页同;
     // 模板不写「到」—— 介词在片段里,中文拼回才与原串逐字一致)
     final where = destination == TransferDestination.gallery
         ? context.t('grid.toAlbum')
         : context.t('grid.toApp');
     final tag = format == null ? '' : '(${context.t(format.short)})';
+    // Navigator 在展示时刻捕获(网格页同款):SnackBar 活得比本页久
+    // (pop 后提示挂到上一页),届时 State 已 unmount,Navigator.of 会
+    // 抛 defunct —— 捕获的根 Navigator 跨 pop 存活,窗口期内动作照常。
+    final navigator = Navigator.of(context);
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(
+          // SDK #173084(2025-08)起带 action 的 SnackBar 默认 persist=
+          // true 永不自动消失:显式关掉,恢复随 duration 自动隐藏。
+          persist: false,
           content: Text(context.t(
               'viewer.downloadStarted', {'where': where, 'tag': tag})),
           action: SnackBarAction(
             label: context.t('viewer.viewProgress'),
-            onPressed: widget.onOpenTransfers ?? _openTransfers,
+            onPressed: widget.onOpenTransfers ??
+                () => navigator.push(MaterialPageRoute<void>(
+                    builder: (_) => const TransfersPage())),
           )));
-  }
-
-  /// 下载进度页(SnackBar 动作;与图库页 AppBar 传输徽标同目的地)。
-  void _openTransfers() {
-    Navigator.of(context).push(
-        MaterialPageRoute<void>(builder: (_) => const TransfersPage()));
   }
 
   /// 编辑:拉取组内 JPG 原图到临时目录(相机会话串行,排队即得),
@@ -498,7 +527,10 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
             controller: _controller,
             itemCount: widget.items.length,
             onPageChanged: (i) {
-              setState(() => _index = i);
+              setState(() {
+                _index = i;
+                _revealDownload = false; // 翻页复位两段式下载
+              });
               _warmCurrent();
               _readProtectState(widget.items[i]);
               // 全屏是视频语境:滑到非视频页自动退出(还原方向与栏)
@@ -571,33 +603,49 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
               const SizedBox(height: 4),
               Row(
                 children: [
-                  Expanded(
-                    child: FilledButton.tonalIcon(
-                      style: FilledButton.styleFrom(
-                        backgroundColor: AppMedia.onMediaDim,
-                        foregroundColor: AppMedia.onMedia,
-                        visualDensity: VisualDensity.compact,
+                  if (!_revealDownload)
+                    Expanded(
+                      child: FilledButton.tonalIcon(
+                        style: FilledButton.styleFrom(
+                          backgroundColor: AppMedia.onMediaDim,
+                          foregroundColor: AppMedia.onMedia,
+                          visualDensity: VisualDensity.compact,
+                        ),
+                        onPressed: () =>
+                            setState(() => _revealDownload = true),
+                        icon: const Icon(Icons.download_outlined),
+                        label: Text(context.t('grid.download')),
                       ),
-                      onPressed: () =>
-                          _download(group, TransferDestination.gallery),
-                      icon: const Icon(Icons.photo_library_outlined),
-                      label: Text(context.t('grid.downloadToAlbum')),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: FilledButton.tonalIcon(
-                      style: FilledButton.styleFrom(
-                        backgroundColor: AppMedia.onMediaDim,
-                        foregroundColor: AppMedia.onMedia,
-                        visualDensity: VisualDensity.compact,
+                    )
+                  else ...[
+                    Expanded(
+                      child: FilledButton.tonalIcon(
+                        style: FilledButton.styleFrom(
+                          backgroundColor: AppMedia.onMediaDim,
+                          foregroundColor: AppMedia.onMedia,
+                          visualDensity: VisualDensity.compact,
+                        ),
+                        onPressed: () =>
+                            _download(group, TransferDestination.gallery),
+                        icon: const Icon(Icons.photo_library_outlined),
+                        label: Text(context.t('grid.downloadToAlbum')),
                       ),
-                      onPressed: () =>
-                          _download(group, TransferDestination.app),
-                      icon: const Icon(Icons.folder_outlined),
-                      label: Text(context.t('grid.downloadToApp')),
                     ),
-                  ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: FilledButton.tonalIcon(
+                        style: FilledButton.styleFrom(
+                          backgroundColor: AppMedia.onMediaDim,
+                          foregroundColor: AppMedia.onMedia,
+                          visualDensity: VisualDensity.compact,
+                        ),
+                        onPressed: () =>
+                            _download(group, TransferDestination.app),
+                        icon: const Icon(Icons.folder_outlined),
+                        label: Text(context.t('grid.downloadToApp')),
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ],

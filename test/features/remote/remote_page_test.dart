@@ -78,6 +78,9 @@ final class _FakeConnection implements CameraConnection {
   String? get deviceName => null;
 
   @override
+  String? get deviceModel => null;
+
+  @override
   bool get isWireless => false;
 
   @override
@@ -302,8 +305,9 @@ Uint8List _realJpeg() {
 
 /// 最小 display-info 头(6048×3400、单 AF 框):头按真机形态补 1024B
 /// 定长 + SOI JPEG 尾(头长靠 SOI 位置定位),页面测试直接注到
-/// engine.header 驱动 AF 框叠层。
-Uint8List _headerObject() {
+/// engine.header 驱动 AF 框叠层。[videoRemainingMs] 写 @816-819
+/// (BE u32 毫秒,视频档胶囊「可录时长」用)。
+Uint8List _headerObject({int? videoRemainingMs}) {
   final b = Uint8List(1024 + 4);
   void be16(int o, int v) {
     b[o] = (v >> 8) & 0xFF;
@@ -318,6 +322,12 @@ Uint8List _headerObject() {
   be16(50, 240);
   be16(52, 3024);
   be16(54, 1700);
+  if (videoRemainingMs != null) {
+    b[816] = (videoRemainingMs >> 24) & 0xFF;
+    b[817] = (videoRemainingMs >> 16) & 0xFF;
+    b[818] = (videoRemainingMs >> 8) & 0xFF;
+    b[819] = videoRemainingMs & 0xFF;
+  }
   b[1024] = 0xFF;
   b[1025] = 0xD8;
   b[1026] = 0xFF;
@@ -396,9 +406,10 @@ void main() {
     // 目录余量照常上栏(2026-10-07:曾因 _stripOrder 不追加余量而整组不渲染)
     expect(find.text('单点'), findsOneWidget, reason: 'AF 区域 FORM 值');
     expect(find.text('SDR'), findsOneWidget, reason: '色调值');
-    // 辅助开关同住设置浮层:对焦后拍 + APP 接管
+    // 辅助开关同住设置浮层:对焦后拍在列;APP 接管不在配置项
+    // (2026-10-17 接管钮移信息胶囊行尾)
     expect(find.text('对焦后拍'), findsOneWidget);
-    expect(find.text('APP 接管'), findsOneWidget);
+    expect(find.text('APP 接管'), findsNothing);
   });
 
   testWidgets('总闸紧急关断:全部参数芯片只读不可点', (tester) async {
@@ -523,8 +534,8 @@ void main() {
     expect(takeover.params, [1]);
   });
 
-  testWidgets('APP 接管芯片:未接管弹确认启用;已接管点按解除(0x90C2 [0])',
-      (tester) async {
+  testWidgets('APP 接管钮(信息胶囊行尾):未接管弹确认启用;已接管点按'
+      '解除(0x90C2 [0];2026-10-17 自设置浮层芯片迁来)', (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
     final conn = _FakeConnection();
@@ -535,25 +546,26 @@ void main() {
         .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
     await tester.pumpAndSettle();
 
-    // 辅助芯片收进控制行 tune 钮的设置浮层(手机相机式排版):
-    // 开面板再点
-    await tester.tap(find.byIcon(Icons.tune));
-    await tester.pumpAndSettle();
+    // 接管钮在胶囊行尾:未接管 lock_open,点按弹确认(同原芯片路径)
+    Finder pillIcon(IconData icon) => find.descendant(
+        of: find.byType(RemoteInfoPill), matching: find.byIcon(icon));
+    expect(pillIcon(Icons.lock_open), findsOneWidget);
     transport.ok(); // 0x90C2 [1]
-    await tester.tap(find.text('APP 接管'));
+    await tester.tap(pillIcon(Icons.lock_open));
     await tester.pumpAndSettle();
     expect(find.text('启用 APP 接管控制?'), findsOneWidget);
     await tester.tap(find.text('启用'));
     await tester.pumpAndSettle();
     expect(controller.takeoverActive, isTrue);
-    // 「APP 接管中」两处:信息胶囊徽标 + 设置浮层芯片
-    expect(find.text('APP 接管中'), findsNWidgets(2));
+    // 接管徽标并入钮态:lock 金,lock_open 不复在
+    expect(pillIcon(Icons.lock), findsOneWidget);
+    expect(pillIcon(Icons.lock_open), findsNothing);
 
     transport.ok(); // 0x90C2 [0]
-    await tester.tap(find.text('APP 接管中').last); // 辅助条芯片(可点)
+    await tester.tap(pillIcon(Icons.lock));
     await tester.pumpAndSettle();
     expect(controller.takeoverActive, isFalse);
-    expect(find.text('APP 接管'), findsOneWidget);
+    expect(pillIcon(Icons.lock_open), findsOneWidget);
     expect(
         transport.requests
             .where((r) => r.opcode == NikonOperationCode.changeCameraMode)
@@ -1484,7 +1496,7 @@ void main() {
   });
 
   testWidgets('竖屏 iPhone 相机式排版:控制行三键(对焦|快门|设置)+ 底行'
-      '(相册|模式条|旋转),参数收设置浮层,隐藏/恢复同位两段淡出',
+      '(相册|模式条|旋转),参数收设置浮层,点空白纯净监看两段淡出',
       (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
@@ -1565,11 +1577,17 @@ void main() {
     expect(find.text('录制'), findsNothing);
     expect(find.text('MF'), findsNothing);
 
-    // 隐藏钮在信息胶囊行尾(右上角);隐藏后恢复钮出现在同一处
-    final hide = find.byIcon(Icons.visibility_off);
-    expect(hide, findsOneWidget, reason: '信息胶囊行尾纯净监看钮');
-    final hideCorner = tester.getTopRight(hide);
-    await tester.tap(hide);
+    // APP 接管钮在信息胶囊行尾(2026-10-17 自隐藏钮换任):未接管
+    // lock_open,行尾贴右
+    final takeover = find.descendant(
+        of: find.byType(RemoteInfoPill),
+        matching: find.byIcon(Icons.lock_open));
+    expect(takeover, findsOneWidget, reason: '信息胶囊行尾 APP 接管钮');
+
+    // 纯净监看(2026-10-17 用户定案):点页面空白(画面下沿信箱带,
+    // 画面 900..1500 之外)隐藏,chrome 两段淡出放行;无恢复钮 ——
+    // 再点任意空白恢复
+    await tester.tapAt(const Offset(400, 1900));
     await tester.pumpAndSettle();
     for (final key in const ['portrait-chrome-top', 'portrait-chrome-bottom']) {
       final chrome = find.byKey(ValueKey(key));
@@ -1583,14 +1601,9 @@ void main() {
           0.0,
           reason: '$key 淡出');
     }
-    final restore = find.byIcon(Icons.visibility);
-    expect(restore, findsOneWidget, reason: '恢复钮现身');
-    final restoreCorner = tester.getTopRight(restore);
-    expect(restoreCorner.dx, closeTo(hideCorner.dx, 20),
-        reason: '隐藏/恢复同位(右上角,横向)');
-    expect(restoreCorner.dy, closeTo(hideCorner.dy, 10),
-        reason: '隐藏/恢复同位(纵向)');
-    await tester.tap(restore);
+    expect(find.byIcon(Icons.visibility), findsNothing,
+        reason: '恢复钮已撤:恢复 = 再点空白');
+    await tester.tapAt(const Offset(400, 1900));
     await tester.pumpAndSettle();
     expect(find.byIcon(Icons.tune), findsOneWidget, reason: 'chrome 回来');
 
@@ -1702,14 +1715,16 @@ void main() {
         tester.getCenter(find.byType(RemoteInfoPill)).dx,
         closeTo((60 + 1600 - 118) / 2, 1),
         reason: '胶囊居中于取景盒(与贴底模式条同轴线)');
-    final hide = find.byIcon(Icons.visibility_off);
-    expect(hide, findsOneWidget, reason: '胶囊行尾纯净监看钮');
-    expect(tester.getCenter(hide).dx, greaterThan((60 + 1600 - 118) / 2),
-        reason: '隐藏钮在胶囊行尾(取景盒心之右)');
-    expect(tester.getCenter(hide).dx,
+    final takeover = find.descendant(
+        of: find.byType(RemoteInfoPill),
+        matching: find.byIcon(Icons.lock_open));
+    expect(takeover, findsOneWidget, reason: '胶囊行尾 APP 接管钮');
+    expect(tester.getCenter(takeover).dx, greaterThan((60 + 1600 - 118) / 2),
+        reason: '接管钮在胶囊行尾(取景盒心之右)');
+    expect(tester.getCenter(takeover).dx,
         lessThan((60 + 1600 - 118) / 2 + kLandscapePillWidth / 2),
-        reason: '隐藏钮不越定宽胶囊右缘');
-    expect(tester.getCenter(hide).dy, lessThan(44),
+        reason: '接管钮不越定宽胶囊右缘');
+    expect(tester.getCenter(takeover).dy, lessThan(44),
         reason: '在顶栏带内(6..44,与贴底镜像)');
 
     // 贴底条:模式条独占、居中于取景盒(旋转钮已迁柱顶;两段文字中点
@@ -1738,15 +1753,6 @@ void main() {
             .where((r) => r.opcode == NikonOperationCode.changeAfArea),
         isEmpty,
         reason: '收浮层这一拍被垫层贪吃');
-    // 画幅左沿外的 letterbox 空白再点:出界点不挪对焦框(2026-10-16
-    // 用户定案),不发 0x9205。
-    await tester.tapAt(const Offset(200, 400));
-    await tester.pumpAndSettle();
-    expect(
-        transport.requests
-            .where((r) => r.opcode == NikonOperationCode.changeAfArea),
-        isEmpty,
-        reason: '框外点按不触控对焦');
     // 点画面中心照常触控对焦:heightFill 纵向满高线性,横向盒内居中
     // (画面中心即盒心 771)→ 归一 (0.5, 0.5) → whole-size 32×24 → [16,12]。
     await tester.tapAt(const Offset(771, 400));
@@ -1754,10 +1760,38 @@ void main() {
     final af = transport.requests.singleWhere(
         (r) => r.opcode == NikonOperationCode.changeAfArea);
     expect(af.params, [16, 12]);
+
+    // 画幅左沿外的 letterbox 空白再点:2026-10-17 改制 = 纯净监看隐藏
+    // (2026-10-16 定案的「框外点按不挪对焦框」收口为此动作),不发 0x9205。
+    await tester.tapAt(const Offset(200, 400));
+    await tester.pumpAndSettle();
+    expect(
+        transport.requests
+            .where((r) => r.opcode == NikonOperationCode.changeAfArea),
+        hasLength(1),
+        reason: '框外点按转隐藏 chrome,零触控对焦');
+    final chrome = find.byKey(const ValueKey('landscape-chrome'));
+    expect(
+        tester
+            .widget<AnimatedOpacity>(find
+                .descendant(of: chrome, matching: find.byType(AnimatedOpacity)))
+            .opacity,
+        0.0,
+        reason: '点空白隐藏');
+    // 再点(隐藏中任意处)恢复
+    await tester.tapAt(const Offset(200, 400));
+    await tester.pumpAndSettle();
+    expect(
+        tester
+            .widget<AnimatedOpacity>(find
+                .descendant(of: chrome, matching: find.byType(AnimatedOpacity)))
+            .opacity,
+        1.0,
+        reason: '再点恢复');
   });
 
-  testWidgets('横屏纯净监看:控制浮层淡出放行点击,可一键恢复',
-      (tester) async {
+  testWidgets('横屏纯净监看:点空白隐藏(盒内信箱/盒外让位带),控制浮层'
+      '淡出放行点击;再点任意处恢复(无恢复钮,2026-10-17)', (tester) async {
     _landscape(tester);
     final transport = _ScriptTransport();
     final conn = _FakeConnection();
@@ -1769,7 +1803,8 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byIcon(Icons.tune), findsOneWidget, reason: '隐前 chrome 在场');
-    await tester.tap(find.byIcon(Icons.visibility_off));
+    // 点信箱空白(画面左沿外,取景盒内)隐藏
+    await tester.tapAt(const Offset(200, 400));
     await tester.pumpAndSettle();
 
     // 淡出 + 放行点击(AnimatedOpacity 不裁树 —— 断言透明度与忽略
@@ -1780,14 +1815,24 @@ void main() {
         find.descendant(of: chrome, matching: find.byType(AnimatedOpacity));
     expect(tester.widget<AnimatedOpacity>(chromeOpacity).opacity, 0.0);
     expect(tester.widget<IgnorePointer>(chrome).ignoring, isTrue,
-        reason: '点击放行给画面(触控对焦照常)');
+        reason: '点击放行(再点恢复)');
 
-    // 恢复钮(chrome 外的独立浮钮)在场可点
-    await tester.tap(find.byIcon(Icons.visibility));
+    // 再点恢复(隐藏中任意处:同一信箱空白)
+    await tester.tapAt(const Offset(200, 400));
     await tester.pumpAndSettle();
     expect(tester.widget<AnimatedOpacity>(chromeOpacity).opacity, 1.0);
     expect(tester.widget<IgnorePointer>(chrome).ignoring, isFalse);
     expect(find.byIcon(Icons.tune), findsOneWidget, reason: 'chrome 回来');
+
+    // 盒外让位带(左 60 带,x<60)同语义:点按走垫层切换 chrome
+    await tester.tapAt(const Offset(30, 400));
+    await tester.pumpAndSettle();
+    expect(tester.widget<AnimatedOpacity>(chromeOpacity).opacity, 0.0,
+        reason: '让位带点按隐藏');
+    await tester.tapAt(const Offset(30, 400));
+    await tester.pumpAndSettle();
+    expect(tester.widget<AnimatedOpacity>(chromeOpacity).opacity, 1.0,
+        reason: '让位带再点恢复');
   });
 
   testWidgets('方向按钮点按横竖直切,图标恒定(Tooltip 已删,长按抬起=点按)'
@@ -2777,6 +2822,49 @@ void main() {
         reason: '视频档面板追加视频参数族');
     expect(find.text('视频 ISO'), findsOneWidget);
     expect(find.text('N-Log'), findsOneWidget);
+  });
+
+  testWidgets('信息胶囊:照片档显张数裸值(0xD1F1 相机自报可拍,用户定案'
+      '不带「张」)', (tester) async {
+    _portrait(tester);
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = _directRemoteController(transport, conn: conn);
+    addTearDown(controller.dispose);
+    _scriptAutoStart(transport);
+    _scriptParams(transport); // 照片档连接,0xD1F1=1234 链首读
+    await tester.pumpWidget(MaterialApp(home: RemotePage(
+        controller: controller,
+        settingsListenable: ValueNotifier(const AppSettings()))));
+    conn.statesCtrl.add(CameraLinkState.connected);
+    await tester.pumpAndSettle();
+    expect(controller.cameraMode, isNot(CaptureMode.video));
+    expect(find.text('1234'), findsOneWidget);
+  });
+
+  testWidgets('信息胶囊:视频档张数换剩余可录时长(帧头 @816,2026-10-16 '
+      '探针定案张数在该档被录像估算污染;用户定案裸显时间不带「可录」)',
+      (tester) async {
+    _portrait(tester);
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = _directRemoteController(transport, conn: conn);
+    addTearDown(controller.dispose);
+    _scriptAutoStart(transport);
+    _scriptParamsVideo(transport, d1a6: 1); // 视频档连接(0xD1F1=1234 照读)
+    await tester.pumpWidget(MaterialApp(home: RemotePage(
+        controller: controller,
+        settingsListenable: ValueNotifier(const AppSettings()))));
+    conn.statesCtrl.add(CameraLinkState.connected);
+    await tester.pumpAndSettle();
+    expect(controller.cameraMode, CaptureMode.video);
+    expect(find.text('1234'), findsNothing, reason: '视频档不显张数');
+
+    // 帧头注入剩余可录 61s → 「1:01」上屏。
+    controller.engine.header.value =
+        parseLiveViewHeader(_headerObject(videoRemainingMs: 61000));
+    await tester.pump();
+    expect(find.text('1:01'), findsOneWidget);
   });
 
   testWidgets('视频参数族面板:照片档不出现视频 tile(零噪声)', (tester) async {

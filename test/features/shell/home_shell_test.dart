@@ -76,6 +76,9 @@ final class _FakeConnection implements CameraConnection {
   String? get deviceName => null;
 
   @override
+  String? get deviceModel => null;
+
+  @override
   bool get isWireless => false;
 
   @override
@@ -528,8 +531,8 @@ void main() {
     await tester.pumpAndSettle();
     expect(f.remote.liveViewActive, isFalse);
     expect(find.byType(RemotePage), findsNothing, reason: '断连即退页');
-    expect(find.text('USB 连接'), findsOneWidget,
-        reason: '相机页回连接方式视图(默认有线)');
+    expect(find.text('连接相机'), findsOneWidget,
+        reason: '相机页回未连接主视图(居中连接按钮,默认有线)');
     expect(find.text('进入拍摄'), findsNothing, reason: '入口随断连消失');
   });
 
