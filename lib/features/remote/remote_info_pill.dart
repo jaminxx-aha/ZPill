@@ -5,26 +5,26 @@ import 'live_design.dart';
 import 'remote_controller.dart';
 
 /// 信息胶囊:返回钮(路由态)+ 链路点 + 设备名 + 剩余张数/REC 时长 +
-/// 接管徽标 + 纯净监看隐藏钮(竖屏;链路/设备状态随控制器,监听由外层
-/// AnimatedBuilder 驱动)。2026-10-10 iPhone 相机式重排:方向钮移底部
-/// 控制行、监看辅助 tune 钮移设置浮层入口,胶囊只余隐藏钮(横屏顶栏
-/// 自带 ChromeIconButton 同职,[onHideChrome] 传 null 即不渲染);
-/// 隐藏后恢复钮出现在**同一处**(页面在右上角同位摆恢复钮)。
+/// APP 接管钮(行尾;链路/设备状态随控制器,监听由外层 AnimatedBuilder
+/// 驱动)。2026-10-17 用户定案:纯净监看隐藏钮撤除(隐藏/显示改点页面
+/// 空白切换,见 RemotePage),行尾位由 APP 接管钮接替 —— 未接管 =
+/// 点按弹确认启用([onTakeoverRequest]),已接管 = 点按解除;接管徽标
+/// 并入钮态(lock_open 灰 = 未接管,lock 金 = 接管中)。
 ///
 /// [compact]:横屏顶栏态(2026-10-12 胶囊整体居中)—— 收缩包内容
 /// (mainAxisSize.min,名字 Flexible 而非 Expanded)可被 Center 居中,
-/// 徽标前用小间距代替 Spacer 撑开;非 compact 照旧占满宽、行尾恒贴
+/// 钮前用小间距代替 Spacer 撑开;非 compact 照旧占满宽、行尾恒贴
 /// 右缘(2026-10-10 修 Flexible→Expanded 的同款口径)。[fixedWidth]:
 /// 九轮「上方的按钮长一点约为两倍」—— 横屏定宽
 /// ([kLandscapePillWidth]);**内部与非 compact 同构**(十一轮用户定案
 /// 「横屏时上方的 button 里面的参数位置和竖屏保持一致」:名字
-/// Expanded + Spacer 各分一半余量 → 张数/REC 落名后中带、隐藏钮恒贴
+/// Expanded + Spacer 各分一半余量 → 张数/REC 落名后中带、接管钮恒贴
 /// 行尾,同竖屏观感)。
 class RemoteInfoPill extends StatelessWidget {
   const RemoteInfoPill({
     super.key,
     required this.controller,
-    this.onHideChrome,
+    required this.onTakeoverRequest,
     this.margin,
     this.compact = false,
     this.fixedWidth,
@@ -32,9 +32,10 @@ class RemoteInfoPill extends StatelessWidget {
 
   final RemoteController controller;
 
-  /// 纯净监看入口(竖屏胶囊行尾):null = 不渲染 —— 横屏顶栏自带
-  /// ChromeIconButton 同职入口,胶囊里不重复。
-  final VoidCallback? onHideChrome;
+  /// APP 接管确认入口(未接管点按弹「启用 APP 接管控制?」,页面侧
+  /// [confirmTakeover] 同款对话框);已接管点按不走此回调,直接
+  /// [RemoteController.releaseTakeover]。
+  final void Function(BuildContext context) onTakeoverRequest;
 
   final EdgeInsetsGeometry? margin;
   final bool compact;
@@ -83,7 +84,7 @@ class RemoteInfoPill extends StatelessWidget {
               size: 8, color: linked ? live.good : live.bad),
           const SizedBox(width: 8),
           // 横屏顶栏与浮层分宽,名字可能被挤 —— 省略号收尾。非 compact
-          // 用 Expanded 吃满余量:行尾徽标/隐藏钮恒贴右缘(旧 Flexible+
+          // 用 Expanded 吃满余量:行尾接管钮恒贴右缘(旧 Flexible+
           // Spacer 各分一半自由空间,短设备名时行尾钮悬在半行 ——
           // 2026-10-10 隐藏/恢复同位需求暴露);compact 收缩包用
           // Flexible(名字取内在宽,超限省略);**定宽时与非 compact
@@ -146,27 +147,18 @@ class RemoteInfoPill extends StatelessWidget {
                     color: live.bad,
                     fontFeatures: const [FontFeature.tabularFigures()])),
           ],
-          // 定宽时余量全归 Spacer(隐藏钮贴行尾,九轮);收缩包时小间距。
+          // 定宽时余量全归 Spacer(接管钮贴行尾,九轮);收缩包时小间距。
           compact && !wide
               ? const SizedBox(width: 12)
               : const Spacer(),
-          if (controller.takeoverActive) ...[
-            Icon(Icons.lock, size: 13, color: live.accent),
-            const SizedBox(width: 4),
-            Text(context.t('takeover.active'),
-                style: TextStyle(fontSize: 12, color: live.accent)),
-            const SizedBox(width: 6),
-          ],
-          if (onHideChrome != null) ...[
-            _hideButton(context, live),
-            const SizedBox(width: 2),
-          ],
+          _takeoverButton(context, live),
+          const SizedBox(width: 2),
         ],
       ),
     );
   }
 
-  /// 返回钮(行首,路由态):pop 回相机页。与隐藏钮同款胶囊内嵌
+  /// 返回钮(行首,路由态):pop 回相机页。与接管钮同款胶囊内嵌
   /// InkWell(34×30 触达、9 圆角)。
   Widget _backButton(BuildContext context, LivePalette live) {
     return InkWell(
@@ -181,20 +173,29 @@ class RemoteInfoPill extends StatelessWidget {
     );
   }
 
-  /// 纯净监看隐藏钮(行尾,竖屏排版):眼睛划线图标,隐去全部控制
-  /// 浮层;与返回钮同款胶囊内嵌 InkWell(34×30 触达、9 圆角)。恢复
-  /// 钮由页面在隐藏后的右上角同位摆出(ChromeIconButton)。
-  Widget _hideButton(BuildContext context, LivePalette live) {
+  /// APP 接管钮(行尾,原纯净监看隐藏钮位,2026-10-17 用户定案):
+  /// 未接管 = lock_open 灰,点按弹 [onTakeoverRequest] 确认启用;已接管
+  /// = lock 金,点按解除(0x90C2 [0])。链路不在时禁点(同原设置浮层
+  /// 接管芯片的门);与返回钮同款胶囊内嵌 InkWell(34×30 触达、9 圆角)。
+  Widget _takeoverButton(BuildContext context, LivePalette live) {
+    final active = controller.takeoverActive;
     return Tooltip(
-      message: context.t('remote.cleanMonitoring'),
+      message: context.t(active ? 'takeover.active' : 'takeover.title'),
       child: InkWell(
-        onTap: onHideChrome,
+        onTap: !controller.linkUp
+            ? null
+            : active
+                ? controller.releaseTakeover
+                : () => onTakeoverRequest(context),
         customBorder:
             RoundedRectangleBorder(borderRadius: BorderRadius.circular(9)),
         child: SizedBox(
           width: 34,
           height: 30,
-          child: Icon(Icons.visibility_off, size: 18, color: live.muted),
+          child: Icon(
+              active ? Icons.lock : Icons.lock_open,
+              size: 18,
+              color: active ? live.accent : live.muted),
         ),
       ),
     );

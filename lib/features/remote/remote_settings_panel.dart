@@ -17,7 +17,8 @@ import 'shooting_param_catalog.dart';
 /// (2026-10-12 自对焦浮层迁入:MF 步进/拉焦轮 —— 快门旁对焦钮已瘦身
 /// 为一键 AF)③监看开关(取景/网格/斑马纹/直方图/水平仪/伪色/峰值;
 /// 2026-10-12 十二轮起全部持久化 —— 关掉重进拍摄页保持,取景开关
-/// 同款)④辅助芯片(对焦后拍/SDRAM 直拍/AE-L/自拍/APP 接管)。
+/// 同款)④辅助芯片(对焦后拍/SDRAM 直拍/AE-L/GPS/音量键/自拍/间隔;
+/// APP 接管钮 2026-10-17 移信息胶囊行尾,不在配置项出现)。
 /// 2026-10-17 排版收口:四段统一排印 —— 参数/监看区等宽格子网格
 /// ([_CellGrid])、控件形态统一图标盒([_iconBoxTile],示波器/遮幅/
 /// 主体追踪原文字胶囊与图标盒混排)、选项组标签上行([_optionRow],
@@ -34,7 +35,6 @@ class CaptureSettingsPanel extends StatelessWidget {
     required this.onEditParam,
     required this.onTogglesChanged,
     required this.onLiveViewToggle,
-    required this.onTakeoverRequest,
     required this.onLiveViewQualityChanged,
     required this.onSdramCaptureChanged,
     required this.onBleGpsInjectChanged,
@@ -87,8 +87,6 @@ class CaptureSettingsPanel extends StatelessWidget {
   /// 当前画质档(持久化设置镜像;null = 跟随相机)。
   final int? liveViewImageSize;
   final int? liveViewImageCompression;
-
-  final void Function(BuildContext context) onTakeoverRequest;
 
   /// 内容限高(null = 不限);超出内部滚动。
   final double? maxHeight;
@@ -506,7 +504,8 @@ class CaptureSettingsPanel extends StatelessWidget {
     );
   }
 
-  /// 辅助芯片组(原辅助浮层迁移):对焦后拍 / 自拍 / APP 接管。
+  /// 辅助芯片组(原辅助浮层迁移):对焦后拍 / AE-L / GPS / 音量键 /
+  /// 自拍 / 间隔(APP 接管钮已移信息胶囊行尾)。
   Widget _assistChips(BuildContext context) {
     return Wrap(
       spacing: 4,
@@ -594,8 +593,6 @@ class CaptureSettingsPanel extends StatelessWidget {
           tooltip: context.t(
               'interval.tooltip'),
         ),
-        _takeoverChip(context,
-            controller: controller, onTakeoverRequest: onTakeoverRequest),
       ],
     );
   }
@@ -750,7 +747,7 @@ List<Widget> _optionChips<T>(BuildContext context, List<(String, T)> options,
   ];
 }
 
-/// 浮层小芯片(对焦后拍 / 自拍 / APP 接管)。
+/// 浮层小芯片(对焦后拍 / 自拍 / 间隔等辅助件)。
 Widget _smallChip({
   required LivePalette live,
   required String label,
@@ -784,26 +781,6 @@ Widget _smallChip({
     ),
   );
   return tooltip == null ? chip : Tooltip(message: tooltip, child: chip);
-}
-
-/// APP 接管控制状态芯片:未接管 = 点按弹确认启用;已接管 = 点按解除
-/// (0x90C2 remote 模式;机身拨盘锁定,host 写入保值)。
-Widget _takeoverChip(BuildContext context,
-    {required RemoteController controller,
-    required void Function(BuildContext) onTakeoverRequest}) {
-  final live = LiveDesign.of(context);
-  final active = controller.takeoverActive;
-  return _smallChip(
-    live: live,
-    label: active ? context.t('takeover.active') : context.t('takeover.title'),
-    selected: active,
-    onTap: !controller.linkUp
-        ? null
-        : (active
-            ? controller.releaseTakeover
-            : () => onTakeoverRequest(context)),
-    tooltip: context.t('takeover.hint'),
-  );
 }
 
 /// 自拍档位点选(芯片 → 菜单):关/2s/5s/10s 单选,当前档打勾;

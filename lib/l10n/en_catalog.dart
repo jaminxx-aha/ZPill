@@ -252,7 +252,6 @@ const Map<String, String> enCatalog = {
       'Pairing info sent: press "OK" on the camera screen to finish pairing; the app reconnects automatically (up to about 1 minute)',
   'conn.pairingAuto': 'Pairing (auto-confirmed)',
   'conn.reconnectAuto': 'Reconnecting automatically…',
-  'remote.showControls': 'Show Controls',
   'common.photo': 'Photo',
   'param.wideAreaHint':
       'Wide C1/C2 are horizontal-band/vertical-strip areas: touch-dragging the frame moves only one axis',
@@ -380,8 +379,6 @@ const Map<String, String> enCatalog = {
   'remote.autofocus': 'Autofocus',
   'common.autoSuffix': '(auto)',
   'remote.notConnected': 'Camera not connected',
-  'remote.cleanMonitoring':
-      'Clean Monitoring (hide all controls, image only)',
   'remote.shootingMode': 'Shooting Mode',
   'param.mode': 'Mode',
   'param.wb': 'White Balance',
