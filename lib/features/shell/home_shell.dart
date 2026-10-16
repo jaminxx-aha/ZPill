@@ -28,10 +28,11 @@ import '../settings/settings_page.dart';
 /// 由相机页已连接视图「进入拍摄」push 进入)。
 const _tabs = <({IconData icon, IconData selectedIcon, String label})>[
   (icon: Icons.photo_camera_outlined,
-      selectedIcon: Icons.photo_camera, label: '相机'),
+      selectedIcon: Icons.photo_camera, label: 'shell.camera'),
   (icon: Icons.photo_library_outlined,
-      selectedIcon: Icons.photo_library, label: '图库'),
-  (icon: Icons.settings_outlined, selectedIcon: Icons.settings, label: '设置'),
+      selectedIcon: Icons.photo_library, label: 'shell.gallery'),
+  (icon: Icons.settings_outlined,
+      selectedIcon: Icons.settings, label: 'common.settings'),
 ];
 
 class HomeShell extends StatefulWidget {

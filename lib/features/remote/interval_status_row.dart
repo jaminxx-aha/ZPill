@@ -59,9 +59,9 @@ class IntervalStatusRow extends StatelessWidget {
           const SizedBox(width: 6),
           Text(
             paused
-                ? context.t('间隔拍摄 {a}/{b} 张 · 已暂停',
+                ? context.t('interval.shotsPaused',
                     {'a': '${controller.intervalTaken}', 'b': totalLabel})
-                : context.t('间隔拍摄 {a}/{b} 张',
+                : context.t('interval.shotsProgress',
                     {'a': '${controller.intervalTaken}', 'b': totalLabel}),
             style: TextStyle(
                 fontSize: 12,
@@ -71,7 +71,7 @@ class IntervalStatusRow extends StatelessWidget {
           if (controller.intervalFailed > 0) ...[
             const SizedBox(width: 6),
             Text(
-              context.t('{n} 张失败', {'n': '${controller.intervalFailed}'}),
+              context.t('interval.failedCount', {'n': '${controller.intervalFailed}'}),
               style: TextStyle(fontSize: 11, color: live.bad),
             ),
           ],
@@ -81,8 +81,8 @@ class IntervalStatusRow extends StatelessWidget {
             icon: paused ? Icons.play_arrow : Icons.pause,
             color: live.accent,
             tooltip: paused
-                ? context.t('恢复间隔拍摄(间隔从恢复时刻重新起算)')
-                : context.t('暂停间隔拍摄(当前一拍完成后挂起)'),
+                ? context.t('interval.resume')
+                : context.t('interval.pause'),
             onTap: paused ? controller.resumeInterval : controller.pauseInterval,
           ),
           const SizedBox(width: 4),
@@ -90,7 +90,7 @@ class IntervalStatusRow extends StatelessWidget {
             key: 'interval-stop',
             icon: Icons.stop_circle_outlined,
             color: live.bad,
-            tooltip: context.t('停止间隔拍摄(立即;在途一拍落地后收口)'),
+            tooltip: context.t('interval.stop'),
             onTap: controller.stopInterval,
           ),
         ],

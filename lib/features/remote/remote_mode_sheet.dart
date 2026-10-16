@@ -32,7 +32,7 @@ Future<void> showModeTakeoverSheet(
             children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
-                child: Text(context.t('拍摄模式'),
+                child: Text(context.t('remote.shootingMode'),
                     style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w600,

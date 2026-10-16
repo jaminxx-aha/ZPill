@@ -56,15 +56,16 @@ final class FilmPreset {
   final List<double> matrix;
 }
 
-/// 分组序(参考仓 categories1 原序,UI 分类筛选沿用)。
+/// 分组序(参考仓 categories1 原序,UI 分类筛选沿用)。值为 t() 键,
+/// 与各预设的 group 字段同键匹配,两侧必须同步改。
 const List<String> filmPresetGroups = [
-  '富士胶片',
-  '柯达胶片',
-  '理光人文',
-  '索尼大师',
-  '经典黑白',
-  '电影特色',
-  '经典精选',
+  'film.fuji',
+  'film.kodak',
+  'film.ricoh',
+  'film.sony',
+  'film.bw',
+  'film.cinema',
+  'film.classicPicks',
 ];
 
 /// 全部预设:77 款相机配方 + 10 款经典精选(含 original 单位阵
@@ -75,7 +76,7 @@ const List<FilmPreset> filmPresets = [
     id: 'sonyFactoryST',
     nameZh: '出厂标准',
     nameEn: 'FACTORY ST',
-    group: '索尼大师',
+    group: 'film.sony',
     matrix: [
       1, 0, 0, 0, 0, //
       0, 1, 0, 0, 0, //
@@ -87,7 +88,7 @@ const List<FilmPreset> filmPresets = [
     id: 'sonyPT',
     nameZh: '索尼 PT（人像）',
     nameEn: 'Sony PT',
-    group: '索尼大师',
+    group: 'film.sony',
     matrix: [
       0.952834, 0.0062, 0.001204, 0, 8.08, //
       0.003144, 0.951689, 0.001199, 0, 6.08, //
@@ -99,7 +100,7 @@ const List<FilmPreset> filmPresets = [
     id: 'sonyNT',
     nameZh: '索尼 NT（中性）',
     nameEn: 'Sony NT',
-    group: '索尼大师',
+    group: 'film.sony',
     matrix: [
       0.905485, 0.021312, 0.004139, 0, 9.736, //
       0.010856, 0.915941, 0.004139, 0, 9.736, //
@@ -111,7 +112,7 @@ const List<FilmPreset> filmPresets = [
     id: 'sonyVV',
     nameZh: '索尼 VV（鲜艳）',
     nameEn: 'Sony VV',
-    group: '索尼大师',
+    group: 'film.sony',
     matrix: [
       1.253449, -0.15864, -0.030809, 0, -9.032, //
       -0.080807, 1.175616, -0.030809, 0, -9.032, //
@@ -123,7 +124,7 @@ const List<FilmPreset> filmPresets = [
     id: 'sonyVV2',
     nameZh: '索尼 VV2',
     nameEn: 'Sony VV2',
-    group: '索尼大师',
+    group: 'film.sony',
     matrix: [
       1.64976, -0.436072, -0.084689, 0, -17.352, //
       -0.222122, 1.43581, -0.084689, 0, -17.352, //
@@ -135,7 +136,7 @@ const List<FilmPreset> filmPresets = [
     id: 'sonyFL',
     nameZh: '索尼 FL（胶片风格）',
     nameEn: 'Sony FL',
-    group: '索尼大师',
+    group: 'film.sony',
     matrix: [
       0.481319, 0.332633, 0.0646, 0, 19.016, //
       0.167226, 0.636122, 0.063758, 0, 18.056, //
@@ -147,7 +148,7 @@ const List<FilmPreset> filmPresets = [
     id: 'sonyIN',
     nameZh: '索尼 IN（即时）',
     nameEn: 'Sony IN',
-    group: '索尼大师',
+    group: 'film.sony',
     matrix: [
       0.407945, 0.281925, 0.054752, 0, 35.116, //
       0.140809, 0.535634, 0.053686, 0, 33.856, //
@@ -159,7 +160,7 @@ const List<FilmPreset> filmPresets = [
     id: 'sonySH',
     nameZh: '索尼 SH（柔和高调）',
     nameEn: 'Sony SH',
-    group: '索尼大师',
+    group: 'film.sony',
     matrix: [
       0.760937, 0.287001, 0.055738, 0, 52.768, //
       0.144285, 0.890001, 0.055012, 0, 54.994667, //
@@ -171,7 +172,7 @@ const List<FilmPreset> filmPresets = [
     id: 'fujiProvia',
     nameZh: 'PROVIA 标准',
     nameEn: 'Provia',
-    group: '富士胶片',
+    group: 'film.fuji',
     matrix: [
       1.141602, -0.118574, -0.023028, 0, 0, //
       -0.060398, 1.083426, -0.023028, 0, 0, //
@@ -183,7 +184,7 @@ const List<FilmPreset> filmPresets = [
     id: 'fujiVelvia',
     nameZh: 'Velvia 鲜艳',
     nameEn: 'Velvia',
-    group: '富士胶片',
+    group: 'film.fuji',
     matrix: [
       1.913815, -0.602755, -0.11706, 0, -25.672, //
       -0.307025, 1.618085, -0.11706, 0, -25.672, //
@@ -195,7 +196,7 @@ const List<FilmPreset> filmPresets = [
     id: 'fujiAstia',
     nameZh: 'ASTIA 柔和',
     nameEn: 'Astia',
-    group: '富士胶片',
+    group: 'film.fuji',
     matrix: [
       0.981728, 0.006388, 0.001241, 0, 19.61, //
       0.003198, 0.967828, 0.001219, 0, 16.65, //
@@ -207,7 +208,7 @@ const List<FilmPreset> filmPresets = [
     id: 'classicChrome',
     nameZh: '经典正片',
     nameEn: 'Classic Chrome',
-    group: '富士胶片',
+    group: 'film.fuji',
     matrix: [
       1.08, -0.05, -0.03, 0, -2, //
       -0.03, 1.02, -0.02, 0, 1, //
@@ -219,7 +220,7 @@ const List<FilmPreset> filmPresets = [
     id: 'fujiClassicNegative',
     nameZh: '经典负片',
     nameEn: 'Classic Neg',
-    group: '富士胶片',
+    group: 'film.fuji',
     matrix: [
       0.692414, 0.428215, 0.083163, 0, -30.92, //
       0.225276, 0.932117, 0.085891, 0, -28.72, //
@@ -231,7 +232,7 @@ const List<FilmPreset> filmPresets = [
     id: 'fujiNostalgicNeg',
     nameZh: '怀旧负片',
     nameEn: 'Nostalgic Neg',
-    group: '富士胶片',
+    group: 'film.fuji',
     matrix: [
       1.196856, -0.124313, -0.024143, 0, 3.52, //
       -0.060398, 1.083426, -0.023028, 0, 0, //
@@ -243,7 +244,7 @@ const List<FilmPreset> filmPresets = [
     id: 'fujiRealaAce',
     nameZh: 'REALA ACE',
     nameEn: 'Reala Ace',
-    group: '富士胶片',
+    group: 'film.fuji',
     matrix: [
       1.065, 0, 0, 0, -8.32, //
       0, 1.065, 0, 0, -8.32, //
@@ -255,7 +256,7 @@ const List<FilmPreset> filmPresets = [
     id: 'fujiProNegStd',
     nameZh: 'PRO Neg. 标准',
     nameEn: 'Pro Neg Std',
-    group: '富士胶片',
+    group: 'film.fuji',
     matrix: [
       0.635264, 0.218244, 0.042385, 0, 16.4, //
       0.11068, 0.739089, 0.042199, 0, 14.4, //
@@ -267,7 +268,7 @@ const List<FilmPreset> filmPresets = [
     id: 'fujiProNegHi',
     nameZh: 'PRO Neg. 高',
     nameEn: 'Pro Neg Hi',
-    group: '富士胶片',
+    group: 'film.fuji',
     matrix: [
       0.726517, 0.249594, 0.048473, 0, -0.24, //
       0.126579, 0.845257, 0.048261, 0, -2.24, //
@@ -279,7 +280,7 @@ const List<FilmPreset> filmPresets = [
     id: 'fujiEterna',
     nameZh: 'ETERNA 影院',
     nameEn: 'Eterna',
-    group: '富士胶片',
+    group: 'film.fuji',
     matrix: [
       0.382734, 0.264502, 0.051368, 0, 33.446, //
       0.134729, 0.512507, 0.051368, 0, 33.446, //
@@ -291,7 +292,7 @@ const List<FilmPreset> filmPresets = [
     id: 'fujiEternaBleach',
     nameZh: 'ETERNA 漂白效果',
     nameEn: 'Eterna Bleach',
-    group: '富士胶片',
+    group: 'film.fuji',
     matrix: [
       0.573419, 0.396282, 0.076961, 0, -21.274, //
       0.201854, 0.767847, 0.076961, 0, -21.274, //
@@ -303,7 +304,7 @@ const List<FilmPreset> filmPresets = [
     id: 'fujiAcros',
     nameZh: 'ACROS 黑白',
     nameEn: 'Acros',
-    group: '富士胶片',
+    group: 'film.fuji',
     matrix: [
       0.363584, 0.713792, 0.138624, 0, -27.648, //
       0.363584, 0.713792, 0.138624, 0, -27.648, //
@@ -315,7 +316,7 @@ const List<FilmPreset> filmPresets = [
     id: 'fujiAcrosYe',
     nameZh: 'ACROS +Ye（黄滤镜）',
     nameEn: 'Acros +Ye',
-    group: '富士胶片',
+    group: 'film.fuji',
     matrix: [
       0.341187, 0.669822, 0.130085, 0, -32.128, //
       0.363584, 0.713792, 0.138624, 0, -27.648, //
@@ -327,7 +328,7 @@ const List<FilmPreset> filmPresets = [
     id: 'fujiAcrosR',
     nameZh: 'ACROS +R（红滤镜）',
     nameEn: 'Acros +R',
-    group: '富士胶片',
+    group: 'film.fuji',
     matrix: [
       0.364085, 0.714776, 0.138815, 0, -64.96, //
       0.42159, 0.82767, 0.16074, 0, -55.04, //
@@ -339,7 +340,7 @@ const List<FilmPreset> filmPresets = [
     id: 'fujiAcrosG',
     nameZh: 'ACROS +G（绿滤镜）',
     nameEn: 'Acros +G',
-    group: '富士胶片',
+    group: 'film.fuji',
     matrix: [
       0.357981, 0.702792, 0.136488, 0, -28.448, //
       0.379291, 0.744628, 0.144613, 0, -24.768, //
@@ -351,7 +352,7 @@ const List<FilmPreset> filmPresets = [
     id: 'fujiSepia',
     nameZh: '富士 棕褐色',
     nameEn: 'Sepia',
-    group: '富士胶片',
+    group: 'film.fuji',
     matrix: [
       0.327651, 0.643248, 0.124924, 0, 6.108, //
       0.307306, 0.603306, 0.117167, 0, -3.222667, //
@@ -363,7 +364,7 @@ const List<FilmPreset> filmPresets = [
     id: 'fujiPro400H',
     nameZh: '富士 Pro 400H',
     nameEn: 'Pro 400H',
-    group: '富士胶片',
+    group: 'film.fuji',
     matrix: [
       0.665781, 0.251111, 0.048768, 0, 41.494, //
       0.132105, 0.814868, 0.050368, 0, 43.694, //
@@ -375,7 +376,7 @@ const List<FilmPreset> filmPresets = [
     id: 'fujiFortia50',
     nameZh: '富士 Fortia 50',
     nameEn: 'Fortia 50',
-    group: '富士胶片',
+    group: 'film.fuji',
     matrix: [
       1.757149, -0.553413, -0.107477, 0, -29.042, //
       -0.286301, 1.508864, -0.109158, 0, -27.922, //
@@ -387,7 +388,7 @@ const List<FilmPreset> filmPresets = [
     id: 'fujiSuperia400',
     nameZh: '富士 Superia 400',
     nameEn: 'Superia 400',
-    group: '富士胶片',
+    group: 'film.fuji',
     matrix: [
       1.334665, -0.138627, -0.026922, 0, -5.47, //
       -0.07087, 1.271278, -0.027021, 0, -5.35, //
@@ -399,7 +400,7 @@ const List<FilmPreset> filmPresets = [
     id: 'fujiC200',
     nameZh: '富士 C200',
     nameEn: 'Fuji C200',
-    group: '富士胶片',
+    group: 'film.fuji',
     matrix: [
       0.978692, 0, 0, 0, -1.48, //
       0, 1.0108, 0, 0, 0.72, //
@@ -411,7 +412,7 @@ const List<FilmPreset> filmPresets = [
     id: 'fujiNatura1600',
     nameZh: '富士 Natura 1600',
     nameEn: 'Natura 1600',
-    group: '富士胶片',
+    group: 'film.fuji',
     matrix: [
       0.651151, 0.223702, 0.043445, 0, 27.93, //
       0.111976, 0.747746, 0.042693, 0, 24.97, //
@@ -423,7 +424,7 @@ const List<FilmPreset> filmPresets = [
     id: 'kodakPortra160',
     nameZh: '柯达 Portra 160',
     nameEn: 'Portra 160',
-    group: '柯达胶片',
+    group: 'film.kodak',
     matrix: [
       0.582539, 0.371788, 0.072204, 0, 31.35, //
       0.18248, 0.737088, 0.069574, 0, 27.13, //
@@ -435,7 +436,7 @@ const List<FilmPreset> filmPresets = [
     id: 'kodakPortra400',
     nameZh: '柯达 Portra 400',
     nameEn: 'Portra 400',
-    group: '柯达胶片',
+    group: 'film.kodak',
     matrix: [
       0.960808, 0.141216, 0.027425, 0, 24.81, //
       0.069479, 0.994969, 0.02649, 0, 20.37, //
@@ -447,7 +448,7 @@ const List<FilmPreset> filmPresets = [
     id: 'kodakPortra800',
     nameZh: '柯达 Portra 800',
     nameEn: 'Portra 800',
-    group: '柯达胶片',
+    group: 'film.kodak',
     matrix: [
       0.647244, 0.22236, 0.043184, 0, 27.57, //
       0.113186, 0.755822, 0.043154, 0, 25.69, //
@@ -459,7 +460,7 @@ const List<FilmPreset> filmPresets = [
     id: 'kodakGold200',
     nameZh: '柯达 Gold 200',
     nameEn: 'Gold 200',
-    group: '柯达胶片',
+    group: 'film.kodak',
     matrix: [
       1.552334, -0.286886, -0.055715, 0, -2.91, //
       -0.14174, 1.369169, -0.054042, 0, -5.35, //
@@ -471,7 +472,7 @@ const List<FilmPreset> filmPresets = [
     id: 'kodakUltraMax400',
     nameZh: '柯达 Ultra Max 400',
     nameEn: 'UltraMax 400',
-    group: '柯达胶片',
+    group: 'film.kodak',
     matrix: [
       1.08346, 0, 0, 0, 1.89, //
       0, 1.101772, 0, 0, 2.97, //
@@ -483,7 +484,7 @@ const List<FilmPreset> filmPresets = [
     id: 'kodakColorPlus200',
     nameZh: '柯达 Color Plus 200',
     nameEn: 'ColorPlus 200',
-    group: '柯达胶片',
+    group: 'film.kodak',
     matrix: [
       1.357849, -0.141035, -0.02739, 0, -4.19, //
       -0.07087, 1.271278, -0.027021, 0, -5.35, //
@@ -495,7 +496,7 @@ const List<FilmPreset> filmPresets = [
     id: 'kodakEktar100',
     nameZh: '柯达 Ektar 100',
     nameEn: 'Ektar 100',
-    group: '柯达胶片',
+    group: 'film.kodak',
     matrix: [
       1.461495, -0.364882, -0.070863, 0, -15.05, //
       -0.18586, 1.282473, -0.070863, 0, -15.05, //
@@ -507,7 +508,7 @@ const List<FilmPreset> filmPresets = [
     id: 'kodakE100',
     nameZh: '柯达 Ektachrome E100',
     nameEn: 'E100',
-    group: '柯达胶片',
+    group: 'film.kodak',
     matrix: [
       1.582892, -0.424019, -0.082348, 0, -28.122, //
       -0.21936, 1.39636, -0.083636, 0, -27.002, //
@@ -519,7 +520,7 @@ const List<FilmPreset> filmPresets = [
     id: 'kodachrome64',
     nameZh: 'Kodachrome 64',
     nameEn: 'Kodachrome 64',
-    group: '柯达胶片',
+    group: 'film.kodak',
     matrix: [
       1.846287, -0.570393, -0.110775, 0, -42.682, //
       -0.295085, 1.590935, -0.112507, 0, -41.562, //
@@ -531,7 +532,7 @@ const List<FilmPreset> filmPresets = [
     id: 'kodakVision3500T',
     nameZh: '柯达 Vision3 500T（日光）',
     nameEn: 'Vision3 500T',
-    group: '柯达胶片',
+    group: 'film.kodak',
     matrix: [
       0.740308, 0.126019, 0.024474, 0, 9.626, //
       0.071243, 0.890274, 0.027163, 0, 16.826, //
@@ -543,7 +544,7 @@ const List<FilmPreset> filmPresets = [
     id: 'kodakVision200T',
     nameZh: '柯达 Vision 200T（小行星城）',
     nameEn: 'Vision 200T',
-    group: '柯达胶片',
+    group: 'film.kodak',
     matrix: [
       0.534033, 0.20142, 0.039117, 0, 41.026, //
       0.10739, 0.662422, 0.040945, 0, 43.946, //
@@ -555,7 +556,7 @@ const List<FilmPreset> filmPresets = [
     id: 'kodakTriX400',
     nameZh: '柯达 Tri-X 400',
     nameEn: 'Tri-X 400',
-    group: '柯达胶片',
+    group: 'film.kodak',
     matrix: [
       0.428898, 0.842016, 0.163526, 0, -38.198, //
       0.428898, 0.842016, 0.163526, 0, -38.198, //
@@ -567,7 +568,7 @@ const List<FilmPreset> filmPresets = [
     id: 'kodakTMax',
     nameZh: '柯达 T-Max',
     nameEn: 'T-Max',
-    group: '柯达胶片',
+    group: 'film.kodak',
     matrix: [
       0.403949, 0.793037, 0.154014, 0, -44.928, //
       0.403949, 0.793037, 0.154014, 0, -44.928, //
@@ -579,7 +580,7 @@ const List<FilmPreset> filmPresets = [
     id: 'kodakTriX1600',
     nameZh: '柯达 Tri-X 1600（增感）',
     nameEn: 'Tri-X 1600',
-    group: '柯达胶片',
+    group: 'film.kodak',
     matrix: [
       0.459533, 0.90216, 0.175207, 0, -52.79, //
       0.459533, 0.90216, 0.175207, 0, -52.79, //
@@ -591,7 +592,7 @@ const List<FilmPreset> filmPresets = [
     id: 'cineStill50D',
     nameZh: 'CineStill 50D（蓝丝绒）',
     nameEn: 'CineStill 50D',
-    group: '电影特色',
+    group: 'film.cinema',
     matrix: [
       0.667472, 0.220829, 0.042887, 0, 7.94, //
       0.111521, 0.769178, 0.04252, 0, 7.48, //
@@ -603,7 +604,7 @@ const List<FilmPreset> filmPresets = [
     id: 'cineStill800T',
     nameZh: 'CineStill 800T',
     nameEn: 'CineStill 800T',
-    group: '电影特色',
+    group: 'film.cinema',
     matrix: [
       0.895493, 0.021077, 0.004093, 0, 5.206, //
       0.011684, 0.985797, 0.004455, 0, 11.146, //
@@ -615,7 +616,7 @@ const List<FilmPreset> filmPresets = [
     id: 'classicCinema',
     nameZh: '经典电影',
     nameEn: 'Classic Cinema',
-    group: '电影特色',
+    group: 'film.cinema',
     matrix: [
       0.971593, 0, 0, 0, 17.96, //
       0, 0.911438, 0, 0, 13.16, //
@@ -627,7 +628,7 @@ const List<FilmPreset> filmPresets = [
     id: 'rec709Video',
     nameZh: 'Rec.709 视频（低对比）',
     nameEn: 'Rec.709',
-    group: '电影特色',
+    group: 'film.cinema',
     matrix: [
       0.531491, 0.200461, 0.038931, 0, 36.456, //
       0.102109, 0.629843, 0.038931, 0, 36.456, //
@@ -639,7 +640,7 @@ const List<FilmPreset> filmPresets = [
     id: 'ricohGRPositive',
     nameZh: 'GR 正片',
     nameEn: 'GR Positive',
-    group: '理光人文',
+    group: 'film.ricoh',
     matrix: [
       1.547595, -0.386378, -0.075038, 0, -16.65, //
       -0.190929, 1.317449, -0.072796, 0, -18.89, //
@@ -651,7 +652,7 @@ const List<FilmPreset> filmPresets = [
     id: 'ricohGRNegative',
     nameZh: 'GR 负片',
     nameEn: 'GR Negative',
-    group: '理光人文',
+    group: 'film.ricoh',
     matrix: [
       0.731646, 0.275953, 0.053592, 0, 2.186, //
       0.145174, 0.895481, 0.05535, 0, 4.386, //
@@ -663,7 +664,7 @@ const List<FilmPreset> filmPresets = [
     id: 'ricohGRBleach',
     nameZh: 'GR 漂白效果',
     nameEn: 'GR Bleach',
-    group: '理光人文',
+    group: 'film.ricoh',
     matrix: [
       0.633756, 0.43798, 0.085059, 0, -23.504, //
       0.223094, 0.848643, 0.085059, 0, -23.504, //
@@ -675,7 +676,7 @@ const List<FilmPreset> filmPresets = [
     id: 'ricohGRRetro',
     nameZh: 'GR 复古',
     nameEn: 'GR Retro',
-    group: '理光人文',
+    group: 'film.ricoh',
     matrix: [
       0.598714, 0.370268, 0.071909, 0, 21.04, //
       0.164842, 0.682063, 0.06285, 0, 9.108, //
@@ -687,7 +688,7 @@ const List<FilmPreset> filmPresets = [
     id: 'ricohGRCross',
     nameZh: 'GR 正负逆冲',
     nameEn: 'GR Cross Proc',
-    group: '理光人文',
+    group: 'film.ricoh',
     matrix: [
       1.642927, -0.434266, -0.084338, 0, -29.672, //
       -0.245058, 1.584072, -0.093434, 0, -22.792, //
@@ -699,7 +700,7 @@ const List<FilmPreset> filmPresets = [
     id: 'ricohGRHiBw',
     nameZh: 'GR 高对比度黑白',
     nameEn: 'GR Hi-B&W',
-    group: '理光人文',
+    group: 'film.ricoh',
     matrix: [
       0.49036, 0.96268, 0.18696, 0, -84.48, //
       0.49036, 0.96268, 0.18696, 0, -84.48, //
@@ -711,7 +712,7 @@ const List<FilmPreset> filmPresets = [
     id: 'ricohGRHardBw',
     nameZh: 'GR 硬调黑白',
     nameEn: 'GR Hard Mono',
-    group: '理光人文',
+    group: 'film.ricoh',
     matrix: [
       0.393484, 0.772492, 0.150024, 0, -40.448, //
       0.393484, 0.772492, 0.150024, 0, -40.448, //
@@ -723,7 +724,7 @@ const List<FilmPreset> filmPresets = [
     id: 'ricohGRSoftBw',
     nameZh: 'GR 柔调黑白',
     nameEn: 'GR Soft Mono',
-    group: '理光人文',
+    group: 'film.ricoh',
     matrix: [
       0.284349, 0.558237, 0.108414, 0, 6.272, //
       0.284349, 0.558237, 0.108414, 0, 6.272, //
@@ -735,7 +736,7 @@ const List<FilmPreset> filmPresets = [
     id: 'leicaContemporary',
     nameZh: '徕卡 当代',
     nameEn: 'Leica Contemp',
-    group: '索尼大师',
+    group: 'film.sony',
     matrix: [
       1.215806, -0.126281, -0.024525, 0, -8.32, //
       -0.064324, 1.153849, -0.024525, 0, -8.32, //
@@ -747,7 +748,7 @@ const List<FilmPreset> filmPresets = [
     id: 'leicaClassic',
     nameZh: '徕卡 经典',
     nameEn: 'Leica Classic',
-    group: '索尼大师',
+    group: 'film.sony',
     matrix: [
       0.982794, 0.135757, 0.026365, 0, -15.68, //
       0.06825, 1.035729, 0.026022, 0, -16.64, //
@@ -759,7 +760,7 @@ const List<FilmPreset> filmPresets = [
     id: 'leicaEternal',
     nameZh: '徕卡 永恒',
     nameEn: 'Leica Eternal',
-    group: '索尼大师',
+    group: 'film.sony',
     matrix: [
       0.468967, 0.324097, 0.062942, 0, 23.856, //
       0.162934, 0.619798, 0.062122, 0, 22.896, //
@@ -771,7 +772,7 @@ const List<FilmPreset> filmPresets = [
     id: 'leicaMonochrome',
     nameZh: '徕卡 黑白',
     nameEn: 'Leica Mono',
-    group: '索尼大师',
+    group: 'film.sony',
     matrix: [
       0.35, 0.65, 0.15, 0, -10, //
       0.35, 0.65, 0.15, 0, -10, //
@@ -783,7 +784,7 @@ const List<FilmPreset> filmPresets = [
     id: 'hasselbladHNCS',
     nameZh: '哈苏 HNCS 自然',
     nameEn: 'Hasselblad HNCS',
-    group: '索尼大师',
+    group: 'film.sony',
     matrix: [
       0.720616, 0.122667, 0.023823, 0, 18.056, //
       0.062483, 0.7808, 0.023823, 0, 18.056, //
@@ -795,7 +796,7 @@ const List<FilmPreset> filmPresets = [
     id: 'canonStandard',
     nameZh: '佳能 标准',
     nameEn: 'Canon Std',
-    group: '索尼大师',
+    group: 'film.sony',
     matrix: [
       1.240478, -0.128844, -0.025022, 0, -6.94, //
       -0.063513, 1.13931, -0.024216, 0, -9.16, //
@@ -807,7 +808,7 @@ const List<FilmPreset> filmPresets = [
     id: 'canonPortrait',
     nameZh: '佳能 人像',
     nameEn: 'Canon Portrait',
-    group: '索尼大师',
+    group: 'film.sony',
     matrix: [
       0.937038, 0.006097, 0.001184, 0, 13.94, //
       0.002993, 0.905791, 0.001141, 0, 9.72, //
@@ -819,7 +820,7 @@ const List<FilmPreset> filmPresets = [
     id: 'canonFaithful',
     nameZh: '佳能 可靠设置',
     nameEn: 'Canon Faithful',
-    group: '索尼大师',
+    group: 'film.sony',
     matrix: [
       0.905485, 0.021312, 0.004139, 0, 9.736, //
       0.010856, 0.915941, 0.004139, 0, 9.736, //
@@ -831,7 +832,7 @@ const List<FilmPreset> filmPresets = [
     id: 'nikonFlat',
     nameZh: '尼康 平面',
     nameEn: 'Nikon Flat',
-    group: '索尼大师',
+    group: 'film.sony',
     matrix: [
       0.370702, 0.256187, 0.049754, 0, 49.256, //
       0.130494, 0.496396, 0.049754, 0, 49.256, //
@@ -843,7 +844,7 @@ const List<FilmPreset> filmPresets = [
     id: 'nikonVivid',
     nameZh: '尼康 鲜艳',
     nameEn: 'Nikon Vivid',
-    group: '索尼大师',
+    group: 'film.sony',
     matrix: [
       1.53608, -0.31157, -0.060509, 0, -21.832, //
       -0.158704, 1.383214, -0.060509, 0, -21.832, //
@@ -855,7 +856,7 @@ const List<FilmPreset> filmPresets = [
     id: 'panaLMonochromeD',
     nameZh: '松下 L.黑白 D',
     nameEn: 'Pana L.Mono D',
-    group: '索尼大师',
+    group: 'film.sony',
     matrix: [
       0.402454, 0.790102, 0.153444, 0, -44.288, //
       0.402454, 0.790102, 0.153444, 0, -44.288, //
@@ -867,7 +868,7 @@ const List<FilmPreset> filmPresets = [
     id: 'panaLClassicNeo',
     nameZh: '松下 L.经典 Neo',
     nameEn: 'Pana L.Neo',
-    group: '索尼大师',
+    group: 'film.sony',
     matrix: [
       0.533751, 0.368868, 0.071637, 0, 22.546, //
       0.182276, 0.693373, 0.069497, 0, 20.306, //
@@ -879,7 +880,7 @@ const List<FilmPreset> filmPresets = [
     id: 'olympusPopArt',
     nameZh: '奥林巴斯 浓郁色调',
     nameEn: 'Olympus PopArt',
-    group: '索尼大师',
+    group: 'film.sony',
     matrix: [
       2.018001, -0.635568, -0.123432, 0, -33.992, //
       -0.323739, 1.706172, -0.123432, 0, -33.992, //
@@ -891,7 +892,7 @@ const List<FilmPreset> filmPresets = [
     id: 'olympusPaleLight',
     nameZh: '奥林巴斯 淡化增亮',
     nameEn: 'Olympus Pale',
-    group: '索尼大师',
+    group: 'film.sony',
     matrix: [
       0.54056, 0.373573, 0.072551, 0, 42.974, //
       0.190287, 0.723846, 0.072551, 0, 42.974, //
@@ -903,7 +904,7 @@ const List<FilmPreset> filmPresets = [
     id: 'agfaVista200',
     nameZh: '爱克发 Vista 200',
     nameEn: 'Vista 200',
-    group: '电影特色',
+    group: 'film.cinema',
     matrix: [
       1.546236, -0.285759, -0.055497, 0, -3.41, //
       -0.138459, 1.337473, -0.05279, 0, -6.91, //
@@ -915,7 +916,7 @@ const List<FilmPreset> filmPresets = [
     id: 'agfaUltra100',
     nameZh: '爱克发 Ultra 100',
     nameEn: 'Ultra 100',
-    group: '电影特色',
+    group: 'film.cinema',
     matrix: [
       1.809629, -0.569942, -0.110687, 0, -17.352, //
       -0.290311, 1.529998, -0.110687, 0, -17.352, //
@@ -927,7 +928,7 @@ const List<FilmPreset> filmPresets = [
     id: 'polaroidInstax',
     nameZh: '宝丽来 / instax',
     nameEn: 'Polaroid',
-    group: '电影特色',
+    group: 'film.cinema',
     matrix: [
       0.592375, 0.366347, 0.071148, 0, 29.53, //
       0.164713, 0.681528, 0.0628, 0, 18.718, //
@@ -939,7 +940,7 @@ const List<FilmPreset> filmPresets = [
     id: 'ilfordHP5',
     nameZh: '伊尔福 HP5',
     nameEn: 'Ilford HP5',
-    group: '经典黑白',
+    group: 'film.bw',
     matrix: [
       0.3849, 0.755639, 0.146751, 0, -20.918, //
       0.3849, 0.755639, 0.146751, 0, -20.918, //
@@ -951,7 +952,7 @@ const List<FilmPreset> filmPresets = [
     id: 'ilfordFP4',
     nameZh: '伊尔福 FP4',
     nameEn: 'Ilford FP4',
-    group: '经典黑白',
+    group: 'film.bw',
     matrix: [
       0.363584, 0.713792, 0.138624, 0, -27.648, //
       0.363584, 0.713792, 0.138624, 0, -27.648, //
@@ -963,7 +964,7 @@ const List<FilmPreset> filmPresets = [
     id: 'ilfordDelta100',
     nameZh: '伊尔福 Delta 100',
     nameEn: 'Delta 100',
-    group: '经典黑白',
+    group: 'film.bw',
     matrix: [
       0.363584, 0.713792, 0.138624, 0, -27.648, //
       0.363584, 0.713792, 0.138624, 0, -27.648, //
@@ -975,7 +976,7 @@ const List<FilmPreset> filmPresets = [
     id: 'ilfordDelta3200',
     nameZh: '伊尔福 Delta 3200',
     nameEn: 'Delta 3200',
-    group: '经典黑白',
+    group: 'film.bw',
     matrix: [
       0.461644, 0.906305, 0.176011, 0, -30.078, //
       0.461644, 0.906305, 0.176011, 0, -30.078, //
@@ -987,7 +988,7 @@ const List<FilmPreset> filmPresets = [
     id: 'ilfordPanF50',
     nameZh: '伊尔福 Pan F 50',
     nameEn: 'Pan F 50',
-    group: '经典黑白',
+    group: 'film.bw',
     matrix: [
       0.393484, 0.772492, 0.150024, 0, -40.448, //
       0.393484, 0.772492, 0.150024, 0, -40.448, //
@@ -999,7 +1000,7 @@ const List<FilmPreset> filmPresets = [
     id: 'original',
     nameZh: '原片直出',
     nameEn: 'Original',
-    group: '经典精选',
+    group: 'film.classicPicks',
     matrix: [
       1, 0, 0, 0, 0, //
       0, 1, 0, 0, 0, //
@@ -1011,7 +1012,7 @@ const List<FilmPreset> filmPresets = [
     id: 'fairSkin',
     nameZh: '冷白皮人像',
     nameEn: 'Fair Skin',
-    group: '经典精选',
+    group: 'film.classicPicks',
     matrix: [
       1.08, -0.02, -0.02, 0, 12, //
       -0.02, 1.05, -0.01, 0, 6, //
@@ -1023,7 +1024,7 @@ const List<FilmPreset> filmPresets = [
     id: 'warmPortrait',
     nameZh: '暖色温馨',
     nameEn: 'Warm Gold',
-    group: '经典精选',
+    group: 'film.classicPicks',
     matrix: [
       1.18, 0.04, -0.08, 0, 16, //
       0.02, 1.08, -0.06, 0, 8, //
@@ -1035,7 +1036,7 @@ const List<FilmPreset> filmPresets = [
     id: 'japanesePure',
     nameZh: '日系街道',
     nameEn: 'Japanese Pure',
-    group: '经典精选',
+    group: 'film.classicPicks',
     matrix: [
       0.95, 0.04, 0.05, 0, 18, //
       0.02, 1.03, 0.04, 0, 18, //
@@ -1047,7 +1048,7 @@ const List<FilmPreset> filmPresets = [
     id: 'shinkaiAnime',
     nameZh: '新海诚风',
     nameEn: 'Shinkai Anime',
-    group: '经典精选',
+    group: 'film.classicPicks',
     matrix: [
       1.14, -0.05, -0.04, 0, 10, //
       -0.04, 1.28, -0.06, 0, 14, //
@@ -1059,7 +1060,7 @@ const List<FilmPreset> filmPresets = [
     id: 'cityNight',
     nameZh: '城市夜景',
     nameEn: 'City Night',
-    group: '经典精选',
+    group: 'film.classicPicks',
     matrix: [
       1.15, -0.08, -0.08, 0, -8, //
       -0.06, 1.1, 0.02, 0, -6, //
@@ -1071,7 +1072,7 @@ const List<FilmPreset> filmPresets = [
     id: 'forestGreen',
     nameZh: '绿色森林',
     nameEn: 'Forest Green',
-    group: '经典精选',
+    group: 'film.classicPicks',
     matrix: [
       0.98, -0.06, -0.04, 0, 4, //
       -0.04, 1.35, -0.06, 0, 18, //
@@ -1083,7 +1084,7 @@ const List<FilmPreset> filmPresets = [
     id: 'floralBotanical',
     nameZh: '花木生机',
     nameEn: 'Floral Botanical',
-    group: '经典精选',
+    group: 'film.classicPicks',
     matrix: [
       1.12, -0.04, -0.02, 0, 8, //
       -0.02, 1.24, -0.04, 0, 12, //
@@ -1095,7 +1096,7 @@ const List<FilmPreset> filmPresets = [
     id: 'clearSky',
     nameZh: '通透蓝天',
     nameEn: 'Clear Sky',
-    group: '经典精选',
+    group: 'film.classicPicks',
     matrix: [
       1.02, -0.02, -0.08, 0, 2, //
       -0.02, 1.05, -0.04, 0, 4, //
@@ -1107,7 +1108,7 @@ const List<FilmPreset> filmPresets = [
     id: 'cinematic',
     nameZh: '电影质感',
     nameEn: 'Cinematic',
-    group: '经典精选',
+    group: 'film.classicPicks',
     matrix: [
       1.24, -0.06, -0.12, 0, 6, //
       -0.06, 1.08, 0.06, 0, -4, //

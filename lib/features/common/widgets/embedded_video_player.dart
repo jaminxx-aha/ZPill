@@ -295,8 +295,8 @@ class _EmbeddedVideoPlayerState extends State<EmbeddedVideoPlayer> {
           },
           bottomRight: IconButton(
             tooltip: widget.fullscreen
-                ? context.t('退出全屏')
-                : context.t('全屏播放'),
+                ? context.t('video.exitFullscreen')
+                : context.t('video.fullscreenPlay'),
             onPressed: widget.onToggleFullscreen,
             icon: Icon(
               widget.fullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
@@ -393,9 +393,9 @@ class _VideoControlsOverlay extends StatelessWidget {
                           child: FilterChip(
                             selected: conform,
                             label: Text(conform
-                                ? context.t('顺帧 24fps · {p}%',
+                                ? context.t('video.conforming',
                                     {'p': percent})
-                                : context.t('24fps 顺帧')),
+                                : context.t('video.conform24')),
                             onSelected: (_) => onToggleConform(),
                           ),
                         ),

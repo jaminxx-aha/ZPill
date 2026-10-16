@@ -15,7 +15,7 @@ import 'l10n/l10n.dart';
 /// SettingsController 驱动,选中即存);拍摄页外围 chrome 随主题、取景
 /// 画面内容层恒暗(LiveDesign)。
 ///
-/// 语言(i18n 第一期):[L10nScope] 挂在 MaterialApp 外层(builder 直
+/// 语言(i18n 抽象键制):[L10nScope] 挂在 MaterialApp 外层(builder 直
 /// 返回值,设置改动沿 ListenableBuilder 每次重建重装)—— pushed 路由
 /// (拍摄页/相机相册/查看器/编辑页)与 dialog 都在 Navigator 之下、不在
 /// home 子树内,scope 若只包 home 会漏掉整条 push 栈。**scope 才是 t()

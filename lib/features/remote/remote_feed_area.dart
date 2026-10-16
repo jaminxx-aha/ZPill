@@ -376,13 +376,13 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea> {
                     ],
                     Text(
                       status.value == LiveViewStatus.running
-                          ? context.t('取景中…(等待首帧)')
+                          ? context.t('live.waitingFirstFrame')
                           : status.value == LiveViewStatus.failed
-                              ? context.t('取景失败({e})', {
+                              ? context.t('live.failed', {
                                   'e': controller.engine.lastError ??
-                                      context.t('未知错误')
+                                      context.t('common.unknownError')
                                 })
-                              : context.t('取景未开启\n点按画面可触控对焦'),
+                              : context.t('live.offHint'),
                       textAlign: TextAlign.center,
                       style: TextStyle(color: live.faint),
                     ),
@@ -403,8 +403,7 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea> {
                       if (controller.apMode &&
                           !controller.takeoverActive) ...[
                         Text(
-                          context.t('无线拍摄需 APP 接管(机身拨盘锁定,'
-                              '退出拍摄自动解除)'),
+                          context.t('live.needsTakeover'),
                           textAlign: TextAlign.center,
                           style: TextStyle(color: live.faint, fontSize: 12),
                         ),
@@ -418,7 +417,7 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea> {
                           ),
                           icon: const Icon(Icons.screen_lock_portrait,
                               size: 16),
-                          label: Text(context.t('开启 APP 接管并重试取景')),
+                          label: Text(context.t('live.enableTakeoverRetry')),
                         ),
                       ] else
                         TextButton.icon(
@@ -429,7 +428,7 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea> {
                           ),
                           icon: Icon(Icons.refresh,
                               size: 16, color: live.bad),
-                          label: Text(context.t('重试取景')),
+                          label: Text(context.t('live.retry')),
                         ),
                     ],
                   ],
@@ -495,9 +494,9 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea> {
                       analysis: analysis,
                       nLogScale: widget.toggles.scopeNLog,
                       bandLabels: [
-                        context.t('上部'),
-                        context.t('中部'),
-                        context.t('下部'),
+                        context.t('remote.top'),
+                        context.t('remote.mid'),
+                        context.t('remote.bot'),
                       ],
                     ),
                   ),
@@ -585,21 +584,21 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea> {
               Align(
                 alignment: Alignment.bottomCenter,
                 child: LiveBanner(
-                    context.t('连接中断 —— 正在自动重连;画面为断开前的保持帧,非实时'),
+                    context.t('live.frozenFrame'),
                     LiveDesign.dark.accent,
                     bottomInset: widget.bannerInset),
               )
             else if (controller.liveViewBusyHold)
               Align(
                 alignment: Alignment.bottomCenter,
-                child: LiveBanner(context.t('相机忙(写卡/下载中),取景画面保持'),
+                child: LiveBanner(context.t('live.cameraBusy'),
                     LiveDesign.dark.accent,
                     bottomInset: widget.bannerInset),
               )
             else if (!controller.linkUp)
               Align(
                 alignment: Alignment.bottomCenter,
-                child: LiveBanner(context.t('未连接相机 —— 请先在「相机」页建立连接'),
+                child: LiveBanner(context.t('live.notConnected'),
                     LiveDesign.dark.accent,
                     bottomInset: widget.bannerInset),
               )

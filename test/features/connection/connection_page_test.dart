@@ -353,11 +353,11 @@ void main() {
 
       conn.statesCtrl.add(CameraLinkState.pairing);
       await pumpEventQueue();
-      expect(controller.hint, '正在配对(自动确认)');
+      expect(controller.hint, 'conn.pairingAuto');
 
       conn.statesCtrl.add(CameraLinkState.failed);
       await pumpEventQueue();
-      expect(controller.hint, '连接失败'); // error null → 兜底文案
+      expect(controller.hint, 'conn.failed'); // error null → 兜底键,渲染层落 zh
     });
 
     test('hint:reconnecting 读连接层动态文案(恢复循环逐拍更新),'
@@ -375,7 +375,7 @@ void main() {
       conn.err = null;
       conn.statesCtrl.add(CameraLinkState.reconnecting); // 重复 notify 重读
       await pumpEventQueue();
-      expect(controller.hint, '正在自动重连…');
+      expect(controller.hint, 'conn.reconnectAuto');
     });
 
     test('activeIp:各连接方式落账(USB null / 发现 / 档案 / 手动)', () async {
@@ -947,7 +947,7 @@ void main() {
       expect(controller.awaitingCameraConfirm, isTrue);
       expect(find.text('等待相机上确认配对…'), findsOneWidget);
       expect(find.text('连接中…'), findsNothing);
-      expect(controller.hint, contains('按「OK」'));
+      expect(controller.hint, contains('conn.pairingSent'));
       expect(find.text('取消连接'), findsOneWidget, reason: '等待窗保留取消逃生口');
 
       // 窗口耗尽转 failed:等待文案撤下,回到真实错误
@@ -955,7 +955,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(controller.awaitingCameraConfirm, isFalse);
       expect(find.text('等待相机上确认配对…'), findsNothing);
-      expect(controller.hint, '连接失败');
+      expect(controller.hint, 'conn.failed');
     });
 
     testWidgets('删除已保存相机:确认 → 清档案,列表即消(无感重配语义)',

@@ -179,12 +179,12 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
       setState(() => _session.protectionOptimistic[handle] = protect);
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content:
-              Text(protect ? context.t('已设为相机内保护(只读)') : context.t('已解除相机内保护')),
+              Text(protect ? context.t('viewer.protected') : context.t('viewer.unprotected')),
           duration: const Duration(seconds: 2)));
     } on Exception catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(context.t('保护标记失败:{e} —— 请确认相机连接与卡写保护状态', {'e': e})),
+          content: Text(context.t('viewer.protectFailed', {'e': e})),
           duration: const Duration(seconds: 3)));
     }
   }
@@ -249,7 +249,7 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
               child: Align(
                 alignment: Alignment.centerLeft,
                 child: Text(
-                  context.t('评分'),
+                  context.t('viewer.rating'),
                   style: TextStyle(
                     fontSize: 13,
                     color: Theme.of(context).colorScheme.onSurfaceVariant,
@@ -279,7 +279,7 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
             ),
             ListTile(
               leading: const Icon(Icons.star_border),
-              title: Text(context.t('清除评分')),
+              title: Text(context.t('viewer.clearRating')),
               onTap: () {
                 _ratings.rate(group, 0);
                 Navigator.of(context).pop();
@@ -303,7 +303,7 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
       sizeBytes: group.totalBytes,
       // 连拍张数(值列)在本页预翻译,信息底单只包行标签
       burstLabel:
-          group.isBurst ? context.t('连拍 ×{n}', {'n': group.shotCount}) : null,
+          group.isBurst ? context.t('viewer.burstCount', {'n': group.shotCount}) : null,
       fallbackTime: formatDateTime(group.capturedAt),
       loadExif: group.isVideo
           ? null
@@ -318,7 +318,7 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
     PhotoDownloadFormat? format;
     if (!group.isVideo && group.hasJpg && group.hasRaw) {
       format = await showDownloadFormatSheet(context,
-          subtitle: context.t('这张照片有 JPG 和 RAW 两份文件'));
+          subtitle: context.t('viewer.dualFormat'));
       if (format == null) {
         return; // 取消,不下载
       }
@@ -331,16 +331,16 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
     // 目的地片段键「到相册/到应用」带介词(不立裸键「应用」,与网格页同;
     // 模板不写「到」—— 介词在片段里,中文拼回才与原串逐字一致)
     final where = destination == TransferDestination.gallery
-        ? context.t('到相册')
-        : context.t('到应用');
+        ? context.t('grid.toAlbum')
+        : context.t('grid.toApp');
     final tag = format == null ? '' : '(${context.t(format.short)})';
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(
           content: Text(context.t(
-              '已开始下载{where}{tag},进度见「图库」页', {'where': where, 'tag': tag})),
+              'viewer.downloadStarted', {'where': where, 'tag': tag})),
           action: SnackBarAction(
-            label: context.t('查看进度'),
+            label: context.t('viewer.viewProgress'),
             onPressed: widget.onOpenTransfers ?? _openTransfers,
           )));
   }
@@ -356,7 +356,7 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
   Future<void> _edit(PhotoGroup group) async {
     final jpg = group.jpg;
     if (jpg == null) return;
-    unawaited(showLoadingOverlay(context, message: context.t('拉取原图…')));
+    unawaited(showLoadingOverlay(context, message: context.t('viewer.fetchingOriginal')));
     try {
       final dl =
           await _downloader.download(jpg, targetDir: await _gallery.tempDir());
@@ -377,7 +377,7 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
       Navigator.of(context).pop(); // loading 对话框
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
-        ..showSnackBar(SnackBar(content: Text(context.t('拉取原图失败,请检查连接后重试'))));
+        ..showSnackBar(SnackBar(content: Text(context.t('viewer.fetchFailed'))));
     }
   }
 
@@ -411,12 +411,12 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
           isCancelled: () => cancel.cancelled);
     } on DownloadCancelledException {
       _closeDialog();
-      _snack('已取消');
+      _snack('common.cancelled');
       page.onFetchFailed(); // 播放钮复位(可再点)
       return;
     } on Exception {
       _closeDialog();
-      _snack('加载视频失败,请检查连接后重试');
+      _snack('viewer.videoLoadFailed');
       page.onFetchFailed(); // 同上:不留卡死的菊花
       return;
     }
@@ -463,14 +463,14 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
                   title: Text('${_index + 1} / ${widget.items.length}'),
                   actions: [
                     IconButton(
-                      tooltip: context.t('照片信息'),
+                      tooltip: context.t('info.title'),
                       onPressed: () => _showInfo(group),
                       icon: const Icon(Icons.info_outline),
                     ),
                     IconButton(
                       tooltip: _isProtected(group)
-                          ? context.t('解除相机内保护')
-                          : context.t('相机内保护(锁定)'),
+                          ? context.t('viewer.unprotect')
+                          : context.t('viewer.protect'),
                       onPressed: () => _toggleProtect(group),
                       icon: Icon(
                         _isProtected(group)
@@ -480,12 +480,12 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
                     ),
                     if (group.hasJpg)
                       IconButton(
-                        tooltip: context.t('编辑'),
+                        tooltip: context.t('viewer.edit'),
                         onPressed: () => _edit(group),
                         icon: const Icon(Icons.tune),
                       ),
                     IconButton(
-                      tooltip: context.t('评分'),
+                      tooltip: context.t('viewer.rating'),
                       onPressed: () => _rate(group),
                       icon: Icon(
                         rating > 0 ? Icons.star : Icons.star_border,
@@ -544,10 +544,10 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
     final info = [
       pair ? '${group.jpg!.name} + ${group.raw!.name}' : group.name,
       formatBytes(group.totalBytes),
-      if (group.isBurst) context.t('连拍 ×{n}', {'n': group.shotCount}),
+      if (group.isBurst) context.t('viewer.burstCount', {'n': group.shotCount}),
       if (formatDateTime(group.capturedAt) != null)
         formatDateTime(group.capturedAt)!,
-      if (group.isVideo) context.t('视频'),
+      if (group.isVideo) context.t('common.video'),
     ].join(' · ');
     return SafeArea(
       top: false,
@@ -581,7 +581,7 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
                       onPressed: () =>
                           _download(group, TransferDestination.gallery),
                       icon: const Icon(Icons.photo_library_outlined),
-                      label: Text(context.t('下载到相册')),
+                      label: Text(context.t('grid.downloadToAlbum')),
                     ),
                   ),
                   const SizedBox(width: 8),
@@ -595,7 +595,7 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
                       onPressed: () =>
                           _download(group, TransferDestination.app),
                       icon: const Icon(Icons.folder_outlined),
-                      label: Text(context.t('下载到应用')),
+                      label: Text(context.t('grid.downloadToApp')),
                     ),
                   ),
                 ],
@@ -690,7 +690,7 @@ class _PreviewImageState extends State<_PreviewImage> {
             children: [
               const CircularProgressIndicator(color: AppMedia.onMedia),
               const SizedBox(height: 12),
-              Text(context.t('加载预览…'),
+              Text(context.t('viewer.loadingPreview'),
                   style: const TextStyle(color: AppMedia.onMediaMuted)),
             ],
           );
@@ -705,7 +705,7 @@ class _PreviewImageState extends State<_PreviewImage> {
             ),
             const SizedBox(height: 8),
             Text(
-              context.t(isVideo ? '点按播放键观看' : '预览不可用'),
+              context.t(isVideo ? 'viewer.tapPlay' : 'viewer.previewUnavailable'),
               style: const TextStyle(color: AppMedia.onMediaMuted),
             ),
           ],
@@ -778,7 +778,7 @@ class _VideoDownloadDialog extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: Text(context.t('准备播放')),
+      title: Text(context.t('viewer.preparingPlay')),
       content: ListenableBuilder(
         listenable: cancel.progress,
         builder: (context, _) {
@@ -803,7 +803,7 @@ class _VideoDownloadDialog extends StatelessWidget {
       actions: [
         TextButton(
           onPressed: () => cancel.cancelled = true,
-          child: Text(context.t('取消')),
+          child: Text(context.t('common.cancel')),
         ),
       ],
     );
@@ -908,7 +908,7 @@ class _CameraVideoPageState extends State<_CameraVideoPage>
       // 无内嵌播放视图的平台:不拉整档,直接说明。
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
-        ..showSnackBar(SnackBar(content: Text(context.t('该平台暂不支持视频播放'))));
+        ..showSnackBar(SnackBar(content: Text(context.t('viewer.videoUnsupported'))));
       return;
     }
     setState(() => _fetching = true);

@@ -10,7 +10,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/media/cube_lut.dart';
 import '../../l10n/l10n.dart';
-import '../edit/lut_presets.dart' show builtinLuts;
+import '../edit/lut_presets.dart' show builtinLuts, lutTitleKey;
 
 class LutExportSheet extends StatelessWidget {
   const LutExportSheet({
@@ -33,20 +33,20 @@ class LutExportSheet extends StatelessWidget {
         children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
-            child: Text(context.t('LUT 风格'),
+            child: Text(context.t('lut.style'),
                 style: Theme.of(context).textTheme.titleMedium),
           ),
           for (final lut in builtinLuts)
             ListTile(
               dense: true,
-              title: Text(context.t(lut.title)),
+              title: Text(context.t(lutTitleKey(lut.title))),
               onTap: () => onPick(lut),
             ),
           const Divider(height: 1),
           ListTile(
             dense: true,
             leading: const Icon(Icons.content_paste),
-            title: Text(context.t('从剪贴板导入 .cube/.xmp')),
+            title: Text(context.t('edit.importClipboard')),
             onTap: () => onImportFromClipboard(),
           ),
         ],

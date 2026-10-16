@@ -26,7 +26,7 @@ Future<PhotoDownloadFormat?> showDownloadFormatSheet(BuildContext context,
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
             child: Align(
               alignment: Alignment.centerLeft,
-              child: Text(context.t('选择下载格式'),
+              child: Text(context.t('fmt.chooseTitle'),
                   style: Theme.of(context).textTheme.titleMedium),
             ),
           ),
@@ -49,12 +49,12 @@ Future<PhotoDownloadFormat?> showDownloadFormatSheet(BuildContext context,
               title: Text(context.t(format.label)),
               subtitle: switch (format) {
                 PhotoDownloadFormat.jpg =>
-                  Text(context.t('没有 JPG 的照片会跳过(视频照常)')),
+                  Text(context.t('fmt.jpgSkipNote')),
                 PhotoDownloadFormat.raw =>
-                  Text(context.t('没有 RAW 的照片会跳过(视频照常)')),
+                  Text(context.t('fmt.rawSkipNote')),
                 PhotoDownloadFormat.both =>
-                  Text(context.t('有什么下什么(缺哪个格式就只下另一个)')),
-                PhotoDownloadFormat.video => Text(context.t('只下视频,照片全部跳过')),
+                  Text(context.t('fmt.anyNote')),
+                PhotoDownloadFormat.video => Text(context.t('fmt.videoOnlyNote')),
               },
               onTap: () => Navigator.pop(context, format),
             ),

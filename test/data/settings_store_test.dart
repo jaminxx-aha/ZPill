@@ -310,10 +310,10 @@ void main() {
           reason: '表外值(手改文件)回落中文');
     });
 
-    test('label:三档文案(跟随系统/中文/English)', () {
-      expect(AppLanguage.system.label, '跟随系统');
-      expect(AppLanguage.zh.label, '中文');
-      expect(AppLanguage.en.label, 'English');
+    test('label:三档文案(键;渲染层 t() 落词表)', () {
+      expect(AppLanguage.system.label, 'common.followSystem');
+      expect(AppLanguage.zh.label, 'lang.zh');
+      expect(AppLanguage.en.label, 'lang.en');
     });
 
     test('文件落盘往返(FileSettingsStore)', () async {

@@ -353,8 +353,7 @@ class _BlePairPageState extends State<BlePairPage> with WidgetsBindingObserver {
   /// 「在等别的手机」指引文案(扫描行提示与重连失败日志共用;动作
   /// 措辞借 HarmoNiLink 真机口径:相机「已配对设备」菜单切换设备)。
   String _conflictHint(BuildContext context, int foreignId) => context.t(
-      '此相机在等别的手机(设备ID 0x{id}):请在相机「已配对设备」菜单'
-      '断开现有连接或改选本机,或确认相机没被其他手机(如 SnapBridge)占用',
+      'ble.waitingOtherPhone',
       {'id': foreignId.toRadixString(16).toUpperCase()});
 
   /// 当前列表里首个「在等别的手机」的设备(无则 null;重连未命中时的
@@ -378,7 +377,7 @@ class _BlePairPageState extends State<BlePairPage> with WidgetsBindingObserver {
     final id = expectedControllerDeviceId(mfg);
     return id == null
         ? '  mfg ${hexOf(mfg)}'
-        : '  ${context.t('设备ID 0x{id}', {
+        : '  ${context.t('ble.deviceId', {
             'id': id.toRadixString(16).toUpperCase()
           })}';
   }
@@ -387,11 +386,11 @@ class _BlePairPageState extends State<BlePairPage> with WidgetsBindingObserver {
   /// 全在 build,故改带参方法)。
   String _stateLabel(BuildContext context) => switch (_sessionState) {
         BleSessionState.idle => _saved == null
-            ? context.t('未配对')
-            : context.t('已断开'),
-        BleSessionState.pairing => context.t('握手中…'),
-        BleSessionState.ready => context.t('已连接(注入就绪)'),
-        BleSessionState.reconnecting => context.t('重连中(退避 {n}s)',
+            ? context.t('ble.notPaired')
+            : context.t('ble.disconnected'),
+        BleSessionState.pairing => context.t('ble.handshaking'),
+        BleSessionState.ready => context.t('ble.connectedReady'),
+        BleSessionState.reconnecting => context.t('ble.reconnectBackoff',
             {'n': _session.nextRetryDelay.inSeconds}),
       };
 
@@ -399,7 +398,7 @@ class _BlePairPageState extends State<BlePairPage> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     final ready = _sessionState == BleSessionState.ready;
     return Scaffold(
-      appBar: AppBar(title: Text(context.t('BLE 配对 / GPS 注入'))),
+      appBar: AppBar(title: Text(context.t('settings.bleGps'))),
       body: Column(
         children: [
           Padding(
@@ -421,16 +420,16 @@ class _BlePairPageState extends State<BlePairPage> with WidgetsBindingObserver {
                   Text(_stateLabel(context)),
                   const Spacer(),
                   if (_auth != null)
-                    Text(context.t('定位授权:{a}', {'a': _auth!}),
+                    Text(context.t('ble.locAuth', {'a': _auth!}),
                         style: Theme.of(context).textTheme.bodySmall),
                 ]),
                 if (_saved != null)
                   Text(
-                    context.t('已配对:{name}{serial}  {date}', {
+                    context.t('ble.pairedInfo', {
                       'name': _saved!.controllerName,
                       'serial': _saved!.serial.isEmpty
                           ? ''
-                          : context.t('  序列 {s}', {'s': _saved!.serial}),
+                          : context.t('ble.serialLine', {'s': _saved!.serial}),
                       'date': _saved!.pairedAt.toLocal(),
                     }).trimRight(),
                     style: Theme.of(context).textTheme.bodySmall,
@@ -438,12 +437,12 @@ class _BlePairPageState extends State<BlePairPage> with WidgetsBindingObserver {
                 Text(
                   context.t(
                     _session.lastError == null
-                        ? '会话:{state} · 定位:{fix} · GEO {geo} 帧 · TIME {time} 帧'
-                        : '会话:{state} · 定位:{fix} · GEO {geo} 帧 · TIME {time} 帧 · 错误:{err}',
+                        ? 'ble.sessionLine'
+                        : 'ble.sessionLineErr',
                     {
                       'state': _stateLabel(context),
                       'fix': _session.lastFix == null
-                          ? context.t('无')
+                          ? context.t('common.none')
                           : _session.lastFix!.utcTime.toLocal().toString().substring(11, 19),
                       'geo': _session.geoWriteCount,
                       'time': _session.timeWriteCount,
@@ -456,14 +455,13 @@ class _BlePairPageState extends State<BlePairPage> with WidgetsBindingObserver {
                 const SizedBox(height: 4),
                 Text(
                   context.t(
-                      '相机先进菜单「连接至智能设备」(广播窗约 30 秒),再点扫描。'),
+                      'ble.scanHint'),
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
                 if (Platform.operatingSystem == 'ios')
                   Text(
                     context.t(
-                        'iOS:配对成功后自动断开并跳系统蓝牙页,点相机完成配对'
-                        '(核对配对码)→ 回本页自动重连注册。'),
+                        'ble.iosPairHint'),
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
               ],
@@ -481,15 +479,15 @@ class _BlePairPageState extends State<BlePairPage> with WidgetsBindingObserver {
                           ? null
                           : _startScan,
                   child: Text(_scanning
-                      ? context.t('扫描中…')
-                      : context.t('扫描(30s)')),
+                      ? context.t('ble.scanning')
+                      : context.t('ble.scanButton')),
                 ),
                 if (_saved != null)
                   OutlinedButton(
                     onPressed: _sessionState == BleSessionState.pairing
                         ? null
                         : _unpair,
-                    child: Text(context.t('解除配对')),
+                    child: Text(context.t('ble.unpair')),
                   ),
                 if (_saved != null &&
                     (_sessionState == BleSessionState.idle ||
@@ -497,8 +495,8 @@ class _BlePairPageState extends State<BlePairPage> with WidgetsBindingObserver {
                   OutlinedButton(
                     onPressed: _retrying ? null : () => unawaited(_resume()),
                     child: Text(_retrying
-                        ? context.t('重连中…')
-                        : context.t('重连(复用身份)')),
+                        ? context.t('ble.reconnecting')
+                        : context.t('ble.reconnectReuse')),
                   ),
                 if (_saved != null &&
                     (_sessionState == BleSessionState.idle ||
@@ -508,24 +506,23 @@ class _BlePairPageState extends State<BlePairPage> with WidgetsBindingObserver {
                     onPressed:
                         _binding ? null : () => unawaited(_bondClassic()),
                     child: Text(_binding
-                        ? context.t('绑定中…')
-                        : context.t('绑定经典蓝牙')),
+                        ? context.t('ble.binding')
+                        : context.t('ble.bindClassic')),
                   ),
                 OutlinedButton(
                   onPressed: _auth == 'always' ? null : _requestAlways,
-                  child: Text(context.t('申请后台定位')),
+                  child: Text(context.t('ble.requestBgLoc')),
                 ),
                 if (_saved != null &&
                     !ready &&
                     Platform.operatingSystem == 'ios') ...[
                   OutlinedButton(
                     onPressed: () => unawaited(_goSystemBluetooth()),
-                    child: Text(context.t('去系统蓝牙完成注册')),
+                    child: Text(context.t('ble.goSystemBt')),
                   ),
                   Text(
                     context.t(
-                        '未注册时可再跳一次:系统蓝牙页点相机配对(核对配对码)'
-                        '→ 回本页自动重连(配对成功后通常已自动跳过一次)'),
+                        'ble.reRegisterHint'),
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ],
@@ -535,14 +532,14 @@ class _BlePairPageState extends State<BlePairPage> with WidgetsBindingObserver {
                         '写 TIME',
                         () => PlatformServices.ble.write(kNikonCharTime,
                             TimePayload.build(DateTime.now().toUtc()))),
-                    child: Text(context.t('写 TIME')),
+                    child: Text(context.t('ble.writeTime')),
                   ),
                   OutlinedButton(
                     onPressed: () => _manual(
                         '0x2005=0x01',
                         () => PlatformServices.ble.write(kNikonCharWifi,
                             Uint8List.fromList([0x01]))),
-                    child: Text(context.t('唤起 WiFi')),
+                    child: Text(context.t('ble.wakeWifi')),
                   ),
                   OutlinedButton(
                     onPressed: () => _manual('读 0x2004', () async {
@@ -551,11 +548,11 @@ class _BlePairPageState extends State<BlePairPage> with WidgetsBindingObserver {
                       _log(
                           '0x2004 ${value == null ? '(null)' : '${value.length}B ${hexOf(value.sublist(0, value.length.clamp(0, 48)))}…'}');
                     }),
-                    child: Text(context.t('读 0x2004')),
+                    child: Text(context.t('ble.read2004')),
                   ),
                   OutlinedButton(
                     onPressed: () => _session.disconnect(),
-                    child: Text(context.t('断开')),
+                    child: Text(context.t('ble.disconnect')),
                   ),
                 ],
               ],
@@ -574,7 +571,7 @@ class _BlePairPageState extends State<BlePairPage> with WidgetsBindingObserver {
                           _sessionState == BleSessionState.reconnecting,
                       leading: const Icon(Icons.camera_alt_outlined),
                       title: Text(device.name.isEmpty
-                          ? context.t('(无名)')
+                          ? context.t('ble.unnamed')
                           : device.name),
                       subtitle: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -615,12 +612,12 @@ class _BlePairPageState extends State<BlePairPage> with WidgetsBindingObserver {
               child: Column(
                 children: [
                   Row(children: [
-                    Text(context.t('日志(长按可选中,或点右侧复制全部)'),
+                    Text(context.t('ble.logHint'),
                         style: Theme.of(context).textTheme.bodySmall),
                     const Spacer(),
                     IconButton(
                       visualDensity: VisualDensity.compact,
-                      tooltip: context.t('复制全部日志'),
+                      tooltip: context.t('ble.copyAllLogs'),
                       icon: const Icon(Icons.copy, size: 18),
                       onPressed: _lines.isEmpty
                           ? null
@@ -631,7 +628,7 @@ class _BlePairPageState extends State<BlePairPage> with WidgetsBindingObserver {
                                 ScaffoldMessenger.of(context).showSnackBar(
                                     SnackBar(
                                         content: Text(
-                                            context.t('日志已复制')),
+                                            context.t('ble.logCopied')),
                                         duration: const Duration(seconds: 1)));
                               }
                             },

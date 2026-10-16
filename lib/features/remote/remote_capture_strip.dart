@@ -157,7 +157,7 @@ class CaptureParamTile extends StatelessWidget {
               // 值文本(displayValue 经控制器路由 displayParamValue 产出)
               // 原文即 t() 键,显示点包 t();「(自动)」后缀同查目录。
               Text(
-                '${context.t(value)}${auto ? context.t('(自动)') : ''}',
+                '${context.t(value)}${auto ? context.t('common.autoSuffix') : ''}',
                 maxLines: 1,
                 style: TextStyle(
                   fontSize: 15,

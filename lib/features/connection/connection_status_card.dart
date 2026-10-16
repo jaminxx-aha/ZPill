@@ -48,15 +48,15 @@ class ConnectionStatusCard extends StatelessWidget {
       _ => false,
     };
     final (label, color) = switch (state) {
-      CameraLinkState.disconnected => ('未连接', scheme.onSurfaceVariant),
-      CameraLinkState.detecting => ('检测相机 WiFi…', scheme.primary),
+      CameraLinkState.disconnected => ('conn.notConnected', scheme.onSurfaceVariant),
+      CameraLinkState.detecting => ('conn.detectingWifi', scheme.primary),
       CameraLinkState.connecting when waitingConfirm =>
-        ('等待相机上确认配对…', scheme.secondary),
-      CameraLinkState.connecting => ('连接中…', scheme.primary),
-      CameraLinkState.pairing => ('等待配对确认…', scheme.secondary),
-      CameraLinkState.connected => ('已连接', AppColors.success(context)),
-      CameraLinkState.reconnecting => ('正在重连…', scheme.secondary),
-      CameraLinkState.failed => ('连接失败', scheme.error),
+        ('conn.waitingPairConfirm', scheme.secondary),
+      CameraLinkState.connecting => ('conn.connecting', scheme.primary),
+      CameraLinkState.pairing => ('conn.waitingPairing', scheme.secondary),
+      CameraLinkState.connected => ('conn.connected', AppColors.success(context)),
+      CameraLinkState.reconnecting => ('conn.reconnecting', scheme.secondary),
+      CameraLinkState.failed => ('conn.failed', scheme.error),
     };
     return Card(
       color: color.withValues(alpha: 0.10),
@@ -71,7 +71,7 @@ class ConnectionStatusCard extends StatelessWidget {
                 Icon(Icons.lan, color: color),
                 const SizedBox(width: AppSpacing.md),
                 Expanded(
-                  // label 即 t() 键(switch 内中文原文),显示点统一包 t()。
+                  // label 即 t() 键(switch 内吐抽象键),显示点统一包 t()。
                   child: Text(
                     context.t(label),
                     style: Theme.of(context)
@@ -106,7 +106,7 @@ class ConnectionStatusCard extends StatelessWidget {
                 child: TextButton.icon(
                   onPressed: onRetry,
                   icon: const Icon(Icons.refresh, size: 18),
-                  label: Text(context.t('重试')),
+                  label: Text(context.t('common.retry')),
                 ),
               ),
           ],
@@ -128,8 +128,8 @@ class _HintText extends StatelessWidget {
   Widget build(BuildContext context) {
     final style =
         TextStyle(color: color, fontSize: 13, height: 1.45);
-    // hint 原文即 t() 键:控制器/连接层无 BuildContext,中文直存,消费
-    // 点统一包 t()(未抽取的连接层 error 如实回落中文)。
+    // 消费点统一包 t():静态文案在控制器/连接层吐抽象键,带 $e 插值的
+    // 运行期串不是键,两表未命中经直通原样回落中文。
     final localized = context.t(text);
     final idx = localized.indexOf(':');
     if (idx < 0) {
@@ -224,11 +224,11 @@ class _StorageRow extends StatelessWidget {
         const SizedBox(width: AppSpacing.md),
         Text(
           storage.maxCapacityBytes > 0
-              ? context.t('{free} 可用 / {total}', {
+              ? context.t('conn.capacity', {
                   'free': formatBytes(storage.freeSpaceBytes),
                   'total': formatBytes(storage.maxCapacityBytes)
                 })
-              : context.t('容量未知'),
+              : context.t('conn.capacityUnknown'),
           style: Theme.of(context)
               .textTheme
               .bodySmall

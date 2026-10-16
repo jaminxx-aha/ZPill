@@ -86,8 +86,8 @@ class CaptureModeStrip extends StatelessWidget {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              segment(CaptureMode.photo, context.t('照片')),
-              segment(CaptureMode.video, context.t('视频')),
+              segment(CaptureMode.photo, context.t('common.photo')),
+              segment(CaptureMode.video, context.t('common.video')),
             ],
           ),
         ),

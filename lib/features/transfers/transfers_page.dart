@@ -143,10 +143,10 @@ class _TransfersPageState extends State<TransfersPage> {
       listenable: _controller,
       builder: (context, _) => Scaffold(
         appBar: AppBar(
-          title: Text(context.t('传输')),
+          title: Text(context.t('transfers.title')),
           actions: [
             IconButton(
-              tooltip: context.t('清空历史'),
+              tooltip: context.t('transfers.clearHistory'),
               onPressed: _controller.clearHistory,
               icon: const Icon(Icons.delete_sweep_outlined),
             ),
@@ -164,7 +164,7 @@ class _TransfersPageState extends State<TransfersPage> {
       // EmptyState 显示端已包 t(),此处再包属双重包裹(无害,见 states.dart)
       return EmptyState(
           icon: Icons.download_outlined,
-          message: context.t('暂无传输任务\n(在相机相册里多选或大图页单张下载)'));
+          message: context.t('transfers.empty'));
     }
     return ListView.builder(
       padding: const EdgeInsets.only(bottom: 16),
@@ -191,7 +191,7 @@ class _TaskTile extends StatelessWidget {
     if (task.state == TransferState.queued ||
         task.state == TransferState.running) {
       trailing = IconButton(
-        tooltip: context.t('取消'),
+        tooltip: context.t('common.cancel'),
         onPressed: () => controller.cancel(task.id),
         icon: const Icon(Icons.close),
       );
@@ -203,24 +203,24 @@ class _TaskTile extends StatelessWidget {
     // 失败串走参数模板(中文拼回逐字一致);error 运行期串经 t 未命中
     // 原样回落,「未知错误」为既有键可译。
     final subtitle = switch (task.state) {
-      TransferState.queued => context.t('排队中'),
+      TransferState.queued => context.t('transfers.queued'),
       TransferState.running => [
           formatBytes(task.receivedBytes),
           if (task.totalBytes > 0) '/ ${formatBytes(task.totalBytes)}',
           if (speed != null) '${(speed / 1024 / 1024).toStringAsFixed(1)}MB/s',
-          if (eta != null) context.t('剩 {n}s', {'n': eta.inSeconds + 1}),
+          if (eta != null) context.t('transfers.secondsLeft', {'n': eta.inSeconds + 1}),
         ].join(' · '),
       TransferState.completed => switch (task.destination) {
           TransferDestination.gallery => task.galleryUri != null
-              ? context.t('已导入相册')
-              : context.t('已完成 · 未导入(可重新下载再试)'),
-          TransferDestination.app => context.t('已保存到应用内'),
+              ? context.t('transfers.importedAlbum')
+              : context.t('transfers.completedNotImported'),
+          TransferDestination.app => context.t('transfers.savedInApp'),
         },
-      TransferState.failed => context.t('失败:{e}(重试 {n} 次)', {
-          'e': context.t(task.error ?? '未知错误'),
+      TransferState.failed => context.t('transfers.failedRetries', {
+          'e': context.t(task.error ?? 'common.unknownError'),
           'n': task.attempts,
         }),
-      TransferState.cancelled => context.t('已取消'),
+      TransferState.cancelled => context.t('common.cancelled'),
     };
 
     return ListTile(
