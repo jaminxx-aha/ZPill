@@ -186,6 +186,9 @@ final class PtpSession {
   /// 返回 true = Cancel 已发出,在途 execute 随后以
   /// [PtpCancelledException] 完成(排水收口由传输层 dispatcher 异步驱动,
   /// 本方法不等它)。取消通道自身异常同样按 false 落回旧路径。
+  /// **2026-10-16 真机定案:Zf 收 Cancel 直接掐链 —— 生产已无调用方**
+  /// (分块下载软取消替代,见 ObjectDownloader);方法留档备将来
+  /// Cancel 友好的机身。
   Future<bool> cancelInFlight() async {
     // 能力探测必须用 if-case 模式绑定:is 检查对「与声明类型无关的
     // 接口」不做类型提升(Dart 流分析只向下提升),裸 is 后调用会编译错。
@@ -238,6 +241,15 @@ final class PtpSession {
     await _serialized(_openLocked);
   }
 
+  /// 保护态乐观覆盖(会话内,句柄 → 是否保护):0x1012 SetObjectProtection
+  /// 无读回应答,查看器以本会话发出/读回的写为准;挂在会话上 —— 页
+  /// State 每次进页重建,页面级缓存重开即清空(2026-10-16 真机复报
+  /// 「加锁后重进显示未锁」根因)。基线真值 = ObjectInfo 的
+  /// ProtectionStatus(相册列表自带,重列即新);本 Map 只记会话内的
+  /// 写入增量(含解锁,故是 Map 非 Set),读回成功也覆写于此。
+  /// open() 清空(新链重列,真值回基线)。
+  final Map<int, bool> protectionOptimistic = {};
+
   Future<void> _openLocked() async {
     final result = await transport.execute(
       const PtpRequest(opcode: PtpOperationCode.openSession, params: [1]),
@@ -263,6 +275,7 @@ final class PtpSession {
     _remoteModeActive = false; // 新链新账:旧链的 remote 模式持有态不带来
     _largeThumbDegraded = false; // 新链新账:0x90C4 重新探测
     _objectPropListDegraded = false; // 新链新账:0x9805 重新探测
+    protectionOptimistic.clear(); // 新链新账:保护态乐观值不跨连接
     connectLadder.clear(); // 一连接一账:新连接的梯从零记
   }
 

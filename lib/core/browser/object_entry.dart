@@ -12,6 +12,7 @@ final class ObjectEntry {
     this.parentHandle = 0,
     this.capturedAt,
     this.formatCode,
+    this.protectionStatus = 0,
   });
 
   /// 只能来自 GetObjectHandles 响应(TODO 注意事项 2)。
@@ -27,7 +28,13 @@ final class ObjectEntry {
   final DateTime? capturedAt;
   final int? formatCode;
 
+  /// ProtectionStatus(ObjectInfo 定长头 @6,u16):0 = 无保护/1 = 只读。
+  /// 相册列表的真值来源(重列即新);查看器保护态 = 会话乐观 Map 优先、
+  /// 此字段兜底(2026-10-16 接线)。
+  final int protectionStatus;
+
   bool get isFolder => kind == ObjectKind.folder;
+  bool get isProtected => protectionStatus == 1;
 
   ObjectEntry copyWith({DateTime? capturedAt}) => ObjectEntry(
         handle: handle,

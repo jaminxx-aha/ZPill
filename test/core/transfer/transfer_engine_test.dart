@@ -332,7 +332,7 @@ void main() {
     expect(Directory('${gallery.root.path}/downloads').listSync(), isEmpty);
   });
 
-  test('取消 running(分块在途):Cancel-Drain 即时收口,任务 cancelled 不重试',
+  test('取消 running(分块在途):软取消等在途块跑完,任务 cancelled 不重试',
       () async {
     final fake = FakePtpTransport();
     final gallery = FakeGallerySaver();
@@ -348,7 +348,8 @@ void main() {
     fake.reply(_okData(
         buildDeviceInfoDataset(operations: const [0x1001, 0x1009, 0x101B])));
     final gate = Completer<void>();
-    fake.failAfter(gate.future, const PtpCancelledException(0)); // 排水收口形
+    fake.replyAfter(
+        gate.future, _okData(Uint8List.fromList(List.filled(64, 7))));
 
     var aId = '';
     engine.tasks.listen((ts) {
@@ -357,20 +358,19 @@ void main() {
     await engine.enqueue([_entry(1, 'A.NEF', 128)],
         destination: TransferDestination.app);
     // 等第一块真正挂进传输层(running 快照可能先于块请求到达,过早
-    // cancel 会走「块间旗标」短路,没有在途块可排水)
+    // cancel 只走「块间旗标」短路)
     while (fake.requests.length < 2) {
       await Future<void>.delayed(const Duration(milliseconds: 10));
     }
 
-    // 取消立即返回(闸未放,任务未落定)
+    // 取消立即返回(闸未放,任务未落定);不发 Cancel 包(2026-10-16
+    // 真机:Zf 收 Cancel 掐链)
     await engine.cancel(aId);
-    await Future<void>.delayed(
-        const Duration(milliseconds: 150)); // 下载器轮询周期 50ms
-    expect(fake.cancelInFlightCalls, 1); // 已对在途块发 Cancel
+    expect(fake.cancelInFlightCalls, 0);
 
     final done = waitUntil(
         engine, (ts) => ts.length == 1 && ts.single.state == TransferState.cancelled);
-    gate.complete(); // 相机排水收口
+    gate.complete(); // 在途块跑完
     final tasks = await done;
 
     // 取消成功:不是 failed、零重试、半成品已删

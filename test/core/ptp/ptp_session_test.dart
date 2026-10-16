@@ -30,6 +30,9 @@ final class FakePtpTransport implements PtpTransport, PtpCancelCapable {
   final Queue<Object> script = Queue();
   final StreamController<PtpEvent> _eventCtrl = StreamController.broadcast();
 
+  /// 事件注入(测试:模拟相机 ObjectAdded 等事件到达)。
+  void emitEvent(PtpEvent event) => _eventCtrl.add(event);
+
   /// cancelInFlight 调用计数(Cancel-Drain 接线断言用)。
   var cancelInFlightCalls = 0;
 

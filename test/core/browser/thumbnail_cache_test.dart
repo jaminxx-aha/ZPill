@@ -328,7 +328,7 @@ void main() {
     final fake = FakePtpTransport()
       ..reply(_okData(_jpeg)) // 网格缩略(裸)
       ..reply(_okData(_jpgHead(8))) // 头读 → 8(记忆)
-      ..reply(_okData(_jpeg)); // 预览 getLargeThumb(裸)
+      ..reply(_okData(_jpeg)); // 预览 FHD 0x920F(裸)
     final cache = ThumbnailCache(
         session: PtpSession(transport: fake), gallery: FakeGallerySaver());
     final entry = _entry(0x12);
@@ -338,12 +338,11 @@ void main() {
     final preview = await cache.pathFor(entry, ThumbSource.preview);
     expect(jpegExifOrientation(File(preview).readAsBytesSync()), 8);
 
-    // 无第二次头读(方向已按内容键记忆;网格与预览各自目录,预览的
-    // 0x90C4 也要真发)
+    // 无第二次头读(方向已按内容键记忆;预览走 FHD 席位)
     expect(fake.requests.map((r) => r.opcode), [
       NikonOperationCode.getLargeThumb,
       PtpOperationCode.getPartialObject,
-      NikonOperationCode.getLargeThumb,
+      NikonOperationCode.getFhdPicture,
     ]);
   });
 
@@ -573,8 +572,8 @@ void main() {
   // ── preview 分流 ──
 
   test(
-      'preview:0x90C4 直发不查能力表(op 表不含也走大图;'
-      '无线 STA 的小表是假门,查表会把大图拒成 160×120 回落)', () async {
+      'preview:0x920F 直发不查能力表(op 表不含也走 FHD;'
+      '无线 STA 的小表是假门),fhd_ 独立键落盘,网格不吃', () async {
     final fake = FakePtpTransport()
       ..reply(_okData(_jpeg))
       ..reply(_okData(_jpgHead(1)));
@@ -582,28 +581,61 @@ void main() {
         session: PtpSession(transport: fake), gallery: FakeGallerySaver());
 
     final path = await cache.pathFor(_entry(0x12), ThumbSource.preview);
+    expect(path, endsWith('fhd_DSC_0001.JPG_100.jpg'));
     expect(File(path).existsSync(), isTrue);
-    // 无 getDeviceInfo(直发),大图请求在前、头读在后
+    // 无 getDeviceInfo(直发),FHD 请求在前、头读在后
     expect(fake.requests.map((r) => r.opcode),
-        [NikonOperationCode.getLargeThumb, PtpOperationCode.getPartialObject]);
+        [NikonOperationCode.getFhdPicture, PtpOperationCode.getPartialObject]);
+
+    // 再取:内存命中,零新请求
+    final again = await cache.pathFor(_entry(0x12), ThumbSource.preview);
+    expect(again, path);
+    expect(fake.requests.length, 2);
   });
 
-  test('preview:相机拒 0x90C4(错误码)→ 回落 GetThumb', () async {
+  test('preview:相机拒 0x920F(错误码)→ 置降级,回落 0x90C4 高清档', () async {
     final fake = FakePtpTransport()
       ..reply(PtpResult(
-          responseCode: PtpResponseCode.operationNotSupported)) // 0x90C4 被拒
-      ..reply(_okData(_jpeg)) // 回落 getThumb
+          responseCode: PtpResponseCode.operationNotSupported)) // 0x920F 被拒
+      ..reply(_okData(_jpeg)) // 回落 getLargeThumb
       ..reply(_okData(_jpgHead(1)));
-    final cache = ThumbnailCache(
-        session: PtpSession(transport: fake), gallery: FakeGallerySaver());
+    final session = PtpSession(transport: fake);
+    final cache = ThumbnailCache(session: session, gallery: FakeGallerySaver());
 
     final path = await cache.pathFor(_entry(0x12), ThumbSource.preview);
     expect(File(path).readAsBytesSync(), _jpeg);
+    expect(path, endsWith('lt_DSC_0001.JPG_100.jpg'));
     expect(fake.requests.map((r) => r.opcode), [
+      NikonOperationCode.getFhdPicture,
       NikonOperationCode.getLargeThumb,
-      PtpOperationCode.getThumb,
       PtpOperationCode.getPartialObject
     ]);
+
+    // 降级旗标:第二张 JPG 预览直走 0x90C4,不再逐张试 0x920F
+    fake
+      ..reply(_okData(_jpeg))
+      ..reply(_okData(_jpgHead(1)));
+    await cache.pathFor(_entry(0x13, name: 'DSC_0002.JPG', size: 200),
+        ThumbSource.preview);
+    expect(fake.requests.map((r) => r.opcode), [
+      NikonOperationCode.getFhdPicture,
+      NikonOperationCode.getLargeThumb,
+      PtpOperationCode.getPartialObject,
+      NikonOperationCode.getLargeThumb,
+      PtpOperationCode.getPartialObject,
+    ]);
+
+    // reset(断连)复位:重探 0x920F(这次成功,直接回 FHD 席位)
+    cache.reset();
+    fake
+      ..reply(_okData(_jpeg))
+      ..reply(_okData(_jpgHead(1)));
+    final retry = await cache.pathFor(
+        _entry(0x14, name: 'DSC_0003.JPG', size: 300), ThumbSource.preview);
+    expect(retry, endsWith('fhd_DSC_0003.JPG_300.jpg'));
+    expect(fake.requests.length, 7);
+    expect(fake.requests[5].opcode, NikonOperationCode.getFhdPicture,
+        reason: 'reset 后重探 0x920F');
   });
 
   test('preview:视频海报直走 GetThumb(不试 0x90C4,不拖垮降级旗标)', () async {
@@ -679,9 +711,9 @@ void main() {
     ]);
   });
 
-  test('preview:JPG 高清席位 —— 0x90C4 小图先显,warm 整档解码换高清', () async {
+  test('preview:JPG 高清席位 —— 0x920F FHD 小图先显,warm 整档解码换高清', () async {
     final fake = FakePtpTransport()
-      ..reply(_okData(_jpeg)) // 小图 0x90C4(裸)
+      ..reply(_okData(_jpeg)) // 小图 0x920F FHD(裸)
       ..reply(_okData(_jpgHead(1))); // 头读(横拍不注入)
     final gallery = FakeGallerySaver();
     final downloader = _FakeDownloader();
@@ -697,8 +729,9 @@ void main() {
 
     final small = await cache.pathFor(entry, ThumbSource.preview);
     expect(File(small).readAsBytesSync(), _jpeg);
+    expect(small, endsWith('fhd_DSC_0001.JPG_100.jpg'));
     expect(fake.requests.map((r) => r.opcode),
-        [NikonOperationCode.getLargeThumb, PtpOperationCode.getPartialObject]);
+        [NikonOperationCode.getFhdPicture, PtpOperationCode.getPartialObject]);
     expect(upgrades, isEmpty);
 
     await cache.warmPreview(entry);

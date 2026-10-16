@@ -24,11 +24,11 @@ import 'package:flutter/services.dart';
 
 import '../../app_services.dart';
 import '../../core/browser/object_entry.dart';
-import '../../core/ptp/operation_codes.dart' show PtpObjectPropCode;
 import '../../core/ptp/ptp_session.dart';
 import '../../core/browser/photo_group.dart';
 import '../../core/browser/thumbnail_cache.dart';
 import '../../core/ptpip/object_format.dart' show ObjectKind;
+import '../transfers/transfers_page.dart';
 import '../../core/transfer/object_downloader.dart';
 import '../../core/transfer/transfer_engine.dart';
 import '../../core/transfer/transfer_task.dart';
@@ -59,6 +59,7 @@ class PhotoViewerPage extends StatefulWidget {
     this.videoPlayer,
     this.embeddedVideoView,
     this.session,
+    this.onOpenTransfers,
   });
 
   final List<PhotoGroup> items;
@@ -89,6 +90,10 @@ class PhotoViewerPage extends StatefulWidget {
   /// 测试注入(保护标记 0x1012);缺省 AppServices 遥控会话。
   /// 相机侧文件保护,断连时点按失败走 SnackBar。
   final PtpSession? session;
+
+  /// 下载 SnackBar 的「查看进度」动作注入(测试;AppServices 里的传输
+  /// 控制器在裸测试树不可建)。null = 默认推 TransfersPage(生产)。
+  final VoidCallback? onOpenTransfers;
 
   @override
   State<PhotoViewerPage> createState() => _PhotoViewerPageState();
@@ -125,38 +130,37 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
   PtpSession get _session =>
       widget.session ?? AppServices.instance.remoteController.session;
 
-  /// 保护标记会话内缓存(0x1012 无读回 —— ObjectInfo 的 ProtectionStatus
-  /// 未解析,这里以本页发出的写为准;开页沿 0x9803 读回对表,见
-  /// [_readProtectState])。
-  final _protectedHandles = <int>{};
+  /// 保护态显示(会话乐观 Map 优先,ObjectInfo 真值兜底):Map 记本会话
+  /// 的写入与读回(0x1012 无应答读回);列表基线 = ObjectInfo 的
+  /// ProtectionStatus(重列即新)。
+  bool _isProtected(PhotoGroup group) {
+    final handle = group.primary.handle;
+    return _session.protectionOptimistic[handle] ?? group.primary.isProtected;
+  }
 
-  /// 本页发出的保护写代数(乐观上屏后在途读回不得用旧真态覆盖)。
+  /// 本页发出的保护写代数(读回在途时用户写入 → 代际不符丢弃)。
   int _protectWrites = 0;
 
-  /// 开页/翻页沿读真实保护态(0x9803 GetObjectPropValue,
-  /// ProtectionStatus 0x0004 = u16:0 不保护/1 只读):重开页面不再回落
-  /// 未保护假态。失败(0x9804 曾不应答的连坐/断链)保持现状 fail-open,
-  /// 不挡查看;未知值不猜。读回在途时用户写入 → 代际不符丢弃。
+  /// 开页/翻页沿读真实保护态(GetObjectInfo 0x1008,ProtectionStatus
+  /// 定长头 @6):0x9803 读回在 Zf 上不在册;相册列表的 0x9805 批量路
+  /// 实测不带该字段(2026-10-16 真机:断开重连后仍显未锁)—— 逐对象
+  /// GetObjectInfo 是唯一在册真值源(整个浏览器都靠它)。读回写会话
+  /// 乐观 Map(读写同账);失败(旧机身拒/无会话)静默保持现状。
   void _readProtectState(PhotoGroup group) {
     final handle = group.primary.handle;
     final gen = _protectWrites;
     unawaited(() async {
       try {
-        final data = await _session.getObjectPropValue(
-            handle, PtpObjectPropCode.protectionStatus);
-        if (!mounted || gen != _protectWrites || data.length < 2) return;
-        final value = data[0] | (data[1] << 8);
-        if (value != 0 && value != 1) return;
-        final isProtected = value == 1;
-        if (isProtected == _protectedHandles.contains(handle)) return;
-        setState(() => isProtected
-            ? _protectedHandles.add(handle)
-            : _protectedHandles.remove(handle));
+        final info = await _session.getObjectInfo(handle);
+        if (!mounted || gen != _protectWrites) return;
+        final value = info.protectionStatus;
+        if (value != 0 && value != 1) return; // 未知值不猜
+        if (_session.protectionOptimistic[handle] == (value == 1)) return;
+        setState(() => _session.protectionOptimistic[handle] = value == 1);
       } on Exception {
         // 读回失败:保持现状(下页翻回再试)
       } on Object catch (e) {
-        // 意外(Error 类:未连接的缺省会话/测试桩耗尽等)同样尽力而为,
-        // 不挡查看(与缩略图方向头读同款兜底)
+        // 意外(Error 类:无会话测试桩等)尽力而为,不挡查看
         debugPrint('[查看器] 保护态读回失败 0x${handle.toRadixString(16)}: $e');
       }
     }());
@@ -167,14 +171,12 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
   /// 失败 SnackBar 指路(断链/卡写保护是常见因)。
   Future<void> _toggleProtect(PhotoGroup group) async {
     final handle = group.primary.handle;
-    final protect = !_protectedHandles.contains(handle);
-    _protectWrites++;
+    final protect = !_isProtected(group);
+    _protectWrites++; // 在途读回代际作废:用户的写优先于旧读回
     try {
       await _session.setObjectProtection(handle, protect: protect);
       if (!mounted) return;
-      setState(() => protect
-          ? _protectedHandles.add(handle)
-          : _protectedHandles.remove(handle));
+      setState(() => _session.protectionOptimistic[handle] = protect);
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content:
               Text(protect ? context.t('已设为相机内保护(只读)') : context.t('已解除相机内保护')),
@@ -336,7 +338,17 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(
           content: Text(context.t(
-              '已开始下载{where}{tag},进度见「图库」页', {'where': where, 'tag': tag}))));
+              '已开始下载{where}{tag},进度见「图库」页', {'where': where, 'tag': tag})),
+          action: SnackBarAction(
+            label: context.t('查看进度'),
+            onPressed: widget.onOpenTransfers ?? _openTransfers,
+          )));
+  }
+
+  /// 下载进度页(SnackBar 动作;与图库页 AppBar 传输徽标同目的地)。
+  void _openTransfers() {
+    Navigator.of(context).push(
+        MaterialPageRoute<void>(builder: (_) => const TransfersPage()));
   }
 
   /// 编辑:拉取组内 JPG 原图到临时目录(相机会话串行,排队即得),
@@ -373,10 +385,17 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
   /// 内嵌播放(EmbeddedVideoPlayer,与图库查看器同款)。PTP 相机没有
   /// 流式播放(Nikon moov 原子位置未验,亦无 HTTP range 语义),大文件
   /// 需等下载;取消 = 删半成品。临时档随视频页存活(翻回不重拉),
-  /// 页面销毁(查看器关闭)时删除。
+  /// 页面销毁(查看器关闭)时交给 [_PlayedVideoCache] 会话级持有
+  /// (容量 2 LRU,翻回/重开查看器秒开;驱逐时才删)。
   Future<void> _startPlayback(_CameraVideoPageState page) async {
     final video = page.widget.group.movie;
     if (video == null) return;
+    final key = _PlayedVideoCache.keyOf(video.name, video.sizeInBytes);
+    final cached = _PlayedVideoCache.instance.get(key);
+    if (cached != null) {
+      page.onDownloaded(cached); // 会话内播过:秒开,不进下载
+      return;
+    }
     final cancel = _DownloadCancel();
     unawaited(showDialog<void>(
       context: context,
@@ -406,6 +425,7 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
       unawaited(_deleteQuietly(dl.path)); // 页面已走:临时档直接清
       return;
     }
+    _PlayedVideoCache.instance.put(key, dl.path);
     page.onDownloaded(dl.path);
   }
 
@@ -448,12 +468,12 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
                       icon: const Icon(Icons.info_outline),
                     ),
                     IconButton(
-                      tooltip: _protectedHandles.contains(group.primary.handle)
+                      tooltip: _isProtected(group)
                           ? context.t('解除相机内保护')
                           : context.t('相机内保护(锁定)'),
                       onPressed: () => _toggleProtect(group),
                       icon: Icon(
-                        _protectedHandles.contains(group.primary.handle)
+                        _isProtected(group)
                             ? Icons.lock
                             : Icons.lock_outline,
                       ),
@@ -701,6 +721,50 @@ final class _DownloadCancel {
   bool cancelled = false;
 }
 
+/// 播放过的临时视频缓存(应用会话级 LRU-2,内容键 → 临时路径):
+/// 相机相册视频的整档下载是首次播放的固有代价(PTP 无流式),翻回/
+/// 重开查看器不再重拉 —— 秒开。超容量驱逐删档;系统回收临时目录的
+/// 情形在命中时 existsSync 校验(缺档当未命中)。
+final class _PlayedVideoCache {
+  _PlayedVideoCache._();
+  static final _PlayedVideoCache instance = _PlayedVideoCache._();
+
+  final Map<String, String> _entries = {}; // LinkedHashMap:插入序 = LRU 序
+  static const _capacity = 2;
+
+  /// 内容键(与缩略缓存同构:文件名去非法字符 + 字节数)。
+  static String keyOf(String name, int sizeInBytes) =>
+      '${name.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_')}_$sizeInBytes';
+
+  String? get(String key) {
+    final path = _entries.remove(key);
+    if (path == null) return null;
+    if (!File(path).existsSync()) return null; // 系统已回收:当未命中
+    _entries[key] = path; // 刷到 LRU 最新端
+    return path;
+  }
+
+  void put(String key, String path) {
+    final old = _entries.remove(key);
+    if (old != null && old != path) _delete(old);
+    _entries[key] = path;
+    while (_entries.length > _capacity) {
+      _delete(_entries.remove(_entries.keys.first)!);
+    }
+  }
+
+  /// 该键当前是否持有 [path](视频页 dispose 决定删不删临时档用)。
+  bool holds(String key, String path) => _entries[key] == path;
+
+  void _delete(String path) {
+    try {
+      File(path).deleteSync();
+    } on FileSystemException {
+      // 盘上已无:索引已清即可
+    }
+  }
+}
+
 /// 视频播放准备进度对话框:进度条 + 已收/总量 + 取消(置位后下载层删
 /// 半成品抛 DownloadCancelledException,对话框由 _startPlayback 收口)。
 /// 文案按播放口径(「准备播放」)—— 整档拉取是 PTP 无流式的代价,
@@ -810,7 +874,13 @@ class _CameraVideoPageState extends State<_CameraVideoPage>
   void dispose() {
     final path = _localPath;
     if (path != null) {
-      unawaited(_deleteQuietly(path));
+      final video = widget.group.movie;
+      final held = video != null &&
+          _PlayedVideoCache.instance.holds(
+              _PlayedVideoCache.keyOf(video.name, video.sizeInBytes), path);
+      if (!held) {
+        unawaited(_deleteQuietly(path)); // 未进会话缓存(取消/失败残留):清
+      }
     }
     super.dispose();
   }
