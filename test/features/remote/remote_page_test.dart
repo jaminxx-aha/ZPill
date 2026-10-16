@@ -938,8 +938,10 @@ void main() {
     await tester.pumpAndSettle();
 
     // 竖拖(分两段:首段 20px 越过触摸 slop 起手势 —— 该段不入拖距;
-    // 第二段干净 30px > 一步 24px)→ 0x9204 向近 60 脉冲
-    transport.ok(); // 0x9204 应答
+    // 第二段干净 30px > 一步 24px)→ 0x9204 向近 300 脉冲
+    transport
+      ..ok() // 0x9204 激活
+      ..ok(); // 0x90C8 就绪探:完成
     final g = await tester.startGesture(tester.getCenter(rail));
     await g.moveBy(const Offset(0, 20)); // 越过 slop,起手势
     await tester.pump();
@@ -949,7 +951,9 @@ void main() {
     await tester.pumpAndSettle();
     final mf = transport.requests.singleWhere(
         (r) => r.opcode == NikonOperationCode.mfDrive);
-    expect(mf.params, [1, 60], reason: '向下拖 = 向近一步(24px → 60 脉冲)');
+    expect(mf.params, [1, 300],
+        reason: '向下拖 = 向近一步(24px → 300 脉冲,真机可见量)');
+    expect(controller.dialNetPulses.value, 300, reason: '刻度鼓派发即入账');
 
     // 点轮子本体不触发触控对焦(自吃点按)
     await tester.tap(rail);
@@ -1017,7 +1021,9 @@ void main() {
     expect(mfCount(), countBefore, reason: '近端已锁:向近增量静默丢弃');
 
     // 反向(向上)拖一步 → 解锁 + 驱动成功 → 复亮。
-    transport.ok();
+    transport
+      ..ok() // 0x9204 激活
+      ..ok(); // 0x90C8 就绪探:完成
     final g3 = await tester.startGesture(tester.getCenter(rail));
     await g3.moveBy(const Offset(0, -20)); // 越过 slop
     await tester.pump();
@@ -1028,7 +1034,9 @@ void main() {
     expect(railOpacity().opacity, 1.0, reason: '反向驱动解锁,复亮');
     final mf = transport.requests
         .lastWhere((r) => r.opcode == NikonOperationCode.mfDrive);
-    expect(mf.params, [2, 60], reason: '解锁后的向远一步照发');
+    expect(mf.params, [2, 300], reason: '解锁后的向远一步照发');
+    expect(controller.dialNetPulses.value, 0,
+        reason: '刻度鼓:向近 +300、向远 -300 对冲归零(端点锁定拖动不派发不入账)');
   });
 
   testWidgets('对焦区端点提示行:0xA00C 后常驻「近端已到」,反向步进即清',
@@ -1058,7 +1066,9 @@ void main() {
         reason: '常驻提示行形态(对焦区,0xA00C 向近归因)');
 
     // 反向步进(向远)成功 → 提示行随解锁消失。
-    transport.ok();
+    transport
+      ..ok() // 0x9204 激活
+      ..ok(); // 0x90C8 就绪探:完成
     await tester.tap(find.text('MF 远'));
     await tester.pumpAndSettle();
     expect(controller.mfNearEnd, isFalse);
@@ -2370,8 +2380,10 @@ void main() {
       ..ok() // 0x9201(进页自动起景)
       ..ok(data: _realJpeg()) // 首帧
       ..ok() // afDrive 0x90C1(对焦钮直触发)
-      ..ok() // mfDrive 0x9204 向近
-      ..ok(); // mfDrive 0x9204 向远
+      ..ok() // mfDrive 0x9204 向近激活
+      ..ok() // 0x90C8 就绪探:完成
+      ..ok() // mfDrive 0x9204 向远激活
+      ..ok(); // 0x90C8 就绪探:完成
     // 十二轮持久化:注入裸 ValueNotifier(拉焦轮开关会写回设置)。
     final settings = ValueNotifier(const AppSettings());
     addTearDown(settings.dispose);
