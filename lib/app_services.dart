@@ -54,11 +54,13 @@ import 'platform/services.dart';
 import 'platform/usb/usb_host.dart';
 import 'platform/usb/watchdog_usb_host.dart';
 
-/// 连接沿侧链让路窗(2026-10-16 真机定案):概览/双卡槽/清事件/对时/
-/// 事件轮询与起景链(接管→模式→画质→0x9201)同在会话串行锁上轮转,
-/// 曾把 0x9201 压到十几事务深 —— 拍摄页「取景未开启」卡好几秒。侧链
-/// 整组延此窗再上路,起景链先独跑、首帧上屏;测试侧控制器默认零延迟。
-const Duration kConnectSideChainYield = Duration(seconds: 2);
+/// 连接沿侧链放行门兜底(2026-10-16 真机定案):概览/双卡槽/清事件/
+/// 对时/事件轮询与起景链(接管→模式→画质→0x9201)同在会话串行锁上
+/// 轮转,曾把 0x9201 压到十几事务深 —— 拍摄页「取景未开启」卡好几秒。
+/// 侧链整组等 RemoteController.connectedStartSettled(起景段落定,
+/// 事件驱动 —— 起景快就早放行,相机页信息卡不再白扛固定让路窗);
+/// 门含楔死自愈梯,正常 ~1-3s,超时兜底防押死。
+const Duration kConnectStartGateTimeout = Duration(seconds: 3);
 
 final class AppServices {
   AppServices._() {
@@ -245,13 +247,13 @@ final class AppServices {
     cameraOverview = CameraOverviewController(
       session: session,
       connection: connection,
-      connectRefreshDelay: kConnectSideChainYield,
+      connectRefreshGate: _connectSideChainGate,
     );
     // 双卡槽余量:连接成功即拉,相册页顶展示。
     storageOverview = StorageOverviewController(
       session: session,
       connection: connection,
-      connectRefreshDelay: kConnectSideChainYield,
+      connectRefreshGate: _connectSideChainGate,
     );
     // 取景引擎先行创建再注入控制器:看门狗重启预算耗尽时升级整链重连
     // (engine → connection.requestRecovery,恢复循环由连接层接管;
@@ -358,11 +360,12 @@ final class AppServices {
           diagRan = true;
           PtpDiagnostics.run(session: session, repository: repository);
         }
-        // 侧链整组让路(kConnectSideChainYield):起景链先独跑,首帧
-        // 上屏后再上路;先清再开轮询器的次序不变。轮询器周期 2s,让路
+        // 侧链整组让路:等起景段落定门(事件驱动,见 kConnectStartGate
+        // Timeout)再上路;先清再开轮询器的次序不变。轮询器周期 2s,等
         // 窗内事件不丢(首拍顺延一并拉)。
-        unawaited(Future<void>.delayed(kConnectSideChainYield, () {
-          // 延迟窗里沿翻篇(断开/重连)不追;重连沿有自己的新定时。
+        unawaited(() async {
+          await _connectSideChainGate();
+          // 门等窗里沿翻篇(断开/重连)不追;重连沿有自己的新定时。
           if (connection.state != CameraLinkState.connected) return;
           // 重连沿清相机事件队列残留(0x9461,官方候选;best-effort ——
           // 不支持/会话未开静默跳过,不挡连接)。先清再开轮询器,免得
@@ -378,7 +381,7 @@ final class AppServices {
           // 相机时钟校准(OpenZCine CameraClockSync 口径:漂移 > 5s 才写,
           // 尽力而为不影响连接)。
           unawaited(session.syncCameraClock());
-        }));
+        }());
       }
       if (s == CameraLinkState.disconnected || s == CameraLinkState.failed) {
         eventPoller.stop();
@@ -656,6 +659,14 @@ final class AppServices {
   late final CameraOverviewController cameraOverview;
   late final StorageOverviewController storageOverview;
   late final RemoteController remoteController;
+
+  /// 侧链放行门:等当前连接沿的起景段落定(超时兜底见
+  /// kConnectStartGateTimeout)。概览/双卡槽/清事件/对时/轮询共此门。
+  /// 引用 late final 字段,连接沿才执行(装配早已收口),无先序问题。
+  Future<void> _connectSideChainGate() =>
+      remoteController.connectedStartSettled
+          .timeout(kConnectStartGateTimeout, onTimeout: () {});
+
   late final TransfersController transfersController;
   late final BleIdentityStore bleIdentityStore;
   /// BLE 相机会话(构造沿即建 —— 连接页「蓝牙」分段装配要引用;
