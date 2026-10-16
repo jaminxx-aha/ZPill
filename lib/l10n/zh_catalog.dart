@@ -634,4 +634,9 @@ const Map<String, String> zhCatalog = {
   'log.saveFailed': '写入失败:{e}',
   'log.empty': '暂无日志',
   'log.header': 'NikonPill 诊断日志\n导出于 {time}\n共 {n} 条\n',
+  // 真机 EN 抽查补漏(2026-10-16):主题分段/静照快门 label 此前中文
+  // 原文直通,现补键(display 表外兜底同步改语言中性裸值)。
+  'param.shutter': '快门',
+  'theme.light': '浅色',
+  'theme.dark': '深色',
 };

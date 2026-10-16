@@ -93,14 +93,21 @@ void main() {
     expect(scopeCode(), 'zh');
 
     // 切 English:落库 + scope 翻转 + 选择器 system 段经 t() 出英文
-    // —— 即「t() 经真实 scope 的英文翻转重建」端到端验证。
+    // —— 即「t() 经真实 scope 的英文翻转重建」端到端验证。语言行与
+    // 主题行 system 段撞义同串(均 common.followSystem),断言按行
+    // 子树收窄各断一处(2026-10-16 主题段包 t() 后)。
     await tester.tap(langSeg('English'));
     await tester.pumpAndSettle();
     expect(AppServices.instance.settingsController.settings.language,
         AppLanguage.en);
     expect(scopeCode(), 'en');
     expect(appLocale(), const Locale('en'));
-    expect(find.text('Follow System'), findsOneWidget);
+    expect(langSeg('Follow System'), findsOneWidget);
+    expect(
+        find.descendant(
+            of: find.byType(SegmentedButton<AppThemeMode>),
+            matching: find.text('Follow System')),
+        findsOneWidget);
 
     // 切中文:回原文。
     await tester.tap(langSeg('中文'));
@@ -119,6 +126,11 @@ void main() {
         AppLanguage.system);
     expect(appLocale(), isNull);
     expect(scopeCode(), 'en');
-    expect(find.text('Follow System'), findsOneWidget);
+    expect(langSeg('Follow System'), findsOneWidget);
+    expect(
+        find.descendant(
+            of: find.byType(SegmentedButton<AppThemeMode>),
+            matching: find.text('Follow System')),
+        findsOneWidget);
   });
 }

@@ -168,6 +168,7 @@ abstract final class PtpResponseCode {
   static const int storeNotAvailable = 0x2013; // ISO 15740 标准码(存储不可用/无卡;2026-10-06 真机:0x100E 报过此码)
   static const int accessDenied = 0x200F; // ISO 15740 标准码(未切应用模式/拨盘拥有时遥控写被拒,真机实证)
   static const int deviceBusy = 0x2019; // ISO 15740 标准码;尼康忙等探针 0x90C8 的语义响应(Zf 待真机核对)
+  static const int invalidDevicePropValue = 0x201C; // ISO 15740 标准码(属性值域拒:FORM 枚举在册但该值当前不可写;2026-10-16 真机:静照色调 0x0001D01C 写 1 被拒 —— 静照域只有 SDR/HLG,1 是 H.265 视频族表借入的枚举)
   static const int invalidParameter = 0x201D; // ISO 15740 标准码(参数域拒;2026-10-06 真机:0x9207 的 [0,0] CaptureSort 在应用模式/接管态被拒)
   static const int sessionAlreadyOpen = 0x201E; // probe ensure_session 真机验证:上次会话残留时的 OpenSession 响应
 

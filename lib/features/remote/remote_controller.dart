@@ -66,6 +66,7 @@ import '../../core/remote/intervalometer.dart';
 import '../../core/remote/mf_travel_ends.dart';
 import '../../core/transfer/transfer_engine.dart';
 import '../../core/transfer/transfer_task.dart';
+import '../../l10n/zh_catalog.dart';
 import 'bulb_close_policy.dart';
 import 'shooting_param_catalog.dart';
 
@@ -555,12 +556,18 @@ final class RemoteController extends ChangeNotifier {
     return _autoControlled(propCode);
   }
 
-  /// 当前模式的中文名(错误提示用;未读为 null)。
+  /// 控制器无 BuildContext:error/notice 类动态串按既定决策维持中文
+  /// 回落;内嵌的参数名/模式名从 zh 词表取渲染形态,避免键名上屏
+  /// (2026-10-16:label 键化后 `${p.label}` 直插会显示 ns.key)。
+  String _zh(String keyOrText) => zhCatalog[keyOrText] ?? keyOrText;
+
+  /// 当前模式的中文渲染形态(错误提示用;未读为 null)。
   String? get _modeLabel {
     final mode = paramProps[PtpDevicePropCode.exposureProgramMode]?.value;
     if (mode == null) return null;
-    return shootingParamByCode[PtpDevicePropCode.exposureProgramMode]
+    final label = shootingParamByCode[PtpDevicePropCode.exposureProgramMode]
         ?.display(mode);
+    return label == null ? null : _zh(label);
   }
 
   /// 自动 ISO 开关(0xD054,u8):开 = ISO 面板「自动」项;关后手动值
@@ -2545,7 +2552,7 @@ final class RemoteController extends ChangeNotifier {
       if (param?.videoOnly == true) {
         final readBack = paramProps[propCode]?.value;
         if (readBack != null && readBack != value && !_disposed) {
-          notice = '${param!.label}已发送,但相机回弹为机身值'
+          notice = '${_zh(param!.label)}已发送,但相机回弹为机身值'
               '(${displayParamValue(propCode, readBack)})—— 该参数由机身'
               '拨盘拥有,视频曝光写路径待解(详见 TODO 二·b)';
         }

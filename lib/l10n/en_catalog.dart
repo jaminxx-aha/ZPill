@@ -744,4 +744,8 @@ const Map<String, String> enCatalog = {
   'log.saveFailed': 'Save failed: {e}',
   'log.empty': 'No logs yet',
   'log.header': 'NikonPill diagnostic log\nExported at {time}\n{n} entries\n',
+  // EN 抽查补漏(2026-10-16)。
+  'param.shutter': 'Shutter',
+  'theme.light': 'Light',
+  'theme.dark': 'Dark',
 };
