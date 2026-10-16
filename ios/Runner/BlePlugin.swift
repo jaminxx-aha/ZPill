@@ -324,6 +324,7 @@ public final class BlePlugin: NSObject, FlutterPlugin, CBCentralManagerDelegate,
   }
 
   public func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
+    NativeLog.w("ble", "BLE 已连接(\(peripheral.identifier.uuidString.lowercased())),开始发现服务")
     self.peripheral = peripheral
     peripheral.delegate = self
     servicesPendingDiscovery.removeAll()
@@ -341,6 +342,7 @@ public final class BlePlugin: NSObject, FlutterPlugin, CBCentralManagerDelegate,
 
   public func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral,
                              error: Error?) {
+    NativeLog.w("ble", "BLE 断连:\(peripheral.identifier.uuidString.lowercased())\(error.map { " err=\($0)" } ?? "")")
     if self.peripheral?.identifier == peripheral.identifier {
       self.peripheral = nil
       failPendingOps("disconnected")

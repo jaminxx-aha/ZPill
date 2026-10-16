@@ -37,6 +37,7 @@ import {
   MethodResult,
   Log,
 } from '@ohos/flutter_ohos';
+import { NativeLog } from '../log/NativeLog';
 
 const TAG = 'BlePlugin';
 const SVC = '0000DE00-3DD4-4255-8D62-6DC7B9BD5561';
@@ -412,6 +413,7 @@ export class BlePlugin implements FlutterPlugin, AbilityAware {
               }, 5000);
             }
           } else if (d.state === 0) {
+            NativeLog.w('ble', `BLE 断连:${this.deviceId}`);
             const pending = this.pendingConnect;
             this.pendingConnect = null;
             if (pending !== null) {
@@ -439,6 +441,7 @@ export class BlePlugin implements FlutterPlugin, AbilityAware {
     } catch (err) {
       const e = err as BusinessError;
       Log.e(TAG, `connect: ${e.code} ${e.message}`);
+      NativeLog.w('ble', `connect 失败:${e.code} ${e.message}`);
       this.pendingConnect = null;
       this.gattClient = null;
       result.error('connectFailed', `${e.message}`, null);

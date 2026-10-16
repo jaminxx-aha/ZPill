@@ -34,11 +34,11 @@ library;
 
 import 'dart:async';
 import 'dart:io';
-
-import 'package:flutter/foundation.dart';
+import 'dart:typed_data';
 
 import '../../platform/gallery_saver.dart';
 import '../../platform/raw_decoder.dart';
+import '../log/app_log.dart';
 import '../media/jpeg_orientation.dart';
 import '../media/watermark.dart' show ExifCardData, exifCardFromHead;
 import '../ptpip/object_format.dart' show ObjectFormatCode, ObjectKind;
@@ -359,7 +359,7 @@ class ThumbnailCache {
   /// 真机诊断辅助:缩略图拉取失败的原因进 hilog(不改变行为,异常
   /// 原样上抛,UI 显示占位)。
   void _logFetchError(ObjectEntry entry, ThumbSource source, Object e) {
-    debugPrint('[缩略图] $source ${entry.name}'
+    AppLog.w(AppLog.browser, '缩略图 $source ${entry.name}'
         '(0x${entry.handle.toRadixString(16)}) 失败: $e');
   }
 
@@ -462,7 +462,8 @@ class ThumbnailCache {
         return 0; // 协议层失败(旧机身拒 0x101B 等):无转正,不挡缩略
       } on Object catch (e) {
         // 意外(Error 类)同样尽力而为:0 驻留本会话,不挡缩略本身
-        debugPrint('[缩略图] 方向头读失败 ${entry.name}: $e');
+        // (error 级:随 AppLog 崩溃尾巴落盘,意外类最值得留痕)。
+        AppLog.e(AppLog.browser, '缩略图 方向头读失败 ${entry.name}: $e');
         return 0;
       }
     });

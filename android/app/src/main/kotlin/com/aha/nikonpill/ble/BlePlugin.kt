@@ -20,6 +20,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import com.aha.nikonpill.log.NativeLog
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
@@ -187,6 +188,7 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
                         }
                     }, MTU_WATCHDOG_MS)
                 } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                    NativeLog.w("ble", "BLE 断连:status=$status($deviceId)")
                     onDisconnectedLocal()
                 }
             }
@@ -637,6 +639,7 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
             result.error("connectFailed", "连接失败(蓝牙权限):$e", null)
         } catch (e: Exception) {
             android.util.Log.e(TAG, "connectGatt: $e")
+            NativeLog.w("ble", "connectGatt 失败:$e")
             pendingConnect = null
             gatt = null
             result.error("connectFailed", "$e", null)

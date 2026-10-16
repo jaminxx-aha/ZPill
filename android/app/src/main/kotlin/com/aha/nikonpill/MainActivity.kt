@@ -5,6 +5,7 @@ import com.aha.nikonpill.bg.BgPlugin
 import com.aha.nikonpill.ble.BlePlugin
 import com.aha.nikonpill.gallery.GalleryPlugin
 import com.aha.nikonpill.location.LocationPlugin
+import com.aha.nikonpill.log.NativeLog
 import com.aha.nikonpill.motion.MotionPlugin
 import com.aha.nikonpill.network.NetworkPlugin
 import com.aha.nikonpill.nsd.NsdPlugin
@@ -29,6 +30,9 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        // 原生日志合流通道最先装(native → Dart 反向上报,契约
+        // lib/platform/log_bridge.dart):后面任何插件早期的上报都有通道可用。
+        NativeLog.install(flutterEngine.dartExecutor.binaryMessenger)
         // app 内置通道在 pub 依赖之外,GeneratedPluginRegistrant 不覆盖,
         // 与 ohos EntryAbility 的手动注册同构。
         flutterEngine.plugins.add(UsbHostPlugin())

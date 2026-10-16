@@ -47,6 +47,7 @@ import {
   EventSink,
   Log,
 } from '@ohos/flutter_ohos';
+import { NativeLog } from '../log/NativeLog';
 
 const TAG = 'UsbHostPlugin';
 
@@ -359,6 +360,7 @@ export class UsbHostPlugin implements FlutterPlugin {
           await this.clearHalt(s.bulkOut.address);
           n = await usb.bulkTransfer(s.pipe, s.bulkOut, chunk, BULK_OUT_TIMEOUT_MS);
           if (n < 0) {
+            NativeLog.e('usb', `bulkOut 失败:rc=${n}(共 ${bytes.length}B,已写 ${off}B)`);
             result.error('usb_error', `bulkTransfer out rc=${n}`, null);
             return;
           }
@@ -424,6 +426,7 @@ export class UsbHostPlugin implements FlutterPlugin {
         }
         return;
       }
+      NativeLog.e('usb', `bulkRead 失败:rc=${n}(max=${maxLen}B,窗=${timeoutMs}ms)`);
       if (timeoutMs > 0) {
         // 窗口内无数据(-1/0):对齐 Dart 的 TimeoutException 语义
         result.error('usb_timeout', `bulkTransfer rc=${n} within ${timeoutMs}ms`, null);
@@ -431,6 +434,7 @@ export class UsbHostPlugin implements FlutterPlugin {
         result.error('usb_error', `bulkTransfer rc=${n}`, null);
       }
     } catch (e) {
+      NativeLog.e('usb', `bulkRead 异常:${e}`);
       result.error('usb_error', `bulkRead: ${e}`, null);
     }
   }

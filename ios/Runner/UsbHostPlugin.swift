@@ -391,6 +391,7 @@ private final class IcPtpSession {
     while staging.count >= kContainerHeaderLength {
       let length = Int(u32le(staging, 0))
       if length < kContainerHeaderLength || length > kMaxStagedContainerBytes {
+        NativeLog.e("usb", "bulkOut 流错位:长度字段=\(length),staging \(staging.count)B")
         throw UsbError.platform(code: "usb_error", message: "容器长度字段非法(\(length)),流错位")
       }
       if staging.count < length { break }  // 未攒满,等后续 bulkOut
@@ -419,6 +420,7 @@ private final class IcPtpSession {
       } else if type == kContainerTypeData {
         pendingOutData = (pendingOutData ?? Data()) + Data(staging[kContainerHeaderLength..<length])
       } else {
+        NativeLog.e("usb", "bulkOut 收到意外容器 type=\(type)(staging \(staging.count)B)")
         throw UsbError.platform(code: "usb_error", message: "bulk OUT 收到意外容器 type=\(type)")
       }
       staging.removeFirst(length)
@@ -445,6 +447,7 @@ private final class IcPtpSession {
     }
     guard let command = pendingCommand else {
       lock.unlock()
+      NativeLog.e("usb", "bulkRead 无待发命令(缓冲空),窗口=\(timeoutMs)ms")
       throw UsbError.timeout
     }
     pendingCommand = nil
@@ -483,6 +486,7 @@ private final class IcPtpSession {
       inFlight = false  // 迟到完成会被上面的 inFlight 检查丢弃
       let wasRemoved = removed
       lock.unlock()
+      NativeLog.e("usb", "IC 无响应:opcode=0x\(String(format: "%04X", opcode)) tid=\(txid) 窗口=\(timeoutMs)ms")
       if wasRemoved {
         throw UsbError.platform(code: "usb_error", message: "相机已断开(USB 连接消失)")
       }
@@ -495,11 +499,14 @@ private final class IcPtpSession {
     lock.unlock()
 
     if let error = error {
+      NativeLog.e("usb", "IC 命令失败:opcode=0x\(String(format: "%04X", opcode)) tid=\(txid):\(error)")
       throw UsbError.platform(code: "usb_error", message: "PTP 命令失败:\(error)")
     }
     guard let ptp = ptpResponse, ptp.count >= kContainerHeaderLength,
       u16le(ptp, 4) == kContainerTypeResponse
     else {
+      NativeLog.e("usb", "IC 响应畸形:opcode=0x\(String(format: "%04X", opcode)) tid=\(txid)"
+        + " data=\(response?.count ?? 0)B resp=\(ptpResponse?.count ?? 0)B")
       throw UsbError.platform(code: "usb_error", message: "守护进程返回空/畸形响应容器")
     }
 
@@ -568,8 +575,10 @@ public final class UsbHostPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
           try session.bulkOut(bytes.data)
           result(nil)
         } catch let e as UsbError {
+          NativeLog.e("usb", "bulkOut 失败(\(bytes.data.count)B):\(e.flutterError.message ?? "?")")
           result(e.flutterError)
         } catch {
+          NativeLog.e("usb", "bulkOut 失败(\(bytes.data.count)B):\(error)")
           result(UsbError.platform(code: "usb_error", message: "\(error)").flutterError)
         }
       }
@@ -590,8 +599,10 @@ public final class UsbHostPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
           result(FlutterStandardTypedData(
             bytes: Data(try session.bulkRead(maxLen: maxLen, timeoutMs: timeoutMs))))
         } catch let e as UsbError {
+          NativeLog.e("usb", "bulkRead 失败(max=\(maxLen)B,窗=\(timeoutMs)ms):\(e.flutterError.message ?? "?")")
           result(e.flutterError)
         } catch {
+          NativeLog.e("usb", "bulkRead 失败(max=\(maxLen)B,窗=\(timeoutMs)ms):\(error)")
           result(UsbError.platform(code: "usb_error", message: "\(error)").flutterError)
         }
       }

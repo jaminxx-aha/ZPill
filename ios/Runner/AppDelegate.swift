@@ -11,6 +11,8 @@ import UIKit
   }
 
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
+    // 日志合流通道最先装配:native 上报(USB/BLE 插桩点)自引擎就绪起可用。
+    NativeLog.install(messenger: engineBridge.applicationRegistrar.messenger())
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
     let registry = engineBridge.pluginRegistry
     if let registrar = registry.registrar(forPlugin: "GalleryPlugin") {

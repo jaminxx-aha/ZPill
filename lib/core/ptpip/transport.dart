@@ -34,6 +34,7 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import '../camera/keepalive.dart';
+import '../log/app_log.dart';
 import '../ptp/operation_codes.dart';
 import '../ptp/ptp_transport.dart';
 import 'channels.dart';
@@ -112,10 +113,16 @@ int _dataPhaseFor(int opcode, Uint8List? dataOut) {
 
 /// 一个在途事务的记账。
 final class _Pending {
-  _Pending({required this.transactionId, this.onData});
+  _Pending({required this.transactionId, required this.opcode, this.onData});
 
   final int transactionId;
+
+  /// 请求操作码(OperationResponse 不回带 opcode,响应沿日志从这里取)。
+  final int opcode;
   final void Function(Uint8List chunk)? onData;
+
+  /// 事务计时(发送沿起跑,响应沿量耗时;Stopwatch 单调,不撞对时跳变)。
+  final Stopwatch clock = Stopwatch()..start();
 
   final completer = Completer<PtpResult>();
   Timer? watchdog;
@@ -277,6 +284,7 @@ final class PtpIpTransport implements PtpTransport, PtpCancelCapable {
               : 'transport 已连接');
     }
     _connecting = true;
+    AppLog.i(AppLog.protocol, '连接 $host:$port …');
     final command = _createChannel();
     final event = _createChannel();
     try {
@@ -292,11 +300,15 @@ final class PtpIpTransport implements PtpTransport, PtpCancelCapable {
           ));
       final initResp = await cmdHandshake.future.timeout(transactionTimeout);
       if (initResp is InitFailPacket) {
+        AppLog.e(AppLog.protocol,
+            '← InitFail(连接)reason=${_hx(initResp.reason)}');
         throw PtpInitRejectException(initResp.reason, '连接');
       }
       // 握手期只可能以目标类型或 InitFail 完成,转型安全
       final init = initResp as InitCommandResponsePacket;
       _cmdHandshake = null;
+      AppLog.i(AppLog.protocol,
+          '← InitCommandResponse conn=${init.connectionNumber}');
 
       await event.connect(host, port);
       final evtHandshake = Completer<PtpIpPacket>();
@@ -306,6 +318,8 @@ final class PtpIpTransport implements PtpTransport, PtpCancelCapable {
           InitEventRequestPacket(connectionNumber: init.connectionNumber));
       final evtResp = await evtHandshake.future.timeout(transactionTimeout);
       if (evtResp is InitFailPacket) {
+        AppLog.e(AppLog.protocol,
+            '← InitFail(事件通道)reason=${_hx(evtResp.reason)}');
         throw PtpInitRejectException(evtResp.reason, '事件通道');
       }
       _evtHandshake = null;
@@ -313,6 +327,8 @@ final class PtpIpTransport implements PtpTransport, PtpCancelCapable {
       _command = command;
       _event = event;
       _connected = true;
+      AppLog.i(AppLog.protocol, '双通道握手完成($host:$port)'
+          '${enableKeepalive ? ',心跳 ${keepaliveInterval.inSeconds}s 档' : ''}');
       if (enableKeepalive) {
         final keepalive = ProbeKeepalive(
           ping: _probe,
@@ -418,6 +434,8 @@ final class PtpIpTransport implements PtpTransport, PtpCancelCapable {
           _onOperationResponse(p);
         case EventPacket ev:
           // 个别固件把事件发到 command 通道:转投广播
+          AppLog.d(AppLog.protocol,
+              '←事件 ${_hx(ev.eventCode)} tid=${ev.transactionId}');
           _eventsCtrl.add(PtpEvent(
             code: ev.eventCode,
             transactionId: ev.transactionId,
@@ -451,6 +469,8 @@ final class PtpIpTransport implements PtpTransport, PtpCancelCapable {
       final packet = _codec.decode(frame);
       switch (packet) {
         case EventPacket ev:
+          AppLog.d(AppLog.protocol,
+              '←事件 ${_hx(ev.eventCode)} tid=${ev.transactionId}');
           _eventsCtrl.add(PtpEvent(
             code: ev.eventCode,
             transactionId: ev.transactionId,
@@ -460,6 +480,9 @@ final class PtpIpTransport implements PtpTransport, PtpCancelCapable {
           // 心跳回声(真机实证:ProbeRequest 在 event 通道有回声)。
           // 迟到的前代回声可能误完成新一拍 —— 窗口内到得这么密,链路
           // 活着,误判方向无害。
+          if (AppLog.isVerbose(AppLog.protocol)) {
+            AppLog.d(AppLog.protocol, '心跳 ← 回声');
+          }
           final pong = _probePong;
           if (pong != null && !pong.isCompleted) pong.complete();
         default:
@@ -488,6 +511,10 @@ final class PtpIpTransport implements PtpTransport, PtpCancelCapable {
     }
     if (payload.isNotEmpty) {
       // 空尾 EndData 不触发 onData / 不计入对账
+      if (AppLog.isVerbose(AppLog.protocol)) {
+        AppLog.d(AppLog.protocol,
+            '←数据 tid=$tid +${payload.length}B 头=${AppLog.hex(payload)}');
+      }
       pending.feed(payload);
     }
     // 排水字节阀:声明过数据相的事务,实收越过声明 = 相机既不理 Cancel
@@ -510,6 +537,8 @@ final class PtpIpTransport implements PtpTransport, PtpCancelCapable {
       _onBreakage('响应事务号错位(tid=$tid,无在途事务)');
       return;
     }
+    final op = _hx(pending.opcode);
+    final ms = pending.clock.elapsed.inMilliseconds;
     pending.watchdog?.cancel();
     pending.drainTimer?.cancel();
 
@@ -517,6 +546,8 @@ final class PtpIpTransport implements PtpTransport, PtpCancelCapable {
     // 连接照常复用。响应码无论是 OK 还是拒绝,对调用方一律是「取消
     // 成功」;对账(声明 vs 实收)在此语义下无意义,跳过。
     if (pending.cancelRequested) {
+      AppLog.i(AppLog.protocol,
+          '← $op tid=$tid 取消收口 ${pending.receivedLength}B ${ms}ms');
       pending.completer.completeError(PtpCancelledException(tid));
       return;
     }
@@ -536,6 +567,8 @@ final class PtpIpTransport implements PtpTransport, PtpCancelCapable {
       _onBreakage('tid=$tid 收到重复响应');
       return;
     }
+    AppLog.i(AppLog.protocol, '← $op tid=$tid rc=${_hx(packet.responseCode)}'
+        ' ${pending.receivedLength}B ${ms}ms');
     pending.completer.complete(PtpResult(
       responseCode: packet.responseCode,
       params: packet.params,
@@ -568,7 +601,8 @@ final class PtpIpTransport implements PtpTransport, PtpCancelCapable {
       _nextTid = 0;
     }
     final tid = _nextTid++;
-    final pending = _Pending(transactionId: tid, onData: onData);
+    final pending =
+        _Pending(transactionId: tid, opcode: request.opcode, onData: onData);
     _pending[tid] = pending;
     _armWatchdog(pending);
     try {
@@ -589,6 +623,10 @@ final class PtpIpTransport implements PtpTransport, PtpCancelCapable {
         await _send(
             command, EndDataPacket(transactionId: tid, payload: dataOut));
       }
+      // 发送沿摘要(原始字节走 verbose,见 _send/_onData)。
+      AppLog.i(AppLog.protocol, '→ ${_hx(request.opcode)} tid=$tid'
+          '${request.params.isEmpty ? '' : ' p=${request.params.join(',')}'}'
+          '${dataOut != null ? ' out=${dataOut.length}B' : ''}');
     } on Object catch (e) {
       // 发送失败 = 链路已死(socket 断/通道关闭):毒化整链,
       // 本事务随 _failPending 一并失败
@@ -664,6 +702,7 @@ final class PtpIpTransport implements PtpTransport, PtpCancelCapable {
   /// 主动 close() 不走这里(不广播)。
   void _onBreakage(String reason) {
     if (_poisoned) return;
+    AppLog.e(AppLog.protocol, '断链: $reason');
     _poisoned = true;
     _deathReason = reason;
     _keepalive?.stop();
@@ -709,8 +748,14 @@ final class PtpIpTransport implements PtpTransport, PtpCancelCapable {
     await _breakagesCtrl.close();
   }
 
+  /// 十六进制格式(日志用;与 ptp_diagnostics 口径一致大写)。
+  static String _hx(int v) => '0x${v.toRadixString(16).toUpperCase()}';
+
   Future<void> _send(PtpIpChannel channel, PtpIpPacket packet) async {
     final bytes = _codec.encode(packet);
+    if (AppLog.isVerbose(AppLog.protocol)) {
+      AppLog.d(AppLog.protocol, '→包 ${packet.runtimeType} ${bytes.length}B');
+    }
     await channel.sendFrame(PtpIpFrame(
       type: packet.type,
       body: Uint8List.sublistView(bytes, kPtpIpHeaderLength),
@@ -730,8 +775,12 @@ final class PtpIpTransport implements PtpTransport, PtpCancelCapable {
     }
     try {
       await pong.future.timeout(probeTimeout);
+      if (AppLog.isVerbose(AppLog.protocol)) {
+        AppLog.d(AppLog.protocol, '心跳 ✓');
+      }
       return true;
     } on Object {
+      AppLog.w(AppLog.protocol, '心跳未回声(${probeTimeout.inSeconds}s 窗)');
       return false; // 超时(或链路毒化后的异常):本拍无回声
     }
   }
