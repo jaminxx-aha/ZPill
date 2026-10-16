@@ -144,6 +144,16 @@ final class MockNikonDevice {
                 ..u32(storageId))
               .takeBytes(),
         );
+      case NikonOperationCode.getVendorStorageIds:
+        // application 模式方言:0x1004 恒幻影无卡 ID,真卡 ID 走 0x9209
+        //(官方 §6.2.3.1)—— mock 同人设回同一组 ID。
+        return MockPtpReply(
+          code: PtpResponseCode.ok,
+          data: (ByteWriter()
+                ..u32(1)
+                ..u32(storageId))
+              .takeBytes(),
+        );
       case PtpOperationCode.getStorageInfo:
         return _storageInfo(params);
       case PtpOperationCode.getObjectHandles:
@@ -358,6 +368,7 @@ final class MockNikonDevice {
       PtpOperationCode.closeSession, // 0x1003
       PtpOperationCode.getStorageIds, // 0x1004
       PtpOperationCode.getStorageInfo, // 0x1005
+      NikonOperationCode.getVendorStorageIds, // 0x9209
       PtpOperationCode.getObjectHandles, // 0x1007
       PtpOperationCode.getObjectInfo, // 0x1008
       PtpOperationCode.getObject, // 0x1009
