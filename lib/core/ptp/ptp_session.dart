@@ -336,6 +336,26 @@ final class PtpSession {
     return [for (var i = 0; i < count; i++) r.u32()];
   }
 
+  /// GetVendorStorageIDs(0x9209,§6.2.3.1):真卡 StorageID 列表。
+  ///
+  /// application 模式下标准 0x1004 恒回无卡幻影 ID(0x00010000/
+  /// 0x00020000,与实际插卡无关 —— 官方明文;0x1005 对幻影 ID 回
+  /// 0x2008),有效卡 ID 只能走本码;数据集与 0x1004 同构。
+  Future<List<int>> getVendorStorageIds() async {
+    final result = await _serialized(() => transport.execute(
+          const PtpRequest(opcode: NikonOperationCode.getVendorStorageIds),
+        ));
+    _ensureOk(result, NikonOperationCode.getVendorStorageIds);
+    final data = result.data!;
+    if (data.length % 4 != 0) {
+      throw FormatException(
+          'GetVendorStorageIDs 数据集 ${data.length}B 非 4 对齐');
+    }
+    final r = ByteReader(data);
+    final count = r.u32();
+    return [for (var i = 0; i < count; i++) r.u32()];
+  }
+
   /// GetStorageInfo(0x1005):单存储槽容量/余量(双卡余量展示)。
   Future<CameraStorage> getStorageInfo(int storageId) async {
     final result = await _serialized(() => transport.execute(

@@ -32,6 +32,8 @@ import 'package:flutter/foundation.dart';
 
 import '../core/browser/object_repository.dart';
 import '../core/browser/photo_group.dart';
+import '../core/log/app_log.dart';
+import '../core/ptp/operation_codes.dart';
 import '../core/ptp/ptp_session.dart';
 import '../core/ptpip/object_format.dart';
 
@@ -229,5 +231,79 @@ final class PtpDiagnostics {
       for (var i = 0; i < take; i++)
         d[i].toRadixString(16).padLeft(2, '0').toUpperCase(),
     ].join(' ');
+  }
+
+  /// 张数语义探针(2026-10-16):0xD1F1 真机行为与官方语义(§6.5.7.4
+  /// 「卡上可录帧数」)背离排查 —— 实测视频档跳变 +17%、画质调高张数
+  /// 反增。在每次张数刷新沿打一行对照:
+  /// ① 0xD10B RecordingMedia / 0xD1F2 ActiveSlot —— 0xD1F1 数的是
+  ///    ActiveSlot 所指槽(§6.5.7.3/.4),视频档跳变假设 = 记录槽翻转;
+  /// ② 真卡余量沿 **GetVendorStorageIDs(0x9209)** 问(application 模式
+  ///    下标准 0x1004 恒回无卡幻影 ID,0x1005 对其回 0x2008,§6.2.3.1
+  ///    官方明文;首轮探针「两卡全 0x2008」即此,卡实际插着);
+  ///    卡余量换算的隐含单张字节 = 估算基石的罗塞塔石,
+  ///    相机自报 FreeSpaceInImages(0x1005)一并对照;
+  /// ③ 画质/尺寸/RAW压缩/档位当前值。
+  /// 走 AppLog(protocol 域)随设置页导出。同样受 PTP_DIAG 总闸,
+  /// 常规运行零开销。
+  static Future<void> shotsSemanticsProbe(
+      PtpSession session, int shots) async {
+    try {
+      final parts = <String>['0xD1F1=$shots'];
+      for (final (code, name) in const [
+        (PtpDevicePropCode.recordingMedia, '记录地'),
+        (PtpDevicePropCode.activeSlot, '记录槽'),
+      ]) {
+        try {
+          final v = await session.getDevicePropValue(code);
+          parts.add('$name=${v.value}');
+        } catch (_) {
+          parts.add('$name=?');
+        }
+      }
+      try {
+        final std = await session.getStorageIds();
+        parts.add('std卡=${std.map(_h).join(',')}');
+      } catch (err) {
+        parts.add('std卡拒答:$err');
+      }
+      try {
+        final ids = await session.getVendorStorageIds();
+        parts.add('vendor卡=${ids.map(_h).join(',')}');
+        for (final id in ids) {
+          try {
+            final s = await session.getStorageInfo(id);
+            parts.add('卡${_h(id)} 余'
+                '${(s.freeSpaceBytes / 1e9).toStringAsFixed(2)}'
+                '/${(s.maxCapacityBytes / 1e9).toStringAsFixed(2)}GB');
+            if (shots > 0 && s.freeSpaceBytes > 0) {
+              parts.add('隐含单张'
+                  '${(s.freeSpaceBytes / shots / 1024).toStringAsFixed(0)}KB');
+            }
+            parts.add('自报可拍=${s.freeSpaceImages}');
+          } catch (err) {
+            parts.add('卡${_h(id)} 信息拒答:$err');
+          }
+        }
+      } catch (err) {
+        parts.add('vendor卡ID拒答:$err');
+      }
+      for (final (code, name) in const [
+        (PtpDevicePropCode.liveViewSelector, '档'),
+        (PtpDevicePropCode.compressionSetting, '画质'),
+        (PtpDevicePropCode.imageSize, '尺寸'),
+        (PtpDevicePropCode.rawCompressionType, 'RAW压缩'),
+      ]) {
+        try {
+          final v = await session.getDevicePropValue(code);
+          parts.add('$name=${v.value}');
+        } catch (_) {
+          parts.add('$name=?');
+        }
+      }
+      AppLog.i(AppLog.protocol, '张数语义探针: ${parts.join(' | ')}');
+    } catch (e) {
+      _p('张数语义探针异常: $e');
+    }
   }
 }

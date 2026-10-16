@@ -78,6 +78,9 @@ final class _FakeConnection implements CameraConnection {
   String? get deviceName => null;
 
   @override
+  String? get deviceModel => null;
+
+  @override
   bool get isWireless => false;
 
   @override
@@ -302,8 +305,9 @@ Uint8List _realJpeg() {
 
 /// 最小 display-info 头(6048×3400、单 AF 框):头按真机形态补 1024B
 /// 定长 + SOI JPEG 尾(头长靠 SOI 位置定位),页面测试直接注到
-/// engine.header 驱动 AF 框叠层。
-Uint8List _headerObject() {
+/// engine.header 驱动 AF 框叠层。[videoRemainingMs] 写 @816-819
+/// (BE u32 毫秒,视频档胶囊「可录时长」用)。
+Uint8List _headerObject({int? videoRemainingMs}) {
   final b = Uint8List(1024 + 4);
   void be16(int o, int v) {
     b[o] = (v >> 8) & 0xFF;
@@ -318,6 +322,12 @@ Uint8List _headerObject() {
   be16(50, 240);
   be16(52, 3024);
   be16(54, 1700);
+  if (videoRemainingMs != null) {
+    b[816] = (videoRemainingMs >> 24) & 0xFF;
+    b[817] = (videoRemainingMs >> 16) & 0xFF;
+    b[818] = (videoRemainingMs >> 8) & 0xFF;
+    b[819] = videoRemainingMs & 0xFF;
+  }
   b[1024] = 0xFF;
   b[1025] = 0xD8;
   b[1026] = 0xFF;
@@ -2777,6 +2787,49 @@ void main() {
         reason: '视频档面板追加视频参数族');
     expect(find.text('视频 ISO'), findsOneWidget);
     expect(find.text('N-Log'), findsOneWidget);
+  });
+
+  testWidgets('信息胶囊:照片档显张数裸值(0xD1F1 相机自报可拍,用户定案'
+      '不带「张」)', (tester) async {
+    _portrait(tester);
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = _directRemoteController(transport, conn: conn);
+    addTearDown(controller.dispose);
+    _scriptAutoStart(transport);
+    _scriptParams(transport); // 照片档连接,0xD1F1=1234 链首读
+    await tester.pumpWidget(MaterialApp(home: RemotePage(
+        controller: controller,
+        settingsListenable: ValueNotifier(const AppSettings()))));
+    conn.statesCtrl.add(CameraLinkState.connected);
+    await tester.pumpAndSettle();
+    expect(controller.cameraMode, isNot(CaptureMode.video));
+    expect(find.text('1234'), findsOneWidget);
+  });
+
+  testWidgets('信息胶囊:视频档张数换剩余可录时长(帧头 @816,2026-10-16 '
+      '探针定案张数在该档被录像估算污染;用户定案裸显时间不带「可录」)',
+      (tester) async {
+    _portrait(tester);
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = _directRemoteController(transport, conn: conn);
+    addTearDown(controller.dispose);
+    _scriptAutoStart(transport);
+    _scriptParamsVideo(transport, d1a6: 1); // 视频档连接(0xD1F1=1234 照读)
+    await tester.pumpWidget(MaterialApp(home: RemotePage(
+        controller: controller,
+        settingsListenable: ValueNotifier(const AppSettings()))));
+    conn.statesCtrl.add(CameraLinkState.connected);
+    await tester.pumpAndSettle();
+    expect(controller.cameraMode, CaptureMode.video);
+    expect(find.text('1234'), findsNothing, reason: '视频档不显张数');
+
+    // 帧头注入剩余可录 61s → 「1:01」上屏。
+    controller.engine.header.value =
+        parseLiveViewHeader(_headerObject(videoRemainingMs: 61000));
+    await tester.pump();
+    expect(find.text('1:01'), findsOneWidget);
   });
 
   testWidgets('视频参数族面板:照片档不出现视频 tile(零噪声)', (tester) async {

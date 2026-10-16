@@ -89,6 +89,9 @@ final class _FakeConnection implements CameraConnection {
   String? get deviceName => null;
 
   @override
+  String? get deviceModel => null;
+
+  @override
   bool get isWireless => false;
 
   @override

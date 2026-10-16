@@ -47,7 +47,9 @@ class RemoteInfoPill extends StatelessWidget {
   Widget build(BuildContext context) {
     final live = LiveDesign.of(context);
     final linked = controller.linkUp;
-    final name = controller.connection?.deviceName;
+    // 左上角只答「什么机型」不答「哪一台」(2026-10-17 用户定案:显
+    // 型号 Zf,不显 Zf_序列号 —— 设备名留给相机页设备行)。
+    final name = controller.connection?.deviceModel;
     // 返回钮只在路由态出现:拍摄页从底栏 tab 改为相机页 push 进入
     // (2026-10-08),页内无 AppBar,这里补返回入口;直挂首页/单测里
     // canPop 为假则不占位(系统返回手势照常可用,这里只是显式入口)。
@@ -107,9 +109,28 @@ class RemoteInfoPill extends StatelessWidget {
                     style: TextStyle(fontSize: 12, color: live.text),
                   ),
                 ),
-          if (linked && controller.shotsRemaining != null) ...[
+          // 张数只在照片档出现(2026-10-16 探针定案):0xD1F1 ≡ 相机
+          // 自报可拍,视频档被录像估算污染(隐含单张随档/画质游走,
+          // 机身视频档也只显剩余时长不显张数),照搬出来是假张数。
+          // 用户定案裸值:只显数字,不带「张」。
+          if (linked &&
+              controller.shotsRemaining != null &&
+              controller.cameraMode != CaptureMode.video) ...[
             const SizedBox(width: 10),
-            Text(context.t('remote.shotCount', {'n': controller.shotsRemaining!}),
+            Text('${controller.shotsRemaining!}',
+                style: TextStyle(
+                    fontSize: 12,
+                    color: live.muted,
+                    fontFeatures: const [FontFeature.tabularFigures()])),
+          ],
+          // 视频档同位换剩余可录时长(帧头 @816 机身自报,与机身自家
+          // 屏同口径);null = 头没带/本帧无效 → 不显,宁缺不错。
+          // 用户定案裸显时间,不带「可录」前缀。
+          if (linked &&
+              controller.cameraMode == CaptureMode.video &&
+              controller.videoRemainingMs != null) ...[
+            const SizedBox(width: 10),
+            Text(_recRemainingLabel(controller.videoRemainingMs!),
                 style: TextStyle(
                     fontSize: 12,
                     color: live.muted,
@@ -187,4 +208,15 @@ String recDurationLabel(int? seconds) {
   final m = s ~/ 60;
   final r = s % 60;
   return '$m:${r.toString().padLeft(2, '0')}';
+}
+
+/// 剩余可录时长标签(帧头 @816 毫秒 → h:mm:ss / m:ss;官方上限
+/// 7500000ms ≈ 2 小时,超小时补位避免 125:00 式怪读)。
+String _recRemainingLabel(int ms) {
+  final s = (ms / 1000).round();
+  final h = s ~/ 3600;
+  final m = (s % 3600) ~/ 60;
+  final r = s % 60;
+  String two(int v) => v.toString().padLeft(2, '0');
+  return h > 0 ? '$h:${two(m)}:${two(r)}' : '$m:${two(r)}';
 }

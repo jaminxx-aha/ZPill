@@ -32,6 +32,8 @@ LiveViewHeader _header({
     timecode: timecode,
     overheatRaw: overheatRaw,
     recordingCountdownSeconds: recordingCountdownSeconds,
+    videoRemainingMs: null,
+    videoElapsedMs: null,
     spotWbRaw: spotWbRaw,
   );
 }

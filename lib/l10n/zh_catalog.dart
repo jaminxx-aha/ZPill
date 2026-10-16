@@ -322,7 +322,6 @@ const Map<String, String> zhCatalog = {
   'remote.autofocus': '自动对焦',
   'common.autoSuffix': '(自动)',
   'remote.notConnected': '未连接相机',
-  'remote.shotCount': '{n} 张',
   'remote.cleanMonitoring': '纯净监看(隐藏全部控制,只留画面)',
   'remote.shootingMode': '拍摄模式',
   'param.mode': '模式',
