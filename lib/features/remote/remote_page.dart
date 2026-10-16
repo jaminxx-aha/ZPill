@@ -789,7 +789,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
             right: kScreenEdgePadding,
             child: ChromeIconButton(
               icon: Icons.visibility,
-              tooltip: context.t('显示控制界面'),
+              tooltip: context.t('remote.showControls'),
               onTap: () => setState(() => _chromeHidden = false),
             ),
           ),
@@ -806,7 +806,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         builder: (_) => PhotoGridPage(
           controller: AppServices.instance.browserController,
           folderHandle: CameraAlbum.allPhotosHandle,
-          fallbackName: context.t('相机相册'),
+          fallbackName: context.t('conn.cameraAlbum'),
         ),
       ),
     );
@@ -1027,7 +1027,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
               child: Center(
                 child: ChromeIconButton(
                   icon: Icons.visibility,
-                  tooltip: context.t('显示控制界面'),
+                  tooltip: context.t('remote.showControls'),
                   onTap: () => setState(() => _chromeHidden = false),
                 ),
               ),

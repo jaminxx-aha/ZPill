@@ -99,7 +99,7 @@ class CaptureSettingsPanel extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _sectionHeader(live, context.t('拍摄参数')),
+            _sectionHeader(live, context.t('remote.paramsGroup')),
             Wrap(
               spacing: 4,
               runSpacing: 4,
@@ -110,12 +110,12 @@ class CaptureSettingsPanel extends StatelessWidget {
                       context, controller, activeParam, onEditParam, p),
               ],
             ),
-            _sectionHeader(live, context.t('对焦')),
+            _sectionHeader(live, context.t('remote.focusGroup')),
             _focusControls(context),
-            _sectionHeader(live, context.t('监看')),
+            _sectionHeader(live, context.t('common.monitoring')),
             _monitorToggles(context),
             _liveViewQualityRows(context),
-            _sectionHeader(live, context.t('辅助')),
+            _sectionHeader(live, context.t('remote.assistGroup')),
             _assistChips(context),
           ],
         ),
@@ -201,12 +201,12 @@ class CaptureSettingsPanel extends StatelessWidget {
     final trackUsable = usable && controller.afAreaCanTrack;
     Widget trackChip = _smallChip(
       live: live,
-      label: context.t('主体追踪'),
+      label: context.t('remote.subjectTracking'),
       selected: controller.tracking,
       onTap: controller.tracking
           ? controller.endTracking
           : (trackUsable ? controller.startTracking : null),
-      tooltip: context.t('启动后相机持续追焦所选主体(点取景画面选目标),再点停止'),
+      tooltip: context.t('remote.subjectTrackingHint'),
     );
     Widget dialToggle = InkWell(
       onTap: () {
@@ -239,7 +239,7 @@ class CaptureSettingsPanel extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 2),
-            Text(context.t('拉焦轮'),
+            Text(context.t('remote.focusDial'),
                 style: TextStyle(
                     fontSize: 10, color: dialOn ? live.accent : live.faint)),
           ],
@@ -255,15 +255,15 @@ class CaptureSettingsPanel extends StatelessWidget {
           spacing: 2,
           runSpacing: 4,
           children: [
-            step(Icons.remove, true, context.t('MF 近'), context.t('MF 向近(步进)')),
-            step(Icons.add, false, context.t('MF 远'), context.t('MF 向远(步进)')),
+            step(Icons.remove, true, context.t('remote.mfNear'), context.t('remote.mfNearStep')),
+            step(Icons.add, false, context.t('remote.mfFar'), context.t('remote.mfFarStep')),
             dialToggle,
             trackChip,
           ],
         ),
         if (controller.focusModeIsMf) ...[
           const SizedBox(height: 6),
-          Text(context.t('机身对焦模式为 MF,远程对焦已停用'),
+          Text(context.t('remote.mfDisabled'),
               style: TextStyle(fontSize: 10, color: live.muted)),
         ] else if (controller.mfNearEnd || controller.mfFarEnd) ...[
           // 端点态常驻行(0xA00C 按请求方向归因,RemoteController
@@ -271,12 +271,12 @@ class CaptureSettingsPanel extends StatelessWidget {
           const SizedBox(height: 6),
           Text(
               context.t(controller.mfNearEnd
-                  ? '近端已到,反向驱动解锁'
-                  : '远端已到,反向驱动解锁'),
+                  ? 'remote.nearLimitUnlock'
+                  : 'remote.farLimitUnlock'),
               style: TextStyle(fontSize: 10, color: live.muted)),
         ] else if (usable && !controller.afAreaCanTrack) ...[
           const SizedBox(height: 6),
-          Text(context.t('主体追踪:AF 区域切到「自动」后可用'),
+          Text(context.t('remote.trackingNeedsAuto'),
               style: TextStyle(fontSize: 10, color: live.muted)),
         ],
       ],
@@ -354,36 +354,36 @@ class CaptureSettingsPanel extends StatelessWidget {
         // 取景总开关(十二轮「取景器关闭的开关」):当前态跟
         // liveViewActive(起景失败/引擎态即时可见,不跟持久位);录制中
         // 禁点 —— 视频模式停录门依赖取景在跑。
-        toggle(Icons.videocam_outlined, context.t('取景'),
+        toggle(Icons.videocam_outlined, context.t('remote.viewfinderGroup'),
             controller.liveViewActive, onLiveViewToggle,
             enabled: !controller.recording),
-        toggle(Icons.grid_on, context.t('网格'), toggles.grid,
+        toggle(Icons.grid_on, context.t('remote.grids'), toggles.grid,
             (v) => onTogglesChanged(toggles.copyWith(grid: v))),
-        toggle(Icons.warning_amber, context.t('斑马纹'), toggles.zebra,
+        toggle(Icons.warning_amber, context.t('remote.zebra'), toggles.zebra,
             (v) => onTogglesChanged(toggles.copyWith(zebra: v))),
-        toggle(Icons.bar_chart, context.t('直方图'), toggles.histogram,
+        toggle(Icons.bar_chart, context.t('remote.histogram'), toggles.histogram,
             (v) => onTogglesChanged(toggles.copyWith(histogram: v))),
-        toggle(Icons.linear_scale, context.t('水平仪'), toggles.level,
+        toggle(Icons.linear_scale, context.t('remote.level'), toggles.level,
             (v) => onTogglesChanged(toggles.copyWith(level: v))),
-        toggle(Icons.palette_outlined, context.t('伪色'), toggles.falseColor,
+        toggle(Icons.palette_outlined, context.t('remote.falseColor'), toggles.falseColor,
             (v) => onTogglesChanged(toggles.copyWith(falseColor: v))),
-        toggle(Icons.blur_on, context.t('峰值'), toggles.peaking,
+        toggle(Icons.blur_on, context.t('remote.peaking'), toggles.peaking,
             (v) => onTogglesChanged(toggles.copyWith(peaking: v))),
         // 示波器族芯片(帧分析路):循环切档 关→波形→RGB Parade→矢量→
         // 红绿灯(遮幅同款循环芯片);开关落定由页面同步分析器启停。
         _smallChip(
           live: live,
           label: switch (toggles.scope) {
-            ScopeKind.off => context.t('示波器'),
-            ScopeKind.waveform => context.t('波形'),
-            ScopeKind.parade => context.t('RGB'),
-            ScopeKind.vector => context.t('矢量'),
-            ScopeKind.traffic => context.t('红绿灯'),
+            ScopeKind.off => context.t('remote.scope'),
+            ScopeKind.waveform => context.t('remote.waveform'),
+            ScopeKind.parade => context.t('remote.scopeParade'),
+            ScopeKind.vector => context.t('remote.vector'),
+            ScopeKind.traffic => context.t('remote.trafficLights'),
           },
           selected: toggles.scope != ScopeKind.off,
           onTap: () => onTogglesChanged(
               toggles.copyWith(scope: toggles.scope.next)),
-          tooltip: context.t('示波器:关→波形→RGB Parade→矢量→红绿灯 循环切换'),
+          tooltip: context.t('remote.scopeCycle'),
         ),
         // 构图框三件(纯显示层,不占分析器):遮幅循环芯片 + 安全框 +
         // 中心标。
@@ -391,25 +391,25 @@ class CaptureSettingsPanel extends StatelessWidget {
           live: live,
           // framingAspect.label 是画幅比数字串(「2.39」等),无需翻译。
           label: toggles.framingAspect == FramingAspect.off
-              ? context.t('遮幅')
-              : context.t('遮幅 {v}', {'v': toggles.framingAspect.label}),
+              ? context.t('remote.matte')
+              : context.t('remote.matteValue', {'v': toggles.framingAspect.label}),
           selected: toggles.framingAspect != FramingAspect.off,
           onTap: () => onTogglesChanged(
               toggles.copyWith(framingAspect: toggles.framingAspect.next)),
-          tooltip: context.t('构图遮幅:2.39/2.35/1.85 循环;画幅外压暗(变宽还原已计入)'),
+          tooltip: context.t('remote.matteCycle'),
         ),
-        toggle(Icons.crop_free, context.t('安全框'), toggles.framingSafeArea,
+        toggle(Icons.crop_free, context.t('remote.safeArea'), toggles.framingSafeArea,
             (v) => onTogglesChanged(toggles.copyWith(framingSafeArea: v))),
         toggle(
             Icons.center_focus_weak,
-            context.t('中心标'),
+            context.t('remote.centerMark'),
             toggles.framingCenterMark,
             (v) => onTogglesChanged(toggles.copyWith(framingCenterMark: v))),
         // 内屏强关(0x9422,B 组线上未验):乐观态会话级,tooltip 标
         // 实验性(副作用未知,断流由看门狗兜底)。
         Tooltip(
-          message: context.t('实验性:强制关闭机背内屏(重连/重开后状态未知)'),
-          child: toggle(Icons.mobile_off, context.t('内屏'),
+          message: context.t('remote.rearScreenHint'),
+          child: toggle(Icons.mobile_off, context.t('remote.rearScreen'),
               controller.monitorOff, (_) => controller.toggleMonitorOff(),
               enabled: controller.linkUp),
         ),
@@ -451,22 +451,22 @@ class CaptureSettingsPanel extends StatelessWidget {
         crossAxisAlignment: WrapCrossAlignment.center,
         children: [
           Tooltip(
-            message: context.t('N-Log 刻度:波形 Y 轴按合法量程 64-940 码 ↔ 0-100 IRE 标注,带 18% 灰线;须相机菜单开 N-Log 才对得上'),
+            message: context.t('remote.nlogScale'),
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 4),
-              child: Text(context.t('示波器刻度'),
+              child: Text(context.t('remote.scopeScale'),
                   style: TextStyle(fontSize: 11, color: live.faint)),
             ),
           ),
           _smallChip(
             live: live,
-            label: context.t('全幅'),
+            label: context.t('remote.fullRange'),
             selected: !toggles.scopeNLog,
             onTap: () => onTogglesChanged(toggles.copyWith(scopeNLog: false)),
           ),
           _smallChip(
             live: live,
-            label: context.t('N-Log'),
+            label: context.t('remote.scopeNlog'),
             selected: toggles.scopeNLog,
             onTap: () => onTogglesChanged(toggles.copyWith(scopeNLog: true)),
           ),
@@ -485,16 +485,16 @@ class CaptureSettingsPanel extends StatelessWidget {
       crossAxisAlignment: WrapCrossAlignment.center,
       children: [
         Tooltip(
-          message: context.t('监看套色(不写帧数据):选中即自动走高质量渲染管线,shader 不可用时无 LUT'),
+          message: context.t('remote.monitorLutHint'),
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 4),
-            child: Text(context.t('监看 LUT'),
+            child: Text(context.t('remote.monitorLut'),
                 style: TextStyle(fontSize: 11, color: live.faint)),
           ),
         ),
         _smallChip(
           live: live,
-          label: context.t('关'),
+          label: context.t('common.offShort'),
           selected: toggles.lutIndex < 0,
           onTap: () => onTogglesChanged(toggles.copyWith(lutIndex: -1)),
         ),
@@ -503,7 +503,7 @@ class CaptureSettingsPanel extends StatelessWidget {
             live: live,
             // LUT 标题(edit/lut_presets 的 builtinLuts 产出)原文即
             // t() 键,显示点包 t()。
-            label: context.t(builtinLuts[i].title),
+            label: context.t(lutTitleKey(builtinLuts[i].title)),
             selected: toggles.lutIndex == i,
             onTap: () => onTogglesChanged(toggles.copyWith(lutIndex: i)),
           ),
@@ -552,18 +552,18 @@ class CaptureSettingsPanel extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         row(
-            context.t('峰值算法'),
-            const [('双尺度', 0), ('经典', 1)],
+            context.t('remote.peakingEngine'),
+            const [('remote.dualScale', 0), ('remote.classic', 1)],
             toggles.peakingEngine,
             (v) => onTogglesChanged(toggles.copyWith(peakingEngine: v))),
         row(
-            context.t('峰值灵敏度'),
-            const [('低', 0), ('中', 1), ('高', 2)],
+            context.t('remote.peakingSens'),
+            const [('common.low', 0), ('common.medium', 1), ('common.high', 2)],
             toggles.peakingLevel,
             (v) => onTogglesChanged(toggles.copyWith(peakingLevel: v))),
         row(
-            context.t('峰值颜色'),
-            const [('金', 0), ('白', 1), ('红', 2)],
+            context.t('remote.peakingColor'),
+            const [('common.gold', 0), ('common.white', 1), ('common.red', 2)],
             toggles.peakingColor,
             (v) => onTogglesChanged(toggles.copyWith(peakingColor: v))),
       ],
@@ -607,9 +607,9 @@ class CaptureSettingsPanel extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         row(
-            context.t('取景尺寸'),
+            context.t('remote.vfSize'),
             const [
-              ('跟随', null),
+              ('remote.follow', null),
               ('QVGA', 1),
               ('VGA', 2),
               ('XGA', 3),
@@ -617,15 +617,15 @@ class CaptureSettingsPanel extends StatelessWidget {
             liveViewImageSize,
             (v) => onLiveViewQualityChanged(v, liveViewImageCompression)),
         row(
-            context.t('取景画质'),
+            context.t('remote.vfQuality'),
             const [
-              ('跟随', null),
-              ('Basic 尺寸', 0),
-              ('Basic 质量', 1),
-              ('Normal 尺寸', 2),
-              ('Normal 质量', 3),
-              ('Fine 尺寸', 4),
-              ('Fine 质量', 5),
+              ('remote.follow', null),
+              ('remote.basicSize', 0),
+              ('remote.basicQuality', 1),
+              ('remote.normalSize', 2),
+              ('remote.normalQuality', 3),
+              ('remote.fineSize', 4),
+              ('remote.fineQuality', 5),
             ],
             liveViewImageCompression,
             (v) => onLiveViewQualityChanged(liveViewImageSize, v)),
@@ -642,29 +642,29 @@ class CaptureSettingsPanel extends StatelessWidget {
       children: [
         _smallChip(
           live: LiveDesign.of(context),
-          label: context.t('对焦后拍'),
+          label: context.t('remote.focusThenCapture'),
           selected: controller.focusBeforeCapture,
           onTap: () =>
               controller.focusBeforeCapture = !controller.focusBeforeCapture,
-          tooltip: context.t('释放快门前先自动对焦(半按-全按;候选参数,待真机核对)'),
+          tooltip: context.t('remote.focusThenCaptureHint'),
         ),
         _smallChip(
           live: LiveDesign.of(context),
-          label: context.t('SDRAM 直拍'),
+          label: context.t('remote.sdramCapture'),
           selected: controller.sdramCapture,
           // 间隔拍摄运行中:SDRAM 直拍不可中途开(逐拍回传图库与调度轮
           // 冲突,也是启动互锁项)。
           onTap: controller.intervalActive
               ? null
               : () => onSdramCaptureChanged(!controller.sdramCapture),
-          tooltip: context.t('AF+SDRAM 一体拍(0x90CB):对象不入卡,回传 APP 存图库'),
+          tooltip: context.t('remote.sdramHint'),
         ),
         _smallChip(
           live: LiveDesign.of(context),
           label: 'AE-L',
           selected: controller.aeLocked,
           onTap: !controller.linkUp ? null : controller.toggleAELock,
-          tooltip: context.t('AE/AWB 锁定(0x9426):曝光随锁定时刻固定,再点解除'),
+          tooltip: context.t('remote.aeAwbLockHint'),
         ),
         _smallChip(
           live: LiveDesign.of(context),
@@ -672,20 +672,18 @@ class CaptureSettingsPanel extends StatelessWidget {
           selected: bleGpsInject,
           onTap: !bleReady ? null : () => onBleGpsInjectChanged(!bleGpsInject),
           tooltip: bleReady
-              ? context.t('BLE 定位注入(0x2007):拍进卡的照片原生带 EXIF 坐标')
-              : context.t('未配对:设置页「BLE 配对 / GPS 注入」先配对相机'),
+              ? context.t('remote.bleGpsHint')
+              : context.t('remote.bleNotPaired'),
         ),
         // Android/iOS 有原生实现才出行(ohos 未做拦截)。
         if (volumeKeyShutterAvailable)
           _smallChip(
             live: LiveDesign.of(context),
-            label: context.t('音量键快门'),
+            label: context.t('remote.volumeShutter'),
             selected: volumeKeyShutter,
             onTap: () => onVolumeKeyShutterChanged(!volumeKeyShutter),
             tooltip: context.t(
-              '音量上/下键兼作快门(拍摄页存续期生效);'
-              'Android 拦键事件,iOS 观察系统音量(按键瞬时改音量并吸回,'
-              '音量条已藏),ohos 未做拦截',
+              'remote.volumeShutterHint',
             ),
           ),
         Builder(
@@ -693,27 +691,27 @@ class CaptureSettingsPanel extends StatelessWidget {
           builder: (chipContext) => _smallChip(
             live: LiveDesign.of(chipContext),
             label: controller.selfTimerSeconds == 0
-                ? context.t('自拍')
-                : context.t('自拍 {s}s', {'s': '${controller.selfTimerSeconds}'}),
+                ? context.t('remote.selfTimer')
+                : context.t('remote.selfTimerValue', {'s': '${controller.selfTimerSeconds}'}),
             selected: controller.selfTimerSeconds > 0,
             // 间隔拍摄运行中:自拍让位(灰化)—— 定时 B 门/自拍倒计时
             // 与调度轮互相踩脚,先停轮再配。
             onTap: controller.intervalActive
                 ? null
                 : () => _pickSelfTimer(chipContext, controller),
-            tooltip: context.t('自拍定时:关/2s/5s/10s 点选;倒计时中再点取消'),
+            tooltip: context.t('remote.selfTimerHint'),
           ),
         ),
         _smallChip(
           live: LiveDesign.of(context),
           label: controller.intervalActive
-              ? context.t('间隔 {a}/{b}', {
+              ? context.t('interval.progress', {
                   'a': '${controller.intervalTaken}',
                   'b': controller.intervalShotCount == null
                       ? '∞'
                       : '${controller.intervalShotCount}'
                 })
-              : context.t('间隔拍摄'),
+              : context.t('interval.title'),
           selected: controller.intervalActive,
           // 运行中点芯片 = 立即停轮(状态行同款停止,快捷入口);
           // 空闲点 = 参数底单(间隔/张数 → 开始)。
@@ -721,7 +719,7 @@ class CaptureSettingsPanel extends StatelessWidget {
               ? controller.stopInterval
               : () => _pickInterval(context, controller),
           tooltip: context.t(
-              '间隔拍摄(延时摄影):设间隔与张数自动连拍;运行中点按立即停止'),
+              'interval.tooltip'),
         ),
         _takeoverChip(context,
             controller: controller, onTakeoverRequest: onTakeoverRequest),
@@ -775,14 +773,14 @@ Widget _takeoverChip(BuildContext context,
   final active = controller.takeoverActive;
   return _smallChip(
     live: live,
-    label: active ? context.t('APP 接管中') : context.t('APP 接管'),
+    label: active ? context.t('takeover.active') : context.t('takeover.title'),
     selected: active,
     onTap: !controller.linkUp
         ? null
         : (active
             ? controller.releaseTakeover
             : () => onTakeoverRequest(context)),
-    tooltip: context.t('拨盘级参数(快门/模式/ISO/光圈)需先接管才能遥控调整'),
+    tooltip: context.t('takeover.hint'),
   );
 }
 
@@ -818,8 +816,8 @@ Future<void> _pickSelfTimer(
             children: [
               Text(
                   s == 0
-                      ? chipContext.t('关')
-                      : chipContext.t('{s} 秒', {'s': '$s'}),
+                      ? chipContext.t('common.offShort')
+                      : chipContext.t('common.seconds', {'s': '$s'}),
                   style: TextStyle(fontSize: 14, color: live.text)),
               if (s == controller.selfTimerSeconds) ...[
                 const Spacer(),
@@ -852,7 +850,7 @@ Future<void> _pickInterval(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(sheetContext.t('间隔拍摄参数'),
+              Text(sheetContext.t('interval.setupTitle'),
                   style: TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w600,
@@ -860,11 +858,11 @@ Future<void> _pickInterval(
               const SizedBox(height: 10),
               _intervalStepper(
                 sheetContext,
-                label: sheetContext.t('间隔'),
+                label: sheetContext.t('interval.interval'),
                 valueLabel: intervalSec >= 60
-                    ? sheetContext.t('{m} 分 {s} 秒',
+                    ? sheetContext.t('interval.minSec',
                         {'m': '${intervalSec ~/ 60}', 's': '${intervalSec % 60}'})
-                    : sheetContext.t('{s} 秒', {'s': '$intervalSec'}),
+                    : sheetContext.t('common.seconds', {'s': '$intervalSec'}),
                 onDecr: intervalSec > 1
                     ? () => setSheetState(() => intervalSec--)
                     : null,
@@ -885,9 +883,9 @@ Future<void> _pickInterval(
               ),
               _intervalStepper(
                 sheetContext,
-                label: sheetContext.t('张数'),
+                label: sheetContext.t('interval.count'),
                 valueLabel: shots == 0
-                    ? sheetContext.t('∞ 无限')
+                    ? sheetContext.t('interval.unlimited')
                     : '$shots',
                 onDecr: shots > 0
                     ? () => setSheetState(() => shots--)
@@ -900,8 +898,7 @@ Future<void> _pickInterval(
               ),
               const SizedBox(height: 6),
               Text(
-                sheetContext.t('每拍等相机就绪再释放;单拍失败自动跳过,'
-                    '连续 3 拍失败自动停止'),
+                sheetContext.t('interval.hint'),
                 style: TextStyle(
                     fontSize: 11, color: LiveDesign.of(sheetContext).faint),
               ),
@@ -916,7 +913,7 @@ Future<void> _pickInterval(
                         intervalSeconds: intervalSec,
                         shotCount: shots == 0 ? null : shots);
                   },
-                  child: Text(sheetContext.t('开始')),
+                  child: Text(sheetContext.t('interval.start')),
                 ),
               ),
             ],

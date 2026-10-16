@@ -34,41 +34,41 @@ void main() {
 
   test('display:模式尼康方言表(2=P/3=A/4=S,U 段与场景段齐)',
       () {
-    expect(_param(PtpDevicePropCode.exposureProgramMode).display(1), '手动 M');
-    expect(_param(PtpDevicePropCode.exposureProgramMode).display(2), '程序 P',
+    expect(_param(PtpDevicePropCode.exposureProgramMode).display(1), 'param.modeM');
+    expect(_param(PtpDevicePropCode.exposureProgramMode).display(2), 'param.modeP',
         reason: '尼康方言 2=P(ISO 标准表 2=自动是错的)');
-    expect(_param(PtpDevicePropCode.exposureProgramMode).display(3), '光圈优先 A');
-    expect(_param(PtpDevicePropCode.exposureProgramMode).display(4), '快门优先 S');
-    expect(_param(PtpDevicePropCode.exposureProgramMode).display(0x8010), '自动');
+    expect(_param(PtpDevicePropCode.exposureProgramMode).display(3), 'param.modeA');
+    expect(_param(PtpDevicePropCode.exposureProgramMode).display(4), 'param.modeS');
+    expect(_param(PtpDevicePropCode.exposureProgramMode).display(0x8010), 'param.auto');
     expect(_param(PtpDevicePropCode.exposureProgramMode).display(0x8050), 'U1');
   });
 
   test('display:白平衡/色温/闪光尼康方言表', () {
-    expect(_param(PtpDevicePropCode.whiteBalance).display(2), '自动');
-    expect(_param(PtpDevicePropCode.whiteBalance).display(6), '白炽灯');
-    expect(_param(PtpDevicePropCode.whiteBalance).display(0x8010), '阴天');
-    expect(_param(PtpDevicePropCode.whiteBalance).display(0x8012), '色温');
+    expect(_param(PtpDevicePropCode.whiteBalance).display(2), 'param.auto');
+    expect(_param(PtpDevicePropCode.whiteBalance).display(6), 'param.incandescent');
+    expect(_param(PtpDevicePropCode.whiteBalance).display(0x8010), 'param.cloudy');
+    expect(_param(PtpDevicePropCode.whiteBalance).display(0x8012), 'param.colorTemp');
     expect(_param(PtpDevicePropCode.wbColorTemp).display(5500), '5500K');
-    expect(_param(PtpDevicePropCode.flashMode).display(2), '关闭');
-    expect(_param(PtpDevicePropCode.flashMode).display(0x8010), '补充闪光');
-    expect(_param(PtpDevicePropCode.flashMode).display(0x8012), '后帘同步');
+    expect(_param(PtpDevicePropCode.flashMode).display(2), 'common.off');
+    expect(_param(PtpDevicePropCode.flashMode).display(0x8010), 'param.fillFlash');
+    expect(_param(PtpDevicePropCode.flashMode).display(0x8012), 'param.rearCurtain');
   });
 
   test('display:释放模式全表(单张/连拍档/自拍/C 高速档)', () {
-    expect(_param(PtpDevicePropCode.stillCaptureMode).display(1), '单张');
-    expect(_param(PtpDevicePropCode.stillCaptureMode).display(2), '高速连拍');
-    expect(_param(PtpDevicePropCode.stillCaptureMode).display(0x8010), '低速连拍');
-    expect(_param(PtpDevicePropCode.stillCaptureMode).display(0x8011), '自拍');
-    expect(_param(PtpDevicePropCode.stillCaptureMode).display(0x811E), '连拍 C30');
+    expect(_param(PtpDevicePropCode.stillCaptureMode).display(1), 'param.single');
+    expect(_param(PtpDevicePropCode.stillCaptureMode).display(2), 'param.burstHigh');
+    expect(_param(PtpDevicePropCode.stillCaptureMode).display(0x8010), 'param.burstLow');
+    expect(_param(PtpDevicePropCode.stillCaptureMode).display(0x8011), 'remote.selfTimer');
+    expect(_param(PtpDevicePropCode.stillCaptureMode).display(0x811E), 'param.burstC30');
   });
 
   test('display:画质 14 值表 + RAW 压缩 + 图像区域', () {
-    expect(_param(PtpDevicePropCode.compressionSetting).display(0), 'JPEG 基本');
-    expect(_param(PtpDevicePropCode.compressionSetting).display(5), 'JPEG 精细★');
+    expect(_param(PtpDevicePropCode.compressionSetting).display(0), 'param.jpegBasic');
+    expect(_param(PtpDevicePropCode.compressionSetting).display(5), 'param.jpegFineStar');
     expect(_param(PtpDevicePropCode.compressionSetting).display(7), 'RAW');
-    expect(_param(PtpDevicePropCode.compressionSetting).display(12), 'RAW+JPEG 精细');
-    expect(_param(PtpDevicePropCode.rawCompressionType).display(0), '无损压缩');
-    expect(_param(PtpDevicePropCode.rawCompressionType).display(4), '高效率');
+    expect(_param(PtpDevicePropCode.compressionSetting).display(12), 'param.rawJpegFine');
+    expect(_param(PtpDevicePropCode.rawCompressionType).display(0), 'param.lossless');
+    expect(_param(PtpDevicePropCode.rawCompressionType).display(4), 'param.he');
     expect(_param(PtpDevicePropCode.captureAreaCrop).display(0), 'FX');
     expect(_param(PtpDevicePropCode.captureAreaCrop).display(2), 'DX');
     expect(_param(PtpDevicePropCode.captureAreaCrop).display(5), '16:9');
@@ -79,8 +79,8 @@ void main() {
     expect(p.pickValues, isNull,
         reason: '取值域走相机 FORM(真机 46 项;静态 11 项直供曾把 desc '
             '读短路砍掉值域,2026-10-07 用户反馈根因)');
-    expect(p.display(1), '标准');
-    expect(p.display(4), '单色');
+    expect(p.display(1), 'param.standard');
+    expect(p.display(4), 'param.monochrome');
     expect(p.display(103), 'Pop');
     expect(p.display(202), '自定义 2');
     expect(p.display(305), '云 5');
@@ -94,9 +94,9 @@ void main() {
     expect(_param(PtpDevicePropCode.exposureTime).display(4 << 16 | 1), '4s');
     expect(_param(PtpDevicePropCode.exposureTime).display(13 << 16 | 10),
         '13/10s');
-    expect(_param(PtpDevicePropCode.exposureTime).display(0xFFFFFFFF), 'B 门');
-    expect(_param(PtpDevicePropCode.exposureTime).display(0xFFFFFFFE), 'X 同步');
-    expect(_param(PtpDevicePropCode.exposureTime).display(0xFFFFFFFD), 'T 门');
+    expect(_param(PtpDevicePropCode.exposureTime).display(0xFFFFFFFF), 'param.bulb');
+    expect(_param(PtpDevicePropCode.exposureTime).display(0xFFFFFFFE), 'param.xSync');
+    expect(_param(PtpDevicePropCode.exposureTime).display(0xFFFFFFFD), 'param.time');
     // ISO 裸数值(2026-10-08 竖屏内联读出行起,值不再内嵌前缀)
     expect(_param(PtpDevicePropCode.exposureIndex).display(200), '200');
     expect(
@@ -156,7 +156,7 @@ void main() {
     expect(kShootingParams.any((p) => p.code == PtpDevicePropCode.focusMode),
         isFalse,
         reason: '0x500A 只读镜像移出目录');
-    expect(_param(PtpDevicePropCode.exposureMeteringMode).display(3), '矩阵',
+    expect(_param(PtpDevicePropCode.exposureMeteringMode).display(3), 'param.matrix',
         reason: '尼康方言:3=矩阵(ISO 标准表 3=点是错的)');
     expect(_param(PtpDevicePropCode.fNumber).readOnly, isFalse);
   });
@@ -165,18 +165,18 @@ void main() {
     final p = _param(PtpDevicePropCode.stillFocusMeteringMode);
     expect(p.pickValues, isNull,
         reason: 'Zf 与 OpenZCine 两套人马,直供表会覆盖真机 FORM');
-    expect(p.display(0x8010), '单点');
-    expect(p.display(0x8011), '自动');
-    expect(p.display(0x8017), '精确');
-    expect(p.display(0x8018), '宽S');
-    expect(p.display(0x8019), '宽L');
-    expect(p.display(0x801E), '宽C1');
-    expect(p.display(0x801F), '宽C2');
+    expect(p.display(0x8010), 'param.singlePoint');
+    expect(p.display(0x8011), 'param.auto');
+    expect(p.display(0x8017), 'param.pinpoint');
+    expect(p.display(0x8018), 'param.wideS');
+    expect(p.display(0x8019), 'param.wideL');
+    expect(p.display(0x801E), 'param.wideC1');
+    expect(p.display(0x801F), 'param.wideC2');
   });
 
   test('AF 区域宽C1/C2 触屏定位提示:饱和轴单轴生效,其余值无提示', () {
-    expect(afAreaAxisHint(0x801E), contains('上下'));
-    expect(afAreaAxisHint(0x801F), contains('左右'));
+    expect(afAreaAxisHint(0x801E), 'param.wideC1Hint');
+    expect(afAreaAxisHint(0x801F), 'param.wideC2Hint');
     expect(afAreaAxisHint(0x8010), isNull, reason: '单点/自动/精确/宽S/L 双轴可移');
     expect(afAreaAxisHint(null), isNull);
   });
@@ -195,7 +195,7 @@ void main() {
   test('曝光三要素标记 prominent(大芯片行),其余进横滚行', () {
     expect(kShootingParams
         .where((p) => p.prominent)
-        .map((p) => p.label), ['光圈', '快门', 'ISO']);
+        .map((p) => p.label), ['info.aperture', '快门', 'ISO']);
     expect(kShootingParams.where((p) => p.prominent), hasLength(3));
   });
 
@@ -220,22 +220,22 @@ void main() {
 
     test('官方逐字标签:视频WB 0x8015 同照片设置 / N-Log 只读 / TC HDMI 档', () {
       final wb = shootingParamByCode[PtpDevicePropCode.movieWhiteBalance]!;
-      expect(wb.display(0x8015), '同照片设置');
-      expect(wb.display(2), '自动', reason: '复用静照 WB 值空间');
+      expect(wb.display(0x8015), 'param.sameAsPhotos');
+      expect(wb.display(2), 'param.auto', reason: '复用静照 WB 值空间');
 
       final log = shootingParamByCode[PtpDevicePropCode.movieLogOutput]!;
       expect(log.readOnly, isTrue, reason: '§6.5.12.4 Get-only');
-      expect(log.display(1), '开');
+      expect(log.display(1), 'common.on');
 
       final tc = shootingParamByCode[PtpDevicePropCode.recordTimeCodes]!;
-      expect(tc.display(2), '开(HDMI 外录)');
+      expect(tc.display(2), 'param.onHdmi');
 
       final countUp = shootingParamByCode[PtpDevicePropCode.timeCodeCountUpMethod]!;
       expect(countUp.display(0), 'Rec Run');
       expect(countUp.display(1), 'Free Run');
 
       final vr = shootingParamByCode[PtpDevicePropCode.movieVibrationReduction]!;
-      expect(vr.display(100), '同照片设置');
+      expect(vr.display(100), 'param.sameAsPhotos');
 
       final tone = shootingParamByCode[PtpDevicePropCode.movieH265ToneMode]!;
       expect(tone.display(1), 'N-Log');

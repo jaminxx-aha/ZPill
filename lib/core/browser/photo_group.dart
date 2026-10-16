@@ -14,23 +14,23 @@ import 'object_entry.dart';
 /// 下载格式选择(双格式照片组与照片视频混选批次用)。
 enum PhotoDownloadFormat {
   /// 仅 JPG:组内没有 JPG → 该组跳过。
-  jpg('仅 JPG', 'JPG'),
+  jpg('fmt.jpgOnly', 'fmt.shortJpg'),
 
   /// 仅 RAW:组内没有 RAW → 该组跳过。
-  raw('仅 RAW', 'RAW'),
+  raw('fmt.rawOnly', 'fmt.shortRaw'),
 
   /// JPG + RAW:有什么下什么(缺哪个格式就只下另一个)。
-  both('JPG + RAW', 'JPG+RAW'),
+  both('fmt.jpgAndRaw', 'fmt.shortJpgRaw'),
 
   /// 仅视频:视频组全量;照片组只取视频件(实况对),无视频件跳过。
-  video('仅视频', '视频');
+  video('fmt.videoOnly', 'common.video');
 
   const PhotoDownloadFormat(this.label, this.short);
 
-  /// 选择面板选项文案。
+  /// 选择面板选项文案 = t() 键。
   final String label;
 
-  /// 提示文案简写。
+  /// 提示文案简写 = t() 键。
   final String short;
 }
 

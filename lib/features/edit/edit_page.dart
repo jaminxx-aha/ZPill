@@ -117,10 +117,10 @@ class _EditPageState extends State<EditPage> {
         }
       }
       if (!mounted) return;
-      _toast(saved ? '已保存到相册' : '未保存(已取消)');
+      _toast(saved ? 'edit.savedAlbum' : 'edit.notSaved');
     } on Exception {
       if (!mounted) return;
-      _toast('保存失败,请重试');
+      _toast('edit.saveFailed');
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -184,7 +184,7 @@ class _EditPageState extends State<EditPage> {
     if (!mounted) return;
     final text = data?.text?.trim();
     if (text == null || text.isEmpty) {
-      _toast('剪贴板没有文本');
+      _toast('edit.clipboardEmpty');
       return;
     }
     try {
@@ -195,18 +195,18 @@ class _EditPageState extends State<EditPage> {
           : CubeLut.parse(text);
       setState(() => _importedLut = lut);
       _controller.setLut(lut);
-      final title = lut.title.isEmpty ? context.t('未命名') : lut.title;
+      final title = lut.title.isEmpty ? context.t('edit.untitled') : lut.title;
       // 带参模板在调用点先 t+填充;_toast 内的二次 t 对已填充串不命中
       // 键、原样回落(双重包裹无害,i18n-7 在案)。
       _toast(context
-          .t('已导入「{title}」({size}³)', {'title': title, 'size': lut.size}));
+          .t('edit.importedTitle', {'title': title, 'size': lut.size}));
     } on FormatException catch (e) {
-      _toast(context.t('导入失败:{e}', {'e': e.message}));
+      _toast(context.t('edit.importFailed', {'e': e.message}));
     }
   }
 
-  /// await 后的消费点收口:静态键原文直传,由这里统一 t;带参模板在
-  /// 调用点已 t+填充,二次 t 不命中键原样回落(无害)。
+  /// await 后的消费点收口:静态调用点传 l10n 键,由这里统一 t;
+  /// 带参模板在调用点已 t+填充,二次 t 不命中键原样回落(无害)。
   void _toast(String message) {
     if (!mounted) return;
     ScaffoldMessenger.of(context)
@@ -228,12 +228,12 @@ class _EditPageState extends State<EditPage> {
           title: Text(widget.filename, style: const TextStyle(fontSize: 16)),
           actions: [
             IconButton(
-              tooltip: context.t('重置'),
+              tooltip: context.t('edit.reset'),
               onPressed: _controller.edited ? _reset : null,
               icon: const Icon(Icons.restart_alt),
             ),
             IconButton(
-              tooltip: context.t('保存到相册'),
+              tooltip: context.t('edit.saveToAlbum'),
               onPressed: (_controller.edited && !_saving) ? _save : null,
               icon: _saving
                   ? const SizedBox(
@@ -248,7 +248,7 @@ class _EditPageState extends State<EditPage> {
         ),
         body: !_controller.isReady
             ? Center(
-                child: Text(context.t('无法编辑此文件(仅支持 JPEG)'),
+                child: Text(context.t('edit.jpegOnly'),
                     style: const TextStyle(color: AppMedia.onMediaMuted)),
               )
             : Column(
@@ -335,11 +335,11 @@ class _EditPageState extends State<EditPage> {
                           _Tool.film => Icons.camera_roll,
                         }),
                         tooltip: switch (t) {
-                          _Tool.rotate => context.t('旋转'),
-                          _Tool.crop => context.t('裁剪'),
-                          _Tool.adjust => context.t('调节'),
+                          _Tool.rotate => context.t('edit.rotate'),
+                          _Tool.crop => context.t('edit.crop'),
+                          _Tool.adjust => context.t('edit.adjust'),
                           _Tool.lut => 'LUT',
-                          _Tool.film => context.t('胶片'),
+                          _Tool.film => context.t('film.title'),
                         },
                       ),
                     ),
@@ -386,7 +386,7 @@ class _EditPageState extends State<EditPage> {
           style: OutlinedButton.styleFrom(foregroundColor: AppMedia.onMedia),
           onPressed: onTap,
           icon: Icon(icon),
-          // label 原文即键,显示点包 t(调用点传中文原文字面量)。
+          // label 持 l10n 键(比例串等非键直通),显示点统一 t。
           label: Text(context.t(label)),
         );
 
@@ -397,11 +397,11 @@ class _EditPageState extends State<EditPage> {
         children: [
           button(
               icon: Icons.rotate_left_outlined,
-              label: '左转 90°',
+              label: 'edit.rotateLeft',
               onTap: _controller.rotateLeft),
           button(
               icon: Icons.rotate_right_outlined,
-              label: '右转 90°',
+              label: 'edit.rotateRight',
               onTap: _controller.rotateRight),
         ],
       ),
@@ -413,14 +413,14 @@ class _EditPageState extends State<EditPage> {
       child: FilledButton.icon(
         onPressed: _enterCropMode,
         icon: const Icon(Icons.crop),
-        label: Text(context.t('选择裁剪区域')),
+        label: Text(context.t('edit.selectCropArea')),
       ),
     );
   }
 
   Widget _cropPanel() {
     final aspects = <(double?, String)>[
-      (null, '自由'),
+      (null, 'edit.free'),
       (1.0, '1:1'),
       (4 / 3, '4:3'),
       (3 / 4, '3:4'),
@@ -442,7 +442,7 @@ class _EditPageState extends State<EditPage> {
                   Padding(
                     padding: const EdgeInsets.only(right: 8),
                     child: ChoiceChip(
-                      // 「自由」入目录;1:1 等纯比例串未命中原文直返。
+                      // 「自由」为键;1:1 等纯比例串非键,直通原样。
                       label: Text(context.t(label)),
                       selected: _aspect == a,
                       onSelected: (_) => _setAspect(a),
@@ -451,7 +451,7 @@ class _EditPageState extends State<EditPage> {
                 Padding(
                   padding: const EdgeInsets.only(right: 8),
                   child: ChoiceChip(
-                    label: Text(context.t('原比例')),
+                    label: Text(context.t('edit.original')),
                     selected: _aspect == -1,
                     onSelected: (_) => _setAspect(-1),
                   ),
@@ -468,12 +468,12 @@ class _EditPageState extends State<EditPage> {
                   style: TextButton.styleFrom(
                       foregroundColor: AppMedia.onMediaMuted),
                   onPressed: _exitCrop,
-                  child: Text(context.t('取消')),
+                  child: Text(context.t('common.cancel')),
                 ),
                 // 「应用」是 Apply 动词(i18n-6 预留的决定:browser 段的
                 // 「到应用/下载到应用」是名词性介词片段,不同键不撞义)。
                 FilledButton(
-                    onPressed: _applyCrop, child: Text(context.t('应用'))),
+                    onPressed: _applyCrop, child: Text(context.t('edit.apply'))),
               ],
             ),
           ),
@@ -496,7 +496,7 @@ class _EditPageState extends State<EditPage> {
           children: [
             SizedBox(
                 width: 52,
-                // label 原文即键,显示点包 t(调用点传中文原文字面量)。
+                // label 持 l10n 键,显示点统一 t。
                 child: Text(context.t(label),
                     style: const TextStyle(
                         color: AppMedia.onMediaMuted, fontSize: 13))),
@@ -535,13 +535,13 @@ class _EditPageState extends State<EditPage> {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          slider('亮度', _brightness, 0.5, 1.5, pct, (v) => _brightness = v,
+          slider('edit.brightness', _brightness, 0.5, 1.5, pct, (v) => _brightness = v,
               (_) => push()),
-          slider('对比', _contrast, 0.5, 1.5, pct, (v) => _contrast = v,
+          slider('edit.contrast', _contrast, 0.5, 1.5, pct, (v) => _contrast = v,
               (_) => push()),
-          slider('饱和', _saturation, 0, 2, pct, (v) => _saturation = v,
+          slider('edit.saturation', _saturation, 0, 2, pct, (v) => _saturation = v,
               (_) => push()),
-          slider('暖调', _warmth, -1, 1, (v) => v.toStringAsFixed(1),
+          slider('edit.warmth', _warmth, -1, 1, (v) => v.toStringAsFixed(1),
               (v) => _warmth = v, (_) => push()),
         ],
       ),
@@ -550,11 +550,11 @@ class _EditPageState extends State<EditPage> {
 
   Widget _lutPanel() {
     final luts = <(String, CubeLut?)>[
-      ('无', null),
-      for (final l in builtinLuts) (l.title, l),
+      ('common.none', null),
+      for (final l in builtinLuts) (lutTitleKey(l.title), l),
       if (_importedLut != null)
         (
-          _importedLut!.title.isEmpty ? '导入' : _importedLut!.title,
+          _importedLut!.title.isEmpty ? 'edit.imported' : _importedLut!.title,
           _importedLut
         ),
     ];
@@ -571,11 +571,9 @@ class _EditPageState extends State<EditPage> {
                   Padding(
                     padding: const EdgeInsets.only(right: 8),
                     child: ChoiceChip(
-                      // LUT 标题键存 edit/lut_presets 的 builtinLuts
-                      // (4 条已按 i18n-3 先例在 i18n-4 入目录,remote_
-                      // settings_panel 同款显示点包 t);「无/导入」与剪贴板
-                      // 导入的 .cube TITLE/.xmp 表名(通常拉丁)未命中原样
-                      // 回落。
+                      // LUT 标题经 lutTitleKey 转键(lut_presets 边车表);
+                      // 「无/导入」为键,剪贴板导入的 .cube TITLE/.xmp 表名
+                      // (通常拉丁)非键,t() 未命中原样直通。
                       label: Text(context.t(name)),
                       selected: _controller.lut == lut,
                       onSelected: (_) => _controller.setLut(lut),
@@ -589,7 +587,7 @@ class _EditPageState extends State<EditPage> {
             style: OutlinedButton.styleFrom(foregroundColor: AppMedia.onMedia),
             onPressed: _importLutFromClipboard,
             icon: const Icon(Icons.content_paste),
-            label: Text(context.t('从剪贴板导入 .cube/.xmp')),
+            label: Text(context.t('edit.importClipboard')),
           ),
         ],
       ),
@@ -620,8 +618,8 @@ class _EditPageState extends State<EditPage> {
       padding: const EdgeInsets.symmetric(vertical: 8),
       child: Column(
         children: [
-          // 分组行:键存 film_presets 的 filmPresetGroups(固定 7 组,
-          // 已按 LUT 芯片标题先例入目录)。
+          // 分组行:filmPresetGroups 值即键(固定 7 组,与预设 group
+          // 字段同键匹配)。
           chipRow([
             for (final g in filmPresetGroups)
               Padding(
@@ -638,7 +636,7 @@ class _EditPageState extends State<EditPage> {
             Padding(
               padding: const EdgeInsets.only(right: 8),
               child: ChoiceChip(
-                label: Text(context.t('无')),
+                label: Text(context.t('common.none')),
                 selected: _controller.filmPreset == null,
                 onSelected: (_) => _controller.setFilmPreset(null),
               ),

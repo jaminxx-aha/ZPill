@@ -133,3 +133,15 @@ final List<CubeLut> builtinLuts = [
   CubeLut.fromFunction('冷调', 17, _coolMatte),
   CubeLut.fromFunction('N-Log 还原', 33, _nLogToRec709),
 ];
+
+/// builtinLuts 标题的 UI 显示键边车表:title 本身是数据(进 .cube 导出
+/// 管线与 edit 页 name→lut 映射,不键化),显示点经 [lutTitleKey] 转键;
+/// 运行期导入的 .cube TITLE 原样透传,t() 两表未命中即直通。
+const Map<String, String> _lutTitleKeys = {
+  '青橙': 'lut.tealOrange',
+  '褪色胶片': 'lut.fadedFilm',
+  '冷调': 'lut.coolMatte',
+  'N-Log 还原': 'lut.nlogConvert',
+};
+
+String lutTitleKey(String title) => _lutTitleKeys[title] ?? title;

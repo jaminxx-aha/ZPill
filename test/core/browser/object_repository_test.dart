@@ -225,7 +225,7 @@ void main() {
 
     final albums = await repo.loadAlbums();
 
-    expect(albums.map((a) => a.name), ['全部照片', '100NIKON']);
+    expect(albums.map((a) => a.name), ['grid.allPhotos', '100NIKON']);
     final all = albums[0];
     expect(all.isAggregate, isTrue);
     expect(all.folderHandle, CameraAlbum.allPhotosHandle);
@@ -272,7 +272,7 @@ void main() {
     final albums = await repo.loadAlbums();
 
     // 汇总:JPG + MOV(时间倒序,MOV 9-28 在前);MISC 的 .DSC 不是相册内容。
-    expect(albums.map((a) => a.name), ['全部照片', '100NIKON']);
+    expect(albums.map((a) => a.name), ['grid.allPhotos', '100NIKON']);
     expect(albums[0].items.map((e) => e.name),
         ['DSC_0004.MOV', 'DSC_0003.JPG']);
     // MOV 扩展名兜底为 video。
@@ -298,12 +298,12 @@ void main() {
     ]);
     // 块 1:只有文件夹对象的照片先到 —— 文件夹相册暂不亮相(不闪
     // 「文件夹 0x11」占位名),但汇总相册已可用。
-    expect(updates[0].albums.map((a) => a.name), ['全部照片']);
+    expect(updates[0].albums.map((a) => a.name), ['grid.allPhotos']);
     expect(updates[0].albums.single.items, hasLength(2));
     // 块 2:文件夹对象 0x11 到达,具名相册亮相。
-    expect(updates[1].albums.map((a) => a.name), ['全部照片', '100NIKON']);
+    expect(updates[1].albums.map((a) => a.name), ['grid.allPhotos', '100NIKON']);
     // 完成事件与 loadAlbums 返回值一致。
-    expect(updates.last.albums.map((a) => a.name), ['全部照片', '100NIKON']);
+    expect(updates.last.albums.map((a) => a.name), ['grid.allPhotos', '100NIKON']);
   });
 
   test('并发 loadAlbums 共享同一次枚举;两个订阅者都收到全部块', () async {
@@ -349,7 +349,7 @@ void main() {
     expect(updates, hasLength(1));
     expect(updates.single.complete, isTrue);
     expect(updates.single.albums[0].items.map((g) => g.name), ['DSC_0002.JPG']);
-    expect(updates.single.albums.map((a) => a.name), ['全部照片', '100NIKON']);
+    expect(updates.single.albums.map((a) => a.name), ['grid.allPhotos', '100NIKON']);
     await sub.cancel();
   });
 
@@ -362,7 +362,7 @@ void main() {
     repo.removeHandles([0x12, 0x13]); // 两张照片都删
 
     final albums = await repo.loadAlbums(); // 缓存已建,直接快照
-    expect(albums.map((a) => a.name), ['全部照片']); // 100NIKON 无内容消失
+    expect(albums.map((a) => a.name), ['grid.allPhotos']); // 100NIKON 无内容消失
     expect(albums.single.items, isEmpty);
   });
 
@@ -392,7 +392,7 @@ void main() {
 
     _replyTree(fake); // 同会话已降级:重枚举不再探 0x9805,直接逐对象
     final albums = await repo.loadAlbums();
-    expect(albums.first.name, '全部照片');
+    expect(albums.first.name, 'grid.allPhotos');
     // 轮 1:handles + 0x9805(拒)+ 4×info;轮 2:handles + 4×info。
     expect(fake.requests, hasLength(11));
   });
@@ -464,7 +464,7 @@ void main() {
     final albums = await repo.loadAlbums();
 
     expect(albums.first.items, hasLength(2));
-    expect(albums.map((a) => a.name), ['全部照片', '100NIKON']);
+    expect(albums.map((a) => a.name), ['grid.allPhotos', '100NIKON']);
     // 请求序:0x13/0x12 成功入缓存(续传不重问);0x11 失败后重问,0x10 补拉。
     expect(
       fake.requests
@@ -492,7 +492,7 @@ void main() {
 
     expect(repo.isLoaded, isTrue);
     expect(albums[0].items.map((e) => e.name), ['DSC_0002.JPG']); // NEF 被跳过
-    expect(albums.map((a) => a.name), ['全部照片', '100NIKON']);
+    expect(albums.map((a) => a.name), ['grid.allPhotos', '100NIKON']);
   });
 
   test('相机连续拒答 3 个对象:视为会话级问题,上抛终止', () async {
@@ -599,7 +599,7 @@ void main() {
     expect(all.items.single.typeLabel, 'jpg+raw');
     // 两个文件夹相册各计入该组一次(组横跨两夹);两夹最新时间同
     //(同一组),排序回退按名:SLOT1 在前。
-    expect(albums.map((a) => a.name), ['全部照片', 'SLOT1', 'SLOT2']);
+    expect(albums.map((a) => a.name), ['grid.allPhotos', 'SLOT1', 'SLOT2']);
     expect(albums[1].items.single.typeLabel, 'jpg+raw');
     expect(albums[2].items.single.typeLabel, 'jpg+raw');
   });
@@ -735,7 +735,7 @@ void main() {
     final albums = await repo.loadAlbums();
 
     // 一个 100NIKON 相册(同名瓦片不再重复),组只出现一次。
-    expect(albums.map((a) => a.name), ['全部照片', '100NIKON']);
+    expect(albums.map((a) => a.name), ['grid.allPhotos', '100NIKON']);
     expect(albums[1].items, hasLength(1));
     expect(albums[1].items.single.typeLabel, 'jpg+raw');
     expect(albums[1].items.single.folderHandles, {0x10, 0x20});
@@ -768,10 +768,10 @@ void main() {
 
     // 块 1:槽 1 夹对象未到 —— 但组横跨两夹,槽 2 的 100NIKON 已含全组,
     //亮相的始终只有一个 100NIKON。
-    expect(updates[0].albums.map((a) => a.name), ['全部照片', '100NIKON']);
+    expect(updates[0].albums.map((a) => a.name), ['grid.allPhotos', '100NIKON']);
     expect(updates[0].albums[1].items.single.typeLabel, 'jpg+raw');
     // 块 2(槽 1 夹到):同名并合,句柄取最小 0x10;仍只有一个。
-    expect(updates[1].albums.map((a) => a.name), ['全部照片', '100NIKON']);
+    expect(updates[1].albums.map((a) => a.name), ['grid.allPhotos', '100NIKON']);
     expect(updates[1].albums[1].folderHandle, 0x10);
     expect(updates[1].albums[1].items.single.typeLabel, 'jpg+raw');
   });
@@ -798,7 +798,7 @@ void main() {
       [0xFFFFFFFF, 0x00000000, 0xFFFFFFFF, 0x00000000, 0xFFFFFFFF],
     );
     // 相册与逐对象世界等价(同值数据集):NEF 9-27 在前,字段全落。
-    expect(albums.map((a) => a.name), ['全部照片', '100NIKON']);
+    expect(albums.map((a) => a.name), ['grid.allPhotos', '100NIKON']);
     expect(albums[0].items.map((g) => g.name), ['DSC_0001.NEF', 'DSC_0002.JPG']);
     final nef = albums[0].items.first.primary;
     expect(nef.kind, ObjectKind.image); // 0x3000 → .nef 兜底
@@ -833,8 +833,8 @@ void main() {
     expect(updates.map((u) => (u.loaded, u.total, u.complete)),
         [(4, 4, false), (4, 4, true)]);
     // 夹对象随批量同到:首拍就是具名相册,无占位闪变。
-    expect(updates[0].albums.map((a) => a.name), ['全部照片', '100NIKON']);
-    expect(updates.last.albums.map((a) => a.name), ['全部照片', '100NIKON']);
+    expect(updates[0].albums.map((a) => a.name), ['grid.allPhotos', '100NIKON']);
+    expect(updates.last.albums.map((a) => a.name), ['grid.allPhotos', '100NIKON']);
   });
 
   test('批量数据集不可信:未知类型整体弃 → 逐对象回退,同会话不再探', () async {
@@ -850,7 +850,7 @@ void main() {
     final albums = await repo.loadAlbums();
 
     // 行为不回归:相册与逐对象世界一致;0x9805 只发过 1 次(降级秒拒)。
-    expect(albums.map((a) => a.name), ['全部照片', '100NIKON']);
+    expect(albums.map((a) => a.name), ['grid.allPhotos', '100NIKON']);
     expect(albums[0].items.map((g) => g.name), ['DSC_0001.NEF', 'DSC_0002.JPG']);
     expect(
       fake.requests

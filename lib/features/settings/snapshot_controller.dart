@@ -15,9 +15,10 @@ import '../../data/config_snapshot_store.dart';
 import '../../design/app_colors.dart';
 import '../../l10n/l10n.dart';
 
-/// 可本地化消息:控制器无 BuildContext,存「中文模板(= t() 的键)+
-/// {名} 参数」,由消费端 buildSnapshotSection 里 context.t(zh, args) 落地。
-typedef L10nMessage = ({String zh, Map<String, Object>? args});
+/// 可本地化消息:控制器无 BuildContext,存「l10n 键 + {名} 参数」,
+/// 由消费端 buildSnapshotSection 里 context.t(key, args) 落地;
+/// 动态串(如 $report)非键,t() 直通原文回落。
+typedef L10nMessage = ({String key, Map<String, Object>? args});
 
 final class SnapshotController extends ChangeNotifier {
   SnapshotController({
@@ -57,7 +58,7 @@ final class SnapshotController extends ChangeNotifier {
   Future<void> capture(String name) async {
     if (busy) return;
     if (!linkUp) {
-      error = (zh: '未连接相机,无法拍配置', args: null);
+      error = (key: 'snapshot.notConnectedCapture', args: null);
       notifyListeners();
       return;
     }
@@ -69,15 +70,18 @@ final class SnapshotController extends ChangeNotifier {
       final snapshot = await CameraConfigSnapshotter.capture(session);
       await store.save(name, snapshot);
       snapshots = await store.loadAll();
-      message = (zh: '已保存「{name}」({n} 项属性)', args: {
-        'name': name,
-        'n': snapshot.props.length,
-      });
+      message = (
+        key: 'snapshot.savedNamed',
+        args: {
+          'name': name,
+          'n': snapshot.props.length,
+        }
+      );
     } on Exception catch (e) {
-      error = (zh: '快照失败:{e}', args: {'e': e});
+      error = (key: 'snapshot.captureFailed', args: {'e': e});
     } on Object {
       // 存储/通道异常:尽力报错,不留半开状态
-      error = (zh: '快照保存失败', args: null);
+      error = (key: 'snapshot.saveFailed', args: null);
     } finally {
       busy = false;
       notifyListeners();
@@ -90,12 +94,12 @@ final class SnapshotController extends ChangeNotifier {
     final snapshot = snapshots[name];
     if (snapshot == null) return;
     if (!linkUp) {
-      error = (zh: '未连接相机,无法恢复', args: null);
+      error = (key: 'snapshot.notConnectedRestore', args: null);
       notifyListeners();
       return;
     }
     if (!PtpSession.kSetPropEnabled) {
-      error = (zh: '恢复已被总闸关断(紧急关断)', args: null);
+      error = (key: 'snapshot.restoreKilled', args: null);
       notifyListeners();
       return;
     }
@@ -106,9 +110,9 @@ final class SnapshotController extends ChangeNotifier {
     try {
       final report = await CameraConfigSnapshotter.restore(session, snapshot);
       // report 来自 core/remote(本波未抽取,中文如实回落,后续波再收)
-      message = (zh: '$report', args: null);
+      message = (key: '$report', args: null);
     } on Exception catch (e) {
-      error = (zh: '恢复失败:{e}', args: {'e': e});
+      error = (key: 'snapshot.restoreFailed', args: {'e': e});
     } finally {
       busy = false;
       notifyListeners();
@@ -137,33 +141,34 @@ Widget buildSnapshotSection(BuildContext context) {
       children: [
         const Divider(),
         ListTile(
-          title: Text(context.t('拍摄配置快照')),
+          title: Text(context.t('snapshot.title')),
           subtitle: Text(controller.linkUp
-              ? context.t('把当前机身设置存成命名预设,或把预设恢复回相机')
-              : context.t('连接相机后可拍下当前配置')),
+              ? context.t('snapshot.subtitle')
+              : context.t('snapshot.emptyHint')),
           trailing: FilledButton.tonal(
-            onPressed:
-                controller.busy || !controller.linkUp ? null : () => _promptCapture(context, controller),
+            onPressed: controller.busy || !controller.linkUp
+                ? null
+                : () => _promptCapture(context, controller),
             child: controller.busy
                 ? const SizedBox(
                     width: 16,
                     height: 16,
                     child: CircularProgressIndicator(strokeWidth: 2))
-                : Text(context.t('拍配置')),
+                : Text(context.t('snapshot.capture')),
           ),
         ),
         if (controller.error != null)
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
             child: Text(
-                context.t(controller.error!.zh, controller.error!.args),
+                context.t(controller.error!.key, controller.error!.args),
                 style: TextStyle(color: Theme.of(context).colorScheme.error)),
           ),
         if (controller.message != null)
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
             child: Text(
-                context.t(controller.message!.zh, controller.message!.args),
+                context.t(controller.message!.key, controller.message!.args),
                 style: TextStyle(color: AppColors.success(context))),
           ),
         for (final e in controller.snapshots.entries)
@@ -171,7 +176,7 @@ Widget buildSnapshotSection(BuildContext context) {
             dense: true,
             leading: const Icon(Icons.tune),
             title: Text(e.key),
-            subtitle: Text(context.t('{model} · {n} 项 · {date}', {
+            subtitle: Text(context.t('snapshot.metaLine', {
               'model': e.value.model,
               'n': e.value.props.length,
               'date': e.value.capturedAt.toLocal().toString().split(' ').first,
@@ -180,14 +185,14 @@ Widget buildSnapshotSection(BuildContext context) {
               mainAxisSize: MainAxisSize.min,
               children: [
                 IconButton(
-                  tooltip: context.t('恢复到相机'),
+                  tooltip: context.t('snapshot.restore'),
                   icon: const Icon(Icons.settings_backup_restore),
                   onPressed: controller.busy || !controller.linkUp
                       ? null
                       : () => controller.restore(e.key),
                 ),
                 IconButton(
-                  tooltip: context.t('删除'),
+                  tooltip: context.t('common.delete'),
                   icon: const Icon(Icons.delete_outline),
                   onPressed: () => controller.delete(e.key),
                 ),
@@ -199,26 +204,26 @@ Widget buildSnapshotSection(BuildContext context) {
   );
 }
 
-Future<void> _promptCapture(BuildContext context, SnapshotController controller) async {
+Future<void> _promptCapture(
+    BuildContext context, SnapshotController controller) async {
   final field = TextEditingController();
   final name = await showDialog<String>(
     context: context,
     builder: (dialogContext) => AlertDialog(
-      title: Text(context.t('命名这份配置')),
+      title: Text(context.t('snapshot.nameTitle')),
       content: TextField(
         controller: field,
         autofocus: true,
-        decoration: InputDecoration(
-            hintText: context.t('如:婚礼室内 · A 档')),
+        decoration: InputDecoration(hintText: context.t('snapshot.nameHint')),
       ),
       actions: [
         TextButton(
           onPressed: () => Navigator.of(dialogContext).pop(),
-          child: Text(context.t('取消')),
+          child: Text(context.t('common.cancel')),
         ),
         FilledButton(
           onPressed: () => Navigator.of(dialogContext).pop(field.text.trim()),
-          child: Text(context.t('保存')),
+          child: Text(context.t('common.save')),
         ),
       ],
     ),

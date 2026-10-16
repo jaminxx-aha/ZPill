@@ -274,7 +274,7 @@ final class CameraConnectionImpl implements CameraConnection {
       final cameras = await _usb.listCameras();
       if (cameras.isEmpty) {
         if (silent) throw const CameraNotPresentException();
-        await _failConnect('未发现尼康相机:请插好 USB 数据线并解锁相机后重试');
+        await _failConnect('conn.errNoUsbCamera');
         return;
       }
       await _usb.open(cameras.first);
@@ -531,8 +531,7 @@ final class CameraConnectionImpl implements CameraConnection {
         throw ConnectRefusedException(
             '相机处于受限连接状态(数据操作被禁用)');
       }
-      await _failConnect('相机处于受限连接状态(数据操作被禁用):'
-          '请关闭相机电源,重新开机后再连接');
+      await _failConnect('conn.errRestricted');
       return;
     }
     await _session.open();
@@ -703,8 +702,7 @@ final class CameraConnectionImpl implements CameraConnection {
     if (profile == null || _reconnectPolicy.stormPaused) {
       // 无档案(本次运行从未成功连上)或风暴保护触发:不自动重连。
       _error = _reconnectPolicy.stormPaused
-          ? '连接在短时间内反复中断,自动重连已暂停:'
-              '请检查相机状态(电量/过热)与 Wi-Fi 链路,稍后手动重连'
+          ? 'conn.errReconnectPaused'
           : reason;
       _transition(CameraLinkState.failed);
       // 链路已毒化,teardown 各步快速失败,由其内部兜底吞掉。
@@ -786,11 +784,10 @@ final class CameraConnectionImpl implements CameraConnection {
   String _recoveryStatusMessage(ReconnectFailureKind kind, Object e) {
     if (kind == ReconnectFailureKind.busy &&
         _reconnectPolicy.busyStreak >= 2) {
-      return '相机被占用(可能被 SnapBridge/尼享连接),'
-          '每 5 秒慢速重试,可点「取消」';
+      return 'conn.errBusy';
     }
     if (kind == ReconnectFailureKind.cameraAbsent) {
-      return '正在等待相机重新接入 USB(重新插好数据线后自动续连)';
+      return 'conn.waitingUsb';
     }
     return '正在自动重连($e)';
   }

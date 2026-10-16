@@ -168,7 +168,7 @@ class _SettingsPageState extends State<SettingsPage> {
   Widget build(BuildContext context) {
     final controller = AppServices.instance.settingsController;
     return Scaffold(
-      appBar: AppBar(title: Text(context.t('设置'))),
+      appBar: AppBar(title: Text(context.t('common.settings'))),
       body: ListenableBuilder(
         listenable: controller,
         builder: (context, _) => GestureDetector(
@@ -178,8 +178,8 @@ class _SettingsPageState extends State<SettingsPage> {
             keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
             children: [
               ListTile(
-                title: Text(context.t('深色模式')),
-                subtitle: Text(context.t('跟随系统,或锁定浅色/深色')),
+                title: Text(context.t('settings.darkMode')),
+                subtitle: Text(context.t('settings.darkModeSubtitle')),
               ),
               // 主题三段(跟随系统/浅色/深色)刻意不包 t():i18n-1 的
               // settings_page_test 在 en scope 下断言全树恰一处
@@ -203,8 +203,8 @@ class _SettingsPageState extends State<SettingsPage> {
                 ),
               ),
               ListTile(
-                title: Text(context.t('语言')),
-                subtitle: Text(context.t('界面文案语言;默认中文,可跟随系统')),
+                title: Text(context.t('settings.language')),
+                subtitle: Text(context.t('settings.languageSubtitle')),
               ),
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
@@ -223,15 +223,15 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
               const Divider(),
               SwitchListTile(
-                title: Text(context.t('自动传输(速传)')),
-                subtitle: Text(context.t('连接期间相机新拍的照片自动下载并导入相册')),
+                title: Text(context.t('settings.autoTransfer')),
+                subtitle: Text(context.t('settings.autoTransferSubtitle')),
                 value: controller.settings.autoTransfer,
                 onChanged: controller.setAutoTransfer,
               ),
               ListTile(
-                title: Text(context.t('速传格式')),
+                title: Text(context.t('settings.quickFormat')),
                 subtitle: Text(context.t(
-                    '双格式(RAW+JPG)照片按此选择下载哪个;「仅视频」只速传视频')),
+                    'settings.quickFormatSubtitle')),
               ),
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
@@ -250,9 +250,9 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
               const Divider(),
               ListTile(
-                title: Text(context.t('元数据注入(XMP)')),
+                title: Text(context.t('settings.xmpInjection')),
                 subtitle: Text(
-                    context.t('下载 JPG 时写入版权/作者/评分/位置(仅影响本机副本)')),
+                    context.t('settings.xmpSubtitle')),
               ),
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
@@ -260,7 +260,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   controller: _creatorCtrl,
                   focusNode: _creatorFocus,
                   decoration: InputDecoration(
-                    labelText: context.t('作者(dc:creator)'),
+                    labelText: context.t('settings.xmpAuthor'),
                     border: const OutlineInputBorder(),
                     isDense: true,
                   ),
@@ -273,7 +273,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   controller: _rightsCtrl,
                   focusNode: _rightsFocus,
                   decoration: InputDecoration(
-                    labelText: context.t('版权(dc:rights)'),
+                    labelText: context.t('settings.xmpCopyright'),
                     border: const OutlineInputBorder(),
                     isDense: true,
                   ),
@@ -281,21 +281,21 @@ class _SettingsPageState extends State<SettingsPage> {
                 ),
               ),
               SwitchListTile(
-                title: Text(context.t('写入评分')),
-                subtitle: Text(context.t('已打星的照片把星级写入 xmp:Rating')),
+                title: Text(context.t('settings.writeRating')),
+                subtitle: Text(context.t('settings.writeRatingSubtitle')),
                 value: controller.settings.xmpInjectRating,
                 onChanged: controller.setXmpInjectRating,
               ),
               SwitchListTile(
-                title: Text(context.t('写入位置(GPS)')),
-                subtitle: Text(context.t('下载时取当前位置写入 EXIF GPS(需定位权限)')),
+                title: Text(context.t('settings.writeGps')),
+                subtitle: Text(context.t('settings.writeGpsSubtitle')),
                 value: controller.settings.xmpInjectGps,
                 onChanged: controller.setXmpInjectGps,
               ),
               const Divider(),
               ListTile(
-                title: Text(context.t('水印')),
-                subtitle: Text(context.t('下载 JPG 时合成:角标或摄影卡片(EXIF 卡)')),
+                title: Text(context.t('settings.watermark')),
+                subtitle: Text(context.t('settings.watermarkSubtitle')),
               ),
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
@@ -303,13 +303,13 @@ class _SettingsPageState extends State<SettingsPage> {
                   segments: [
                     ButtonSegment(
                         value: WatermarkStyle.off,
-                        label: Text(context.t('关闭'))),
+                        label: Text(context.t('common.off'))),
                     ButtonSegment(
                         value: WatermarkStyle.corner,
-                        label: Text(context.t('角标'))),
+                        label: Text(context.t('settings.badge'))),
                     ButtonSegment(
                         value: WatermarkStyle.card,
-                        label: Text(context.t('摄影卡'))),
+                        label: Text(context.t('settings.photoCard'))),
                   ],
                   selected: {controller.settings.watermarkStyle},
                   onSelectionChanged: (s) =>
@@ -323,7 +323,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     controller: _watermarkCtrl,
                     focusNode: _watermarkFocus,
                     decoration: InputDecoration(
-                      labelText: context.t('水印文本(空 = 相机型号)'),
+                      labelText: context.t('settings.watermarkText'),
                       border: const OutlineInputBorder(),
                       isDense: true,
                     ),
@@ -332,14 +332,14 @@ class _SettingsPageState extends State<SettingsPage> {
                 ),
               const Divider(),
               ListTile(
-                title: Text(context.t('监看')),
-                subtitle: Text(context.t('取景画面显示层处理:上采样 / 降噪 / 旋转 / 变宽')),
+                title: Text(context.t('common.monitoring')),
+                subtitle: Text(context.t('settings.monitoringSubtitle')),
               ),
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
                 child: Align(
                   alignment: Alignment.centerLeft,
-                  child: Text(context.t('画面上采样'),
+                  child: Text(context.t('settings.upscaling'),
                       style: const TextStyle(fontSize: 13)),
                 ),
               ),
@@ -348,12 +348,12 @@ class _SettingsPageState extends State<SettingsPage> {
                 child: SegmentedButton<FeedUpscaler>(
                   segments: [
                     ButtonSegment(
-                        value: FeedUpscaler.off, label: Text(context.t('关'))),
+                        value: FeedUpscaler.off, label: Text(context.t('common.offShort'))),
                     ButtonSegment(
-                        value: FeedUpscaler.fast, label: Text(context.t('快速'))),
+                        value: FeedUpscaler.fast, label: Text(context.t('common.fast'))),
                     ButtonSegment(
                         value: FeedUpscaler.quality,
-                        label: Text(context.t('高质量'))),
+                        label: Text(context.t('common.highQuality'))),
                   ],
                   selected: {controller.settings.feedUpscaler},
                   onSelectionChanged: (s) =>
@@ -361,21 +361,21 @@ class _SettingsPageState extends State<SettingsPage> {
                 ),
               ),
               SwitchListTile(
-                title: Text(context.t('时域降噪')),
+                title: Text(context.t('settings.temporalDenoise')),
                 subtitle: Text(
-                    context.t('前后帧运动自适应混合(仅「高质量」上采样生效)')),
+                    context.t('settings.temporalDenoiseSubtitle')),
                 value: controller.settings.temporalDenoise,
                 onChanged: controller.setTemporalDenoise,
               ),
               SwitchListTile(
-                title: Text(context.t('画面自动旋转')),
-                subtitle: Text(context.t('相机竖持/倒置时画面转正显示(默认开)')),
+                title: Text(context.t('settings.autoRotate')),
+                subtitle: Text(context.t('settings.autoRotateSubtitle')),
                 value: controller.settings.autoRotateFeed,
                 onChanged: controller.setAutoRotateFeed,
               ),
               ListTile(
-                title: Text(context.t('变宽还原(anamorphic)')),
-                subtitle: Text(context.t('变形宽银幕镜头的水平挤压按倍率还原显示;当前 {v}×',
+                title: Text(context.t('settings.desqueeze')),
+                subtitle: Text(context.t('settings.desqueezeSubtitle',
                     {'v': controller.settings.deSqueeze.toStringAsFixed(2)})),
               ),
               Padding(
@@ -386,7 +386,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     for (final preset in kDeSqueezePresets)
                       ChoiceChip(
                         label: preset == 1.0
-                            ? Text(context.t('关'))
+                            ? Text(context.t('common.offShort'))
                             : Text('$preset×'),
                         selected:
                             controller.settings.deSqueeze == preset,
@@ -410,14 +410,14 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
               const Divider(),
               ListTile(
-                title: Text(context.t('传输质量')),
-                subtitle: Text(context.t('原图直传(压缩传输待后续版本)')),
+                title: Text(context.t('settings.transferQuality')),
+                subtitle: Text(context.t('settings.transferQualitySubtitle')),
                 enabled: false,
               ),
               ListTile(
-                title: Text(context.t('BLE 配对 / GPS 注入')),
+                title: Text(context.t('settings.bleGps')),
                 subtitle: Text(
-                    context.t('相机智能设备模式配对;拍进卡的照片原生带 EXIF 坐标')),
+                    context.t('settings.bleGpsSubtitle')),
                 onTap: () => Navigator.of(context).push(
                   MaterialPageRoute<void>(
                       builder: (_) => const BlePairPage()),

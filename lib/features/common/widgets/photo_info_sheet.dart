@@ -64,18 +64,18 @@ Future<void> showPhotoInfoSheet(
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
             child: Text(
-              context.t('照片信息'),
+              context.t('info.title'),
               style: TextStyle(
                 fontSize: 13,
                 color: Theme.of(context).colorScheme.onSurfaceVariant,
               ),
             ),
           ),
-          _row(context.t('文件'), filename),
-          if (sizeBytes != null) _row(context.t('大小'), formatBytes(sizeBytes)),
-          if (burstLabel != null) _row(context.t('连拍'), burstLabel),
+          _row(context.t('info.file'), filename),
+          if (sizeBytes != null) _row(context.t('info.size'), formatBytes(sizeBytes)),
+          if (burstLabel != null) _row(context.t('info.burst'), burstLabel),
           if (exifFuture == null)
-            _row(context.t('时间'), fallbackTime ?? '—')
+            _row(context.t('info.time'), fallbackTime ?? '—')
           else
             FutureBuilder<ExifCardData?>(
               future: exifFuture,
@@ -98,13 +98,14 @@ Future<void> showPhotoInfoSheet(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     if (time != null)
-                      _row(context.t(card?.takenAt != null ? '拍摄时间' : '时间'),
+                      _row(context.t(
+                          card?.takenAt != null ? 'info.captured' : 'info.time'),
                           time),
                     if (card?.titleLine.isNotEmpty == true)
-                      _row(context.t('机身'), card!.titleLine),
-                    if (card?.lens != null) _row(context.t('镜头'), card!.lens!),
+                      _row(context.t('info.body'), card!.titleLine),
+                    if (card?.lens != null) _row(context.t('info.lens'), card!.lens!),
                     if (card?.paramLine.isNotEmpty == true)
-                      _row(context.t('参数'), card!.paramLine),
+                      _row(context.t('info.exposure'), card!.paramLine),
                   ],
                 );
               },

@@ -249,7 +249,7 @@ final class AppServices {
     final lvEngine = LiveViewEngine(
       session: session,
       onEscalateToLinkRecovery: () =>
-          connection.requestRecovery('取景流多次重启未恢复'),
+          connection.requestRecovery('conn.errStreamRestart'),
     );
     remoteController = RemoteController(
       session: session,

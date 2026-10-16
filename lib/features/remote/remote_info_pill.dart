@@ -92,8 +92,8 @@ class RemoteInfoPill extends StatelessWidget {
               ? Flexible(
                   child: Text(
                     linked
-                        ? (name ?? context.t('已连接'))
-                        : context.t('未连接相机'),
+                        ? (name ?? context.t('conn.connected'))
+                        : context.t('remote.notConnected'),
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(fontSize: 12, color: live.text),
                   ),
@@ -101,15 +101,15 @@ class RemoteInfoPill extends StatelessWidget {
               : Expanded(
                   child: Text(
                     linked
-                        ? (name ?? context.t('已连接'))
-                        : context.t('未连接相机'),
+                        ? (name ?? context.t('conn.connected'))
+                        : context.t('remote.notConnected'),
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(fontSize: 12, color: live.text),
                   ),
                 ),
           if (linked && controller.shotsRemaining != null) ...[
             const SizedBox(width: 10),
-            Text(context.t('{n} 张', {'n': controller.shotsRemaining!}),
+            Text(context.t('remote.shotCount', {'n': controller.shotsRemaining!}),
                 style: TextStyle(
                     fontSize: 12,
                     color: live.muted,
@@ -132,7 +132,7 @@ class RemoteInfoPill extends StatelessWidget {
           if (controller.takeoverActive) ...[
             Icon(Icons.lock, size: 13, color: live.accent),
             const SizedBox(width: 4),
-            Text(context.t('APP 接管中'),
+            Text(context.t('takeover.active'),
                 style: TextStyle(fontSize: 12, color: live.accent)),
             const SizedBox(width: 6),
           ],
@@ -165,7 +165,7 @@ class RemoteInfoPill extends StatelessWidget {
   /// 钮由页面在隐藏后的右上角同位摆出(ChromeIconButton)。
   Widget _hideButton(BuildContext context, LivePalette live) {
     return Tooltip(
-      message: context.t('纯净监看(隐藏全部控制,只留画面)'),
+      message: context.t('remote.cleanMonitoring'),
       child: InkWell(
         onTap: onHideChrome,
         customBorder:

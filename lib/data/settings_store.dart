@@ -26,12 +26,12 @@ enum AppThemeMode { system, light, dark }
 enum AppLanguage {
   system, zh, en;
 
-  /// 设置页选择器文案。「中文」是语言专名,英文环境也不译(enCatalog
-  /// 同款映射)。
+  /// 设置页选择器文案 = t() 键(l10n 抽象键制)。「中文」是语言专名,
+  /// 英文环境也不译(zhCatalog/enCatalog 同款映射)。
   String get label => switch (this) {
-        system => '跟随系统',
-        zh => '中文',
-        en => 'English',
+        system => 'common.followSystem',
+        zh => 'lang.zh',
+        en => 'lang.en',
       };
 }
 

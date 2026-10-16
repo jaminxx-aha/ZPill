@@ -1071,16 +1071,18 @@ final class _LevelPainter extends CustomPainter {
 /// 过热警告等级文案(纯函数,测试直取;官方 §9.7.1 四级,与机身自家
 /// 屏的温度提示同语义):[countdownSeconds] 只在「倒计时显示」态(4)
 /// 传入,拼进尾句(官方口径过热后 30s 起 —— 倒计时到零机身自动停录)。
+/// 返回 = t() 键(带倒计时的拼接串仅在测试直取;显示点取静态键后
+/// 自行拼 m:ss,见 OverheatBadge)。
 String overheatBadgeText(int level, {int? countdownSeconds}) {
   final tail = countdownSeconds != null
       ? ' ${overheatCountdownText(countdownSeconds)}'
       : '';
   return switch (level) {
-    1 => '机内温度升高$tail',
-    2 => '机内温度较高$tail',
-    3 => '机内高温,录制即将停止$tail',
-    4 => '即将自动停止录制$tail',
-    _ => '机内温度升高$tail',
+    1 => 'live.tempRising$tail',
+    2 => 'live.tempHigh$tail',
+    3 => 'live.tempCritical$tail',
+    4 => 'live.autoStop$tail',
+    _ => 'live.tempRising$tail',
   };
 }
 
@@ -1119,9 +1121,8 @@ class OverheatBadge extends StatelessWidget {
         children: [
           Icon(Icons.device_thermostat, size: 13, color: color),
           const SizedBox(width: 4),
-          // overheatBadgeText 产出原文即 t() 键(纯函数无 BuildContext),
-          // 显示点包 t();倒计时尾段是 m:ss 数字串,拼接在译文之后
-          //(与 overheatBadgeText 的拼接语义一致)。
+          // overheatBadgeText 产出 = t() 键(纯函数无 BuildContext),
+          // 显示点包 t();倒计时尾段是 m:ss 数字串,拼接在译文之后。
           Text(
             countdownSeconds == null
                 ? context.t(overheatBadgeText(level))

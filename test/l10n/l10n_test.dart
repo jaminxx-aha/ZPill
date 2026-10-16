@@ -3,72 +3,80 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:nikon_pill/l10n/l10n.dart';
 
-/// t() 基建(i18n 第一期):中文原文即键;裸树兜底;enCatalog 命中/
-/// 回落;{名} 占位替换;scope code 变化重建。全部用裸 Directionality
-/// 树 —— 刻意不带 MaterialApp/Localizations,证明存量测试树零依赖。
+/// t() 抽象键制(i18n 二期):t('ns.key') 查词表;裸树落 zh 词表;
+/// en 未命中先落 zh 再直通键;运行期动态串(非键)原样透出;
+/// {名} 占位替换;scope code 变化重建。全部用裸 Directionality 树
+/// —— 刻意不带 MaterialApp/Localizations,证明存量测试树零依赖。
 void main() {
   // 捕获式探针:build 里把 t() 结果写进 late 变量,断言不经 Text 渲染。
   late String a, b, c;
 
-  testWidgets('裸树(无 scope):原文直返,参数照替换', (tester) async {
+  testWidgets('裸树(无 scope):键落 zh 词表,动态串直通', (tester) async {
     await tester.pumpWidget(Directionality(
       textDirection: TextDirection.ltr,
       child: Builder(builder: (context) {
-        a = context.t('快门');
-        b = context.t('已选 {n} 项', {'n': 3});
+        a = context.t('common.settings');
+        b = context.t('snapshot.metaLine',
+            {'model': 'Zf', 'n': 3, 'date': '2026-10-16'});
+        c = context.t('相机未接入'); // 运行期动态串,非键
         return const SizedBox();
       }),
     ));
-    expect(a, '快门', reason: '裸测试树(未装 scope)必须原文直返不炸');
-    expect(b, '已选 3 项');
+    expect(a, '设置', reason: '裸测试树(未装 scope)落 zh 词表不炸');
+    expect(b, 'Zf · 3 项 · 2026-10-16');
+    expect(c, '相机未接入', reason: '非键原样透出(动态串口径)');
   });
 
-  testWidgets('zh scope:原文直返(键即文案)', (tester) async {
+  testWidgets('zh scope:键落 zh 词表', (tester) async {
     await tester.pumpWidget(L10nScope(
       code: 'zh',
       child: Directionality(
         textDirection: TextDirection.ltr,
         child: Builder(builder: (context) {
-          a = context.t('快门');
-          b = context.t('已选 {n} 项', {'n': 3});
+          a = context.t('common.followSystem');
+          b = context.t('快门'); // 非键动态串
           return const SizedBox();
         }),
       ),
     ));
-    expect(a, '快门');
-    expect(b, '已选 3 项');
+    expect(a, '跟随系统');
+    expect(b, '快门');
   });
 
-  testWidgets('en scope:enCatalog 命中给译文;未命中回落原文', (tester) async {
+  testWidgets('en scope:enCatalog 命中;语言专名不译;未知键直通',
+      (tester) async {
     await tester.pumpWidget(L10nScope(
       code: 'en',
       child: Directionality(
         textDirection: TextDirection.ltr,
         child: Builder(builder: (context) {
-          a = context.t('跟随系统');
-          b = context.t('中文');
-          c = context.t('English');
+          a = context.t('common.followSystem');
+          b = context.t('lang.zh');
+          c = context.t('快门');
           return const SizedBox();
         }),
       ),
     ));
     expect(a, 'Follow System');
     expect(b, '中文', reason: '「中文」语言专名,英文环境不译');
-    expect(c, 'English');
+    expect(c, '快门', reason: 'en 未命中落 zh 词表也未命中(非键),直通原文');
+  });
 
+  testWidgets('en scope:带参模板按 en 词表填充', (tester) async {
     await tester.pumpWidget(L10nScope(
       code: 'en',
       child: Directionality(
         textDirection: TextDirection.ltr,
         child: Builder(builder: (context) {
-          a = context.t('快门'); // enCatalog 未命中(第一期只放三条)
-          b = context.t('未知 {n}', {'n': 7}); // 未命中 + 带参
+          a = context.t('snapshot.metaLine',
+              {'model': 'Zf', 'n': 3, 'date': '2026-10-16'});
+          b = context.t('录制控制失败:boom'); // 动态串直通,不走词表
           return const SizedBox();
         }),
       ),
     ));
-    expect(a, '快门', reason: '未命中诚实回落中文,宁缺毋错');
-    expect(b, '未知 7', reason: '回落原文仍做占位替换');
+    expect(a, 'Zf · 3 props · 2026-10-16');
+    expect(b, '录制控制失败:boom', reason: '动态串原样透出,不查词表');
   });
 
   testWidgets('占位替换:多参/值 toString/未知 {x} 字面保留', (tester) async {
@@ -77,16 +85,15 @@ void main() {
       child: Directionality(
         textDirection: TextDirection.ltr,
         child: Builder(builder: (context) {
-          a = context.t('{a} + {b}', {'a': 1, 'b': 2.5});
-          b = context.t('{x} 字面保留', {'n': 1});
-          c = context.t('无参模板');
+          a = context.t('snapshot.metaLine',
+              {'model': 'Zf', 'n': 12, 'date': '2026-10-16'});
+          b = context.t('unknown.key {x}', {'n': 1});
           return const SizedBox();
         }),
       ),
     ));
-    expect(a, '1 + 2.5', reason: '值按 toString 填入');
-    expect(b, '{x} 字面保留', reason: '只替换已知参数名,不误伤字面花括号');
-    expect(c, '无参模板');
+    expect(a, 'Zf · 12 项 · 2026-10-16', reason: '值按 toString 填入');
+    expect(b, 'unknown.key {x}', reason: '只替换已知参数名,不误伤字面花括号');
   });
 
   testWidgets('scope code 变化:依赖 t() 的子树重建(updateShouldNotify)',
@@ -97,7 +104,7 @@ void main() {
           code: code,
           child: const Directionality(
             textDirection: TextDirection.ltr,
-            child: _T('跟随系统'),
+            child: _T('common.followSystem'),
           ),
         );
     await tester.pumpWidget(app('zh'));
@@ -112,10 +119,10 @@ void main() {
 }
 
 class _T extends StatelessWidget {
-  const _T(this.zh);
+  const _T(this.textKey);
 
-  final String zh;
+  final String textKey;
 
   @override
-  Widget build(BuildContext context) => Text(context.t(zh));
+  Widget build(BuildContext context) => Text(context.t(textKey));
 }

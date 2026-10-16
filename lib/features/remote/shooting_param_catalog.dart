@@ -139,11 +139,11 @@ String _formatEv(int v) {
 String _formatShutterRaw(int raw) {
   switch (raw) {
     case 0xFFFFFFFF:
-      return 'B 门';
+      return 'param.bulb';
     case 0xFFFFFFFE:
-      return 'X 同步';
+      return 'param.xSync';
     case 0xFFFFFFFD:
-      return 'T 门';
+      return 'param.time';
   }
   final n = (raw >> 16) & 0xFFFF;
   final d = raw & 0xFFFF;
@@ -192,16 +192,16 @@ String _formatPicCtrl(int v) {
 /// 白平衡值空间标签(静照 0x5005 与视频 0xD23A 共用 —— 官方 §6.5.3.9:
 /// 视频表复用静照表并加 0x8015「同照片设置」;尼康方言,verify-on-HW)。
 const kWhiteBalanceLabels = <int, String>{
-  2: '自动',
-  4: '直射阳光',
-  5: '荧光灯',
-  6: '白炽灯',
-  7: '闪光',
-  0x8010: '阴天',
-  0x8011: '背阴',
-  0x8012: '色温',
-  0x8013: '手动预设',
-  0x8016: '自然自动',
+  2: 'param.auto',
+  4: 'param.daylight',
+  5: 'param.fluorescent',
+  6: 'param.incandescent',
+  7: 'param.flash',
+  0x8010: 'param.cloudy',
+  0x8011: 'param.shade',
+  0x8012: 'param.colorTemp',
+  0x8013: 'param.presetManual',
+  0x8016: 'param.naturalAuto',
 };
 
 /// 目录顺序 = 刷新顺序 = 展示顺序(三要素居首,其余按拍摄调整频率;
@@ -215,23 +215,23 @@ final kShootingParams = <ShootingParam>[
   // verify-on-HW)。场景段(0x801x)写入相机可能拒,以应答为准。
   ShootingParam(
     code: PtpDevicePropCode.exposureProgramMode,
-    label: '模式',
+    label: 'param.mode',
     dialOwned: true,
     enumLabels: {
-      1: '手动 M',
-      2: '程序 P',
-      3: '光圈优先 A',
-      4: '快门优先 S',
-      0x8010: '自动',
-      0x8011: '人像',
-      0x8012: '风景',
-      0x8013: '微距',
-      0x8014: '运动',
-      0x8015: '夜景',
-      0x8016: '夜景人像',
-      0x8017: '儿童',
-      0x8018: '场景',
-      0x8019: '特效',
+      1: 'param.modeM',
+      2: 'param.modeP',
+      3: 'param.modeA',
+      4: 'param.modeS',
+      0x8010: 'param.auto',
+      0x8011: 'param.portrait',
+      0x8012: 'param.landscape',
+      0x8013: 'param.macro',
+      0x8014: 'param.sports',
+      0x8015: 'param.night',
+      0x8016: 'param.nightPortrait',
+      0x8017: 'param.children',
+      0x8018: 'param.scene',
+      0x8019: 'param.effects',
       0x8050: 'U1',
       0x8051: 'U2',
       0x8052: 'U3',
@@ -243,7 +243,7 @@ final kShootingParams = <ShootingParam>[
   //(2026-10-06 真机:ISO 写 0x200F 实证拨盘级参数需接管,光圈同类)。
   ShootingParam(
       code: PtpDevicePropCode.fNumber,
-      label: '光圈',
+      label: 'info.aperture',
       format: _formatFNumber,
       prominent: true,
       dialOwned: true),
@@ -285,7 +285,7 @@ final kShootingParams = <ShootingParam>[
   // 0xD01E 的开尔文值才生效(见色温条目)。
   ShootingParam(
     code: PtpDevicePropCode.whiteBalance,
-    label: '白平衡',
+    label: 'param.wb',
     enumLabels: kWhiteBalanceLabels,
   ),
   // 色温 0xD01E(u16,2500-10000K 连续值;OpenZCine WhiteBalanceKelvin
@@ -293,31 +293,31 @@ final kShootingParams = <ShootingParam>[
   // 先切 WB 模式(真机「改了没效果」根因)。
   ShootingParam(
       code: PtpDevicePropCode.wbColorTemp,
-      label: '色温',
+      label: 'param.colorTemp',
       format: _formatColorTemp),
   // 闪光:尼康方言候选表(默认「自动/前帘同步」不在表内,表外裸显)。
   ShootingParam(
     code: PtpDevicePropCode.flashMode,
-    label: '闪光',
+    label: 'param.flash',
     enumLabels: {
-      2: '关闭',
-      4: '防红眼',
-      0x8010: '补充闪光',
-      0x8011: '慢速同步',
-      0x8012: '后帘同步',
-      0x8013: '防红眼慢速',
+      2: 'common.off',
+      4: 'param.redEye',
+      0x8010: 'param.fillFlash',
+      0x8011: 'param.slowSync',
+      0x8012: 'param.rearCurtain',
+      0x8013: 'param.redEyeSlow',
     },
   ),
   // 测光:尼康方言值表(OpenZCine exposureMetering;ISO 标准表 2=中央
   // 3=点 对尼康是错的 —— 3=矩阵、4=点)。
   ShootingParam(
     code: PtpDevicePropCode.exposureMeteringMode,
-    label: '测光',
+    label: 'param.metering',
     enumLabels: {
-      2: '中央重点',
-      3: '矩阵',
-      4: '点测光',
-      0x8010: '高光',
+      2: 'param.centerWeighted',
+      3: 'param.matrix',
+      4: 'param.spot',
+      0x8010: 'param.highlight',
     },
   ),
   // 对焦模式 0xD061(u8;静照权威源,单一芯片 —— 0x500A 是只读镜像已
@@ -329,7 +329,7 @@ final kShootingParams = <ShootingParam>[
   // AF↔MF 切换(3/4 两值等价 MF)。门控值集见 [kStillFocusModeMfValues]。
   ShootingParam(
     code: PtpDevicePropCode.stillFocusMode,
-    label: '对焦模式',
+    label: 'param.focusMode',
     writeType: PtpDataType.uint8,
     pickValues: [0, 1, 4, 5],
     enumLabels: {
@@ -345,39 +345,39 @@ final kShootingParams = <ShootingParam>[
   // ISO 标准表 2=连拍/3=间隔 对尼康不成立 —— C15-C120 为高速连拍档)。
   ShootingParam(
     code: PtpDevicePropCode.stillCaptureMode,
-    label: '释放',
+    label: 'param.release',
     enumLabels: {
-      1: '单张',
-      0x8010: '低速连拍',
-      2: '高速连拍',
-      0x8019: '高速连拍+',
-      0x8011: '自拍',
-      0x8100: '快速',
-      0x810F: '连拍 C15',
-      0x811E: '连拍 C30',
-      0x813C: '连拍 C60',
-      0x8178: '连拍 C120',
+      1: 'param.single',
+      0x8010: 'param.burstLow',
+      2: 'param.burstHigh',
+      0x8019: 'param.burstHighPlus',
+      0x8011: 'remote.selfTimer',
+      0x8100: 'common.fast',
+      0x810F: 'param.burstC15',
+      0x811E: 'param.burstC30',
+      0x813C: 'param.burstC60',
+      0x8178: 'param.burstC120',
     },
   ),
   // 画质:尼康 14 值全表(★ = 画质优先/最优压缩档)。
   ShootingParam(
     code: PtpDevicePropCode.compressionSetting,
-    label: '画质',
+    label: 'param.quality',
     enumLabels: {
-      0: 'JPEG 基本',
-      1: 'JPEG 基本★',
-      2: 'JPEG 标准',
-      3: 'JPEG 标准★',
-      4: 'JPEG 精细',
-      5: 'JPEG 精细★',
+      0: 'param.jpegBasic',
+      1: 'param.jpegBasicStar',
+      2: 'param.jpegNormal',
+      3: 'param.jpegNormalStar',
+      4: 'param.jpegFine',
+      5: 'param.jpegFineStar',
       6: 'TIFF',
       7: 'RAW',
-      8: 'RAW+JPEG 基本',
-      9: 'RAW+JPEG 基本★',
-      10: 'RAW+JPEG 标准',
-      11: 'RAW+JPEG 标准★',
-      12: 'RAW+JPEG 精细',
-      13: 'RAW+JPEG 精细★',
+      8: 'param.rawJpegBasic',
+      9: 'param.rawJpegBasicStar',
+      10: 'param.rawJpegNormal',
+      11: 'param.rawJpegNormalStar',
+      12: 'param.rawJpegFine',
+      13: 'param.rawJpegFineStar',
     },
   ),
   // ---- 厂商候选区(0xD0xx/0xD2xx;0xD05D AF 区域 2026-10-07 USB 实证
@@ -386,15 +386,15 @@ final kShootingParams = <ShootingParam>[
   // + 显式 u8(厂商码 PropDesc 拒答时类型会错落到 u16 默认,写入无效)。
   ShootingParam(
     code: PtpDevicePropCode.rawCompressionType,
-    label: 'RAW 压缩',
+    label: 'param.rawCompression',
     writeType: PtpDataType.uint8,
     pickValues: [0, 3, 4],
     enumLabels: {
-      0: '无损压缩',
-      1: '压缩(旧型)',
-      2: '未压缩',
-      3: '高效率★',
-      4: '高效率',
+      0: 'param.lossless',
+      1: 'param.compressedLegacy',
+      2: 'param.uncompressed',
+      3: 'param.heStar',
+      4: 'param.he',
     },
   ),
   // 图像尺寸 0x5003:**STR 型**(OpenZCine stringFromPTPStringData),
@@ -402,7 +402,7 @@ final kShootingParams = <ShootingParam>[
   // 图像区域 0xD030(u8):同 RAW 压缩,pickValues + 显式 u8。
   ShootingParam(
     code: PtpDevicePropCode.captureAreaCrop,
-    label: '图像区域',
+    label: 'param.imageArea',
     writeType: PtpDataType.uint8,
     pickValues: [0, 2, 4, 5],
     enumLabels: {0: 'FX', 2: 'DX', 4: '1:1', 5: '16:9'},
@@ -419,16 +419,16 @@ final kShootingParams = <ShootingParam>[
   // 侧在册性待核。
   ShootingParam(
     code: PtpDevicePropCode.stillFocusMeteringMode,
-    label: 'AF 区域',
+    label: 'param.afArea',
     writeType: PtpDataType.uint16,
     enumLabels: {
-      0x8010: '单点',
-      0x8011: '自动',
-      0x8017: '精确',
-      0x8018: '宽S',
-      0x8019: '宽L',
-      0x801E: '宽C1',
-      0x801F: '宽C2',
+      0x8010: 'param.singlePoint',
+      0x8011: 'param.auto',
+      0x8017: 'param.pinpoint',
+      0x8018: 'param.wideS',
+      0x8019: 'param.wideL',
+      0x801E: 'param.wideC1',
+      0x801F: 'param.wideC2',
     },
   ),
   // ---- Ex 扩展属性码(0x0001_xxxx,> u16;读写自动走 Gen-3 Ex ops
@@ -437,17 +437,17 @@ final kShootingParams = <ShootingParam>[
   // 是 movie 属性,静照在册性待真机核对)。pickValues 直供。
   ShootingParam(
     code: 0x0001D006,
-    label: '主体检测',
+    label: 'param.subjectDetection',
     writeType: PtpDataType.uint8,
     pickValues: [0, 1, 2, 3, 4, 5, 6],
     enumLabels: {
-      0: '关闭',
-      1: '自动',
-      2: '人',
-      3: '动物',
-      4: '车辆',
-      5: '鸟',
-      6: '飞机',
+      0: 'common.off',
+      1: 'param.auto',
+      2: 'param.people',
+      3: 'param.animals',
+      4: 'param.vehicles',
+      5: 'param.birds',
+      6: 'param.airplanes',
     },
   ),
   // 色调模式(0x0001D01C,u8;OpenZCine:2 = HLG,其余 SDR)。此前因
@@ -455,7 +455,7 @@ final kShootingParams = <ShootingParam>[
   // 解锁。待真机核对值域。
   ShootingParam(
     code: 0x0001D01C,
-    label: '色调',
+    label: 'param.toneMode',
     writeType: PtpDataType.uint8,
     pickValues: [1, 2],
     enumLabels: {1: 'SDR', 2: 'HLG'},
@@ -467,16 +467,16 @@ final kShootingParams = <ShootingParam>[
   // (RemoteController.picCtrlNames),静态标签只是占位。
   ShootingParam(
     code: PtpDevicePropCode.activePicCtrlItem,
-    label: '优化校准',
+    label: 'param.pictureControl',
     enumLabels: {
-      1: '标准',
-      2: '中性',
-      3: '鲜艳',
-      4: '单色',
-      5: '人像',
-      6: '风景',
-      7: '平面',
-      8: '自动',
+      1: 'param.standard',
+      2: 'param.neutral',
+      3: 'param.vivid',
+      4: 'param.monochrome',
+      5: 'param.portrait',
+      6: 'param.landscape',
+      7: 'param.flat',
+      8: 'param.auto',
       9: 'Flat Mono',
       10: 'Deep Tone Mono',
       11: 'Rich Tone Portrait',
@@ -519,25 +519,25 @@ final kVideoShootingParams = <ShootingParam>[
   // 0x200F → tile 锁标机制接)。
   ShootingParam(
     code: PtpDevicePropCode.movieFnumber,
-    label: '视频光圈',
+    label: 'param.movieAperture',
     format: _formatFNumber,
     videoOnly: true,
   ),
   ShootingParam(
     code: PtpDevicePropCode.movieShutterSpeed,
-    label: '视频快门',
+    label: 'param.movieShutter',
     format: _formatShutterRaw,
     videoOnly: true,
   ),
   ShootingParam(
     code: PtpDevicePropCode.movieExposureIndex,
-    label: '视频 ISO',
+    label: 'param.movieIso',
     format: _formatIso,
     videoOnly: true,
   ),
   ShootingParam(
     code: PtpDevicePropCode.movieExposureBiasCompensation,
-    label: '视频 EV',
+    label: 'param.movieEv',
     format: _formatEv,
     videoOnly: true,
   ),
@@ -545,8 +545,8 @@ final kVideoShootingParams = <ShootingParam>[
   // 其余复用静照 WB 值空间。
   ShootingParam(
     code: PtpDevicePropCode.movieWhiteBalance,
-    label: '视频白平衡',
-    enumLabels: {0x8015: '同照片设置', ...kWhiteBalanceLabels},
+    label: 'param.movieWb',
+    enumLabels: {0x8015: 'param.sameAsPhotos', ...kWhiteBalanceLabels},
     videoOnly: true,
   ),
   // N-Log 输出(u8 只读,§6.5.12.4 Get-only):LUT/log 路的读侧入口;
@@ -555,39 +555,39 @@ final kVideoShootingParams = <ShootingParam>[
     code: PtpDevicePropCode.movieLogOutput,
     label: 'N-Log',
     readOnly: true,
-    enumLabels: {0: '关', 1: '开'},
+    enumLabels: {0: 'common.offShort', 1: 'common.on'},
     videoOnly: true,
   ),
   // 视频减震(u8,§6.5.3.62:双形态 —— 镜头防抖仅 Normal 档时 {0,1,100},
   // 全档时 {0,1,2,100};值域以 FORM 为准)。
   ShootingParam(
     code: PtpDevicePropCode.movieVibrationReduction,
-    label: '视频减震',
+    label: 'param.movieVr',
     writeType: PtpDataType.uint8,
-    enumLabels: {0: '关', 1: '正常', 2: '运动', 100: '同照片设置'},
+    enumLabels: {0: 'common.offShort', 1: 'param.normal', 2: 'param.sports', 100: 'param.sameAsPhotos'},
     videoOnly: true,
   ),
   // 电子减震(u8 Range 0/1,§6.5.3.63;120p/升格/Hi-Res Zoom 时拒)。
   ShootingParam(
     code: PtpDevicePropCode.electronicVR,
-    label: '电子减震',
+    label: 'param.evr',
     writeType: PtpDataType.uint8,
     pickValues: [0, 1],
-    enumLabels: {0: '关', 1: '开'},
+    enumLabels: {0: 'common.offShort', 1: 'common.on'},
     videoOnly: true,
   ),
   // 时间码三件(u8,§6.5.3.69-72;0xD1FD 起源时间是数组型不入)。
   ShootingParam(
     code: PtpDevicePropCode.recordTimeCodes,
-    label: '录制时间码',
+    label: 'param.timecode',
     writeType: PtpDataType.uint8,
     pickValues: [0, 1, 2],
-    enumLabels: {0: '关', 1: '开', 2: '开(HDMI 外录)'},
+    enumLabels: {0: 'common.offShort', 1: 'common.on', 2: 'param.onHdmi'},
     videoOnly: true,
   ),
   ShootingParam(
     code: PtpDevicePropCode.timeCodeCountUpMethod,
-    label: '计数方法',
+    label: 'param.countUp',
     writeType: PtpDataType.uint8,
     pickValues: [0, 1],
     enumLabels: {0: 'Rec Run', 1: 'Free Run'},
@@ -595,17 +595,17 @@ final kVideoShootingParams = <ShootingParam>[
   ),
   ShootingParam(
     code: PtpDevicePropCode.timeCodeDropFrame,
-    label: '丢帧',
+    label: 'param.dropFrame',
     writeType: PtpDataType.uint8,
     pickValues: [0, 1],
-    enumLabels: {0: '关', 1: '开'},
+    enumLabels: {0: 'common.offShort', 1: 'common.on'},
     videoOnly: true,
   ),
   // 视频图像区域(u8:0=FX/2=DX,§6.5.3.5;静照 0xD030 同名异码,
   // 四值空间不通用)。
   ShootingParam(
     code: PtpDevicePropCode.movieCaptureAreaCrop,
-    label: '视频区域',
+    label: 'param.movieArea',
     writeType: PtpDataType.uint8,
     pickValues: [0, 2],
     enumLabels: {0: 'FX', 2: 'DX'},
@@ -615,7 +615,7 @@ final kVideoShootingParams = <ShootingParam>[
   // >0xFFFF 自动走 Ex ops)。
   ShootingParam(
     code: PtpDevicePropCode.movieH265ToneMode,
-    label: 'H.265 色调',
+    label: 'param.h265Tone',
     writeType: PtpDataType.uint8,
     pickValues: [0, 1, 2],
     enumLabels: {0: 'SDR', 1: 'N-Log', 2: 'HLG'},
@@ -628,7 +628,7 @@ final kVideoShootingParams = <ShootingParam>[
 /// 钳位,「点了框不动」属相机行为非缺陷 —— AF 编辑面板常驻提示行与
 /// 切换沿 notice(RemoteController.setParam)共用此文案。
 String? afAreaAxisHint(int? value) {
-  if (value == 0x801E) return '宽C1 是横向条形区域,触屏移框仅上下生效';
-  if (value == 0x801F) return '宽C2 是纵向条形区域,触屏移框仅左右生效';
+  if (value == 0x801E) return 'param.wideC1Hint';
+  if (value == 0x801F) return 'param.wideC2Hint';
   return null;
 }

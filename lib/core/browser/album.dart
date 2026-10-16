@@ -19,14 +19,15 @@ final class CameraAlbum {
   static const int allPhotosHandle = 0;
 
   /// 汇总相册:全部 image/video,按 [ObjectRepositoryImpl.compareEntries]
-  /// 排序(新的在前)。
+  /// 排序(新的在前)。name = t() 键(真实相册 name 是相机上报文件夹名,
+  /// 直通不译;汇总相册吐抽象键,消费点 photo_grid_page 包 t)。
   factory CameraAlbum.allPhotos(List<PhotoGroup> items) => CameraAlbum(
-        name: '全部照片',
+        name: 'grid.allPhotos',
         folderHandle: allPhotosHandle,
         items: List.unmodifiable(items),
       );
 
-  /// 相册名(文件夹对象名;汇总相册为「全部照片」)。
+  /// 相册名(文件夹对象名;汇总相册为汇总键,见 [CameraAlbum.allPhotos])。
   final String name;
 
   /// 对应文件夹对象的 handle;[allPhotosHandle] 表示汇总相册。

@@ -394,7 +394,7 @@ final class RemoteController extends ChangeNotifier {
   /// 透出),链路/B 门守卫复用 capture 口径。capturing 逐拍置位 —— 屏
   /// 上快门芯随拍闪忙,与手动单拍观感一致。
   Future<(bool, String?)> _intervalShot() async {
-    if (!_linkUp) return (false, '未连接相机');
+    if (!_linkUp) return (false, 'remote.notConnected');
     if (_shutterIsOpenShutter) {
       return (false, '快门在 B 门/Time 档,本拍跳过');
     }
@@ -567,7 +567,7 @@ final class RemoteController extends ChangeNotifier {
   /// 生效。开关后 ISO 值随即回读(0xD0B5 工作值跟随)。
   Future<void> setIsoAuto(bool enabled) async {
     if (!_linkUp) {
-      error = '未连接相机';
+      error = 'remote.notConnected';
       notifyListeners();
       return;
     }
@@ -610,7 +610,7 @@ final class RemoteController extends ChangeNotifier {
   Future<bool> enableTakeover() async {
     if (_takeoverActive) return true;
     if (!_linkUp) {
-      error = '未连接相机';
+      error = 'remote.notConnected';
       notifyListeners();
       return false;
     }
@@ -892,7 +892,7 @@ final class RemoteController extends ChangeNotifier {
   /// - 普通档:自拍倒计时(档位 > 0)后一次 [capture]。
   Future<void> capturePressed() async {
     if (!_linkUp) {
-      error = '未连接相机';
+      error = 'remote.notConnected';
       notifyListeners();
       return;
     }
@@ -1102,10 +1102,8 @@ final class RemoteController extends ChangeNotifier {
     _bulbCloseFailed = !closed;
     if (!closed) {
       error = autoClose
-          ? '定时 B 门自动收门失败:相机持续忙(已重试 3 次),曝光可能'
-              '仍在进行,请再点一次快门收门或查看相机'
-          : 'B 门收门失败:相机持续忙(已重试 3 次),曝光可能仍在进行,'
-              '请再点一次快门收门或查看相机';
+          ? 'remote.errTimedBulbBusy'
+          : 'remote.errBulbCloseBusy';
       notifyListeners();
       return;
     }
@@ -1114,7 +1112,7 @@ final class RemoteController extends ChangeNotifier {
       if (await _tryRestoreShutter(_bulbShutterRestore!)) {
         _bulbShutterRestore = null;
       } else {
-        notice = '曝光已结束,但快门值未能自动恢复,请在快门面板手动改回';
+        notice = 'remote.errShutterRestore';
         notifyListeners();
       }
     }
@@ -1180,12 +1178,12 @@ final class RemoteController extends ChangeNotifier {
   /// 静照落空,先停轮再录)。
   Future<void> toggleRecord() async {
     if (!_linkUp) {
-      error = '未连接相机';
+      error = 'remote.notConnected';
       notifyListeners();
       return;
     }
     if (!liveViewActive) {
-      error = '请先开启取景再录制';
+      error = 'remote.errRecordNeedsViewfinder';
       notifyListeners();
       return;
     }
@@ -1211,8 +1209,7 @@ final class RemoteController extends ChangeNotifier {
       if (e.responseCode == NikonResponseCode.invalidStatus) {
         // 0xA004:机身不在可录制的状态 —— Zf 的机顶「照片/视频」切换
         // 拨杆在照片档时 0x920A 即被拒(OpenZCine 同码口径 invalidStatus)。
-        error = '相机当前状态不允许录制 —— 请把机顶「照片/视频」切换拨杆'
-            '拨到视频档后重试(取景保持开启)';
+        error = 'remote.errLeverVideo';
       } else {
         error = '录制控制失败:${_nikonHint(e.responseCode) ?? e}';
       }
@@ -1228,12 +1225,12 @@ final class RemoteController extends ChangeNotifier {
   /// 两路共用 —— 提示行与轮压暗跟读)。
   Future<void> mfDriveStep({required bool towardNear, int pulses = 300}) async {
     if (!_linkUp) {
-      error = '未连接相机';
+      error = 'remote.notConnected';
       notifyListeners();
       return;
     }
     if (!liveViewActive) {
-      error = '请先开启取景';
+      error = 'remote.errViewfinderOff';
       notifyListeners();
       return;
     }
@@ -1251,11 +1248,11 @@ final class RemoteController extends ChangeNotifier {
         case MfDriveOutcome.complete:
           break;
         case MfDriveOutcome.endOfTravel:
-          notice = towardNear ? '对焦已到近端' : '对焦已到远端';
+          notice = towardNear ? 'remote.focusNearEnd' : 'remote.focusFarEnd';
         case MfDriveOutcome.stepTooSmall:
-          notice = '步进量过小,镜头未动';
+          notice = 'remote.stepTooSmall';
         case MfDriveOutcome.refused:
-          error = '手动对焦不可用(机械对焦环或机身忙)';
+          error = 'remote.errMfUnavailable';
       }
     } finally {
       if (_viewerVisible) engine.resume();
@@ -1372,10 +1369,10 @@ final class RemoteController extends ChangeNotifier {
           case MfDriveOutcome.stepTooSmall:
             break; // 过小是结果:不提示(拖快些即可),不挡续发
           case MfDriveOutcome.endOfTravel:
-            notice = towardNear ? '对焦已到近端' : '对焦已到远端';
+            notice = towardNear ? 'remote.focusNearEnd' : 'remote.focusFarEnd';
             notifyListeners();
           case MfDriveOutcome.refused:
-            notice = '手动对焦不可用(机械对焦环或机身忙)';
+            notice = 'remote.errMfUnavailable';
             _dialAccum = 0;
             notifyListeners();
         }
@@ -1392,7 +1389,7 @@ final class RemoteController extends ChangeNotifier {
         if (_dialFailures.length >= _dialFailureLimit) {
           _dialSuspended = true;
           _dialAccum = 0;
-          notice = '对焦滚轮已暂停(连续失败),稍后自动恢复';
+          notice = 'remote.focusDialPaused';
           notifyListeners();
         }
       } finally {
@@ -1485,8 +1482,7 @@ final class RemoteController extends ChangeNotifier {
       .contains(paramProps[PtpDevicePropCode.stillFocusMode]?.value);
 
   /// MF 门闩的提示文案(触控对焦/AF 钮/MF 步进共用)。
-  static const _focusModeMfHint = '机身对焦模式为 MF —— 远程对焦不可用,'
-      '请切回 AF-S/AF-C(「对焦模式」芯片可直接切换)';
+  static const _focusModeMfHint = 'remote.errMfMode';
 
   /// MF 门闩:锁定时设提示并返回 true,调用方即拦下本次操作。
   bool _rejectIfFocusModeMf() {
@@ -1509,7 +1505,7 @@ final class RemoteController extends ChangeNotifier {
   /// 对焦框上屏直到下次点按/停取景;帧头 AF 框(真实尺寸)另行叠加。
   Future<void> touchFocus(double nx, double ny) async {
     if (!_linkUp) {
-      error = '未连接相机';
+      error = 'remote.notConnected';
       notifyListeners();
       return;
     }
@@ -1521,7 +1517,7 @@ final class RemoteController extends ChangeNotifier {
         ? (width: h.coordinateWidth, height: h.coordinateHeight)
         : _lastHeaderSpace ?? frameSize.value;
     if (size == null) {
-      error = '暂无取景帧,无法定位对焦点';
+      error = 'remote.errNoFrameFocus';
       notifyListeners();
       return;
     }
@@ -1562,17 +1558,17 @@ final class RemoteController extends ChangeNotifier {
           // 取消失败不打断在途对焦的应答处理
         }
       }());
-      notice = '已取消对焦';
+      notice = 'remote.focusCancelled';
       notifyListeners();
       return;
     }
     if (!_linkUp) {
-      error = '未连接相机';
+      error = 'remote.notConnected';
       notifyListeners();
       return;
     }
     if (!liveViewActive) {
-      error = '请先开启取景';
+      error = 'remote.errViewfinderOff';
       notifyListeners();
       return;
     }
@@ -1657,18 +1653,18 @@ final class RemoteController extends ChangeNotifier {
   /// 坐标系同 0x9205(帧头 whole-size)。
   Future<void> startTracking() async {
     if (!_linkUp) {
-      error = '未连接相机';
+      error = 'remote.notConnected';
       notifyListeners();
       return;
     }
     if (!liveViewActive) {
-      error = '请先开启取景';
+      error = 'remote.errViewfinderOff';
       notifyListeners();
       return;
     }
     if (_rejectIfFocusModeMf()) return;
     if (!afAreaCanTrack) {
-      notice = '主体追踪需 AF 区域为「自动」(「AF 区域」芯片可切换)';
+      notice = 'remote.errTrackingNeedsAuto';
       notifyListeners();
       return;
     }
@@ -1678,7 +1674,7 @@ final class RemoteController extends ChangeNotifier {
         ? (width: h.coordinateWidth, height: h.coordinateHeight)
         : _lastHeaderSpace ?? frameSize.value;
     if (size == null) {
-      error = '暂无取景帧,无法定位追踪目标';
+      error = 'remote.errNoFrameTrack';
       notifyListeners();
       return;
     }
@@ -1725,7 +1721,7 @@ final class RemoteController extends ChangeNotifier {
   /// (会话级状态,重连后未知)。
   Future<void> toggleAELock() async {
     if (!_linkUp) {
-      error = '未连接相机';
+      error = 'remote.notConnected';
       notifyListeners();
       return;
     }
@@ -1767,7 +1763,7 @@ final class RemoteController extends ChangeNotifier {
   /// (可能断取景流)由看门狗既有兜底,UI 标实验性。
   Future<void> toggleMonitorOff() async {
     if (!_linkUp) {
-      error = '未连接相机';
+      error = 'remote.notConnected';
       notifyListeners();
       return;
     }
@@ -1937,12 +1933,12 @@ final class RemoteController extends ChangeNotifier {
     final current = _cameraMode;
     if (current == null || target == current) return false;
     if (_modeWriteRejected) {
-      error = '相机拒绝了远程切换拍摄模式 —— 请直接用机顶拨杆切换';
+      error = 'remote.errModeSwitchRefused';
       notifyListeners();
       return false;
     }
     if (!_setPropEnabled()) {
-      error = '参数写入已关断,无法切换拍摄模式';
+      error = 'remote.errWriteDisabledMode';
       notifyListeners();
       return false;
     }
@@ -2102,7 +2098,7 @@ final class RemoteController extends ChangeNotifier {
   Future<void> capture() async {
     if (capturing) return;
     if (!_linkUp) {
-      error = '未连接相机';
+      error = 'remote.notConnected';
       notifyListeners();
       return;
     }
@@ -2117,8 +2113,7 @@ final class RemoteController extends ChangeNotifier {
       // B 门/Time 经不起「点按即走」:曝光开了没人收门(音量键快门等
       // capture() 直呼路径)—— 本地拒绝零流量并指路;按住曝光走屏上
       // 快门钮([capturePressed]),或开自拍定时组合成定时 B 门。
-      notice = '快门在 B 门/Time 档:请用屏上快门钮按住曝光,'
-          '或开启自拍定时组合为定时 B 门';
+      notice = 'remote.errBulbShutter';
       notifyListeners();
       return;
     }
@@ -2180,25 +2175,21 @@ final class RemoteController extends ChangeNotifier {
       // 0x2013:标准义 = 存储不可用(无卡/卡错误);2026-10-11 真机
       // 另证:机身拨杆在视频档时远程拍照除 0x200F 外也会报此码
       //(存储卡在位,具体子态待核)—— 双因都指,别把用户支去翻卡槽。
-      return '快门释放失败:相机存储不可用 —— 请检查存储卡与插槽;'
-          '若卡在位,可能是机身拨杆在视频档拒绝了远程拍照,'
-          '请拨回照片档重试(视频档请用拍摄页的录制钮拍视频)';
+      return 'remote.errShutterStorage';
     }
     if (e.responseCode == PtpResponseCode.invalidParameter) {
-      return '快门释放失败:相机不接受快门参数(0x201D,已试全部'
-          '已知形态)—— 请反馈当时的「APP 接管」与「对焦后拍」状态';
+      return 'remote.errShutterParam';
     }
     if (e.responseCode == NikonResponseCode.movieFrameReleaseBusy) {
       // 0xA202:录像中的静照释放进行中(官方 §6.3.2.17)—— 录像
       // 期间拍静照连拍两下会撞上,等一拍再试。
-      return '快门释放失败:录像中的静照拍摄尚在进行,请稍候再试';
+      return 'remote.errShutterDuringRec';
     }
     if (e.responseCode == PtpResponseCode.accessDenied) {
       // 0x200F:相机锁定拍照控制 —— Zf 机顶「照片/视频」切换拨杆在
       // 视频档时 0x9207 即被拒(2026-10-11 真机定案;对称于录像侧
       // 0xA004 的拨杆提示)。
-      return '相机当前状态不允许拍照 —— 请把机顶「照片/视频」切换'
-          '拨杆拨回照片档后重试(视频档请用拍摄页的录制钮拍视频)';
+      return 'remote.errLeverPhoto';
     }
     // 码随文浮出:有提示语时附 〔0x????〕(同连接梯诊断风格);
     // 无提示语时异常文本自带码,不再重复。
@@ -2260,8 +2251,7 @@ final class RemoteController extends ChangeNotifier {
     }
     if (!_linkUp) return;
     if (handle == null || handle == 0) {
-      notice = '拍摄完成,但未收到相机回传对象(SDRAM 对象未到,'
-          '可稍后在相机相册确认)';
+      notice = 'remote.errNoSdramObject';
       notifyListeners();
       return;
     }
@@ -2271,7 +2261,7 @@ final class RemoteController extends ChangeNotifier {
       if (!_linkUp) return;
       final entry = ObjectRepository.toEntry(info);
       if (engine == null) {
-        notice = '已拍摄(SDRAM,不入卡):未接图库通道,对象未保存';
+        notice = 'remote.sdramNoGallery';
         notifyListeners();
         return;
       }
@@ -2279,12 +2269,11 @@ final class RemoteController extends ChangeNotifier {
       if (!_linkUp) return;
       switch (state) {
         case TransferState.completed:
-          notice = '已拍摄并保存到图库(SDRAM,不入卡)';
+          notice = 'remote.sdramSaved';
         case TransferState.failed:
-          notice = '已拍摄(SDRAM,不入卡):图库保存失败,可到传输页重试';
+          notice = 'remote.sdramSaveFailed';
         default:
-          notice = '已拍摄(SDRAM,不入卡):仍在后台保存到图库,'
-              '进度见传输页';
+          notice = 'remote.sdramSaving';
       }
       notifyListeners();
     } on Exception catch (e) {
@@ -2461,18 +2450,18 @@ final class RemoteController extends ChangeNotifier {
   /// (接管已开 → 指向模式;未开 → 提示接管)。
   Future<void> setParam(int propCode, int value) async {
     if (!_linkUp) {
-      error = '未连接相机';
+      error = 'remote.notConnected';
       notifyListeners();
       return;
     }
     if (!_setPropEnabled()) {
-      error = '参数写入已被总闸关断(kSetPropEnabled=false,紧急关断)';
+      error = 'remote.errWriteKilled';
       notifyListeners();
       return;
     }
     final param = shootingParamByCode[propCode];
     if (param?.readOnly ?? false) {
-      error = '该参数由机身转盘控制,不支持遥控修改';
+      error = 'remote.errDialOwned';
       notifyListeners();
       return;
     }
@@ -2486,7 +2475,7 @@ final class RemoteController extends ChangeNotifier {
         case PtpDevicePropCode.exposureIndex:
           error = '$mode 下 ISO 由相机自动控制,不可手调';
         default:
-          error = '该参数当前由相机自动控制,不可手调';
+          error = 'remote.errAutoControlled';
       }
       notifyListeners();
       return;
@@ -2496,7 +2485,7 @@ final class RemoteController extends ChangeNotifier {
         param?.dialOwned != true &&
         desc != null &&
         !desc.getSet) {
-      error = '相机上报该属性为只读';
+      error = 'remote.errReadOnly';
       notifyListeners();
       return;
     }
@@ -2508,7 +2497,7 @@ final class RemoteController extends ChangeNotifier {
     if (convert != null) {
       final packed = convert(value);
       if (packed == null) {
-        error = '该值无法换算为机身写码(0x100),未发送';
+        error = 'remote.errNotEncodable';
         notifyListeners();
         return;
       }
@@ -2611,7 +2600,7 @@ final class RemoteController extends ChangeNotifier {
           }
           // 无在途链:照旧按卡对象提示(防御 —— 相机内存残留等)
         }
-        notice = '已拍摄';
+        notice = 'remote.captured';
         notifyListeners();
         // 先缩略图(即拍即览要快)再全量刷参 —— 顺序确定,事务排队
         // 不会与参数刷新交错。

@@ -2297,7 +2297,8 @@ void main() {
             .paramProps[PtpDevicePropCode.stillFocusMeteringMode]?.value,
         0x801E,
         reason: '0x1016 写 + 回读落值');
-    expect(controller.notice, '宽C1 是横向条形区域,触屏移框仅上下生效');
+    expect(controller.notice, 'param.wideC1Hint',
+        reason: '控制器层吐键;渲染层经 t() 落 zh 词表');
     expect(find.text('宽C1 是横向条形区域,触屏移框仅上下生效'),
         findsOneWidget,
         reason: '切换沿 notice 横幅在屏');

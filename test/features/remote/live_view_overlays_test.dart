@@ -160,13 +160,13 @@ void main() {
 
   group('overheatBadgeText/overheatCountdownText:过热徽章文案(纯函数)', () {
     test('四级文案与倒计时拼接;倒计时 m:ss 补零', () {
-      expect(overheatBadgeText(1), '机内温度升高');
-      expect(overheatBadgeText(2), '机内温度较高');
-      expect(overheatBadgeText(3), '机内高温,录制即将停止');
-      expect(overheatBadgeText(4), '即将自动停止录制',
+      expect(overheatBadgeText(1), 'live.tempRising');
+      expect(overheatBadgeText(2), 'live.tempHigh');
+      expect(overheatBadgeText(3), 'live.tempCritical');
+      expect(overheatBadgeText(4), 'live.autoStop',
           reason: '无倒计时不拼尾句');
       expect(overheatBadgeText(4, countdownSeconds: 30),
-          '即将自动停止录制 0:30');
+          'live.autoStop 0:30');
       expect(overheatCountdownText(3600), '60:00');
       expect(overheatCountdownText(30), '0:30');
       expect(overheatCountdownText(65), '1:05');

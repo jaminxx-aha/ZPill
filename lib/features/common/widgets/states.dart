@@ -95,7 +95,7 @@ class ErrorRetryPanel extends StatelessWidget {
           children: [
             Text(context.t(message), textAlign: TextAlign.center),
             const SizedBox(height: AppSpacing.lg),
-            FilledButton(onPressed: onRetry, child: Text(context.t('重试'))),
+            FilledButton(onPressed: onRetry, child: Text(context.t('common.retry'))),
           ],
         ),
       ),

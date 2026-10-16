@@ -140,7 +140,7 @@ Widget _valueSection({
     // AF 区域(0xD05D)的宽C1/C2 是横带/竖条饱和区:触屏移框饱和轴
     // 不动属相机行为 —— 面板常驻一行说明(切换沿另有 notice)。
     final afAreaHint = p.code == PtpDevicePropCode.stillFocusMeteringMode
-        ? sheetContext.t('宽C1/C2 为横带/竖条区域:触屏移框仅上下/左右单轴生效')
+        ? sheetContext.t('param.wideAreaHint')
         : null;
     final list = ListView(
       key: key,
@@ -152,7 +152,7 @@ Widget _valueSection({
         // 开关只在这里显式控制)。
         if (hasIsoAutoTile)
           ListTile(
-            title: Text(sheetContext.t('自动 ISO'),
+            title: Text(sheetContext.t('param.autoIso'),
                 style: TextStyle(color: live.text)),
             trailing: controller.isoAuto == true
                 ? Icon(Icons.check, color: live.accent)
@@ -228,7 +228,7 @@ Widget _valueSection({
   return Padding(
     key: key,
     padding: const EdgeInsets.all(24),
-    child: Text(sheetContext.t('该属性的取值域未知,暂不可调(待真机核对)'),
+    child: Text(sheetContext.t('param.rangeUnknown'),
         style: TextStyle(color: live.muted)),
   );
 }
@@ -255,15 +255,13 @@ class TakeoverSection extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(context.t('启用 APP 接管控制?'),
+          Text(context.t('takeover.confirmTitle'),
               style: TextStyle(
                   fontSize: 15, fontWeight: FontWeight.w600, color: live.text)),
           const SizedBox(height: 10),
           Text(
             context.t(
-              '该设置项受相机物理拨盘控制,启用接管后应用才能调整。'
-              '接管期间机身拨盘可能被锁定、机身屏幕可能熄灭;'
-              '点按「APP 接管中」或断开连接可解除。',
+              'takeover.confirmBody',
             ),
             style: TextStyle(fontSize: 13, height: 1.5, color: live.muted),
           ),
@@ -286,7 +284,7 @@ class TakeoverSection extends StatelessWidget {
                             child: CircularProgressIndicator(
                                 strokeWidth: 2.2, color: live.onAccent),
                           )
-                        : Text(context.t('启用'),
+                        : Text(context.t('takeover.enable'),
                             style: TextStyle(
                                 fontSize: 14,
                                 fontWeight: FontWeight.w600,
@@ -310,13 +308,11 @@ Future<bool> confirmTakeover(
   if (controller.takeoverActive) return true;
   final confirmed = await showConfirmDialog(
     context,
-    title: context.t('启用 APP 接管控制?'),
+    title: context.t('takeover.confirmTitle'),
     content: context.t(
-      '该设置项受相机物理拨盘控制,启用接管后应用才能调整。'
-      '接管期间机身拨盘可能被锁定、机身屏幕可能熄灭;'
-      '点按「APP 接管中」或断开连接可解除。',
+      'takeover.confirmBody',
     ),
-    confirmLabel: context.t('启用'),
+    confirmLabel: context.t('takeover.enable'),
   );
   if (!confirmed) return false;
   return controller.enableTakeover();

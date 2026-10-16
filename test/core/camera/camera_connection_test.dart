@@ -385,7 +385,7 @@ void main() {
     await conn.connect();
 
     expect(conn.state, CameraLinkState.failed);
-    expect(conn.error, contains('未发现尼康相机'));
+    expect(conn.error, 'conn.errNoUsbCamera');
     expect(usb.openedIdentifiers, isEmpty);
     expect(fake.requests, isEmpty);
   });
@@ -483,8 +483,7 @@ void main() {
     await conn.connect();
 
     expect(conn.state, CameraLinkState.failed);
-    expect(conn.error, contains('受限连接状态'));
-    expect(conn.error, contains('重新开机'));
+    expect(conn.error, 'conn.errRestricted');
     // 拦在 OpenSession 之前(会话都开不了,浏览无意义)
     expect(fake.requests.map((r) => r.opcode),
         [PtpOperationCode.getDeviceInfo]);
@@ -1209,9 +1208,8 @@ void main() {
 
       expect(conn.state, CameraLinkState.reconnecting,
           reason: 'busy 恒 5s 慢拍,永不终态(理论;停摆防真跑 5s)');
-      expect(conn.error, contains('相机被占用'));
-      expect(conn.error, contains('每 5 秒'));
-      expect(delays, [
+      expect(conn.error, 'conn.errBusy');
+        expect(delays, [
         const Duration(milliseconds: 1200), // settle
         const Duration(seconds: 5), // busy 拍 1
         const Duration(seconds: 5), // busy 拍 2(其后停摆)
@@ -1270,7 +1268,7 @@ void main() {
       usb.breakageCtrl.add('相机已断开(USB 连接消失)');
       await pumpEventQueue();
       expect(conn.state, CameraLinkState.reconnecting);
-      expect(conn.error, contains('正在等待相机重新接入 USB'));
+      expect(conn.error, 'conn.waitingUsb');
       expect(usb.openedIdentifiers, ['1-2'], reason: '未归位拍不重复 open');
 
       // 插回 + 预置完整拨号脚本,放行停摆拍 → 下一拨即成
@@ -1423,9 +1421,8 @@ void main() {
       await pumpEventQueue();
 
       expect(conn.state, CameraLinkState.failed);
-      expect(conn.error, contains('反复中断'));
-      expect(conn.error, contains('自动重连已暂停'));
-      expect(states.where((s) => s == CameraLinkState.reconnecting),
+      expect(conn.error, 'conn.errReconnectPaused');
+        expect(states.where((s) => s == CameraLinkState.reconnecting),
           hasLength(3), reason: '首断 + DROP 1/2 进恢复期;DROP 3 直接 failed(风暴)');
     });
 

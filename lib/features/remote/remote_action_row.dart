@@ -43,7 +43,7 @@ class CaptureControlRow extends StatelessWidget {
           _shutterButton(live, controller, mode: mode),
           CaptureCircleButton(
             icon: Icons.tune,
-            tooltip: context.t('拍摄设置(参数 / 网格斑马纹 / 辅助)'),
+            tooltip: context.t('remote.settingsTooltip'),
             onTap: onOpenSettings,
           ),
         ],
@@ -104,7 +104,7 @@ class CaptureShutterColumn extends StatelessWidget {
         const SizedBox(height: 8),
         CaptureCircleButton(
           icon: Icons.tune,
-          tooltip: context.t('拍摄设置(参数 / 网格斑马纹 / 辅助)'),
+          tooltip: context.t('remote.settingsTooltip'),
           onTap: onOpenSettings,
         ),
         const SizedBox(height: 8),
@@ -228,7 +228,7 @@ Widget _focusButton(BuildContext context, LivePalette live, RemoteController con
       controller.liveViewActive &&
       !controller.focusModeIsMf;
   return Tooltip(
-    message: context.t('自动对焦'),
+    message: context.t('remote.autofocus'),
     child: SizedBox(
       width: 54,
       height: 54,
@@ -388,7 +388,7 @@ class AlbumThumbButton extends StatelessWidget {
     final live = LiveDesign.of(context);
     final thumb = controller.reviewThumb;
     return Tooltip(
-      message: context.t('相机相册'),
+      message: context.t('conn.cameraAlbum'),
       child: SizedBox(
         width: 54,
         height: 54,
