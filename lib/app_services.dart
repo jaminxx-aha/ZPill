@@ -335,15 +335,18 @@ final class AppServices {
 
     // 断开/失败 → 对象缓存与缩略图内存索引失效(缩略图磁盘缓存是
     // 内容键,跨会话稳定,保留;重连后重新全量枚举)。
-    // 连接成功 → debug 构建自动跑一次 PTP 诊断序列(结果进 hilog,
-    // 见 debug/ptp_diagnostics.dart)。
+    // 连接成功 → PTP 诊断序列**显式开才跑**(kPtpDiagnosticsOnConnect,
+    // --dart-define=PTP_DIAG=true):序列含全卡枚举×3 + 两次整图下载 +
+    // 会话重开,全在串行锁上 —— 2026-10-16 真机定案收闸,Wi-Fi 下它
+    // 把取景首帧/进页刷参/信息卡全部压到分钟级(拍摄页「进页卡很久、
+    // 无实时取景」主因)。见 debug/ptp_diagnostics.dart。
     var diagRan = false;
     connection.states.listen((s) {
       // 连接成功沿(含重连成功)每沿必启轮询器(start 幂等);诊断只
       // 跑一次。2026-10-10 修:旧结构把 start() 关在 !diagRan 门里,
       // 首连后重连成功的 connected 沿轮询器永远不再跑。
       if (s == CameraLinkState.connected) {
-        if (!diagRan) {
+        if (kPtpDiagnosticsOnConnect && !diagRan) {
           diagRan = true;
           PtpDiagnostics.run(session: session, repository: repository);
         }
