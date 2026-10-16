@@ -1,9 +1,13 @@
 /// 相机相册页(相机页「相册」入口直达):全部照片网格按拍摄日期分段
-/// (段头点按 = 整日选择/取消),顶部文件夹 chips 切换分类(同文件夹内
-/// RAW+JPG 仍合并);长按进入多选,选中项可批量下载到相册/应用(批次含
-/// 双格式组时先选格式,缺格式的组跳过)、批量删除(相机侧逐文件
-/// 0x100B,确认对话框把关)。本地评分角标(左上星标)随
-/// [RatingsController] 变化;连拍簇一条目(typeLabel 带 ×N)。
+/// (段头点按 = 整日选择/取消);文件夹筛选收进 AppBar 右上弹层(图库
+/// 页同款 MenuAnchor 分区卡片,仅多相册时出相册分区),同文件夹内
+/// RAW+JPG 仍合并。长按进入多选,底部操作栏默认单「下载」钮,点按
+/// 换出「到相册/到应用」双目的地(批次含双格式组时先选格式,缺格式
+/// 的组跳过)、批量删除(相机侧逐文件 0x100B,确认对话框把关)。筛选
+/// 弹层的图片下载格式档(全部/仅 JPG/仅 RAW)只定批量下载的格式
+/// 预选:非「全部」时跳过格式面板直接按该格式收集(网格显示不变)。
+/// 本地评分角标(左上星标)随 [RatingsController] 变化;连拍簇一条目
+/// (typeLabel 带 ×N)。
 ///
 /// 活页模式:随 [BrowserController] 的渐进发布增长(最新优先,新对象尾部
 /// 追加);AppBar 细进度条 + 刷新按钮 + 下拉刷新重枚举;首块前轻加载态,
@@ -32,11 +36,34 @@ import '../common/format.dart';
 import '../common/widgets/confirm_dialog.dart';
 import '../common/widgets/states.dart';
 import '../../design/app_colors.dart';
+import '../../design/app_dimens.dart';
 import 'browser_controller.dart';
 import 'download_format_sheet.dart';
 import '../transfers/transfers_page.dart';
 import 'photo_viewer_page.dart';
 import 'ratings_controller.dart';
+
+/// 图片下载格式筛选(筛选弹层第三区):只定批量下载的格式预选,网格
+/// 显示不受影响。全部 = 现状(双格式组/照片视频混选批次下载前仍弹
+/// 格式面板);仅 JPG / 仅 RAW = 按该格式直接收集下载,不再弹面板
+/// (缺该格式的组跳过计数提示,视频组照常全量 —— 与格式面板同义)。
+/// label = t() 键,显示点包 t()。
+enum _FormatFilter {
+  all('libpage.all'),
+  jpg('fmt.jpgOnly'),
+  raw('fmt.rawOnly');
+
+  const _FormatFilter(this.label);
+
+  final String label;
+
+  /// 映射到下载格式收集口径;null = 不预选(全部,下载沿自行弹面板)。
+  PhotoDownloadFormat? get asDownloadFormat => switch (this) {
+        all => null,
+        jpg => PhotoDownloadFormat.jpg,
+        raw => PhotoDownloadFormat.raw,
+      };
+}
 
 class PhotoGridPage extends StatefulWidget {
   const PhotoGridPage({
@@ -99,6 +126,13 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
   /// 当前过滤的相册(初始 = 入口句柄;chips 切换)。选中的文件夹在
   /// 重枚举后消失时回落汇总(见 build 里的 post-frame 兜底)。
   late int _filterHandle = widget.folderHandle;
+
+  /// 图片下载格式筛选(筛选弹层;只定下载格式,不改网格)。
+  _FormatFilter _formatFilter = _FormatFilter.all;
+
+  /// 底栏两段式下载:「下载」钮点按后换出「到相册/到应用」双目的地;
+  /// 选择清空(下载完成/手动取消)复位,下次多选重新从「下载」起。
+  bool _revealDownload = false;
 
   /// 缩略图 Future 按代表文件句柄缓存:主文件变化(渐进配对完成
   /// NEF→JPG 切换)时取新 Future,其余重建不闪、不重发请求。
@@ -258,7 +292,7 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
     return null;
   }
 
-  /// chips 切换过滤:清空选择(跨相册选择无意义)+ 弃旧快照。
+  /// 筛选弹层相册切换:清空选择(跨相册选择无意义)+ 弃旧快照。
   void _switchFilter(int handle) {
     if (handle == _filterHandle) return;
     setState(() {
@@ -294,12 +328,17 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
     });
   }
 
-  void _clearSelection() => setState(_selected.clear);
+  void _clearSelection() => setState(() {
+        _selected.clear();
+        _revealDownload = false;
+      });
 
-  /// 批量下载:批次内容不单一才弹格式选择 —— 含双格式组(选 JPG/RAW)
-  /// 或照片视频混选(选「仅视频」可整批只要视频);纯单一格式直接下,
-  /// 行为同旧版;按所选格式过滤,缺格式的组跳过并计数提示;取消
-  /// 选择面板则什么都不下,保留选中态(便于改选格式再下)。
+  /// 批量下载:筛选弹层已定格式(仅 JPG/仅 RAW)直接按该格式收集,
+  /// 不再弹面板;「全部」维持现状 —— 批次内容不单一才弹格式选择(含
+  /// 双格式组(选 JPG/RAW)或照片视频混选(选「仅视频」可整批只要
+  /// 视频));纯单一格式直接下,行为同旧版;按所选格式过滤,缺格式
+  /// 的组跳过并计数提示;取消选择面板则什么都不下,保留选中态(便于
+  /// 改选格式再下)。
   Future<void> _downloadSelected(
       List<PhotoGroup> items, TransferDestination destination) async {
     final groups =
@@ -307,22 +346,24 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
     if (groups.isEmpty) {
       return;
     }
-    PhotoDownloadFormat? format;
-    final pairCount =
-        groups.where((g) => !g.isVideo && g.hasJpg && g.hasRaw).length;
-    final mixedPhotoVideo =
-        groups.any((g) => g.isVideo) && groups.any((g) => !g.isVideo);
-    if (pairCount > 0 || mixedPhotoVideo) {
-      format = await showDownloadFormatSheet(context,
-          subtitle: pairCount > 0
-              ? context.t(
-                  'grid.selectedDual', {'n': groups.length, 'm': pairCount})
-              : context.t('grid.selectedMixed', {'n': groups.length}));
-      if (format == null) {
-        return;
-      }
-      if (!mounted) {
-        return;
+    PhotoDownloadFormat? format = _formatFilter.asDownloadFormat;
+    if (format == null) {
+      final pairCount =
+          groups.where((g) => !g.isVideo && g.hasJpg && g.hasRaw).length;
+      final mixedPhotoVideo =
+          groups.any((g) => g.isVideo) && groups.any((g) => !g.isVideo);
+      if (pairCount > 0 || mixedPhotoVideo) {
+        format = await showDownloadFormatSheet(context,
+            subtitle: pairCount > 0
+                ? context.t(
+                    'grid.selectedDual', {'n': groups.length, 'm': pairCount})
+                : context.t('grid.selectedMixed', {'n': groups.length}));
+        if (format == null) {
+          return;
+        }
+        if (!mounted) {
+          return;
+        }
       }
     }
     // 按所选格式收集;「仅视频」可能把整批照片全部筛掉(entries 空)。
@@ -437,6 +478,8 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
           items: items,
           initialIndex: index,
           ratings: widget.ratings,
+          // 筛选弹层预定的下载格式跟随进查看器(查看器下载不再弹面板)
+          downloadFormat: _formatFilter.asDownloadFormat,
         ),
       ),
     );
@@ -463,9 +506,9 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
         }
         final album = live ?? _lastAlbum;
         final items = album?.items ?? const <PhotoGroup>[];
-        // chips 源:活列表优先,断连后用快照(chips 保持可切换)。
+        // 筛选弹层相册区源:活列表优先,断连后用快照(切换保持可用)。
         if (controller.albums.isNotEmpty) _lastAlbums = controller.albums;
-        final chipAlbums =
+        final filterAlbums =
             controller.albums.isNotEmpty ? controller.albums : _lastAlbums;
         return Scaffold(
           appBar: AppBar(
@@ -491,6 +534,7 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
                   onPressed: controller.syncing ? null : controller.reload,
                   icon: const Icon(Icons.refresh),
                 ),
+                _filterMenuAnchor(context, filterAlbums),
                 const SizedBox(width: 8),
               ],
             ],
@@ -508,7 +552,7 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
                   )
                 : null,
           ),
-          body: _body(controller, chipAlbums, album, items),
+          body: _body(controller, filterAlbums, album, items),
           bottomSheet: _selecting ? _actionBar(items) : null,
         );
       },
@@ -517,7 +561,7 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
 
   /// 主体四态:无内容硬错误屏 / 首块前轻加载 / 空相册提示 / 内容网格
   /// (同步中断仅软横幅,已显示内容可继续浏览,下拉刷新重枚举)。
-  Widget _body(BrowserController controller, List<CameraAlbum> chipAlbums,
+  Widget _body(BrowserController controller, List<CameraAlbum> filterAlbums,
       CameraAlbum? album, List<PhotoGroup> items) {
     _resetPrefetchAnchors(items); // items 换实例(刷新/切换):预取锚点重置
     if (items.isEmpty) {
@@ -544,7 +588,6 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
               // 常可滚动:内容不足一屏时下拉刷新仍可用。
               physics: const AlwaysScrollableScrollPhysics(),
               slivers: [
-                _filterChips(chipAlbums),
                 for (final section in _sectionsOf(items)) ...[
                   SliverToBoxAdapter(
                     child: _sectionHeader(section, items),
@@ -590,34 +633,73 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
     );
   }
 
-  /// 文件夹筛选 chips(首 sliver):汇总 + 各文件夹;只有汇总一个相册时
-  /// 不占位(无分类可言)。
-  Widget _filterChips(List<CameraAlbum> albums) {
-    if (albums.length < 2) {
-      return const SliverToBoxAdapter(child: SizedBox.shrink());
-    }
-    return SliverToBoxAdapter(
-      child: SizedBox(
-        height: 44,
-        child: ListView.separated(
-          scrollDirection: Axis.horizontal,
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-          itemCount: albums.length,
-          separatorBuilder: (_, __) => const SizedBox(width: 8),
-          itemBuilder: (context, i) {
-            final album = albums[i];
-            return ChoiceChip(
+  /// 右上筛选弹层(图库页同款 MenuAnchor 分区卡片):相册区(汇总 +
+  /// 各文件夹,仅多相册时出现)+ 图片下载格式区(全部/仅 JPG/仅 RAW)。
+  /// 相册切换沿用旧 chips 规矩清空选择(跨相册选择无意义);格式切换
+  /// 不动选择 —— 网格显示不变,选中项的下载格式跟着走。
+  Widget _filterMenuAnchor(BuildContext context, List<CameraAlbum> albums) {
+    final scheme = Theme.of(context).colorScheme;
+    return MenuAnchor(
+      style: MenuStyle(
+        backgroundColor: WidgetStatePropertyAll(scheme.surfaceContainerLow),
+        shape: WidgetStatePropertyAll(
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadius.lg)),
+        ),
+      ),
+      alignmentOffset: const Offset(0, 6),
+      menuChildren: [
+        if (albums.length >= 2) ...[
+          _menuHeader(context, 'grid.albums'),
+          for (final album in albums)
+            MenuItemButton(
+              trailingIcon: _filterHandle == album.folderHandle
+                  ? Icon(Icons.check, size: 18, color: scheme.primary)
+                  : null,
+              onPressed: () => _switchFilter(album.folderHandle),
               // 相册名 = 相机上报文件夹名(Latin,未命中原文直传)+
               // 汇总相册「全部照片」(core 常量,命中即译)
-              label: Text(context.t(album.name)),
-              selected: _filterHandle == album.folderHandle,
-              onSelected: (_) => _switchFilter(album.folderHandle),
-            );
-          },
+              child: Text(context.t(album.name)),
+            ),
+        ],
+        _menuHeader(context, 'grid.downloadFormat'),
+        for (final f in _FormatFilter.values)
+          MenuItemButton(
+            leadingIcon: Icon(_formatIcon(f)),
+            trailingIcon: _formatFilter == f
+                ? Icon(Icons.check, size: 18, color: scheme.primary)
+                : null,
+            onPressed: () => setState(() => _formatFilter = f),
+            child: Text(context.t(f.label)),
+          ),
+      ],
+      builder: (context, controller, child) => IconButton(
+        tooltip: context.t('libpage.filter'),
+        onPressed: () =>
+            controller.isOpen ? controller.close() : controller.open(),
+        icon: const Icon(Icons.tune),
+      ),
+    );
+  }
+
+  Widget _menuHeader(BuildContext context, String key) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+      child: Text(
+        context.t(key),
+        style: TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.w600,
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
         ),
       ),
     );
   }
+
+  IconData _formatIcon(_FormatFilter f) => switch (f) {
+        _FormatFilter.all => Icons.apps,
+        _FormatFilter.jpg => Icons.image_outlined,
+        _FormatFilter.raw => Icons.raw_on_outlined,
+      };
 
   /// 网格缩略取数(句柄去重):失败不驻留 —— 移除在途 future 并限次
   /// 自动重试(3 次,间隔 3s;耗尽留断图占位,滚动重建自然再试)。旧版
@@ -820,28 +902,40 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
     );
   }
 
+  /// 底栏两段式下载:默认单「下载」钮,点按换出「到相册/到应用」双
+  /// 目的地(选择清空沿复位,见 [_clearSelection]);删除钮常驻。
   Widget _actionBar(List<PhotoGroup> items) {
     return SafeArea(
       child: BottomAppBar(
         child: Row(
           children: [
-            Expanded(
-              child: FilledButton.tonalIcon(
-                onPressed: () =>
-                    _downloadSelected(items, TransferDestination.gallery),
-                icon: const Icon(Icons.photo_library_outlined),
-                label: Text(context.t('grid.downloadToAlbum')),
+            if (!_revealDownload)
+              Expanded(
+                child: FilledButton.tonalIcon(
+                  onPressed: () => setState(() => _revealDownload = true),
+                  icon: const Icon(Icons.download_outlined),
+                  label: Text(context.t('grid.download')),
+                ),
+              )
+            else ...[
+              Expanded(
+                child: FilledButton.tonalIcon(
+                  onPressed: () =>
+                      _downloadSelected(items, TransferDestination.gallery),
+                  icon: const Icon(Icons.photo_library_outlined),
+                  label: Text(context.t('grid.downloadToAlbum')),
+                ),
               ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: FilledButton.tonalIcon(
-                onPressed: () =>
-                    _downloadSelected(items, TransferDestination.app),
-                icon: const Icon(Icons.folder_outlined),
-                label: Text(context.t('grid.downloadToApp')),
+              const SizedBox(width: 8),
+              Expanded(
+                child: FilledButton.tonalIcon(
+                  onPressed: () =>
+                      _downloadSelected(items, TransferDestination.app),
+                  icon: const Icon(Icons.folder_outlined),
+                  label: Text(context.t('grid.downloadToApp')),
+                ),
               ),
-            ),
+            ],
             const SizedBox(width: 8),
             IconButton(
               tooltip: context.t('common.delete'),

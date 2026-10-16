@@ -350,7 +350,8 @@ final class _FakePtpTransport implements PtpTransport {
 }
 
 void main() {
-  testWidgets('双格式组:下载前弹格式选择,仅 RAW 只入队 NEF', (tester) async {
+  testWidgets('双格式组:「下载」展开目的地后弹格式选择,仅 RAW 只入队 NEF',
+      (tester) async {
     final engine = _FakeEngine();
     final group = PhotoGroup([
       _file(101, 'DSC_0001.JPG'),
@@ -367,6 +368,10 @@ void main() {
           onOpenTransfers: () => transfersTapped = true,
         ));
 
+    expect(find.text('下载'), findsOneWidget);
+    expect(find.text('下载到相册'), findsNothing); // 两段式:默认单「下载」钮
+    await tester.tap(find.text('下载'));
+    await tester.pump();
     await tester.tap(find.text('下载到相册'));
     await tester.pumpAndSettle();
     expect(find.text('选择下载格式'), findsOneWidget);
@@ -454,7 +459,8 @@ void main() {
     expect(find.byType(CircularProgressIndicator), findsNothing);
   });
 
-  testWidgets('单格式组:不弹面板直接整组入队', (tester) async {
+  testWidgets('单格式组:「下载」展开目的地后不弹面板直接整组入队',
+      (tester) async {
     final engine = _FakeEngine();
     final group = PhotoGroup([_file(101, 'IMG_0101.JPG')]);
     await _openViewer(
@@ -466,6 +472,8 @@ void main() {
           engine: engine,
         ));
 
+    await tester.tap(find.text('下载'));
+    await tester.pump();
     await tester.tap(find.text('下载到相册'));
     await tester.pumpAndSettle();
 
@@ -473,6 +481,64 @@ void main() {
     final (entries, destination) = engine.calls.single;
     expect(entries.single.name, 'IMG_0101.JPG');
     expect(destination, TransferDestination.gallery);
+
+    await _drainSnackBar(tester);
+  });
+
+  testWidgets('筛选预定格式(仅 RAW):跳过面板直接入队 NEF,入队后复位「下载」',
+      (tester) async {
+    final engine = _FakeEngine();
+    final group = PhotoGroup([
+      _file(101, 'DSC_0001.JPG'),
+      _file(102, 'DSC_0001.NEF', format: 0x3000),
+    ]);
+    await _openViewer(
+        tester,
+        PhotoViewerPage(
+          items: [group],
+          initialIndex: 0,
+          thumbnails: _FakeThumbs(),
+          engine: engine,
+          downloadFormat: PhotoDownloadFormat.raw,
+        ));
+
+    await tester.tap(find.text('下载'));
+    await tester.pump();
+    await tester.tap(find.text('下载到相册'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('选择下载格式'), findsNothing,
+        reason: '相册页筛选已定格式:不再弹格式面板');
+    final (entries, destination) = engine.calls.single;
+    expect(entries.single.name, 'DSC_0001.NEF');
+    expect(destination, TransferDestination.gallery);
+    expect(find.text('下载到相册'), findsNothing,
+        reason: '入队完成:两段式复位回单「下载」钮');
+
+    await _drainSnackBar(tester);
+  });
+
+  testWidgets('筛选预定格式但组内缺该格式(纯 JPG × 仅 RAW):提示不下',
+      (tester) async {
+    final engine = _FakeEngine();
+    final group = PhotoGroup([_file(101, 'IMG_0101.JPG')]);
+    await _openViewer(
+        tester,
+        PhotoViewerPage(
+          items: [group],
+          initialIndex: 0,
+          thumbnails: _FakeThumbs(),
+          engine: engine,
+          downloadFormat: PhotoDownloadFormat.raw,
+        ));
+
+    await tester.tap(find.text('下载'));
+    await tester.pump();
+    await tester.tap(find.text('下载到相册'));
+    await tester.pumpAndSettle();
+
+    expect(engine.calls, isEmpty);
+    expect(find.text('没有符合「仅 RAW」的文件,未开始下载'), findsOneWidget);
 
     await _drainSnackBar(tester);
   });
@@ -754,7 +820,7 @@ void main() {
     ]);
     expect(chromeCalls.any((c) => c.method.contains('SystemUIMode')), isTrue);
     expect(find.text('1 / 2'), findsNothing); // AppBar 收
-    expect(find.text('下载到相册'), findsNothing); // 底栏收
+    expect(find.text('下载'), findsNothing); // 底栏收
     // 同一播放器:无二次装载
     expect(player.loads, hasLength(1));
     expect(find.byTooltip('退出全屏'), findsOneWidget);
