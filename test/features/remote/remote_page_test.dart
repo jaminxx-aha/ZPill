@@ -142,16 +142,19 @@ Uint8List _u32Bytes(int v) => Uint8List.fromList(
 /// 目录序全量应答(模式 M · f/2.8 · 1/100s · ISO 200 · EV+0.3 ·
 /// 白平衡自动 · 色温 5500K · 闪光关闭 · 测光 2 · 对焦 AF-C · 对焦模式
 /// AF-S · 释放单张 · 画质 RAW · RAW 无损 · 尺寸 2 · 区域 FX · 校准标准,
-/// 均可写;快门/ISO 值走厂商读码裸值,末尾自动 ISO 状态(0xD054,关)
-/// 与剩余张数),与 remote_controller_test 同值。0xD1A6 模式镜像**打头**
+/// 均可写;快门/ISO 值走厂商读码裸值,末尾自动 ISO 状态(0xD054,关)),
+/// 与 remote_controller_test 同值。0xD1A6 模式镜像**打头**
 /// ([d1a6]:0=照片/1=视频/null=不预置 —— 连接沿串链/进页对表都是模式读
 /// 先于刷参,2026-10-11 真机反馈改制;重连流模式读应答预置在引擎重启
 /// 对之前,参数块内不再带)。[mode] 参数化曝光模式(默认 M)。
+/// 张数链首读(0xD1F1,refreshParams 打头,2026-10-16 改制)在 d1a6
+/// 之后紧跟 —— [d1a6]=null 时它就是块首。
 void _scriptParams(_ScriptTransport t,
     {int mode = 1, int? d1a6 = 0, bool tail = true}) {
   if (d1a6 != null) {
     t.ok(data: Uint8List.fromList([d1a6])); // 0xD1A6 模式镜像(链首读)
   }
+  t.ok(data: _u32Bytes(1234)); // 0xD1F1 剩余张数(链首读)
   t
     ..ok(data: _propDescDataset(PtpDevicePropCode.exposureProgramMode,
         PtpDataType.uint16, mode,
@@ -199,9 +202,7 @@ void _scriptParams(_ScriptTransport t,
     ..ok(data: _propDescDataset(PtpDevicePropCode.activePicCtrlItem,
         PtpDataType.uint16, 1, enums: [1, 2, 3, 4]));
   if (tail) {
-    t
-      ..ok(data: Uint8List.fromList([0])) // 0xD054 自动 ISO:关
-      ..ok(data: _u32Bytes(1234)); // 0xD1F1 剩余张数
+    t.ok(data: Uint8List.fromList([0])); // 0xD054 自动 ISO:关
   }
 }
 
@@ -254,13 +255,12 @@ void _scriptVideoParams(_ScriptTransport t) {
 }
 
 /// 视频档全量刷参块(消费序 = refreshParams 的
-/// [d1a6? → 照片参数 → 视频参数族 → 0xD054 → 0xD1F1])。
+/// [d1a6? → 0xD1F1 → 照片参数 → 视频参数族 → 0xD054],张数链首读紧跟
+/// 模式读,2026-10-16 改制)。
 void _scriptParamsVideo(_ScriptTransport t, {int mode = 1, int? d1a6 = 0}) {
   _scriptParams(t, mode: mode, d1a6: d1a6, tail: false);
   _scriptVideoParams(t);
-  t
-    ..ok(data: Uint8List.fromList([0])) // 0xD054 自动 ISO:关
-    ..ok(data: _u32Bytes(1234)); // 0xD1F1 剩余张数
+  t.ok(data: Uint8List.fromList([0])); // 0xD054 自动 ISO:关
 }
 
 /// 挂起的 delay(永不完成):引擎帧轮询/AE 轮询在测试里驻停,

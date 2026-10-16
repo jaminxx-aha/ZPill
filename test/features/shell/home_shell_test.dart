@@ -166,11 +166,13 @@ const _kVendorReadValues = <int, int>{
 };
 
 /// 目录序全量应答(与 remote_controller_test._scriptParams 同款:
-/// PropDesc(取值域直供表参数跳过)+ 值回读(路由参数读厂商码裸值)
-/// + 末尾自动 ISO 状态与剩余张数;0xD1A6 模式镜像**打头** —— 连接沿
-/// 串链/进页对表都是模式读先于刷参,2026-10-11 真机反馈改制)。
+/// 张数链首读(0xD1F1,refreshParams 打头,2026-10-16 改制)+ PropDesc
+/// (取值域直供表参数跳过)+ 值回读(路由参数读厂商码裸值)+ 末尾
+/// 自动 ISO 状态;0xD1A6 模式镜像**打头** —— 连接沿串链/进页对表都是
+/// 模式读先于刷参,2026-10-11 真机反馈改制)。
 void _scriptParams(_ScriptTransport t, {int fNumber = 280}) {
   t.ok(data: Uint8List.fromList([0])); // 0xD1A6 模式镜像(链首读)
+  t.ok(data: _u32Bytes(1234)); // 0xD1F1 剩余张数(链首读)
   for (final s in _kParamSpecs) {
     final param = shootingParamByCode[s.code]!;
     final value = s.code == PtpDevicePropCode.fNumber ? fNumber : s.value;
@@ -187,7 +189,6 @@ void _scriptParams(_ScriptTransport t, {int fNumber = 280}) {
     }
   }
   t.ok(data: Uint8List.fromList([0])); // 0xD054 自动 ISO:关
-  t.ok(data: _u32Bytes(1234)); // 0xD1F1 剩余张数
 }
 
 /// 挂起的 delay(永不完成):引擎帧轮询/AE 轮询在测试里驻停。
