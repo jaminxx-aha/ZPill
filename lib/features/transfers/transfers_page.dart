@@ -72,14 +72,20 @@ final class TransfersController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> deleteAppFile(File file) async {
-    try {
-      await file.delete();
-    } on FileSystemException {
-      // 删失败:刷新后自然回显
+  /// 批量删除应用内文件:逐个删(单个失败不中断批次),一次刷新一次
+  /// notify。
+  Future<void> deleteAppFiles(Iterable<File> files) async {
+    for (final file in files) {
+      try {
+        await file.delete();
+      } on FileSystemException {
+        // 删失败:刷新后自然回显
+      }
     }
     await refreshAppFiles();
   }
+
+  Future<void> deleteAppFile(File file) => deleteAppFiles([file]);
 
   void _absorb(List<TransferTask> ts) {
     var appFileLanded = false;

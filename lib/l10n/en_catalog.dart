@@ -723,11 +723,22 @@ const Map<String, String> enCatalog = {
   '只下视频,照片全部跳过': 'Videos only; all photos are skipped',
 
   // ── library-transfers(i18n-7)──
-  // local_library_page(「图库」「刷新」「照片」「视频」「连拍」「删除」
-  // 「照片信息」「该平台暂不支持视频播放」复用既有键;筛选/排序/类型
-  // chips 的 label 存枚举原文即 t() 键,显示点包 t;「传输」键与下方
-  // transfers_page 的 AppBar 标题同键共用)
+  // local_library_page(「图库」「刷新」「删除」「照片信息」「该平台暂不
+  // 支持视频播放」复用既有键;筛选弹层/多选的文案在本组;筛选/排序的
+  // label 存枚举原文即 t() 键,显示点包 t;「传输」键与下方 transfers_page
+  // 的 AppBar 标题同键共用)
   '全部': 'All',
+  '选择': 'Select',
+  '筛选': 'Filter',
+  '筛选:': 'Filter:',
+  '排序': 'Sort',
+  '视图选项': 'View Options',
+  '连拍聚合': 'Group Bursts',
+  '已导出 {n} 项到系统相册(应用内文件保留)':
+      'Exported {n} items to the system album (in-app files are kept)',
+  '批量删除': 'Delete Selected',
+  '将删除 {n} 个文件。\n此操作不可恢复(相机上的原件不受影响)。':
+      'This will delete {n} files.\nThis cannot be undone (the originals on the camera are unaffected).',
   '新→旧': 'Newest First',
   '旧→新': 'Oldest First',
   '应用内还没有文件\n(在相机相册里选择「下载到应用」)':

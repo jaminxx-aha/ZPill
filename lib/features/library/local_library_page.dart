@@ -2,24 +2,29 @@
 /// TransfersController 的 appFiles 数据源)。**不含**已导入系统相册的
 /// 文件 —— 那些归系统相册 App 管,这里只看应用自留的份。
 ///
-/// 网格默认按修改时间倒序(新下载在前,排序可翻「旧→新」);顶栏下
-/// 格式过滤 chips(全部/RAW/JPG/视频,按文件名扩展名,与相机侧判定同
-/// 源)再叠一行类型/排序/连拍 chips(全部/照片/视频 × 新→旧/旧→新
-/// × 连拍聚合开关,内存态不落库)。「连拍」开时相邻拍摄时刻的同段
-/// 文件合为一格(×N 角标,与相机相册连拍簇同参,见 [groupLocalBurstRuns];
-/// mtime = 拍摄时刻由下载引擎落盘回写)。Flutter 可解码的图片
-/// 直接铺格(cacheWidth 限内存);NEF 走原生解码、MOV 走原生抽帧出
-/// 网格缩略(iOS ImageIO / AVAssetImageGenerator,≤512px 同一管线
-/// 落盘缓存,MOV 格内叠摄像机角标;无解码器/无抽帧/失败回落图标格)。
-/// 点任意可看件进黑底查看器:PageView 左右滑翻页(网格过滤序同源),
-/// 图片双指缩放、NEF 原生解码长边 ≤2560(会话缓存,翻回不重解)。
-/// 视频在页面内直接播放(2026-10-09:点开即播,不再「海报帧 + 播放
-/// 钮 + 弹全屏新页」三步走;iOS 平台视图嵌 AVPlayerViewController,
-/// 播放控制在 Flutter 侧自绘 —— 原生传输条关掉,横滑才归 PageView
-/// 翻页不抢手势;高帧率素材浮「24fps 顺帧」开关,非阻塞点了才变速
-/// 静音;Android/ohos 通道待补回落海报帧 + 说明文案)。查看器/长按格
-/// 可删除,查看器可把文件补导入系统相册。AppBar 传输徽标(进行中
-/// 任务数)→ 传输页(任务列表)。
+/// 网格默认按修改时间倒序(新下载在前,弹层可翻「旧→新」);筛选收进
+/// AppBar 右上弹层(排序 新→旧/旧→新 × 格式 全部/RAW/JPG/视频 × 视图
+/// 选项 连拍聚合开关,内存态不落库,与旧 chips 同先例)。「连拍聚合」
+/// 开时相邻拍摄时刻的同段文件合为一格(×N 角标,与相机相册连拍簇同参,
+/// 见 [groupLocalBurstRuns];mtime = 拍摄时刻由下载引擎落盘回写)。
+/// Flutter 可解码的图片直接铺格(cacheWidth 限内存);NEF 走原生解码、
+/// MOV 走原生抽帧出网格缩略(iOS ImageIO / AVAssetImageGenerator,
+/// ≤512px 同一管线落盘缓存,MOV 格内叠摄像机角标;无解码器/无抽帧/
+/// 失败回落图标格)。点任意可看件进黑底查看器:PageView 左右滑翻页
+/// (网格过滤序同源),图片双指缩放、NEF 原生解码长边 ≤2560(会话
+/// 缓存,翻回不重解)。视频在页面内直接播放(2026-10-09:点开即播,
+/// 不再「海报帧 + 播放钮 + 弹全屏新页」三步走;iOS 平台视图嵌
+/// AVPlayerViewController,播放控制在 Flutter 侧自绘 —— 原生传输条
+/// 关掉,横滑才归 PageView 翻页不抢手势;高帧率素材浮「24fps 顺帧」
+/// 开关,非阻塞点了才变速静音;Android/ohos 通道待补回落海报帧 +
+/// 说明文案)。查看器可删除/把文件补导入系统相册。
+///
+/// 多选:AppBar「选择」或长按任意格进入(长按格预选);多选中点格
+/// = 勾/取消(连拍格整段原子勾),AppBar 变「已选 {n} 项」+ 全选/
+/// 退出,底部操作栏批量删除(确认把关)/批量导出系统相册(导出后
+/// 应用内文件保留)。单删收进多选(选 1 删 1);查看器内单删不动。
+/// 页面常驻 IndexedStack,选中态跨 tab 保活(计数从活控制器现取,
+/// 文件被删自然缩)。AppBar 传输徽标(进行中任务数)→ 传输页。
 library;
 
 import 'dart:async';
@@ -34,6 +39,7 @@ import '../../core/media/cube_lut.dart';
 import '../../core/media/xmp_rgb_table.dart' show parseXmpRgbTable;
 import '../../core/ptpip/object_format.dart';
 import '../../design/app_colors.dart';
+import '../../design/app_dimens.dart';
 import '../../l10n/l10n.dart';
 import '../../platform/gallery_saver.dart';
 import '../../platform/raw_decoder.dart';
@@ -65,26 +71,6 @@ enum _LibFilter {
         all => true,
         raw => isRawFilename(filename),
         jpg => isJpgFilename(filename),
-        video => isVideoFilename(filename),
-      };
-}
-
-/// 图库类型过滤:照片/视频大类。视频集与格式过滤「视频」同源同集
-/// (两处「视频」永远同口径,分叉会对不上);其余一律归照片 —— 相机
-/// 下载物(RAW/JPG/其他图像)没有第三类去处,「非视频即照片」。
-/// label 原文即 t() 键,显示点包 t()。
-enum _LibType {
-  all('全部'),
-  photo('照片'),
-  video('视频');
-
-  const _LibType(this.label);
-
-  final String label;
-
-  bool allows(String filename) => switch (this) {
-        all => true,
-        photo => !isVideoFilename(filename),
         video => isVideoFilename(filename),
       };
 }
@@ -204,12 +190,16 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
       widget.videoPlayer ?? PlatformServices.videoPlayer;
 
   _LibFilter _filter = _LibFilter.all;
-  _LibType _type = _LibType.all;
   _LibSort _sort = _LibSort.newestFirst;
 
-  /// 连拍聚合开关(内存级,不落 AppSettings —— 与类型/排序 chips 同
+  /// 连拍聚合开关(内存级,不落 AppSettings —— 与筛选弹层各档同
   /// 先例):开时网格条目 = [groupLocalBurstRuns] 的段,成段合为一格。
   bool _burstGrouped = false;
+
+  /// 多选:显式模式位(「选择」钮进场时选中集为空,不能以非空推导),
+  /// 键 = 文件绝对路径(删除/导出消费的就是路径;连拍格整段成员进出)。
+  bool _selectMode = false;
+  final Set<String> _selected = {};
 
   /// NEF/MOV 网格缩略:原生解码/抽帧一次(≤512px)落盘复用。会话内
   /// future 合并(滚动反复 build 不重复解码);解码串行(整档 RAW 解码
@@ -282,16 +272,37 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
         final filtered = _filtered(files);
         return Scaffold(
           appBar: AppBar(
-            title: Text(context.t('图库')),
+            title: Text(_selectMode
+                ? context.t('已选 {n} 项', {'n': _selected.length})
+                : context.t('图库')),
             actions: [
-              // 传输徽标:进行中任务数角标,点击进传输页看任务列表。
-              _transfersBadge(context, activeCount),
-              IconButton(
-                tooltip: context.t('刷新'),
-                onPressed: _controller.refreshAppFiles,
-                icon: const Icon(Icons.refresh),
-              ),
-              const SizedBox(width: 8),
+              if (_selectMode) ...[
+                IconButton(
+                  tooltip: context.t('全选'),
+                  onPressed: () => _selectAll(filtered),
+                  icon: const Icon(Icons.select_all),
+                ),
+                IconButton(
+                  tooltip: context.t('取消选择'),
+                  onPressed: _exitSelect,
+                  icon: const Icon(Icons.close),
+                ),
+              ] else ...[
+                // 传输徽标:进行中任务数角标,点击进传输页看任务列表。
+                _transfersBadge(context, activeCount),
+                IconButton(
+                  tooltip: context.t('刷新'),
+                  onPressed: _controller.refreshAppFiles,
+                  icon: const Icon(Icons.refresh),
+                ),
+                _filterMenuAnchor(context),
+                if (files.isNotEmpty)
+                  TextButton(
+                    onPressed: _enterSelect,
+                    child: Text(context.t('选择')),
+                  ),
+                const SizedBox(width: 8),
+              ],
             ],
           ),
           body: files.isEmpty
@@ -300,79 +311,23 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
                   // EmptyState 显示端已包 t(),此处再包属双重包裹(无害)
                   message: context.t('应用内还没有文件\n(在相机相册里选择「下载到应用」)'),
                 )
-              : Column(
-                  children: [
-                    // 格式过滤:切换不清文件,只按扩展名收窄网格。
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
-                      child: SegmentedButton<_LibFilter>(
-                        segments: [
-                          for (final f in _LibFilter.values)
-                            ButtonSegment(
-                                value: f, label: Text(context.t(f.label))),
-                        ],
-                        selected: {_filter},
-                        onSelectionChanged: (s) =>
-                            setState(() => _filter = s.first),
-                      ),
-                    ),
-                    // 类型 + 排序 chips(ChoiceChip 行,与相册页文件夹
-                    // chips 同款):类型是大类照片/视频,可与格式筛子叠
-                    // (一个管大类、一个管扩展名细分);排序只翻方向。
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
-                      child: Wrap(
-                        spacing: 8,
-                        runSpacing: 4,
-                        crossAxisAlignment: WrapCrossAlignment.center,
-                        children: [
-                          // 循环变量避开单字母 t(与 context.t 扩展撞观感)
-                          for (final ty in _LibType.values)
-                            ChoiceChip(
-                              label: Text(context.t(ty.label)),
-                              selected: _type == ty,
-                              onSelected: (_) => setState(() => _type = ty),
-                            ),
-                          // 分组视觉分隔:后两组是排序,不与类型混读。
-                          Icon(Icons.sort,
-                              size: 18, color: Theme.of(context).hintColor),
-                          for (final s in _LibSort.values)
-                            ChoiceChip(
-                              label: Text(context.t(s.label)),
-                              selected: _sort == s,
-                              onSelected: (_) => setState(() => _sort = s),
-                            ),
-                          // 连拍聚合:相邻拍摄时刻的成段文件合为一格
-                          //(×N 角标,点开段内翻张),关掉恢复平铺。
-                          ChoiceChip(
-                            label: Text(context.t('连拍')),
-                            selected: _burstGrouped,
-                            onSelected: (on) =>
-                                setState(() => _burstGrouped = on),
-                          ),
-                        ],
-                      ),
-                    ),
-                    Expanded(
-                      child: filtered.isEmpty
-                          ? Center(
-                              child: Text(_emptyMessage,
-                                  textAlign: TextAlign.center,
-                                  style: TextStyle(
-                                      color: Theme.of(context).hintColor)),
-                            )
-                          : _grid(context, filtered),
-                    ),
-                  ],
-                ),
+              : filtered.isEmpty
+                  ? Center(
+                      child: Text(_emptyMessage,
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                              color: Theme.of(context).hintColor)),
+                    )
+                  : _grid(context, filtered),
+          bottomSheet: _selectMode ? _actionBar() : null,
         );
       },
     );
   }
 
-  // 格式与类型两把筛子都过(格式管扩展名细分,类型管照片/视频大类)。
+  // 格式筛子按扩展名收窄(筛选弹层唯一滤网)。
   List<File> _filtered(List<File> files) => files
-      .where((f) => _filter.allows(_nameOf(f)) && _type.allows(_nameOf(f)))
+      .where((f) => _filter.allows(_nameOf(f)))
       .toList(growable: false);
 
   /// 网格主体:平铺(现状)或连拍聚合。「连拍」开时条目 =
@@ -412,16 +367,17 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   /// 连拍段格:封面 = 段内首个 JPG(无 JPG 用段首文件,与相机侧
   /// primary = jpg ?? first 同语义);左下 ×N 角标(N = 段内不同基名
   /// 数,即张数)。点开查看器 peers = 段内全部文件(可翻张),初始页
-  /// = 封面;长按删除保持单文件语义(确认对话框按封面文件名把关,
-  /// 不改成删段)。
+  /// = 封面;多选中整段成员原子勾/取消(格选中 = 段内全部都在)。
   Widget _burstCell(BuildContext context, List<File> run) {
     final cover = run.firstWhere((f) => isJpgFilename(_nameOf(f)),
         orElse: () => run.first);
     final shots = run.map((f) => baseNameOf(_nameOf(f))).toSet().length;
     return GestureDetector(
       key: ValueKey(_nameOf(cover)), // 测试/定位锚:格 = 封面文件名
-      onTap: _openable(cover) ? () => _openViewer(cover, run) : null,
-      onLongPress: () => _confirmDelete(cover),
+      onTap: _selectMode
+          ? () => _toggleFiles(run)
+          : (_openable(cover) ? () => _openViewer(cover, run) : null),
+      onLongPress: () => _cellLongPress(run),
       child: Stack(
         fit: StackFit.expand,
         children: [
@@ -449,17 +405,111 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
               ),
             ),
           ),
+          if (_selectMode) ..._selectOverlay(
+              run.every((f) => _selected.contains(f.path))),
         ],
       ),
     );
   }
 
-  /// 空筛选文案:单格式筛子沿用原文案(既有认知/用例不动);类型筛子
-  /// 在场(单独或与格式叠加)说不清哪把筛子拦的,退泛化一行。
-  /// 格式名片段经 t() 内嵌(模板中文拼回与原串逐字一致)。
-  String get _emptyMessage => _type == _LibType.all
-      ? context.t('没有{label}格式的文件', {'label': context.t(_filter.label)})
-      : context.t('没有符合条件的文件');
+  /// 空筛选文案:格式名片段经 t() 内嵌(模板中文拼回与原串逐字一致)。
+  String get _emptyMessage =>
+      context.t('没有{label}格式的文件', {'label': context.t(_filter.label)});
+
+  /// 筛选弹层(AppBar 右上,iPhone 图库式分区卡片):排序两向 / 格式
+  /// 四档 / 视图选项(连拍聚合)。MenuAnchor 锚按钮弹出,点任意行即收;
+  /// 当前档 trailing 打勾。多选中弹层不可达(actions 换了),setter 仍
+  /// 防御性清选中(与相机相册页换筛选清选中同规矩)。
+  Widget _filterMenuAnchor(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return MenuAnchor(
+      style: MenuStyle(
+        backgroundColor: WidgetStatePropertyAll(scheme.surfaceContainerLow),
+        shape: WidgetStatePropertyAll(
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadius.lg)),
+        ),
+      ),
+      alignmentOffset: const Offset(0, 6),
+      menuChildren: [
+        _menuHeader(context, '排序'),
+        for (final s in _LibSort.values)
+          MenuItemButton(
+            trailingIcon: _sort == s
+                ? Icon(Icons.check, size: 18, color: scheme.primary)
+                : null,
+            onPressed: () => _setSort(s),
+            child: Text(context.t(s.label)),
+          ),
+        _menuHeader(context, '筛选:'),
+        for (final f in _LibFilter.values)
+          MenuItemButton(
+            leadingIcon: Icon(_filterIcon(f)),
+            trailingIcon: _filter == f
+                ? Icon(Icons.check, size: 18, color: scheme.primary)
+                : null,
+            onPressed: () => _setFilter(f),
+            child: Text(context.t(f.label)),
+          ),
+        _menuHeader(context, '视图选项'),
+        MenuItemButton(
+          leadingIcon: const Icon(Icons.burst_mode_outlined),
+          trailingIcon: _burstGrouped
+              ? Icon(Icons.check, size: 18, color: scheme.primary)
+              : null,
+          onPressed: _toggleBurstGrouped,
+          child: Text(context.t('连拍聚合')),
+        ),
+      ],
+      builder: (context, controller, child) => IconButton(
+        tooltip: context.t('筛选'),
+        onPressed: () =>
+            controller.isOpen ? controller.close() : controller.open(),
+        icon: const Icon(Icons.tune),
+      ),
+    );
+  }
+
+  Widget _menuHeader(BuildContext context, String key) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+      child: Text(
+        context.t(key),
+        style: TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.w600,
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
+        ),
+      ),
+    );
+  }
+
+  IconData _filterIcon(_LibFilter f) => switch (f) {
+        _LibFilter.all => Icons.apps,
+        _LibFilter.raw => Icons.raw_on_outlined,
+        _LibFilter.jpg => Icons.image_outlined,
+        _LibFilter.video => Icons.videocam_outlined,
+      };
+
+  void _setFilter(_LibFilter f) {
+    setState(() {
+      _filter = f;
+      _selected.clear();
+    });
+  }
+
+  void _setSort(_LibSort s) {
+    setState(() {
+      _sort = s;
+      _selected.clear();
+    });
+  }
+
+  void _toggleBurstGrouped() {
+    setState(() {
+      _burstGrouped = !_burstGrouped;
+      _selected.clear();
+    });
+  }
 
   Widget _transfersBadge(BuildContext context, int activeCount) {
     return Stack(
@@ -505,15 +555,48 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
         isVideoFilename(name);
   }
 
-  /// 单文件格:手势(点开查看器/长按删除)包内容(见 [_cellBody])。
+  /// 单文件格:手势(多选中点格勾/取消,平时点开查看器;长按进多选并
+  /// 预选)包内容(见 [_cellBody])。
   Widget _cell(BuildContext context, File file, List<File> peers) {
     return GestureDetector(
       key: ValueKey(_nameOf(file)), // 测试/定位锚:格 = 文件名
-      onTap: _openable(file) ? () => _openViewer(file, peers) : null,
-      onLongPress: () => _confirmDelete(file),
-      child: _cellBody(context, file),
+      onTap: _selectMode
+          ? () => _toggleFiles([file])
+          : (_openable(file) ? () => _openViewer(file, peers) : null),
+      onLongPress: () => _cellLongPress([file]),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          _cellBody(context, file),
+          if (_selectMode) ..._selectOverlay(_selected.contains(file.path)),
+        ],
+      ),
     );
   }
+
+  /// 选中覆盖层(与相机相册网格同款):压暗 + 右上勾圈。
+  List<Widget> _selectOverlay(bool selected) => [
+        Positioned.fill(
+          child: ColoredBox(
+            color: selected
+                ? Colors.black.withValues(alpha: 0.3)
+                : Colors.black.withValues(alpha: 0.55),
+          ),
+        ),
+        Align(
+          alignment: Alignment.topRight,
+          child: Padding(
+            padding: const EdgeInsets.all(4),
+            child: Icon(
+              selected ? Icons.check_circle : Icons.radio_button_unchecked,
+              color: selected
+                  ? Theme.of(context).colorScheme.primary
+                  : Colors.white,
+              size: 20,
+            ),
+          ),
+        ),
+      ];
 
   /// 格内容(可解码图片铺格 / NEF·MOV 原生缩略 / 图标格)。
   Widget _cellBody(BuildContext context, File file) {
@@ -623,20 +706,132 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     );
   }
 
-  /// 长按格 / 查看器删除:确认对话框把关(应用内文件,删了要重下)。
+  // ── 多选(选择钮 / 长按格进场;底部操作栏批量删/导出)──
+
+  void _enterSelect() => setState(() => _selectMode = true);
+
+  void _exitSelect() => setState(() {
+        _selectMode = false;
+        _selected.clear();
+      });
+
+  /// 全选当前筛选序全部文件(平铺列表本就含连拍段全部成员)。
+  void _selectAll(List<File> filtered) => setState(() {
+        _selected
+          ..clear()
+          ..addAll([for (final f in filtered) f.path]);
+      });
+
+  /// 勾/取消一组路径(连拍格 = 整段原子进出;组内全在则全出,否则全进)。
+  void _togglePaths(Set<String> paths) {
+    if (paths.every(_selected.contains)) {
+      _selected.removeAll(paths);
+    } else {
+      _selected.addAll(paths);
+    }
+  }
+
+  void _toggleFiles(List<File> files) =>
+      setState(() => _togglePaths({for (final f in files) f.path}));
+
+  /// 长按格:进多选并按组勾(未进场时 = 进入且预选该格)。
+  void _cellLongPress(List<File> files) => setState(() {
+        _selectMode = true;
+        _togglePaths({for (final f in files) f.path});
+      });
+
+  /// 选中集 → 实文件(从活控制器现取,陈旧路径自然忽略)。
+  List<File> get _selectedFiles => _controller.appFiles
+      .where((f) => _selected.contains(f.path))
+      .toList(growable: false);
+
+  /// 批量删除:确认把关(应用内文件,删了要重下;相机原件不受影响)。
   /// 对话框显示端(confirm_dialog)已包 t(),此处再包属双重包裹(无害)。
-  Future<void> _confirmDelete(File file) async {
-    final name = _nameOf(file);
+  Future<void> _deleteSelected() async {
+    final files = _selectedFiles;
+    if (files.isEmpty) {
+      return;
+    }
     final confirmed = await showConfirmDialog(
       context,
       title: context.t('删除应用内文件?'),
-      content: context.t('将删除「{name}」。\n此操作不可恢复(相机上的原件不受影响)。', {'name': name}),
+      content: context.t(
+        '将删除 {n} 个文件。\n此操作不可恢复(相机上的原件不受影响)。',
+        {'n': files.length},
+      ),
       confirmLabel: context.t('删除'),
       destructive: true,
     );
-    if (confirmed) {
-      await _controller.deleteAppFile(file);
+    if (!confirmed) {
+      return;
     }
+    await _controller.deleteAppFiles(files);
+    _exitSelect();
+    if (mounted) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(
+            content:
+                Text(context.t('已删除 {n} 个文件', {'n': files.length}))));
+    }
+  }
+
+  /// 批量导出系统相册:导入是复制不是移动(应用内文件保留);ohos 亮
+  /// 保存面板,用户取消返回空列表(不报错)。
+  Future<void> _exportSelected() async {
+    final files = _selectedFiles;
+    if (files.isEmpty) {
+      return;
+    }
+    var imported = false;
+    try {
+      final uris = await _gallery.importFiles([
+        for (final f in files)
+          GalleryImportRequest(
+            path: f.path,
+            kind: kindForFilename(_nameOf(f)),
+            filename: _nameOf(f),
+          ),
+      ]);
+      imported = uris.isNotEmpty;
+    } on Exception {
+      imported = false;
+    }
+    _exitSelect();
+    if (mounted) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(
+            content: Text(imported
+                ? context.t('已导出 {n} 项到系统相册(应用内文件保留)',
+                    {'n': files.length})
+                : context.t('未导入(已取消或失败)'))));
+    }
+  }
+
+  /// 底部操作栏(多选常驻,空选禁用按钮 —— iPhone 图库式)。
+  Widget _actionBar() {
+    return SafeArea(
+      child: BottomAppBar(
+        child: Row(
+          children: [
+            Expanded(
+              child: FilledButton.tonalIcon(
+                onPressed: _selected.isEmpty ? null : _exportSelected,
+                icon: const Icon(Icons.photo_library_outlined),
+                label: Text(context.t('导出到系统相册')),
+              ),
+            ),
+            const SizedBox(width: 8),
+            IconButton(
+              tooltip: context.t('批量删除'),
+              onPressed: _selected.isEmpty ? null : _deleteSelected,
+              icon: const Icon(Icons.delete_outline),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 

@@ -257,12 +257,19 @@ Uint8List _jpgExifBytes() {
   ]);
 }
 
-/// 格式行文案定位:类型行 chips 与格式行重名(「全部」「视频」),
-/// 格式行在列首,先序遍历第一处即它(类型行另有 ChoiceChip 可定位)。
-Finder fmtText(String label) => find.text(label).first;
+/// 打开筛选弹层(右上 tune 按钮,tooltip 定位;点任意行即收,换档每步重开)。
+Future<void> openFilterMenu(WidgetTester tester) async {
+  await tester.tap(find.byTooltip('筛选'));
+  await tester.pumpAndSettle();
+}
 
-/// 类型/排序行芯片定位(页面唯一的 ChoiceChip 组)。
-Finder libChip(String label) => find.widgetWithText(ChoiceChip, label);
+/// 开弹层点一行并等收场。弹层行文案页面唯一(旧双行 chips 的
+/// 「全部/视频」重名问题随弹层化消失,直接按文案点)。
+Future<void> pickFilter(WidgetTester tester, String label) async {
+  await openFilterMenu(tester);
+  await tester.tap(find.text(label));
+  await tester.pumpAndSettle();
+}
 
 void main() {
   late Directory dir;
@@ -343,7 +350,7 @@ void main() {
     expect(find.text('b.jpg'), findsWidgets); // 查看器 AppBar 标题
   });
 
-  testWidgets('格式过滤:RAW/JPG/视频 chips 按扩展名收窄网格', (tester) async {
+  testWidgets('格式过滤:弹层 RAW/JPG/视频按扩展名收窄网格', (tester) async {
     writeFile('a.jpg', modified: DateTime(2026, 10, 1));
     writeFile('b.nef', modified: DateTime(2026, 10, 2));
     writeFile('c.mov', modified: DateTime(2026, 10, 3));
@@ -358,26 +365,22 @@ void main() {
     expect(find.text('NEF'), findsOneWidget);
     expect(find.byIcon(Icons.videocam_outlined), findsOneWidget);
 
-    await tester.tap(fmtText('RAW'));
-    await tester.pumpAndSettle();
+    await pickFilter(tester, 'RAW');
     expect(find.text('NEF'), findsOneWidget);
     expect(find.byType(Image), findsNothing);
     expect(find.byIcon(Icons.videocam_outlined), findsNothing);
 
-    await tester.tap(fmtText('视频'));
-    await tester.pumpAndSettle();
+    await pickFilter(tester, '视频');
     expect(find.byIcon(Icons.videocam_outlined), findsOneWidget);
     expect(find.text('NEF'), findsNothing);
     expect(find.byType(Image), findsNothing);
 
-    await tester.tap(fmtText('JPG'));
-    await tester.pumpAndSettle();
+    await pickFilter(tester, 'JPG');
     expect(find.byType(Image), findsOneWidget);
     expect(find.text('NEF'), findsNothing);
     expect(find.byIcon(Icons.videocam_outlined), findsNothing);
 
-    await tester.tap(fmtText('全部'));
-    await tester.pumpAndSettle();
+    await pickFilter(tester, '全部');
     expect(find.byType(Image), findsOneWidget);
     expect(find.text('NEF'), findsOneWidget);
     expect(find.byIcon(Icons.videocam_outlined), findsOneWidget);
@@ -391,13 +394,11 @@ void main() {
     await tester.pumpWidget(host(gallery, controller));
     await tester.pumpAndSettle();
 
-    await tester.tap(fmtText('视频'));
-    await tester.pumpAndSettle();
+    await pickFilter(tester, '视频');
     expect(find.text('没有视频格式的文件'), findsOneWidget);
     expect(find.byType(Image), findsNothing);
 
-    await tester.tap(fmtText('全部'));
-    await tester.pumpAndSettle();
+    await pickFilter(tester, '全部');
     expect(find.byType(Image), findsOneWidget);
   });
 
@@ -512,7 +513,8 @@ void main() {
         reason: '时间行(mtime 兜底)');
   });
 
-  testWidgets('长按删除:确认对话框把关,删后网格收缩', (tester) async {
+  testWidgets('长按进多选:预选该格,批量删除确认把关,删后网格收缩',
+      (tester) async {
     writeFile('a.jpg', modified: DateTime(2026, 10, 1));
     writeFile('b.jpg', modified: DateTime(2026, 10, 2));
     final gallery = _FakeGallery(dir);
@@ -524,7 +526,14 @@ void main() {
 
     await tester.longPress(find.byType(Image).first); // b.jpg(最新在前)
     await tester.pumpAndSettle();
+    expect(find.text('已选 1 项'), findsOneWidget); // AppBar 计数
+    expect(find.byIcon(Icons.check_circle), findsOneWidget); // 格上勾
+    expect(find.byType(BottomAppBar), findsOneWidget); // 操作栏常驻
+
+    await tester.tap(find.byTooltip('批量删除'));
+    await tester.pumpAndSettle();
     expect(find.text('删除应用内文件?'), findsOneWidget);
+    expect(find.textContaining('将删除 1 个文件'), findsOneWidget);
     await tester.tap(find.text('删除'));
     await tester.pumpAndSettle();
 
@@ -536,6 +545,199 @@ void main() {
         .runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
     await tester.pumpAndSettle();
     expect(find.byType(Image), findsOneWidget);
+    expect(find.text('图库'), findsOneWidget); // 删后退出多选,标题复原
+
+    // 冲掉 snackbar 的自动消失 timer(不能留 pending 到测试末)
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
+  });
+
+  // ── 筛选弹层/多选(2026-10-16:iPhone 图库式收口,筛选进弹层,
+  // 选择钮/长按格进多选,操作栏批量删/导出)──
+
+  testWidgets('筛选弹层:分区头在场,当前项打勾,换档勾随迁、点行即收',
+      (tester) async {
+    writeFile('a.jpg', modified: DateTime(2026, 10, 1));
+    final gallery = _FakeGallery(dir);
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    await tester.pumpWidget(host(gallery, controller));
+    await tester.pumpAndSettle();
+
+    await openFilterMenu(tester);
+    expect(find.text('排序'), findsOneWidget);
+    expect(find.text('筛选:'), findsOneWidget);
+    expect(find.text('视图选项'), findsOneWidget);
+    expect(find.text('连拍聚合'), findsOneWidget);
+    // 当前档(新→旧 / 全部)行尾打勾
+    Finder checkBeside(String label) => find.descendant(
+        of: find.ancestor(
+            of: find.text(label), matching: find.byType(MenuItemButton)),
+        matching: find.byIcon(Icons.check));
+    expect(checkBeside('新→旧'), findsOneWidget);
+    expect(checkBeside('全部'), findsOneWidget);
+    expect(checkBeside('旧→新'), findsNothing);
+
+    await tester.tap(find.text('旧→新'));
+    await tester.pumpAndSettle();
+    expect(find.byType(MenuItemButton), findsNothing); // 点行即收
+
+    await openFilterMenu(tester);
+    expect(checkBeside('旧→新'), findsOneWidget);
+    expect(checkBeside('新→旧'), findsNothing);
+    await tester.tap(find.text('旧→新')); // 再点选中行收弹层(同值无害)
+    await tester.pumpAndSettle();
+    expect(find.byType(MenuItemButton), findsNothing);
+  });
+
+  testWidgets('「选择」进多选:空选禁用操作栏,勾选启用,退出复原',
+      (tester) async {
+    writeFile('a.jpg', modified: DateTime(2026, 10, 1));
+    writeFile('b.jpg', modified: DateTime(2026, 10, 2));
+    final gallery = _FakeGallery(dir);
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    await tester.pumpWidget(host(gallery, controller));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('选择'));
+    await tester.pumpAndSettle();
+    expect(find.text('已选 0 项'), findsOneWidget);
+    expect(find.byTooltip('全选'), findsOneWidget);
+    expect(find.byTooltip('取消选择'), findsOneWidget);
+    FilledButton exportBtn() => tester.widget<FilledButton>(find.ancestor(
+        of: find.text('导出到系统相册'), matching: find.byType(FilledButton)));
+    expect(exportBtn().onPressed, isNull); // 空选禁用
+
+    await tester.tap(find.byType(Image).first);
+    await tester.pumpAndSettle();
+    expect(find.text('已选 1 项'), findsOneWidget);
+    expect(exportBtn().onPressed, isNotNull); // 勾选即启用
+
+    await tester.tap(find.byTooltip('取消选择'));
+    await tester.pumpAndSettle();
+    expect(find.text('图库'), findsOneWidget);
+    expect(find.byType(BottomAppBar), findsNothing);
+    expect(find.byIcon(Icons.check_circle), findsNothing);
+    expect(find.byIcon(Icons.radio_button_unchecked), findsNothing);
+  });
+
+  testWidgets('多选增删与全选:点格勾/取消,全选收齐', (tester) async {
+    writeFile('a.jpg', modified: DateTime(2026, 10, 1));
+    writeFile('b.jpg', modified: DateTime(2026, 10, 2));
+    final gallery = _FakeGallery(dir);
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    await tester.pumpWidget(host(gallery, controller));
+    await tester.pumpAndSettle();
+
+    await tester.longPress(find.byType(Image).first); // b(最新在前)预选
+    await tester.pumpAndSettle();
+    await tester.tap(find.byType(Image).at(1)); // a 勾上
+    await tester.pumpAndSettle();
+    expect(find.text('已选 2 项'), findsOneWidget);
+
+    await tester.tap(find.byType(Image).first); // b 再点 = 取消
+    await tester.pumpAndSettle();
+    expect(find.text('已选 1 项'), findsOneWidget);
+    expect(find.byIcon(Icons.radio_button_unchecked), findsOneWidget);
+
+    await tester.tap(find.byTooltip('全选'));
+    await tester.pumpAndSettle();
+    expect(find.text('已选 2 项'), findsOneWidget);
+    expect(find.byIcon(Icons.check_circle), findsNWidgets(2));
+    expect(find.byIcon(Icons.radio_button_unchecked), findsNothing);
+  });
+
+  testWidgets('批量删除取消:确认框点取消,文件与选中态不动', (tester) async {
+    writeFile('a.jpg', modified: DateTime(2026, 10, 1));
+    final gallery = _FakeGallery(dir);
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    await tester.pumpWidget(host(gallery, controller));
+    await tester.pumpAndSettle();
+
+    await tester.longPress(find.byType(Image).first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('批量删除'));
+    await tester.pumpAndSettle();
+    expect(
+        find.text('将删除 1 个文件。\n此操作不可恢复(相机上的原件不受影响)。'),
+        findsOneWidget);
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+
+    expect(File('${dir.path}/a.jpg').existsSync(), isTrue);
+    expect(find.text('已选 1 项'), findsOneWidget); // 选中态保留
+    expect(find.byType(BottomAppBar), findsOneWidget);
+  });
+
+  testWidgets('批量导出:一次批量落账(kind 按扩展名),应用内文件保留',
+      (tester) async {
+    writeFile('a.jpg', modified: DateTime(2026, 10, 1));
+    writeFile('v.mov', modified: DateTime(2026, 10, 3));
+    final gallery = _FakeGallery(dir);
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    await tester.pumpWidget(host(gallery, controller));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('选择'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('全选'));
+    await tester.pumpAndSettle();
+    expect(find.text('已选 2 项'), findsOneWidget);
+
+    await tester.tap(find.text('导出到系统相册'));
+    await tester.pumpAndSettle();
+
+    expect(gallery.importCalls, hasLength(1)); // 一次批量调用,不逐格拆单
+    final call = gallery.importCalls.single;
+    expect(call, hasLength(2));
+    expect(call.map((r) => r.kind).toSet(),
+        {ObjectKind.image, ObjectKind.video});
+    expect(call.map((r) => r.filename).toSet(), {'a.jpg', 'v.mov'});
+    expect(find.text('已导出 2 项到系统相册(应用内文件保留)'), findsOneWidget);
+    // 复制不是移动:两文件原位保留
+    expect(File('${dir.path}/a.jpg').existsSync(), isTrue);
+    expect(File('${dir.path}/v.mov').existsSync(), isTrue);
+    expect(find.text('图库'), findsOneWidget); // 导出后退出多选
+
+    // 冲掉 snackbar 的自动消失 timer
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('批量导出取消:空回列表 → 未导入文案,退出多选,文件原位',
+      (tester) async {
+    writeFile('a.jpg', modified: DateTime(2026, 10, 1));
+    final gallery = _FakeGallery(dir)..importResult = const [];
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    await tester.pumpWidget(host(gallery, controller));
+    await tester.pumpAndSettle();
+
+    await tester.longPress(find.byType(Image).first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('导出到系统相册'));
+    await tester.pumpAndSettle();
+
+    expect(gallery.importCalls, hasLength(1));
+    expect(find.text('未导入(已取消或失败)'), findsOneWidget);
+    expect(File('${dir.path}/a.jpg').existsSync(), isTrue);
+    expect(find.text('图库'), findsOneWidget);
+
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('空目录不出「选择」钮', (tester) async {
+    final gallery = _FakeGallery(dir);
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    await tester.pumpWidget(host(gallery, controller));
+    await tester.pumpAndSettle();
+    expect(find.text('选择'), findsNothing);
   });
 
   testWidgets('传输徽标:进行中任务数角标;点击进传输页', (tester) async {
@@ -929,73 +1131,7 @@ void main() {
     expect(find.byType(PageView), findsOneWidget); // 查看器还在
   });
 
-  // ── 类型筛选/排序(2026-10-14:照片/视频大类 + 时间两向)──
-
-  testWidgets('类型筛选:照片/视频 chips 大类收窄(非视频归照片)', (tester) async {
-    writeFile('a.jpg', modified: DateTime(2026, 10, 1));
-    writeFile('b.nef', modified: DateTime(2026, 10, 2));
-    writeFile('c.mov', modified: DateTime(2026, 10, 3));
-    final gallery = _FakeGallery(dir);
-    final controller =
-        TransfersController(engine: _FakeEngine(), gallery: gallery);
-    await tester.pumpWidget(host(gallery, controller));
-    await tester.pumpAndSettle();
-
-    // 全部:a.jpg 铺格 + NEF 图标格 + MOV 摄像机图标格
-    expect(find.byType(Image), findsOneWidget);
-    expect(find.text('NEF'), findsOneWidget);
-    expect(find.byIcon(Icons.videocam_outlined), findsOneWidget);
-
-    // 照片:JPG 与 RAW 都是大类「照片」,MOV 出局
-    await tester.tap(libChip('照片'));
-    await tester.pumpAndSettle();
-    expect(find.byType(Image), findsOneWidget);
-    expect(find.text('NEF'), findsOneWidget);
-    expect(find.byIcon(Icons.videocam_outlined), findsNothing);
-
-    // 视频:只剩 MOV(与格式行「视频」同集)
-    await tester.tap(libChip('视频'));
-    await tester.pumpAndSettle();
-    expect(find.byIcon(Icons.videocam_outlined), findsOneWidget);
-    expect(find.byType(Image), findsNothing);
-    expect(find.text('NEF'), findsNothing);
-
-    // 回全部
-    await tester.tap(libChip('全部'));
-    await tester.pumpAndSettle();
-    expect(find.byType(Image), findsOneWidget);
-    expect(find.text('NEF'), findsOneWidget);
-    expect(find.byIcon(Icons.videocam_outlined), findsOneWidget);
-  });
-
-  testWidgets('类型与格式叠筛:交集生效;类型在场走泛化空文案',
-      (tester) async {
-    writeFile('a.jpg', modified: DateTime(2026, 10, 1));
-    writeFile('c.mov', modified: DateTime(2026, 10, 3));
-    final gallery = _FakeGallery(dir);
-    final controller =
-        TransfersController(engine: _FakeEngine(), gallery: gallery);
-    await tester.pumpWidget(host(gallery, controller));
-    await tester.pumpAndSettle();
-
-    // 格式 RAW × 类型照片:a.jpg 被格式拦、c.mov 被类型拦 → 交集空
-    await tester.tap(fmtText('RAW'));
-    await tester.pumpAndSettle();
-    await tester.tap(libChip('照片'));
-    await tester.pumpAndSettle();
-    expect(find.text('没有符合条件的文件'), findsOneWidget);
-
-    // 类型回全部后只剩格式筛子:回格式行文案
-    await tester.tap(libChip('全部'));
-    await tester.pumpAndSettle();
-    expect(find.text('没有RAW格式的文件'), findsOneWidget);
-
-    // 两把筛子都回全部:网格恢复
-    await tester.tap(fmtText('全部'));
-    await tester.pumpAndSettle();
-    expect(find.byType(Image), findsOneWidget);
-    expect(find.byIcon(Icons.videocam_outlined), findsOneWidget);
-  });
+  // ── 排序(时间两向,弹层切换)──
 
   testWidgets('排序:默认新→旧不动;「旧→新」翻向,查看器随排序翻页',
       (tester) async {
@@ -1016,7 +1152,7 @@ void main() {
     await tester.pumpAndSettle();
 
     // 旧→新:首格 a,翻页序随排序(a → b)
-    await tester.tap(libChip('旧→新'));
+    await pickFilter(tester, '旧→新');
     await tester.pumpAndSettle();
     await tester.tap(find.byType(Image).first);
     await tester.pumpAndSettle();
@@ -1027,7 +1163,7 @@ void main() {
     // 回新→旧:首格回到 c
     await tester.pageBack();
     await tester.pumpAndSettle();
-    await tester.tap(libChip('新→旧'));
+    await pickFilter(tester, '新→旧');
     await tester.pumpAndSettle();
     await tester.tap(find.byType(Image).first);
     await tester.pumpAndSettle();
@@ -1137,7 +1273,7 @@ void main() {
     ]);
   });
 
-  testWidgets('连拍 chip:成段合为一格带 ×N 角标,点开段内翻张,关掉恢复平铺',
+  testWidgets('连拍聚合弹层开关:成段合为一格带 ×N 角标,点开段内翻张,关掉恢复平铺',
       (tester) async {
     final base = DateTime(2026, 10, 1, 10, 0, 0);
     // 三连拍(mtime = 拍摄时刻)+ 一张散拍
@@ -1157,8 +1293,7 @@ void main() {
     expect(find.text('×3'), findsNothing);
 
     // 开连拍:倒序 [b3,b2,b1] 聚一段(封面 b3)+ solo 独立格 → 2 格
-    await tester.tap(libChip('连拍'));
-    await tester.pumpAndSettle();
+    await pickFilter(tester, '连拍聚合');
     expect(find.byType(Image), findsNWidgets(2));
     expect(find.text('×3'), findsOneWidget);
 
@@ -1175,42 +1310,55 @@ void main() {
     // 关连拍:恢复平铺 4 格
     await tester.pageBack();
     await tester.pumpAndSettle();
-    await tester.tap(libChip('连拍'));
-    await tester.pumpAndSettle();
+    await pickFilter(tester, '连拍聚合');
     expect(find.byType(Image), findsNWidgets(4));
     expect(find.text('×3'), findsNothing);
   });
 
-  testWidgets('连拍格长按删除:保持单文件语义(按封面把关),删后段重聚',
-      (tester) async {
+  testWidgets('连拍格长按:整段成员一次全选,批量删除整段', (tester) async {
     final base = DateTime(2026, 10, 1, 10, 0, 0);
-    writeFile('b1.jpg', modified: base);
-    writeFile('b2.jpg', modified: base.add(const Duration(milliseconds: 100)));
-    writeFile('b3.jpg', modified: base.add(const Duration(milliseconds: 200)));
+    final b1 = writeFile('b1.jpg', modified: base);
+    final b2 =
+        writeFile('b2.jpg', modified: base.add(const Duration(milliseconds: 100)));
+    final b3 =
+        writeFile('b3.jpg', modified: base.add(const Duration(milliseconds: 200)));
     final gallery = _FakeGallery(dir);
     final controller =
         TransfersController(engine: _FakeEngine(), gallery: gallery);
     await tester.pumpWidget(host(gallery, controller));
     await tester.pumpAndSettle();
-    await tester.tap(libChip('连拍'));
-    await tester.pumpAndSettle();
+    await pickFilter(tester, '连拍聚合');
     expect(find.text('×3'), findsOneWidget);
 
-    // 长按连拍格:确认对话框按封面文件名把关(不是删整段)
+    // 长按连拍格:进多选,整段 3 成员(3 基名)原子勾上
     await tester.longPress(find.byKey(const ValueKey('b3.jpg')));
     await tester.pumpAndSettle();
-    expect(find.text('删除应用内文件?'), findsOneWidget);
-    expect(find.textContaining('b3.jpg'), findsOneWidget);
+    expect(find.text('已选 3 项'), findsOneWidget);
+    expect(find.byIcon(Icons.check_circle), findsOneWidget);
+
+    await tester.tap(find.byTooltip('批量删除'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('将删除 3 个文件'), findsOneWidget);
     await tester.tap(find.text('删除'));
     await tester.pumpAndSettle();
-    await tester
-        .runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+    // 真异步 IO 的完成回调在 runAsync 出窗时才上浮(单删一个窗够,
+    // 批量要逐窗排水):开窗直到三文件全消失(上限兜底防死循环)。
+    for (var i = 0; i < 5; i++) {
+      await tester
+          .runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+      await tester.pumpAndSettle();
+      if ([b1, b2, b3].every((f) => !f.existsSync())) {
+        break;
+      }
+    }
     await tester.pumpAndSettle();
 
-    // 只删了封面:剩 2 基名不成段 → 平铺 2 格,角标消失
+    // 整段删除:三文件全消失
+    expect(File('${dir.path}/b1.jpg').existsSync(), isFalse);
+    expect(File('${dir.path}/b2.jpg').existsSync(), isFalse);
     expect(File('${dir.path}/b3.jpg').existsSync(), isFalse);
-    expect(File('${dir.path}/b1.jpg').existsSync(), isTrue);
-    expect(find.byType(Image), findsNWidgets(2));
-    expect(find.text('×3'), findsNothing);
+
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
   });
 }
