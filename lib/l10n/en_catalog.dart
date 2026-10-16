@@ -552,6 +552,8 @@ const Map<String, String> enCatalog = {
   '单色': 'Monochrome',
   '平面': 'Flat',
   'X 同步': 'X-sync',
+  'B 门': 'Bulb',
+  'T 门': 'Time',
   '视频光圈': 'Movie Aperture',
   '视频快门': 'Movie Shutter',
   '视频 ISO': 'Movie ISO',
