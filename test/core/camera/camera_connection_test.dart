@@ -594,6 +594,19 @@ void main() {
       ]);
     });
 
+    test('设备名取 mDNS 实例名(型号_序列号;无实例名退型号,见上例)',
+        () async {
+      final usb = FakeUsbHostChannel(const []);
+      final (conn, _, session, command, event, _) = wireWireless(usb);
+
+      await scriptWirelessConnect(command, event,
+          conn.connect(ip: '192.168.1.1', instanceName: 'Z_f_8014411'));
+
+      expect(conn.state, CameraLinkState.connected);
+      expect(conn.deviceName, 'Z_f_8014411');
+      expect(session.isSessionOpen, isTrue);
+    });
+
     test('STA 小 op 表人设(op 表缺 GetObject):照常 connected —— 按表拒连是误杀',
         () async {
       final usb = FakeUsbHostChannel(const []);

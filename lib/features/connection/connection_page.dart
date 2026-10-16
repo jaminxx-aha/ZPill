@@ -1604,7 +1604,9 @@ class _ConnectionPageState extends State<ConnectionPage>
           ),
           _infoRow(
             context,
-            Icons.camera_outlined,
+            // 光圈叶片环形(filter_tilt_shift):型号行已占 camera_outlined,
+            // 同卡撞图标(2026-10-16 真机反馈)。
+            Icons.filter_tilt_shift,
             'info.aperture',
             f == null ? '--' : 'ƒ/${(f / 100).toStringAsFixed(1)}',
             last: true,

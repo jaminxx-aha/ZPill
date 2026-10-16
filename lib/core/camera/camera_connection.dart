@@ -48,7 +48,8 @@ abstract interface class CameraConnection {
   Stream<CameraLinkState> get states;
   String? get error;
 
-  /// 已连接设备的展示名(如 "NIKON ZF";来自 GetDeviceInfo);
+  /// 已连接设备的展示名(答「哪一台」):无线 = mDNS 实例名(型号_序列
+  /// 号,如 Z_f_8014411),手动 IP/USB 无实例名退 GetDeviceInfo 型号;
   /// 未连接为 null。
   String? get deviceName;
 
@@ -315,7 +316,11 @@ final class CameraConnectionImpl implements CameraConnection {
       final info = await _openWirelessLink(transport, ip)
           .timeout(_wirelessConnectBudget);
       _wireless = true;
-      _deviceName = info.model;
+      // 设备名取 mDNS 实例名(型号_序列号,答「哪一台」,与 SnapBridge
+      // 同口径);手动 IP 无实例名退型号。UI 型号行另由 GetDeviceInfo 出,
+      // 两行不再同源(2026-10-16:原先两行都显示 Zf)。USB 路无实例名,
+      // 仍取型号(见 _openSessionOrReject 沿)。
+      _deviceName = instanceName ?? info.model;
       if (await _needsPairing(info)) {
         switch (await _runPairing(info, ip, instanceName)) {
           case _PairResult.newlyPaired:
