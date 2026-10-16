@@ -1271,6 +1271,11 @@ final class RemoteController extends ChangeNotifier {
       final outcome =
           await session.mfDrive(towardNear: towardNear, pulses: pulses);
       _applyMfOutcome(towardNear: towardNear, outcome: outcome);
+      if (outcome == MfDriveOutcome.complete ||
+          outcome == MfDriveOutcome.endOfTravel) {
+        // 刻度鼓按实际驱动入账;步进过小(0xA00E 镜头未动)与拒答不入。
+        dialNetPulses.value += towardNear ? pulses : -pulses;
+      }
       switch (outcome) {
         case MfDriveOutcome.complete:
           break;
@@ -1298,6 +1303,11 @@ final class RemoteController extends ChangeNotifier {
   /// → 该增量静默丢弃(不发 0x9204,省流量防错;余量保留 —— 反向
   /// 增量照常攒步)。拖动方向反转后首步请求即解锁([_noteMfDrive]),
   /// 轮身压暗随 [_mfEnds] 翻转。
+  ///
+  /// 拒答(0x9204 refused)不弃单:脉冲原量归还,退避
+  /// [_dialRetryBackoff] 静默续发(瞬时拒答 = AF 收敛/STM 镜头初始化/
+  /// 激活瞬时忙,OpenZCine 重排队口径);同一拒答连跑超
+  /// [_dialRefusalGrace] 墙钟才暂停出提示。
   void focusDialDrag(double dy) {
     if (dy == 0 || !_linkUp || capturing) return;
     if (focusModeIsMf) {
@@ -1314,28 +1324,51 @@ final class RemoteController extends ChangeNotifier {
     _dialPump();
   }
 
-  /// 滚轮重新启用(开关从关到开时页面调;清失败预算与余量)。
+  /// 滚轮重新启用(开关从关到开时页面调;清失败预算、拒答连跑戳与余量)。
   void resetFocusDial() {
     _dialFailures.clear();
     _dialSuspended = false;
+    _dialRefusalSince = null;
     _dialAccum = 0;
+    dialNetPulses.value = 0;
   }
 
-  /// 步进标定:24px 拖动 = 60 脉冲(OpenZCine FocusDial 同款量级;
-  /// 0x9204 脉冲与镜头 focus-by-wire 行程换算随机身,真机再调)。
+  /// 步进标定:24px 拖动 = 300 脉冲。**真机定案(2026-10-17 Zf + 24-120
+  /// ƒ4 S)**:300 是唯一实证可见量(MF 步进按钮单发),60 脉冲/步弱到
+  /// 看不见(拉焦轮「拉了没动」主因);等比标定天然带速度曲线 —— 慢拖
+  /// 24px/s ≈ 300 脉冲/s,快甩十倍 ≈ 3000/s(OpenZCine 2 脉冲/dp 量级
+  /// 偏弱,其「pulse feel per lens」本就标 verify-on-HW)。换算随机身
+  /// /镜头,手感出入再调。
   static const double _dialStepPx = 24.0;
-  static const int _dialStepPulses = 60;
+  static const int _dialStepPulses = 300;
 
   /// 失败墙钟预算:8s 窗口内 3 次失败 → 暂停滚轮(提示),窗口滑出
   /// 后再拖自动恢复。失败多为链路/状态类,无脑重试只会堵命令通道。
   static const _dialFailureWindow = Duration(seconds: 8);
   static const int _dialFailureLimit = 3;
 
+  /// 拒答重试(0x9204 refused):瞬时拒答(AF 收敛/STM 镜头初始化/激活
+  /// 瞬时忙)是常态,退避 [_dialRetryBackoff] 静默续发;同一拒答连跑超
+  /// [_dialRefusalGrace] 墙钟(镜头拨杆 MF / 持续忙)才暂停出提示
+  /// (OpenZCine wall-clock 预算同款口径)。
+  static const _dialRetryBackoff = Duration(milliseconds: 150);
+  static const _dialRefusalGrace = Duration(seconds: 4);
+
   double _dialAccum = 0;
   int _dialGen = 0;
   bool _dialDriving = false;
   final _dialFailures = <DateTime>[];
   bool _dialSuspended = false;
+
+  /// 滚轮刻度鼓净脉冲(乐观账本,towardNear 为正):滚轮路径派发即
+  /// 入账(拒答重排队脉冲未弃单,不回冲);按钮路径按结果入账(拒答
+  /// /步进过小 = 镜头未动,不入账)。只喂轮子刻度鼓(ValueListenable,
+  /// 高频滚动不广播全页);断连与 [resetFocusDial] 归零。
+  final dialNetPulses = ValueNotifier<int>(0);
+
+  /// 当前拒答连跑起点(complete/endOfTravel/stepTooSmall 即清;暂停/
+  /// 重置同清)。
+  DateTime? _dialRefusalSince;
 
   /// MF 端点态(0xA00C/0xA00E 按请求方向归因学习,见 [MfTravelEnds]);
   /// 步进/滚轮两条 0x9204 路径共用。UI 读 [mfNearEnd]/[mfFarEnd]。
@@ -1380,28 +1413,48 @@ final class RemoteController extends ChangeNotifier {
     }
     final steps = _dialAccum ~/ _dialStepPx; // 截断除法:正负对称攒步
     if (steps == 0) return;
-    _dialAccum -= steps * _dialStepPx;
+    final sentPx = steps * _dialStepPx;
+    _dialAccum -= sentPx;
     final gen = _dialGen;
     final towardNear = steps > 0;
+    final pulses = steps.abs() * _dialStepPulses;
     _noteMfDrive(towardNear); // 反向请求即解锁(nico 语义,镜头正离开该端)
+    // 刻度鼓派发即入账(乐观,跟手):拒答重排队脉冲未弃单,不回冲。
+    dialNetPulses.value += towardNear ? pulses : -pulses;
     _dialDriving = true;
     unawaited(() async {
+      var requeued = false;
       try {
-        final outcome = await session.mfDrive(
-            towardNear: towardNear,
-            pulses: steps.abs() * _dialStepPulses);
+        final outcome =
+            await session.mfDrive(towardNear: towardNear, pulses: pulses);
         _applyMfOutcome(towardNear: towardNear, outcome: outcome);
         switch (outcome) {
           case MfDriveOutcome.complete:
           case MfDriveOutcome.stepTooSmall:
+            _dialRefusalSince = null;
             break; // 过小是结果:不提示(拖快些即可),不挡续发
           case MfDriveOutcome.endOfTravel:
+            _dialRefusalSince = null;
             notice = towardNear ? 'remote.focusNearEnd' : 'remote.focusFarEnd';
             notifyListeners();
           case MfDriveOutcome.refused:
-            notice = 'remote.errMfUnavailable';
-            _dialAccum = 0;
-            notifyListeners();
+            // 瞬时拒答是常态:脉冲重排队(原量归还)退避静默续发,
+            // 不横幅不清账(OpenZCine 同款);连跑超宽限才暂停出提示,
+            // 并入失败预算同走 8s 窗恢复门。
+            _dialAccum += sentPx;
+            requeued = true;
+            _dialRefusalSince ??= DateTime.now();
+            if (DateTime.now()
+                    .difference(_dialRefusalSince!) >=
+                _dialRefusalGrace) {
+              requeued = false;
+              _dialSuspended = true;
+              _dialAccum = 0;
+              _dialRefusalSince = null;
+              _dialFailures.add(DateTime.now());
+              notice = 'remote.focusDialPaused';
+              notifyListeners();
+            }
         }
       } on Exception catch (e) {
         if (!_linkUp) return; // 断连收口已清状态,迟到异常不计数
@@ -1421,9 +1474,17 @@ final class RemoteController extends ChangeNotifier {
         }
       } finally {
         _dialDriving = false;
-        // 在途期间又拖了(或没被抢占):续发攒下的余量。
+        // 在途期间又拖了(或没被抢占):续发攒下的余量;拒答重排队走
+        // 退避续发(瞬时忙/AF 收敛给机身喘息窗),代数守卫防 AF 抢占
+        // 后陈旧续发。
         if (!_dialSuspended && gen == _dialGen && _linkUp) {
-          _dialPump();
+          if (requeued) {
+            unawaited(_delay(_dialRetryBackoff).then((_) {
+              if (gen == _dialGen && !_dialSuspended && _linkUp) _dialPump();
+            }));
+          } else {
+            _dialPump();
+          }
         }
       }
     }());
@@ -2824,6 +2885,7 @@ final class RemoteController extends ChangeNotifier {
     _dialDriving = false;
     _dialSuspended = false;
     _dialFailures.clear();
+    dialNetPulses.value = 0; // 刻度鼓随链路消亡(重连后镜头位置未知)
     recording = false;
     recordingSince = null;
     reviewThumb = null;
@@ -2879,6 +2941,7 @@ final class RemoteController extends ChangeNotifier {
     frameSize.dispose();
     orientationLock.dispose();
     analyzer.dispose();
+    dialNetPulses.dispose();
     super.dispose();
   }
 }
