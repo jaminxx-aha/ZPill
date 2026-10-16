@@ -360,21 +360,24 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
         ? context.t('grid.toAlbum')
         : context.t('grid.toApp');
     final tag = format == null ? '' : '(${context.t(format.short)})';
+    // Navigator 在展示时刻捕获(网格页同款):SnackBar 活得比本页久
+    // (pop 后提示挂到上一页),届时 State 已 unmount,Navigator.of 会
+    // 抛 defunct —— 捕获的根 Navigator 跨 pop 存活,窗口期内动作照常。
+    final navigator = Navigator.of(context);
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(
+          // SDK #173084(2025-08)起带 action 的 SnackBar 默认 persist=
+          // true 永不自动消失:显式关掉,恢复随 duration 自动隐藏。
+          persist: false,
           content: Text(context.t(
               'viewer.downloadStarted', {'where': where, 'tag': tag})),
           action: SnackBarAction(
             label: context.t('viewer.viewProgress'),
-            onPressed: widget.onOpenTransfers ?? _openTransfers,
+            onPressed: widget.onOpenTransfers ??
+                () => navigator.push(MaterialPageRoute<void>(
+                    builder: (_) => const TransfersPage())),
           )));
-  }
-
-  /// 下载进度页(SnackBar 动作;与图库页 AppBar 传输徽标同目的地)。
-  void _openTransfers() {
-    Navigator.of(context).push(
-        MaterialPageRoute<void>(builder: (_) => const TransfersPage()));
   }
 
   /// 编辑:拉取组内 JPG 原图到临时目录(相机会话串行,排队即得),

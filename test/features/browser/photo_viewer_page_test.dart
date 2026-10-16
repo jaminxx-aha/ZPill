@@ -20,6 +20,7 @@ import 'package:nikon_pill/core/transfer/transfer_task.dart';
 import 'package:nikon_pill/core/utils/byte_writer.dart';
 import 'package:nikon_pill/features/browser/photo_viewer_page.dart';
 import 'package:nikon_pill/features/common/widgets/embedded_video_player.dart';
+import 'package:nikon_pill/features/transfers/transfers_page.dart';
 import 'package:nikon_pill/platform/gallery_saver.dart';
 import 'package:nikon_pill/platform/video_player.dart';
 
@@ -271,14 +272,20 @@ PhotoGroup _videoGroup() => PhotoGroup([
     ]);
 
 /// 推入查看器路由(home 直挂是栈底路由没有返回钮,pageBack 无从收)。
-/// 路由动画收口后返回。
+/// 路由动画收口后返回。入口页带 Scaffold:与生产一致(否则 pop 后
+/// ScaffoldMessenger 的在显 SnackBar 无处挂载,下载提示回归用例测不出
+/// 「挂到上一页」的真实行为)。
 Future<void> _openViewer(WidgetTester tester, PhotoViewerPage page) async {
   await tester.pumpWidget(MaterialApp(
     home: Builder(
-      builder: (context) => TextButton(
-        onPressed: () => Navigator.of(context)
-            .push(MaterialPageRoute(builder: (_) => page)),
-        child: const Text('打开查看器'),
+      builder: (context) => Scaffold(
+        body: Center(
+          child: TextButton(
+            onPressed: () => Navigator.of(context)
+                .push(MaterialPageRoute(builder: (_) => page)),
+            child: const Text('打开查看器'),
+          ),
+        ),
       ),
     ),
   ));
@@ -391,6 +398,45 @@ void main() {
     expect(transfersTapped, isTrue, reason: 'SnackBar 动作直通传输页');
 
     await _drainSnackBar(tester);
+  });
+
+  testWidgets('下载后立即返回:「查看进度」仍可跳传输页,提示自动消失',
+      (tester) async {
+    // 网格页同款回归(2026-10-17 真机):pop 后动作闭包沿 State.context
+    // 找 Navigator 抛 defunct;SDK #173084 起带 action 默认 persist=true
+    // 永不消失。生产默认路径(不注入 onOpenTransfers)。
+    final engine = _FakeEngine();
+    final group = PhotoGroup([_file(101, 'DSC_0001.JPG')]);
+    await _openViewer(
+        tester,
+        PhotoViewerPage(
+          items: [group],
+          initialIndex: 0,
+          thumbnails: _FakeThumbs(),
+          engine: engine,
+        ));
+
+    // 两段式:先点「下载」换出目的地,再点「下载到相册」。
+    await tester.tap(find.text('下载'));
+    await tester.pump();
+    await tester.tap(find.text('下载到相册'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('已开始下载到相册'), findsOneWidget);
+
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    expect(find.text('打开查看器'), findsOneWidget);
+    expect(find.textContaining('已开始下载'), findsOneWidget,
+        reason: 'dismiss 窗口内提示随 messenger 挂在上一页');
+
+    await tester.tap(find.text('查看进度'));
+    await tester.pumpAndSettle();
+    expect(find.byType(TransfersPage), findsOneWidget,
+        reason: '展示时刻捕获的 Navigator 跨 pop 存活');
+
+    await _drainSnackBar(tester);
+    expect(find.textContaining('已开始下载'), findsNothing,
+        reason: 'persist=false 恢复自动消失,不永久滞留');
   });
 
   testWidgets('信息底单:照片组 EXIF 头读出机身/镜头/参数/拍摄时间,'

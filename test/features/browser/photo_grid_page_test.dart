@@ -17,6 +17,7 @@ import 'package:nikon_pill/core/transfer/transfer_engine.dart';
 import 'package:nikon_pill/core/transfer/transfer_task.dart';
 import 'package:nikon_pill/features/browser/browser_controller.dart';
 import 'package:nikon_pill/features/browser/photo_grid_page.dart';
+import 'package:nikon_pill/features/transfers/transfers_page.dart';
 
 /// 手动驱动的伪仓库(同 browser_controller_test:块事件逐个发,
 /// loadAlbums 挂在 Completer 上由测试择机完成)。
@@ -657,6 +658,83 @@ void main() {
     expect(find.textContaining('跳过 1 项无 JPG'), findsOneWidget);
 
     await _drainSnackBar(tester);
+  });
+
+  testWidgets('下载后立即返回:提示自动消失,「查看进度」仍可跳传输页',
+      (tester) async {
+    // 真实导航栈(入口页 push 相册页)+ 生产默认跳转路径(不注入
+    // onOpenTransfers)。复现盘:2026-10-17 真机 —— SDK #173084 起带
+    // action 的 SnackBar 默认 persist=true 永不消失,且 pop 后动作闭包
+    // 沿 State.context 找 Navigator 抛 defunct。
+    final repo = _FakeRepo();
+    final controller = BrowserController(repository: repo);
+    final engine = _FakeEngine();
+    final g1 = _photo(1);
+    final g2 = _photo(2);
+
+    await tester.pumpWidget(MaterialApp(
+      home: Builder(
+        builder: (context) => Scaffold(
+          body: Center(
+            child: FilledButton(
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => PhotoGridPage(
+                    controller: controller,
+                    folderHandle: CameraAlbum.allPhotosHandle,
+                    fallbackName: '相机相册',
+                    thumbnails: _FakeThumbs(),
+                    engine: engine,
+                  ),
+                ),
+              ),
+              child: const Text('打开相册'),
+            ),
+          ),
+        ),
+      ),
+    ));
+    await tester.tap(find.text('打开相册'));
+    await tester.pumpAndSettle();
+
+    final loading = controller.load();
+    final album = CameraAlbum.allPhotos([g1, g2]);
+    repo.updatesCtrl.add(AlbumsUpdate(
+        albums: [album], loaded: 2, total: 2, complete: true));
+    await tester.pump();
+    repo.completeLoad([album]);
+    await loading;
+    await tester.pumpAndSettle();
+
+    await tester.longPress(find.byKey(ValueKey(g1.key)));
+    await tester.pump();
+    await tester.tap(find.byKey(ValueKey(g2.key)));
+    await tester.pump();
+    // 两段式:先点「下载」换出目的地,再点「下载到应用」。
+    await tester.tap(find.text('下载'));
+    await tester.pump();
+    await tester.tap(find.text('下载到应用'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('已开始下载'), findsOneWidget);
+
+    // 马上返回:提示挂到上一页(仍可见、仍可点)。
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    expect(find.text('打开相册'), findsOneWidget);
+    expect(find.textContaining('已开始下载'), findsOneWidget,
+        reason: 'dismiss 窗口内提示随 messenger 挂在上一页');
+
+    // 窗口期内点「查看进度」:本页已 unmount,动作须仍能推传输页。
+    await tester.tap(find.text('查看进度'));
+    await tester.pumpAndSettle();
+    expect(find.byType(TransfersPage), findsOneWidget,
+        reason: '展示时刻捕获的 Navigator 跨 pop 存活');
+
+    // 提示不滞留:persist 关闭后随 duration 自动消失(messenger 上的
+    // 定时器与页面 pop 无关)。
+    await _drainSnackBar(tester);
+    expect(find.textContaining('已开始下载'), findsNothing,
+        reason: 'persist=false 恢复自动消失,不永久滞留');
   });
 
   // ── 右上筛选弹层(相册区 + 图片下载格式区) ─────────────────────
