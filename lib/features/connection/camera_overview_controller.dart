@@ -14,8 +14,8 @@
 ///   0x5008 沿补读 ID 对比 = 换镜精确判(同区间换镜焦距不挪也抓到)
 ///   → 规格五连读 + 光圈对表;出区间启发式兜底。
 ///
-/// 拒绝/失败均静默降级为该行不显示,不报错 —— 信息卡是锦上添花,
-/// 不拦使用。
+/// 拒绝/失败均静默降级为该字段保持空(界面回 '--'),不报错 —— 信息
+/// 卡是锦上添花,不拦使用。
 library;
 
 import 'dart:async';
@@ -78,6 +78,12 @@ const Map<int, String> kLensIdNames = {
   31: 'NIKKOR Z 24-120mm f/4 S',
 };
 
+/// 0x1015 裸值安全取整:方言偏离转长度嗅探后可能回 string/uint64
+/// (见 PtpDevicePropValue.parse),`as int?` 硬转型抛 TypeError 逃
+/// `on Exception` 收口网 —— 整链静默中断、notify 不再发;此处退
+/// null = 该字段缺省,链照走。
+int? _asInt(Object? v) => v is int ? v : null;
+
 final class CameraOverviewController extends ChangeNotifier {
   CameraOverviewController({
     required this.session,
@@ -111,7 +117,7 @@ final class CameraOverviewController extends ChangeNotifier {
   /// 机身信息(GetDeviceInfo);null = 未连接/未读到。
   PtpDeviceInfo? deviceInfo;
 
-  /// 电池余量(%);null = 相机不报或读取失败(该行不显示)。
+  /// 电池余量(%);null = 相机不报或读取失败(界面行回 '--' 占位)。
   int? batteryPercent;
 
   /// 当前焦距(mm);null 同上。
@@ -145,6 +151,11 @@ final class CameraOverviewController extends ChangeNotifier {
   StreamSubscription<PtpEvent>? _eventsSub;
 
   /// 连接成功 / 手动刷新:机身 + 属性(能力门禁)。
+  ///
+  /// 渐进式刷新(2026-10-16 真机反馈「连接后电池/镜头卡几秒才刷出」
+  /// 修):各数据点赋值沿即 notify,不等整链 —— 全链串行 8 事务
+  /// (Wi-Fi 每事务一次往返),链尾一次 notify 曾把电池、镜头整卡压到
+  /// 全链跑完才一起亮。
   Future<void> refresh() async {
     if (_refreshing || !_linkUp) return;
     _refreshing = true;
@@ -152,6 +163,7 @@ final class CameraOverviewController extends ChangeNotifier {
       final info = await session.getDeviceInfo();
       if (!_linkUp) return;
       deviceInfo = info;
+      notifyListeners(); // 机身组(型号/固件/序列号)先亮
       for (final code in const [
         PtpDevicePropCode.batteryLevel,
         PtpDevicePropCode.focalLength,
@@ -161,7 +173,7 @@ final class CameraOverviewController extends ChangeNotifier {
         try {
           final v = await session.getDevicePropValue(code);
           if (!_linkUp) return;
-          final value = v.value as int?;
+          final value = _asInt(v.value);
           if (value == null) continue;
           switch (code) {
             case PtpDevicePropCode.batteryLevel:
@@ -173,12 +185,13 @@ final class CameraOverviewController extends ChangeNotifier {
             case PtpDevicePropCode.fNumber:
               fNumber = value;
           }
+          notifyListeners(); // 单点亮:电池第 1 事务后即见,不等规格五连读
         } on Exception {
           // 单属性拒答/失败:该行保持缺省,不拖垮整卡
         }
       }
       await _readLensSpec();
-      notifyListeners();
+      notifyListeners(); // 镜头行(ID/规格)收尾亮
     } on Exception {
       // GetDeviceInfo 失败 = 链路问题,状态机会收口;信息卡保持已有点
     } finally {
@@ -225,7 +238,7 @@ final class CameraOverviewController extends ChangeNotifier {
           try {
             final v = await session.getDevicePropValue(code);
             if (!_linkUp) return;
-            final value = v.value as int?;
+            final value = _asInt(v.value);
             if (value == null) continue;
             if (code == PtpDevicePropCode.fNumber) {
               fNumber = value;
@@ -248,7 +261,7 @@ final class CameraOverviewController extends ChangeNotifier {
             final v =
                 await session.getDevicePropValue(PtpDevicePropCode.lensId);
             if (!_linkUp) return;
-            final raw = v.value as int?;
+            final raw = _asInt(v.value);
             if (raw != null && raw != 0) {
               idChanged = _knownLensId != 0 && raw != _knownLensId;
             }
@@ -269,7 +282,7 @@ final class CameraOverviewController extends ChangeNotifier {
                 final v = await session
                     .getDevicePropValue(PtpDevicePropCode.fNumber);
                 if (!_linkUp) return;
-                final value = v.value as int?;
+                final value = _asInt(v.value);
                 if (value != null) {
                   fNumber = value;
                 }
@@ -297,7 +310,7 @@ final class CameraOverviewController extends ChangeNotifier {
     try {
       final v = await session.getDevicePropValue(PtpDevicePropCode.lensId);
       if (!_linkUp) return;
-      final raw = v.value as int?;
+      final raw = _asInt(v.value);
       if (raw != null) {
         idAnswered = true;
         lensId = raw == 0 ? null : raw;
@@ -320,7 +333,7 @@ final class CameraOverviewController extends ChangeNotifier {
       try {
         final v = await session.getDevicePropValue(code);
         if (!_linkUp) return;
-        final raw = v.value as int?;
+        final raw = _asInt(v.value);
         if (raw == null) return;
         values[code] = raw;
       } on Exception {

@@ -193,6 +193,64 @@ void main() {
     ]);
   });
 
+  test('渐进刷新:数据点赋值沿即 notify,不等整链跑完', () async {
+    final transport = FakePtpTransport();
+    final session = PtpSession(transport: transport);
+    final conn = _FakeConnection();
+    final controller = CameraOverviewController(
+        session: session, connection: conn);
+
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: buildDataset(
+            deviceProps: const [0x5001, 0x5008, 0x5007])));
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: Uint8List.fromList([80]))); // 电池 u8
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: Uint8List.fromList([0xA0, 0x0F, 0x00, 0x00]))); // 焦距 40mm
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: Uint8List.fromList([0x18, 0x01]))); // 光圈 ƒ/2.8
+    _scriptLensSpec(transport);
+
+    var notifies = 0;
+    controller.addListener(() => notifies++);
+    conn.statesCtrl.add(CameraLinkState.connected);
+    await pumpEventQueue();
+
+    // 机身组 + 电池/焦距/光圈逐点 + 镜头规格 = 5 次沿通知(旧实现整链
+    // 只在尾部 notify 一次,电池/镜头卡要陪跑完全部 8 事务才可见)。
+    expect(notifies, 5);
+  });
+
+  test('裸值方言偏离回 string:安全取整退 null,整链照走不中断', () async {
+    final transport = FakePtpTransport();
+    final session = PtpSession(transport: transport);
+    final conn = _FakeConnection();
+    final controller = CameraOverviewController(
+        session: session, connection: conn);
+
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: buildDataset(deviceProps: const [0x5001])));
+    // 电池应答 5 字节 string 布局(标准 u8 宽度失配 → 嗅探按 string):
+    // 硬转型 `as int?` 在此抛 TypeError 逃 on Exception 收口 —— 整链
+    // 静默中断、镜头规格永远不读;安全取整退 null = 该行缺省,链照走。
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: Uint8List.fromList([2, 0x41, 0, 0x42, 0]))); // PTP string 'AB'
+    _scriptLensSpec(transport);
+
+    conn.statesCtrl.add(CameraLinkState.connected);
+    await pumpEventQueue();
+
+    expect(controller.batteryPercent, isNull);
+    expect(controller.lensSpec, isNotNull, reason: '链未被坏值中断');
+    expect(transport.requests, hasLength(7)); // GetDeviceInfo + 电池 + 规格五连读
+  });
+
   test('标准属性全不在册:只发 GetDeviceInfo,规格五连读绕声明表照发', () async {
     final transport = FakePtpTransport();
     final session = PtpSession(transport: transport);
