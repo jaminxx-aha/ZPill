@@ -13,12 +13,6 @@
 /// 让位给顶栏/底条(横屏顶底条/竖屏底部两行浮层);[rightInset] 供横屏
 /// 快门柱贴右缘时把贴右叠层(录制读出/拉焦轮)左移让位。[fit] 为适配
 /// 模式(竖屏满宽/横屏满高,2026-10-12「不留黑边」定案,见 [FeedFit])。
-/// [phoneAttitudes] 为手机姿态流取值(页面缓存的单实例 —— MovtionHost
-/// 的 getter 每次返回**新**流,取景期每帧重建会让 StreamBuilder 反复
-/// 拆装 EventChannel);相机帧头带虚拟水平仪时优先用它,本流只作兜底。
-/// 传**取值函数**而非流:流字段在页面是 late final(平台通道宿主),
-/// 只有水平仪兜底真正要建 StreamBuilder 时才取值 —— 提前取值会在无
-/// 平台通道的测试环境炸 LateInitializationError。
 /// [onTapFocus] 点按取景画面 = 触控对焦:第二参为该点的**归一化图像
 /// 坐标**(已含缩放/旋转/变宽逆映射;null = 无画面)。
 /// [settingsListenable] 提供画面自动旋转/变宽还原设置(null = AppServices
@@ -52,7 +46,6 @@ class RemoteFeedArea extends StatefulWidget {
     super.key,
     required this.controller,
     required this.toggles,
-    required this.phoneAttitudes,
     required this.onTapFocus,
     this.topInset = 0,
     this.bottomInset = 0,
@@ -65,7 +58,6 @@ class RemoteFeedArea extends StatefulWidget {
 
   final RemoteController controller;
   final MonitorToggles toggles;
-  final Stream<MotionOrientation> Function() phoneAttitudes;
   final void Function(TapUpDetails details, Offset? norm) onTapFocus;
   final double topInset;
   final double bottomInset;
@@ -540,29 +532,24 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea> {
                 );
               },
             ),
-            // 水平仪优先用**相机帧头**的虚拟水平仪(Zf 机身侧水平仪,
-            // OpenZCine 同源字段;Gen-1 短头/相机未报时落回手机姿态)。
-            // 屏幕坐标层不随画面旋转 —— 地平线参考系是手机。
+            // 水平仪只用**相机帧头**的虚拟水平仪(Zf 机身侧水平仪,
+            // OpenZCine 同源字段)。无帧(取景未开/失败/Gen-1 短头)
+            // 不显示 —— 手机姿态回落已撤(2026-10-16 用户定案:手机
+            // 水平线误导,宁缺勿错)。屏幕坐标层不随画面旋转 —— 地平线
+            // 参考系是手机。
             if (widget.toggles.level)
               ValueListenableBuilder<LiveViewHeader?>(
                 valueListenable: controller.engine.header,
                 builder: (context, LiveViewHeader? h, _) {
                   final level = h?.level;
-                  if (level != null) {
-                    const d2r = 3.141592653589793 / 180;
-                    return LevelOverlay(
-                      orientation: MotionOrientation(
-                        // 帧头角为相机视角、度;符号换算待真机核对。
-                        pitchRad: level.signedPitch * d2r,
-                        rollRad: -level.signedRoll * d2r,
-                      ),
-                    );
-                  }
-                  return StreamBuilder<MotionOrientation>(
-                    stream: widget.phoneAttitudes(),
-                    builder: (context, snapshot) => snapshot.hasData
-                        ? LevelOverlay(orientation: snapshot.data!)
-                        : const SizedBox.shrink(),
+                  if (level == null) return const SizedBox.shrink();
+                  const d2r = 3.141592653589793 / 180;
+                  return LevelOverlay(
+                    orientation: MotionOrientation(
+                      // 帧头角为相机视角、度;符号换算待真机核对。
+                      pitchRad: level.signedPitch * d2r,
+                      rollRad: -level.signedRoll * d2r,
+                    ),
                   );
                 },
               ),

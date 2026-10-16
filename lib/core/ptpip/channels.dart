@@ -108,6 +108,11 @@ final class TcpPtpIpChannel implements PtpIpChannel {
       throw StateError('channel 已连接');
     }
     final socket = await Socket.connect(host, port, timeout: connectTimeout);
+    // Nagle 必关:PTP-IP 每笔事务是「命令→数据起→数据→收尾→应答」一串
+    // 小包逐个往返,Nagle 会把小包按住等前一包的 ACK,对端延迟 ACK 一等
+    // 几十~几百 ms —— Wi-Fi 局域网纯 RTT 才几 ms,「每事务几百 ms」的
+    // 主成分在此(libgphoto2 ptpip 同款先例)。大块数据传输不受影响。
+    socket.setOption(SocketOption.tcpNoDelay, true);
     if (_closed) {
       // close() 与连接完成竞态:立刻回收刚建立的 socket
       socket.destroy();
