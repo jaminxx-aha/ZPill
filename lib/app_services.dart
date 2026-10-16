@@ -54,6 +54,12 @@ import 'platform/services.dart';
 import 'platform/usb/usb_host.dart';
 import 'platform/usb/watchdog_usb_host.dart';
 
+/// 连接沿侧链让路窗(2026-10-16 真机定案):概览/双卡槽/清事件/对时/
+/// 事件轮询与起景链(接管→模式→画质→0x9201)同在会话串行锁上轮转,
+/// 曾把 0x9201 压到十几事务深 —— 拍摄页「取景未开启」卡好几秒。侧链
+/// 整组延此窗再上路,起景链先独跑、首帧上屏;测试侧控制器默认零延迟。
+const Duration kConnectSideChainYield = Duration(seconds: 2);
+
 final class AppServices {
   AppServices._() {
     // 幂等:测试直接 pumpWidget 不经 main(),这里保证平台服务就绪。
@@ -239,11 +245,13 @@ final class AppServices {
     cameraOverview = CameraOverviewController(
       session: session,
       connection: connection,
+      connectRefreshDelay: kConnectSideChainYield,
     );
     // 双卡槽余量:连接成功即拉,相册页顶展示。
     storageOverview = StorageOverviewController(
       session: session,
       connection: connection,
+      connectRefreshDelay: kConnectSideChainYield,
     );
     // 取景引擎先行创建再注入控制器:看门狗重启预算耗尽时升级整链重连
     // (engine → connection.requestRecovery,恢复循环由连接层接管;
@@ -350,20 +358,27 @@ final class AppServices {
           diagRan = true;
           PtpDiagnostics.run(session: session, repository: repository);
         }
-        // 重连沿清相机事件队列残留(0x9461,官方候选;best-effort ——
-        // 不支持/会话未开静默跳过,不挡连接)。先清再开轮询器,免得
-        // 首拍把陈年事件当新鲜货推给 UI。
-        unawaited(() async {
-          try {
-            await session.clearEvent();
-          } on Exception {
-            // 静默:候选码,机身不支持属常态
-          }
-        }());
-        eventPoller.start();
-        // 相机时钟校准(OpenZCine CameraClockSync 口径:漂移 > 5s 才写,
-        // 尽力而为不影响连接)。
-        unawaited(session.syncCameraClock());
+        // 侧链整组让路(kConnectSideChainYield):起景链先独跑,首帧
+        // 上屏后再上路;先清再开轮询器的次序不变。轮询器周期 2s,让路
+        // 窗内事件不丢(首拍顺延一并拉)。
+        unawaited(Future<void>.delayed(kConnectSideChainYield, () {
+          // 延迟窗里沿翻篇(断开/重连)不追;重连沿有自己的新定时。
+          if (connection.state != CameraLinkState.connected) return;
+          // 重连沿清相机事件队列残留(0x9461,官方候选;best-effort ——
+          // 不支持/会话未开静默跳过,不挡连接)。先清再开轮询器,免得
+          // 首拍把陈年事件当新鲜货推给 UI。
+          unawaited(() async {
+            try {
+              await session.clearEvent();
+            } on Exception {
+              // 静默:候选码,机身不支持属常态
+            }
+          }());
+          eventPoller.start();
+          // 相机时钟校准(OpenZCine CameraClockSync 口径:漂移 > 5s 才写,
+          // 尽力而为不影响连接)。
+          unawaited(session.syncCameraClock());
+        }));
       }
       if (s == CameraLinkState.disconnected || s == CameraLinkState.failed) {
         eventPoller.stop();

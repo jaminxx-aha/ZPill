@@ -59,7 +59,8 @@
 /// 依赖系统自动横竖屏设置。
 ///
 /// 水平仪数据源:相机帧头虚拟水平仪(LiveViewHeader.level,机身侧水平
-/// 仪,OpenZCine 同源)优先,手机姿态流只作相机未报时的兜底。
+/// 仪,OpenZCine 同源)。无帧(取景未开/失败)不显示任何水平仪 —— 手机
+/// 姿态回落已撤(2026-10-16 用户定案:手机水平线误导,宁缺勿错)。
 ///
 /// 挂载模式(2026-10-08 从底栏 tab 改制):相机页已连接视图「进入拍摄」
 /// 全屏 push,返回(pop/系统返回手势)即回相机页 —— 底栏全程不占监看
@@ -87,8 +88,6 @@ import '../../core/browser/album.dart';
 import '../../core/remote/peaking_engines.dart';
 import '../../data/settings_store.dart';
 import '../../l10n/l10n.dart';
-import '../../platform/motion_host.dart';
-import '../../platform/services.dart';
 import '../../platform/volume_keys.dart';
 import '../browser/photo_grid_page.dart';
 import '../settings/settings_page.dart' show SettingsController;
@@ -163,12 +162,6 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
 
   /// 纯净监看:隐去全部控制浮层(横幅/监看叠层/触控对焦保留)。
   bool _chromeHidden = false;
-
-  /// 手机姿态流(缓存单实例:MovtionHost 的 getter 每次返回**新**流,
-  /// 取景期页面每帧重建会让 StreamBuilder 反复拆装 EventChannel)。
-  /// 相机帧头带虚拟水平仪时优先用它,本流只作兜底。
-  late final Stream<MotionOrientation> _phoneAttitudes =
-      PlatformServices.motion.attitudes;
 
   /// 上拍链路态:断连沿(linkUp true→false)触发自动退页。控制器冷启
   /// 乐观门闩 true 起步,直挂未连接场景与真连接在此同形,只在沿上分。
@@ -616,7 +609,6 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
           builder: (context, _) => RemoteFeedArea(
             controller: controller,
             toggles: _toggles,
-            phoneAttitudes: () => _phoneAttitudes,
             onTapFocus: _handleTapFocus,
             topInset: pad.top + kPortraitTopInset,
             // 贴底叠层(横幅/直方图)让位底区两行浮层(含物理屏缘 20)。
@@ -875,7 +867,6 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
             builder: (context, _) => RemoteFeedArea(
               controller: controller,
               toggles: _toggles,
-              phoneAttitudes: () => _phoneAttitudes,
               onTapFocus: _handleTapFocus,
               topInset: kLandscapeTopInset,
               bottomInset: kLandscapeBottomInset,

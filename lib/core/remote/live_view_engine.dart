@@ -150,12 +150,18 @@ final class LiveViewEngine {
   /// 全败上抛**原始** 0xA004(不遮原语义);非 0xA004 拒 → 上抛
   /// 该次错误(不无限打)。每步(0x9201 各次/每把钥匙)记入
   /// [PtpSession.connectLadder],start() 失败时随 lastError 浮出:
-  /// ① 0x90C2(1) 进 remote 模式 —— 上传优先门是单向闩,1 = 唯一
-  ///   实证开闩钥匙(2026-10-07 真机对照;iOS IC 链上 ② 不生效);
+  /// ① 0x9202 先关再开 —— 楔死候选钥匙(2026-10-16 真机):上次会话
+  ///   取景未干净收尾(杀进程/断链)时,机身侧取景残留开着,新会话
+  ///   0x9201 恒 Invalid_Status(照片/视频档同病,90C2/D406 全无效);
+  ///   先 EndLiveView 再起即解。关被拒 = 取景本没开(0xA00B/不支持),
+  ///   不耗重试直接换下一把钥匙。switchMode 配方本就 0x9202 在前。
+  /// ② 0x90C2(1) 进 remote 模式 —— 上传优先门是单向闩,1 = 唯一
+  ///   实证开闩钥匙(2026-10-07 真机对照;iOS IC 链上 ③ 不生效);
   ///   **凡自愈进过 remote,收尾必配对 0x90C2(0) 还机身自由** ——
   ///   remote 持有态才是机身停「已连接到计算机」屏的元凶,而闩不因
-  ///   退而关(v9 背靠背 1→0 后 0x9201 照通、帧照流)。
-  /// ② 写会话发起者身份 0xD406 非 MTP 串 —— 直连 USB 主机(usbfs/
+  ///   退而关(v9 背靠背 1→0 后 0x9201 照通、帧照流;AP 下须持有,
+  ///   此钥匙路径只在非持有沿走到,见 ③ 末)。
+  /// ③ 写会话发起者身份 0xD406 非 MTP 串 —— 直连 USB 主机(usbfs/
   ///   libusb 类:Android/ohos)实证有效(2026-10-07 探针);有屏显
   ///   人设副作用(机身把主机归类为计算机),只作末级兜底。
   Future<void> _startLiveViewHealing() async {
@@ -169,13 +175,13 @@ final class LiveViewEngine {
         // 接管持有中:下面的自愈梯每把钥匙都配对 0x90C2(0) 还机身
         // 自由 —— 会连带杀掉仅持有期保值的会话写入(模式覆写)。而
         // 模式切换后的 0xA004 是瞬态忙(2026-10-11 Zf 实证:写后立即
-        // 起景偶发被拒,稍候重试即过),退避重试,仍拒上抛原语义。
-        for (var attempt = 0; attempt < 2; attempt++) {
+        // 起景偶发被拒,稍候重试即过),退避重试。
+        Future<bool> busyRetry(String tag) async {
           await _delay(const Duration(milliseconds: 400));
           try {
             await session.startLiveView();
-            session.noteLadder('9201:OK(忙重试)');
-            return;
+            session.noteLadder('9201:OK($tag)');
+            return true;
           } on PtpResponseException catch (e2) {
             session.noteLadder('9201:${PtpSession.ladderRc(e2.responseCode)}');
             final rc = e2.responseCode;
@@ -183,12 +189,37 @@ final class LiveViewEngine {
                 rc != PtpResponseCode.deviceBusy) {
               rethrow;
             }
+            return false;
           }
+        }
+
+        if (await busyRetry('忙重试') || await busyRetry('忙重试')) return;
+        // 仍拒 → 楔死候选(见 ①):先关再开,再给两轮退避重试。
+        try {
+          await session.endLiveView();
+          session.noteLadder('9202:OK');
+        } on Object {
+          session.noteLadder('9202:拒');
+        }
+        if (await busyRetry('9202 后重试') || await busyRetry('9202 后重试')) {
+          return;
         }
         rethrow;
       }
       var remoteEntered = false;
       final keys = <Future<bool> Function()>[
+        () async {
+          // 楔死候选先排(见 ①):机身侧取景残留开着 → 0x9201 恒拒。
+          // 关被拒 = 取景本没开,不耗重试直接换下一把。
+          try {
+            await session.endLiveView();
+            session.noteLadder('9202:OK');
+            return true;
+          } on Object {
+            session.noteLadder('9202:拒');
+            return false;
+          }
+        },
         () async {
           try {
             await session.changeCameraMode(1);
