@@ -82,6 +82,11 @@ Uint8List buildDataset(
 final class _FakeConnection implements CameraConnection {
   final statesCtrl = StreamController<CameraLinkState>.broadcast();
 
+  /// 可变当前态(放行门用例模拟放行时点与「等窗里翻篇」;其余用例不触
+  /// 碰,恒 disconnected 与旧口径同形)。
+  @override
+  CameraLinkState state = CameraLinkState.disconnected;
+
   @override
   String? get error => null;
 
@@ -93,9 +98,6 @@ final class _FakeConnection implements CameraConnection {
 
   @override
   String? get pairingCode => null;
-
-  @override
-  CameraLinkState get state => CameraLinkState.disconnected;
 
   @override
   Stream<CameraLinkState> get states => statesCtrl.stream;
@@ -191,6 +193,59 @@ void main() {
       PtpDevicePropCode.lensMaxApertureWide,
       PtpDevicePropCode.lensMaxApertureTele,
     ]);
+  });
+
+  test('连接沿放行门:门挂住概览零请求,放行即上路', () async {
+    final transport = FakePtpTransport();
+    final session = PtpSession(transport: transport);
+    final conn = _FakeConnection();
+    final gate = Completer<void>();
+    CameraOverviewController(
+        session: session,
+        connection: conn,
+        connectRefreshGate: () => gate.future);
+
+    // 放行后整链可排空的应答(GetDeviceInfo + 电池/焦距/光圈 + 规格五连读)
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: buildDataset(deviceProps: const [0x5001, 0x5008, 0x5007])));
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: Uint8List.fromList([80]))); // 电池 u8
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: Uint8List.fromList([0xA0, 0x0F, 0x00, 0x00]))); // 焦距 u32
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: Uint8List.fromList([0x18, 0x01]))); // 光圈 u16
+    _scriptLensSpec(transport);
+
+    conn.state = CameraLinkState.connected;
+    conn.statesCtrl.add(CameraLinkState.connected);
+    await pumpEventQueue();
+    expect(transport.requests, isEmpty, reason: '门挂住:起景段未落定,概览不抢锁');
+
+    gate.complete();
+    await pumpEventQueue();
+    expect(transport.requests.first.opcode, 0x1001, reason: '门放行即上路');
+  });
+
+  test('连接沿放行门:等窗里翻篇(断开),放行后不追', () async {
+    final transport = FakePtpTransport();
+    final session = PtpSession(transport: transport);
+    final conn = _FakeConnection();
+    final gate = Completer<void>();
+    CameraOverviewController(
+        session: session,
+        connection: conn,
+        connectRefreshGate: () => gate.future);
+
+    conn.statesCtrl.add(CameraLinkState.connected);
+    conn.statesCtrl.add(CameraLinkState.disconnected);
+    await pumpEventQueue();
+    gate.complete(); // 放行时已是断开态
+    await pumpEventQueue();
+    expect(transport.requests, isEmpty, reason: '翻篇不追:重连沿有自己的新定时');
   });
 
   test('渐进刷新:数据点赋值沿即 notify,不等整链跑完', () async {
