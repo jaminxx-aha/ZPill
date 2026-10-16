@@ -16,14 +16,14 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  testWidgets('应用骨架整体可渲染(相机 tab 连接方式分段)', (tester) async {
+  testWidgets('应用骨架整体可渲染(相机 tab 未连接主视图)', (tester) async {
     await boot(tester);
 
     expect(find.text('相机'), findsWidgets); // AppBar 标题 + 底部 tab
     expect(find.text('未连接'), findsOneWidget);
-    expect(find.text('USB 连接'), findsOneWidget); // 默认方式 = 有线
-    expect(find.text('AP 连接'), findsNothing); // 未选中方式不占屏
-    expect(find.text('扫描相机'), findsNothing);
+    expect(find.text('连接相机'), findsOneWidget); // 默认方式 = 有线,居中直连
+    expect(find.text('当前方式:有线'), findsOneWidget);
+    expect(find.text('扫描相机'), findsNothing); // 方式入口收进右上角弹层
   });
 
   // 拍摄页冒烟不在此列:2026-10-08 起拍摄页由相机页已连接视图

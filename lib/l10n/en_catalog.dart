@@ -157,6 +157,14 @@ const Map<String, String> enCatalog = {
   'conn.apHotspot': 'AP Hotspot',
   'conn.sameWifi': 'Same Wi-Fi',
   'conn.bluetooth': 'Bluetooth',
+  'conn.connectCamera': 'Connect to camera',
+  'conn.chooseMethod': 'Choose Connection Method',
+  'conn.currentMethod': 'Mode: {m}',
+  'conn.descUsb': 'Direct C-to-C cable link — stable, low latency',
+  'conn.descAp': 'Join the camera hotspot, then connect',
+  'conn.descSta': 'Camera and phone on the same Wi-Fi; scan to find the camera',
+  'conn.descBle':
+      'Tool channel for GPS injection and waking camera Wi-Fi (no camera connection)',
   'conn.wirelessNotes':
       '· The first wireless connection asks for pairing confirmation on the camera (it remembers this device; no pairing needed afterwards); press OK on the camera when prompted.\n· The camera allows only one client at a time: if SnapBridge got there first you will be rejected — close it completely first.\n· If the first connection fails, allow local network access in the system dialog and retry; keep the app in the foreground with the screen on while downloading large files.',
   'conn.btTools': 'Bluetooth (Tools)',
@@ -177,37 +185,30 @@ const Map<String, String> enCatalog = {
   'common.unknown': 'Unknown',
   'conn.notSent': 'not sent',
   'conn.wifiAwakeCred':
-      'Camera Wi-Fi is awake: Bluetooth released to let the camera raise hotspot "{ssid}"; credentials are on the "AP Hotspot" card — join it via system Wi-Fi, then connect from the "AP Hotspot" card',
+      'Camera Wi-Fi is awake: Bluetooth released to let the camera raise hotspot "{ssid}"; credentials are on the connection page (choose "AP Hotspot" to see them) — join the hotspot, then tap "Connect to camera"',
   'conn.wifiAwake':
-      'Camera Wi-Fi is awake: Bluetooth released to let the camera raise hotspot "{ssid}" — join it via system Wi-Fi, then connect from the "AP Hotspot" card',
+      'Camera Wi-Fi is awake: Bluetooth released to let the camera raise hotspot "{ssid}" — join the hotspot, then choose "AP Hotspot" on the connection page and tap "Connect to camera"',
   'conn.joiningHotspot':
       'Bluetooth released; joining camera hotspot "{ssid}"…',
   'conn.joinedHotspot':
       'Joined camera hotspot "{ssid}"; connecting to the camera…',
   'conn.autoJoinFailed':
-      'Auto-join failed: {e} — join via system Wi-Fi manually (password on the camera screen), then connect from the "AP Hotspot" card',
+      'Auto-join failed: {e} — join via system Wi-Fi manually (password on the camera screen), then choose "AP Hotspot" on the connection page and tap "Connect to camera"',
   'conn.wifiAwakeNoCred':
       'Camera Wi-Fi is awake: Bluetooth released to let the camera raise its hotspot; credentials not decoded: {e} — join via system Wi-Fi (password on the camera screen); tap "Reconnect" to resume Bluetooth after transfers',
   'conn.hotspotDecoded':
-      'Hotspot "{ssid}" credentials decoded; see the "AP Hotspot" card',
+      'Hotspot "{ssid}" credentials decoded; see the connection page (choose "AP Hotspot")',
   'conn.noCredentials': 'Credentials not retrieved: {e}',
   'conn.opFailed': 'Operation failed: {e}',
   'conn.methodUsb': 'Wired (USB)',
   'conn.methodAp': 'AP (Camera as Hotspot)',
   'conn.methodSta': 'STA (Same Wi-Fi)',
-  'conn.usbHint':
-      'Connect the camera and phone with a C-to-C cable, unlock the camera, then tap "USB Connect"',
-  'conn.usbConnect': 'USB Connect',
-  'conn.apMenuHint':
-      'Camera menu: Network → Connect to Smart Device → Wi-Fi Connection (hotspot mode). Join the camera hotspot in system Wi-Fi settings first, then come back to connect.',
-  'conn.cameraIpDefault': 'Camera IP (default 192.168.1.1)',
-  'conn.apConnect': 'AP Connect',
   'conn.apTakeoverNote':
-      'After tapping "AP Connect", the app takes over the camera: its screen shows "Connected to Computer" and the dials lock; released on disconnect.',
+      'Tapping "Connect to camera" takes over the camera: its screen shows "Connected to Computer" and the dials lock; released on disconnect.',
   'conn.hotspotCred': 'Camera Hotspot Credentials (decoded via Bluetooth)',
   'conn.password': 'Password',
   'conn.security':
-      'Security: {s} · join the hotspot, then tap "AP Connect" on this card',
+      'Security: {s} · join the hotspot, then tap "Connect to camera" on the connection page',
   'common.empty': '(empty)',
   'conn.copyLabel': 'Copy {label}',
   'conn.copiedLabel': '{label} copied',
