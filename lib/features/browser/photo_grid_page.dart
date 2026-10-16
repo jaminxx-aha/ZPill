@@ -10,7 +10,7 @@
 /// (typeLabel 带 ×N)。
 ///
 /// 活页模式:随 [BrowserController] 的渐进发布增长(最新优先,新对象尾部
-/// 追加);AppBar 细进度条 + 刷新按钮 + 下拉刷新重枚举;首块前轻加载态,
+/// 追加);AppBar 细进度条 + 刷新按钮 + 下拉刷新重枚举;首块前骨架态,
 /// 同步中断 = 无内容硬错误屏 / 有内容软横幅(已显示内容可继续浏览)。
 /// 断连后保留最后快照(相册列表被控制器清空时,网格内容可见,缩略图走
 /// 磁盘缓存)。缩略图 Future 按 handle 缓存在本页 State(setState 重建
@@ -65,6 +65,9 @@ enum _FormatFilter {
         raw => PhotoDownloadFormat.raw,
       };
 }
+
+/// 骨架态结构键(测试定位用)。
+const _enumSkeletonKey = ValueKey('gridSkeleton');
 
 class PhotoGridPage extends StatefulWidget {
   const PhotoGridPage({
@@ -572,7 +575,7 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
     );
   }
 
-  /// 主体四态:无内容硬错误屏 / 首块前轻加载 / 空相册提示 / 内容网格
+  /// 主体四态:无内容硬错误屏 / 首块前骨架 / 空相册提示 / 内容网格
   /// (同步中断仅软横幅,已显示内容可继续浏览,下拉刷新重枚举)。
   Widget _body(BrowserController controller, List<CameraAlbum> filterAlbums,
       CameraAlbum? album, List<PhotoGroup> items) {
@@ -584,7 +587,8 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
       }
       if (controller.syncing) {
         final p = controller.progress;
-        return LoadingState(
+        return _EnumSkeleton(
+            key: _enumSkeletonKey,
             message: p == null
                 ? context.t('grid.connectingObjects')
                 : context.t('grid.readingObjects', {'a': p.$1, 'b': p.$2}));
@@ -958,6 +962,87 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// 懒枚举首块前骨架(2026-10-17,替代旧转圈):0x9805 全库枚举单笔
+/// ~3.8s 相机端编目(真机日志定案),期间界面不再是空心 spinner,而是
+/// 4 列方块网格形占位(与真网格同几何:4 列/2px 缝/lg 圆角/日期头)。
+/// **静态无动画**:AppBar 不定进度细条已承担「在动」反馈,页内再加
+/// 无限动画会卡死测试的 pumpAndSettle(渐进时序用例全依赖它)。
+class _EnumSkeleton extends StatelessWidget {
+  const _EnumSkeleton({super.key, this.message});
+
+  final String? message;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return SingleChildScrollView(
+      physics: const NeverScrollableScrollPhysics(),
+      padding: const EdgeInsets.only(bottom: AppSpacing.lg),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (var g = 0; g < 3; g++) _skeletonGroup(scheme, first: g == 0),
+          if (message != null)
+            Padding(
+              padding: const EdgeInsets.only(top: AppSpacing.lg),
+              child: Text(
+                message!,
+                textAlign: TextAlign.center,
+                style: TextStyle(color: scheme.onSurfaceVariant),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// 一组 = 日期头条 + 2 行 4 列方块(形状对齐分段日期网格)。
+  Widget _skeletonGroup(ColorScheme scheme, {required bool first}) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: EdgeInsets.fromLTRB(12, first ? 20 : 28, 12, 8),
+          child: Container(
+            width: 96,
+            height: 12,
+            decoration: BoxDecoration(
+              color: scheme.onSurface.withValues(alpha: 0.10),
+              borderRadius: BorderRadius.circular(6),
+            ),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 2),
+          child: Column(
+            children: [
+              for (var r = 0; r < 2; r++)
+                Row(
+                  children: [
+                    for (var c = 0; c < 4; c++)
+                      Expanded(
+                        child: AspectRatio(
+                          aspectRatio: 1,
+                          child: Container(
+                            margin: const EdgeInsets.all(1),
+                            decoration: BoxDecoration(
+                              color: scheme.onSurface.withValues(alpha: 0.06),
+                              borderRadius:
+                                  BorderRadius.circular(AppRadius.lg),
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }
