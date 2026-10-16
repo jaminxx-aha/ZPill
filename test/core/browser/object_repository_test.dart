@@ -168,6 +168,56 @@ void main() {
     expect(infoReqs.map((r) => r.params.single), [0x13, 0x12, 0x11, 0x10]);
   });
 
+  test('拍照即现身:ObjectAdded 事件 → 拉对象入缓存并广播,免手动刷新',
+      () async {
+    final fake = FakePtpTransport();
+    final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
+    _replyTreeNoBatch(fake);
+
+    final updates = <AlbumsUpdate>[];
+    final sub = repo.updates.listen(updates.add);
+    addTearDown(sub.cancel);
+
+    final albums = await repo.loadAlbums();
+    expect(albums[0].items, hasLength(2)); // 基线:两张
+
+    // 相机落卡新照:ObjectAdded(0x4002)带句柄 → ObjectInfo → 入缓存广播
+    fake.reply(_okData(_objectInfoDataset(
+        format: 0x3000,
+        parent: 0x11,
+        size: 100,
+        name: 'DSC_0003.NEF',
+        captured: '20261016T120000')));
+    fake.emitEvent(const PtpEvent(
+        code: PtpEventCode.objectAdded,
+        transactionId: 0,
+        params: [0x14]));
+    await pumpEventQueue();
+    await pumpEventQueue();
+
+    // 快照带新照(汇总三张,新照时刻最新排最前);完成事件即到
+    int infoReqs() => fake.requests
+        .where((r) => r.opcode == PtpOperationCode.getObjectInfo)
+        .length;
+    expect(updates.last.complete, isTrue, reason: '增量广播即到,无须刷新');
+    expect(updates.last.albums[0].items.map((e) => e.name).first,
+        'DSC_0003.NEF');
+    expect(updates.last.albums[0].items, hasLength(3));
+
+    // 重复事件:句柄已缓存,零新请求
+    final before = infoReqs();
+    fake.emitEvent(const PtpEvent(
+        code: PtpEventCode.objectAdded,
+        transactionId: 0,
+        params: [0x14]));
+    await pumpEventQueue();
+    expect(infoReqs(), before, reason: '重复事件不重拉');
+
+    final fresh = await repo.loadAlbums();
+    expect(fresh[0].items, hasLength(3));
+    expect(fresh[0].items.map((e) => e.name).first, 'DSC_0003.NEF');
+  });
+
   test('loadAlbums:汇总相册在前,文件夹相册按 parent 分组、时间倒序', () async {
     final fake = FakePtpTransport();
     final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));

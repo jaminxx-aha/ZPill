@@ -13,13 +13,11 @@
 /// - GetPartialObject 分块([partialChunkBytes] > 0):每块一个完整
 ///   事务,块间响应取消/进度;**单块大小由 AIMD 策略演化**(64KB 起步,
 ///   快块加性升、超时/错误减半、1MB 封顶,见 [AimdChunkPolicy];定值
-///   时代 iOS 64KB→1MB 的两次手工调参由此自动化)。取消双保险:块间
-///   旗标停发新块(旧路径,链路不支持时兜底)+ **块在途期间轮询旗标对
-///   在途块发 Cancel-Drain**
-///   (PTP-IP,私有轮询周期默认 50ms)—— 用户取消即时生效,不必等
-///   在途块自然跑完;在途块以 [PtpCancelledException] 收口,本类映射为
-///   [DownloadCancelledException](取消成功,不是传输失败)。取消对
-///   AIMD 不惩罚:块大小原样带入下次传输。
+///   时代 iOS 64KB→1MB 的两次手工调参由此自动化)。取消 = 旗标等
+///   **在途块跑完**(≤AIMD 封顶,亚秒级)再停,不发新块 —— **不对在
+///   途块发 PTP-IP Cancel 包**(2026-10-16 真机 2.2 定案:Zf 收 Cancel
+///   直接掐链,取消即断链;软取消的即时性代价一块,远小于断链代价;
+///   曾用 Cancel-Drain 机制留传输层留档,生产已无调用方)。
 ///   **iOS IC 通道必须走分块路线**:ImageCaptureCore 把整个数据相位
 ///   塞进一次 requestSendPTPCommand 回调,多 MB 大档(NEF 24MB / MOV
 ///   数百 MB)一次回调不可控 —— 真机触发读超时 → 看门狗判链路死亡,
@@ -70,11 +68,8 @@ class ObjectDownloader {
   ObjectDownloader({
     required PtpSession session,
     this.partialChunkBytes,
-    Duration? cancelPollInterval,
     AimdChunkPolicy? chunkPolicy,
-  })  : _cancelPollInterval =
-            cancelPollInterval ?? const Duration(milliseconds: 50),
-        // 每下载器(= 传输会话)一个策略实例:跨 download 调用延续学习,
+  })  : // 每下载器(= 传输会话)一个策略实例:跨 download 调用延续学习,
         // 不跨下载器/会话共享。注入是测试口径(小数值 + 判快阈值可控);
         // 缺省自建,上限随 [partialChunkBytes](生产 iOS = 1MB)。
         _chunkPolicy =
@@ -92,14 +87,6 @@ class ObjectDownloader {
   /// 分块路线的 AIMD 策略(块大小演化,见库注释)。私有字段是刻意的:
   /// 公共成员会进 `implements ObjectDownloader` 的测试假件接口。
   final AimdChunkPolicy _chunkPolicy;
-
-  /// 分块路线的取消轮询周期:块在途期间盯 [download] 的 isCancelled
-  /// 旗标,翻真即对在途块发 Cancel-Drain(PTP-IP;链路不支持为 no-op)。
-  /// 触发延迟 ≤ 本值;50ms 相对块 RTT(≥100ms)不可感。
-  ///
-  /// 私有字段是刻意的:公共成员会进 `implements ObjectDownloader` 的
-  /// 测试假件接口(widget 测试「仅 download」契约,见类注)。
-  final Duration _cancelPollInterval;
 
   /// 流式下载 [entry] 到 [targetDir](不存在则创建),文件名冲突自动
   /// 加 ` (n)` 序号。[onProgress] 回调累计字节数(整档路线块大小对齐
@@ -124,59 +111,43 @@ class ObjectDownloader {
     try {
       chunked = partialChunkBytes != null && await _partialReadable();
       if (chunked) {
-        // 分块路线:每块是完整事务,取消/失败即停,不再发新命令。
-        // 取消双保险:块间旗标(旧路径兜底)+ 块在途轮询旗标对在途块
-        // 发 Cancel-Drain(即时生效,不必等在途块跑完)。
+        // 分块路线:每块是完整事务,取消/失败即停,不再发新命令。取消 =
+        // 旗标等**在途块跑完**(≤AIMD 封顶,亚秒级)再停 —— **不对在途
+        // 块发 PTP-IP Cancel 包**:2026-10-16 真机 2.2 定案,Zf 收 Cancel
+        // 直接掐链(取消即断链);软取消的即时性代价(一块)远小于断链
+        // 代价。Cancel-Drain 机制留传输层留档,生产已无调用方。
         var offset = 0;
-        var chunkInFlight = false;
-        var cancelFired = false;
-        Timer? cancelPoller;
-        if (isCancelled != null) {
-          final check = isCancelled;
-          cancelPoller = Timer.periodic(_cancelPollInterval, (_) {
-            if (!chunkInFlight || cancelFired || !check()) return;
-            cancelFired = true; // 一块只发一次 Cancel
-            unawaited(_cancelInFlightQuietly());
-          });
-        }
-        try {
-          while (offset < entry.sizeInBytes) {
-            if (isCancelled != null && isCancelled()) {
-              cancelled = true;
-              break;
-            }
-            final want =
-                math.min(_chunkPolicy.currentBytes, entry.sizeInBytes - offset);
-            chunkInFlight = true;
-            final chunkWatch = Stopwatch()..start();
-            final Uint8List chunk;
-            try {
-              chunk =
-                  await _session.getPartialObject(entry.handle, offset, want);
-            } on TimeoutException {
-              // 超时(USB 单事务读超时):链路撑不起这个块大小 —— 喂降。
-              _chunkPolicy.reportTimeout();
-              rethrow;
-            } on PtpCancelledException {
-              rethrow; // 取消:不惩罚(用户行为 ≠ 链路质量)
-            } on Exception {
-              // 传输错误(相机拒绝应答 / PTP-IP 看门狗断链 / …):喂降。
-              _chunkPolicy.reportError();
-              rethrow;
-            } finally {
-              chunkInFlight = false;
-            }
-            // 成功:带耗时喂策略(快 → 加性升;慢 → 不动,见策略口径)。
-            _chunkPolicy.reportSuccess(chunkWatch.elapsed);
-            if (chunk.isEmpty) break; // 相机提前收尾
-            sink.add(chunk);
-            received += chunk.length;
-            onProgress?.call(received);
-            offset += chunk.length;
-            if (chunk.length < want) break; // 短读 = EOF
+        while (offset < entry.sizeInBytes) {
+          if (isCancelled != null && isCancelled()) {
+            cancelled = true;
+            break;
           }
-        } finally {
-          cancelPoller?.cancel();
+          final want =
+              math.min(_chunkPolicy.currentBytes, entry.sizeInBytes - offset);
+          final chunkWatch = Stopwatch()..start();
+          final Uint8List chunk;
+          try {
+            chunk =
+                await _session.getPartialObject(entry.handle, offset, want);
+          } on TimeoutException {
+            // 超时(USB 单事务读超时):链路撑不起这个块大小 —— 喂降。
+            _chunkPolicy.reportTimeout();
+            rethrow;
+          } on PtpCancelledException {
+            rethrow; // 取消收口(若上层有取消通道):不惩罚(用户行为 ≠ 链路质量)
+          } on Exception {
+            // 传输错误(相机拒绝应答 / PTP-IP 看门狗断链 / …):喂降。
+            _chunkPolicy.reportError();
+            rethrow;
+          }
+          // 成功:带耗时喂策略(快 → 加性升;慢 → 不动,见策略口径)。
+          _chunkPolicy.reportSuccess(chunkWatch.elapsed);
+          if (chunk.isEmpty) break; // 相机提前收尾
+          sink.add(chunk);
+          received += chunk.length;
+          onProgress?.call(received);
+          offset += chunk.length;
+          if (chunk.length < want) break; // 短读 = EOF
         }
       } else {
         await _session.getObject(entry.handle, onData: (chunk) {
@@ -230,16 +201,6 @@ class ObjectDownloader {
       elapsed: watch.elapsed,
       averageBytesPerSecond: received / watch.elapsed.inMicroseconds * 1e6,
     );
-  }
-
-  /// 对在途块事务发 Cancel-Drain;取消通道自身异常一律静默 ——
-  /// 旧路径(块间旗标停发)已在兜底,取消不该因通道抖动变失败。
-  Future<void> _cancelInFlightQuietly() async {
-    try {
-      await _session.cancelInFlight();
-    } on Exception {
-      // 静默:见上
-    }
   }
 
   /// 0x101B 能力门禁(op 表在册才走分块;取能力失败也回落整档)。

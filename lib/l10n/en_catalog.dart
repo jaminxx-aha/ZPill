@@ -693,6 +693,7 @@ const Map<String, String> enCatalog = {
   '这张照片有 JPG 和 RAW 两份文件': 'This photo has both a JPG and a RAW file',
   '已开始下载{where}{tag},进度见「图库」页':
       'Download started {where} {tag}; see "Gallery" for progress',
+  '查看进度': 'View Progress',
   '拉取原图…': 'Fetching Original…',
   '拉取原图失败,请检查连接后重试':
       'Failed to fetch the original; check the connection and retry',

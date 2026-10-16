@@ -620,10 +620,11 @@ final class PtpIpTransport implements PtpTransport, PtpCancelCapable {
   /// - 无在途事务 / 已在排水(重复调用)/ 未连接 / 已毒化 → false,
   ///   均为无害 no-op。
   ///
-  /// 真机待验证:Zf 收到 Cancel 后是「提前掐数据相、立即回 Operation
-  /// Response」还是「无视 Cancel 继续把声明量发完」。后者也能排水收场
-  /// (分块 ≤ 声明量,墙钟阀兜底),只是取消不够「即时」—— 行为账见
-  /// 测试与 TODO。
+  /// **2026-10-16 真机定案(原「真机待验证」收账)**:Zf 收到 Cancel
+  /// 既不提前掐数据相也不发完声明量 —— **直接掐链**(2.2 真机:下载
+  /// 中途取消即断链)。生产因此已无调用方(分块下载改软取消:等在途
+  /// 块跑完,见 ObjectDownloader);本机制留档 —— 遇到「Cancel 友好」
+  /// 的机身可复活,对 Zf 勿再发 Cancel 包。
   @override
   Future<bool> cancelInFlight() async {
     if (_poisoned || _closed) return false;

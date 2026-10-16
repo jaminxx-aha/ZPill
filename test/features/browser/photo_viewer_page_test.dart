@@ -17,6 +17,7 @@ import 'package:nikon_pill/core/ptpip/object_format.dart';
 import 'package:nikon_pill/core/transfer/object_downloader.dart';
 import 'package:nikon_pill/core/transfer/transfer_engine.dart';
 import 'package:nikon_pill/core/transfer/transfer_task.dart';
+import 'package:nikon_pill/core/utils/byte_writer.dart';
 import 'package:nikon_pill/features/browser/photo_viewer_page.dart';
 import 'package:nikon_pill/features/common/widgets/embedded_video_player.dart';
 import 'package:nikon_pill/platform/gallery_saver.dart';
@@ -225,7 +226,9 @@ final class _FakeGallery implements GallerySaver {
 }
 
 ObjectEntry _file(int handle, String name,
-        {int format = 0x3801, ObjectKind kind = ObjectKind.image}) =>
+        {int format = 0x3801,
+        ObjectKind kind = ObjectKind.image,
+        int protectionStatus = 0}) =>
     ObjectEntry(
       handle: handle,
       name: name,
@@ -234,7 +237,33 @@ ObjectEntry _file(int handle, String name,
       parentHandle: 0x11,
       capturedAt: DateTime.utc(2026, 10, 1, 12),
       formatCode: format,
+      protectionStatus: protectionStatus,
     );
+
+/// GetObjectInfo 数据集(开页保护态读回 0x1008 用):52B 定长头 + 文件
+/// 名/拍摄/修改三串([protection] = ProtectionStatus u16)。
+Uint8List _objectInfoDataset({int protection = 0}) {
+  final w = ByteWriter()
+    ..u32(1) // storageId
+    ..u16(0x3801) // format JPG
+    ..u16(protection)
+    ..u32(8) // size(与 _file 一致)
+    ..u16(0)..u32(0)..u32(0)..u32(0) // 缩略图四件
+    ..u32(0)..u32(0)..u32(0) // 图像宽/高/位深
+    ..u32(0x11) // parentObject
+    ..u16(0)..u32(0)..u32(0); // assocType/assocDesc/sequence
+  void str(String s) {
+    w
+      ..u8(s.length + 1)
+      ..utf16le(s)
+      ..u16(0);
+  }
+
+  str('DSC_0001.JPG');
+  str('20261016T120000.0');
+  str('20261016T120000.0');
+  return w.takeBytes();
+}
 
 PhotoGroup _videoGroup() => PhotoGroup([
       _file(101, 'DSC_0001.MOV',
@@ -265,16 +294,6 @@ EmbeddedVideoViewBuilder get _stubView =>
 Future<void> _drainSnackBar(WidgetTester tester) async {
   await tester.pump(const Duration(seconds: 5));
   await tester.pumpAndSettle();
-}
-
-/// 等真 IO(临时档删除)落地:pumpAndSettle 无帧可泵会提前返回,
-/// runAsync 里轮询。
-Future<void> _waitFileGone(WidgetTester tester, String path) async {
-  await tester.runAsync(() async {
-    for (var i = 0; i < 100 && File(path).existsSync(); i++) {
-      await Future<void>.delayed(const Duration(milliseconds: 1));
-    }
-  });
 }
 
 /// 真机手指式拖动翻页:多帧小步位移(单步大位移会先触发
@@ -337,6 +356,7 @@ void main() {
       _file(101, 'DSC_0001.JPG'),
       _file(102, 'DSC_0001.NEF', format: 0x3000),
     ]);
+    var transfersTapped = false;
     await _openViewer(
         tester,
         PhotoViewerPage(
@@ -344,6 +364,7 @@ void main() {
           initialIndex: 0,
           thumbnails: _FakeThumbs(),
           engine: engine,
+          onOpenTransfers: () => transfersTapped = true,
         ));
 
     await tester.tap(find.text('下载到相册'));
@@ -358,6 +379,11 @@ void main() {
     expect(entries.single.name, 'DSC_0001.NEF');
     expect(destination, TransferDestination.gallery);
     expect(find.textContaining('已开始下载到相册(RAW)'), findsOneWidget);
+
+    // SnackBar「查看进度」动作 → 传输页入口
+    await tester.tap(find.text('查看进度'));
+    await tester.pump();
+    expect(transfersTapped, isTrue, reason: 'SnackBar 动作直通传输页');
 
     await _drainSnackBar(tester);
   });
@@ -488,11 +514,29 @@ void main() {
     // 播放中:临时档还在(keep-alive 页持有)
     expect(File(player.loads.single.$2).existsSync(), isTrue);
 
-    // 收查看器 → 临时档删
+    // 收查看器 → 临时档由会话缓存持有不删(2026-10-16 起:重开秒开);
+    // 重开查看器再点播放:不重拉,同一临时档直接装载
     await tester.pageBack();
     await tester.pumpAndSettle();
-    await _waitFileGone(tester, player.loads.single.$2);
-    expect(File(player.loads.single.$2).existsSync(), isFalse);
+    expect(File(player.loads.single.$2).existsSync(), isTrue,
+        reason: '临时档由 _PlayedVideoCache 会话持有,收看器不删');
+    await _openViewer(
+        tester,
+        PhotoViewerPage(
+          items: [_videoGroup()],
+          initialIndex: 0,
+          thumbnails: _FakeThumbs(),
+          downloader: downloader,
+          gallery: gallery,
+          videoPlayer: player,
+          embeddedVideoView: _stubView,
+        ));
+    await tester.tap(find.byIcon(Icons.play_arrow));
+    await tester.pumpAndSettle();
+    expect(downloader.calls, hasLength(1), reason: '缓存命中:不重拉');
+    expect(player.loads, hasLength(2));
+    expect(player.loads.last.$2, player.loads.first.$2,
+        reason: '同一临时档复用');
   });
 
   testWidgets('视频组:高帧率浮顺帧开关(非阻塞,点了才变速静音)',
@@ -622,7 +666,7 @@ void main() {
     await _drainSnackBar(tester);
   });
 
-  testWidgets('视频组:滑走翻回不重拉(keep-alive 持临时档),收查看器才删',
+  testWidgets('视频组:滑走翻回不重拉(keep-alive 持临时档),收看视器档留会话缓存',
       (tester) async {
     final gallery = _FakeGallery();
     addTearDown(() => gallery.temp.deleteSync(recursive: true));
@@ -660,11 +704,10 @@ void main() {
     expect(downloader.calls, hasLength(1));
     expect(player.loads, hasLength(1));
 
-    // 收查看器 → 删档
+    // 收看视器 → 档由会话缓存持有(重开秒开语义,详见「点播放」例)
     await tester.pageBack();
     await tester.pumpAndSettle();
-    await _waitFileGone(tester, tempPath);
-    expect(File(tempPath).existsSync(), isFalse);
+    expect(File(tempPath).existsSync(), isTrue);
   });
 
   testWidgets('视频组:全屏原地旋转(锁横屏 + 沉浸,同一播放器不新增视图);'
@@ -769,12 +812,13 @@ void main() {
 
   group('相机内保护(SetObjectProtection 0x1012,2026-10-12 官方 §6.2.1.14)',
       () {
-    testWidgets('开页 0x9803 读回真实态(1 = 已保护,图标直亮锁)', (tester) async {
+    testWidgets('开页读回真值:GetObjectInfo ProtectionStatus=1 → 图标直亮锁',
+        (tester) async {
       final t = _FakePtpTransport();
-      // 0x9803 ProtectionStatus(u16 LE):1 = 只读
+      // 0x1008 定长头 @6 = 1(只读);列表条目不带保护字段(0x9805 路)
       t.reply(PtpResult(
           responseCode: PtpResponseCode.ok,
-          data: Uint8List.fromList([1, 0])));
+          data: _objectInfoDataset(protection: 1)));
       await _openViewer(
           tester,
           PhotoViewerPage(
@@ -783,36 +827,18 @@ void main() {
             thumbnails: _FakeThumbs(),
             session: PtpSession(transport: t),
           ));
-      expect(t.requests.single.opcode, NikonOperationCode.getObjectPropValue);
-      expect(t.requests.single.params, [0x1234, 0x0004]);
+      expect(t.requests.single.opcode, PtpOperationCode.getObjectInfo);
+      expect(t.requests.single.params, [0x1234]);
       expect(find.byIcon(Icons.lock), findsOneWidget,
-          reason: '0x1012 无读回,开页沿 0x9803 对表真态');
-    });
-
-    testWidgets('读回失败(0x9804 连坐/断链):图标回落未保护,fail-open', (tester) async {
-      final t = _FakePtpTransport();
-      t.fail(const PtpResponseException(
-          opcode: NikonOperationCode.getObjectPropValue,
-          responseCode: PtpResponseCode.operationNotSupported));
-      await _openViewer(
-          tester,
-          PhotoViewerPage(
-            items: [PhotoGroup([_file(0x1234, 'DSC_0001.JPG')])],
-            initialIndex: 0,
-            thumbnails: _FakeThumbs(),
-            session: PtpSession(transport: t),
-          ));
-      expect(find.byIcon(Icons.lock_outline), findsOneWidget,
-          reason: '读回失败不挡查看,回落乐观基线(未保护)');
+          reason: '0x1008 是唯一在册真值源(0x9803 不在册/0x9805 不带字段)');
     });
 
     testWidgets('锁钮点按发 [句柄, 0x0001],再点发解除;失败走 SnackBar',
         (tester) async {
       final t = _FakePtpTransport();
-      // 开页读回:未保护(u16 0)
       t.reply(PtpResult(
           responseCode: PtpResponseCode.ok,
-          data: Uint8List.fromList([0, 0])));
+          data: _objectInfoDataset(protection: 0))); // 开页读回:未保护
       final group = PhotoGroup([_file(0x1234, 'DSC_0001.JPG')]);
       await _openViewer(
           tester,
@@ -848,10 +874,9 @@ void main() {
 
     testWidgets('写被拒(断链/卡写保护):图标不动,SnackBar 指路', (tester) async {
       final t = _FakePtpTransport();
-      // 开页读回:未保护
       t.reply(PtpResult(
           responseCode: PtpResponseCode.ok,
-          data: Uint8List.fromList([0, 0])));
+          data: _objectInfoDataset(protection: 0))); // 开页读回:未保护
       final group = PhotoGroup([_file(0x1234, 'DSC_0001.JPG')]);
       await _openViewer(
           tester,
@@ -871,6 +896,87 @@ void main() {
       expect(find.byIcon(Icons.lock_outline), findsOneWidget,
           reason: '失败不落乐观态');
       await _drainSnackBar(tester);
+    });
+
+    testWidgets('重开页面:乐观态挂会话保值(0x9803 废弃,乐观 Map 不随页清)',
+        (tester) async {
+      // 2026-10-16 真机复报「加锁后重进显示未锁」回归:页 State 每次进页
+      // 重建,页面级缓存重开即清空;乐观增量挂 session 后跨页保值。
+      final t = _FakePtpTransport();
+      final group = PhotoGroup([_file(0x1234, 'DSC_0001.JPG')]);
+      final session = PtpSession(transport: t);
+      await _openViewer(
+          tester,
+          PhotoViewerPage(
+            items: [group],
+            initialIndex: 0,
+            thumbnails: _FakeThumbs(),
+            session: session,
+          ));
+
+      t.reply(const PtpResult(responseCode: PtpResponseCode.ok)); // 上保护
+      await tester.tap(find.byIcon(Icons.lock_outline));
+      await tester.pumpAndSettle();
+      expect(find.byIcon(Icons.lock), findsOneWidget);
+      await _drainSnackBar(tester);
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+
+      // 重开:会话乐观 Map 保住锁态(真机形态:重读 0x1008 已回 1)
+      t.reply(PtpResult(
+          responseCode: PtpResponseCode.ok,
+          data: _objectInfoDataset(protection: 1)));
+      await _openViewer(
+          tester,
+          PhotoViewerPage(
+            items: [group],
+            initialIndex: 0,
+            thumbnails: _FakeThumbs(),
+            session: session,
+          ));
+      expect(find.byIcon(Icons.lock), findsOneWidget,
+          reason: '乐观态挂会话:重开不回落未锁假态');
+    });
+
+    testWidgets('断开重连:会话清账 + 重列新真值(ProtectionStatus=1)→ 锁态如显',
+        (tester) async {
+      // 真机原始复报路径:加锁 → 断开重连(open() 清乐观账)→ 重进照片
+      // 仍须显锁 —— 重列的 ObjectInfo ProtectionStatus 带回真值 1。
+      final t = _FakePtpTransport();
+      final session = PtpSession(transport: t);
+      final group = PhotoGroup([_file(0x1234, 'DSC_0001.JPG')]);
+      await _openViewer(
+          tester,
+          PhotoViewerPage(
+            items: [group],
+            initialIndex: 0,
+            thumbnails: _FakeThumbs(),
+            session: session,
+          ));
+      t.reply(const PtpResult(responseCode: PtpResponseCode.ok)); // 上保护
+      await tester.tap(find.byIcon(Icons.lock_outline));
+      await tester.pumpAndSettle();
+      await _drainSnackBar(tester);
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+
+      session.protectionOptimistic.clear(); // open():新链新账
+      // 重列:0x9805 批量路不带保护字段(Zf 实测),条目基线 0
+      final relisted = PhotoGroup([_file(0x1234, 'DSC_0001.JPG')]);
+      // 开页读回 0x1008:真值 1(相机侧已锁)
+      t.reply(PtpResult(
+          responseCode: PtpResponseCode.ok,
+          data: _objectInfoDataset(protection: 1)));
+      await _openViewer(
+          tester,
+          PhotoViewerPage(
+            items: [relisted],
+            initialIndex: 0,
+            thumbnails: _FakeThumbs(),
+            session: session,
+          ));
+      expect(find.byIcon(Icons.lock), findsOneWidget,
+          reason: '开页 0x1008 读回真值接管显示,不再回落未锁假态');
     });
   });
 }

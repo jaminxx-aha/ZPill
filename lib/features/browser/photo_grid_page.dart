@@ -17,6 +17,7 @@ library;
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 
 import '../../app_services.dart';
 import '../../core/browser/album.dart';
@@ -33,6 +34,7 @@ import '../common/widgets/states.dart';
 import '../../design/app_colors.dart';
 import 'browser_controller.dart';
 import 'download_format_sheet.dart';
+import '../transfers/transfers_page.dart';
 import 'photo_viewer_page.dart';
 import 'ratings_controller.dart';
 
@@ -46,6 +48,7 @@ class PhotoGridPage extends StatefulWidget {
     this.engine,
     this.fileOps,
     this.ratings,
+    this.onOpenTransfers,
   });
 
   /// 应用级共享控制器(本页不拥有、不 dispose);网格随其渐进发布增长。
@@ -68,6 +71,10 @@ class PhotoGridPage extends StatefulWidget {
 
   /// 测试注入;缺省用 AppServices 单例。
   final RatingsController? ratings;
+
+  /// 下载 SnackBar 的「查看进度」动作注入(测试;AppServices 里的传输
+  /// 控制器在裸测试树不可建)。null = 默认推 TransfersPage(生产)。
+  final VoidCallback? onOpenTransfers;
 
   @override
   State<PhotoGridPage> createState() => _PhotoGridPageState();
@@ -96,6 +103,59 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
   /// 缩略图 Future 按代表文件句柄缓存:主文件变化(渐进配对完成
   /// NEF→JPG 切换)时取新 Future,其余重建不闪、不重发请求。
   final Map<int, Future<String>> _thumbFutures = {};
+
+  /// 缩略取数连续失败计数(句柄 → 次数):取数失败与图档级失败共享
+  /// 预算(防真坏源无限循环),耗尽后滚动重建自然再试。
+  final Map<int, int> _thumbRetries = {};
+
+  /// 缩略图已落盘路径(future 完成沿记录):图档级失败时删坏档用。
+  final Map<int, String> _thumbPaths = {};
+
+  /// 图档级重试在途(句柄集合):errorBuilder 每帧可重复进,2s 去抖。
+  final Set<int> _thumbFileRetryPending = {};
+
+  /// 前瞻预取锚点(懒加载预热):已构建到的最深/最浅全局 index。cell
+  /// 构建沿更新;新锚点沿把窗外一窗(24 张)先拉起来 —— 滚到即现,不
+  /// 再「滚到才排队」。post-frame 批量发起(本帧可视 cell 的请求先入
+  /// 串行队列,预取不插队)。items 换实例(刷新/切换相册)重置锚点。
+  static const _prefetchWindow = 24;
+  int _builtMaxIndex = -1;
+  int _builtMinIndex = 1 << 30;
+  List<PhotoGroup>? _prefetchItems;
+
+  void _resetPrefetchAnchors(List<PhotoGroup> items) {
+    if (identical(items, _prefetchItems)) return;
+    _prefetchItems = items;
+    _builtMaxIndex = -1;
+    _builtMinIndex = 1 << 30;
+  }
+
+  void _noteBuilt(int index, List<PhotoGroup> items) {
+    final newMax = index > _builtMaxIndex;
+    final newMin = index < _builtMinIndex;
+    if (!newMax && !newMin) return;
+    if (newMax) _builtMaxIndex = index;
+    if (newMin) _builtMinIndex = index;
+    final targets = <PhotoGroup>[];
+    void window(int lo, int hi) {
+      for (var i = lo; i <= hi && i < items.length; i++) {
+        if (i < 0) continue;
+        if (!_thumbFutures.containsKey(items[i].primary.handle)) {
+          targets.add(items[i]);
+        }
+      }
+    }
+
+    if (newMax) window(index + 1, index + _prefetchWindow);
+    if (newMin) window(index - _prefetchWindow, index - 1);
+    if (targets.isEmpty) return;
+    SchedulerBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      for (final g in targets) {
+        _thumbFuture(g);
+      }
+    });
+  }
 
   /// 最后一次解析到的活相册(断连后控制器清空,以它保持网格快照)。
   CameraAlbum? _lastAlbum;
@@ -316,7 +376,17 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
         'tag': tag,
         'where': where,
         'skip': skipNote,
-      }))));
+      })),
+          action: SnackBarAction(
+            label: context.t('查看进度'),
+            onPressed: widget.onOpenTransfers ?? _openTransfers,
+          )));
+  }
+
+  /// 下载进度页(SnackBar 动作;与图库页 AppBar 传输徽标同目的地)。
+  void _openTransfers() {
+    Navigator.of(context).push(
+        MaterialPageRoute<void>(builder: (_) => const TransfersPage()));
   }
 
   /// 批量删除(相机侧,不可逆):确认对话框点明项数与文件数;逐成员
@@ -449,6 +519,7 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
   /// (同步中断仅软横幅,已显示内容可继续浏览,下拉刷新重枚举)。
   Widget _body(BrowserController controller, List<CameraAlbum> chipAlbums,
       CameraAlbum? album, List<PhotoGroup> items) {
+    _resetPrefetchAnchors(items); // items 换实例(刷新/切换):预取锚点重置
     if (items.isEmpty) {
       if (controller.error != null) {
         return ErrorRetryPanel(
@@ -548,8 +619,69 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
     );
   }
 
+  /// 网格缩略取数(句柄去重):失败不驻留 —— 移除在途 future 并限次
+  /// 自动重试(3 次,间隔 3s;耗尽留断图占位,滚动重建自然再试)。旧版
+  /// 失败 future 永驻缓存,断图格直到重进页面都不再尝试(2026-10-16
+  /// 真机复报「部分缩略图加载不出来」根因之一)。
+  Future<String> _thumbFuture(PhotoGroup group) {
+    final handle = group.primary.handle;
+    return _thumbFutures.putIfAbsent(handle, () {
+      final f = _thumbnails.pathFor(group.primary, ThumbSource.grid);
+      // 落盘路径记账(图档级失败删坏档用);onError 吞掉防未处理异常。
+      f.then<void>((p) => _thumbPaths[handle] = p,
+          onError: (Object _) {});
+      return f.catchError((Object e) {
+        _thumbFutures.remove(handle);
+        final tries = (_thumbRetries[handle] ?? 0) + 1;
+        _thumbRetries[handle] = tries;
+        if (mounted && tries <= 3) {
+          Future<void>.delayed(const Duration(seconds: 3), () {
+            if (mounted && !_thumbFutures.containsKey(handle)) {
+              setState(() {});
+            }
+          });
+        }
+        throw e;
+      });
+    });
+  }
+
+  /// 图档级失败恢复(Image.file errorBuilder 沿):future 已完成但盘档
+  /// 被 LRU 驱逐删档/内容损坏时,死路径 future 不失效格子就永远断图
+  /// (2026-10-16 真机 440 张相册回拉全断图根因)。2s 去抖 → 删坏档
+  /// (缓存层命中沿 existsSync 校验,档不在即当未命中重下)+ future
+  /// 失效重建重取;与取数失败共享 5 次预算(防真坏源无限循环)。
+  void _retryThumbAfterFileError(PhotoGroup group) {
+    final handle = group.primary.handle;
+    if (!_thumbFileRetryPending.add(handle)) return; // 已排程:去抖
+    Future<void>.delayed(const Duration(seconds: 2)).then((_) {
+      _thumbFileRetryPending.remove(handle);
+      final path = _thumbPaths.remove(handle);
+      if (path != null) {
+        try {
+          File(path).deleteSync(); // 坏档删掉:重取不走旧命中(同路径)
+        } on FileSystemException {
+          // 删失败不挡:缓存层命中沿 existsSync 校验兜底
+        }
+      }
+      if (!mounted) return;
+      if ((_thumbRetries[handle] ?? 0) >= 5) return; // 预算耗尽
+      _thumbRetries[handle] = (_thumbRetries[handle] ?? 0) + 1;
+      if (_thumbFutures.remove(handle) != null) {
+        setState(() {});
+      }
+    });
+  }
+
+  /// [debugRetryThumbAfterFileError] 直调入口:errorBuilder 沿的引擎解
+  /// 码失败在 fake-async 测试里无法落地,直调同款逻辑验证重取。
+  @visibleForTesting
+  void debugRetryThumbAfterFileError(PhotoGroup group) =>
+      _retryThumbAfterFileError(group);
+
   Widget _cell(PhotoGroup group, int index, List<PhotoGroup> items,
       {Key? key}) {
+    _noteBuilt(index, items); // 构建沿 = 预取锚点沿(前瞻预热)
     final selected = _selected.contains(group.key);
     return GestureDetector(
       key: key,
@@ -559,10 +691,7 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
         fit: StackFit.expand,
         children: [
           FutureBuilder<String>(
-            future: _thumbFutures.putIfAbsent(
-              group.primary.handle,
-              () => _thumbnails.pathFor(group.primary, ThumbSource.grid),
-            ),
+            future: _thumbFuture(group),
             builder: (context, snap) {
               if (snap.connectionState != ConnectionState.done) {
                 return ColoredBox(
@@ -586,10 +715,15 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
               return Image.file(
                 File(path),
                 fit: BoxFit.cover,
-                errorBuilder: (context, error, stackTrace) => ColoredBox(
-                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                  child: const Center(child: Icon(Icons.broken_image_outlined)),
-                ),
+                errorBuilder: (context, error, stackTrace) {
+                  _retryThumbAfterFileError(group); // 死路径/坏档:自愈
+                  return ColoredBox(
+                    color:
+                        Theme.of(context).colorScheme.surfaceContainerHighest,
+                    child: const Center(
+                        child: Icon(Icons.broken_image_outlined)),
+                  );
+                },
               );
             },
           ),

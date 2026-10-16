@@ -8,6 +8,7 @@ import '../ptpip/object_format.dart';
 import '../ptpip/object_info.dart';
 import '../ptp/operation_codes.dart';
 import '../ptp/ptp_session.dart';
+import '../ptp/ptp_transport.dart';
 import 'album.dart';
 import 'object_entry.dart';
 import 'photo_group.dart';
@@ -71,6 +72,7 @@ abstract interface class ObjectRepository {
       capturedAt:
           _parsePtpDate(info.captureDate) ?? _parsePtpDate(info.modificationDate),
       formatCode: info.objectFormat,
+      protectionStatus: info.protectionStatus,
     );
   }
 
@@ -86,6 +88,7 @@ abstract interface class ObjectRepository {
     int? format;
     var size = 0;
     var parent = 0;
+    var protection = 0;
     String? created;
     String? modified;
     for (final p in props) {
@@ -98,6 +101,8 @@ abstract interface class ObjectRepository {
           size = (p.value as int?) ?? 0;
         case PtpObjectPropCode.parentObject:
           parent = (p.value as int?) ?? 0;
+        case PtpObjectPropCode.protectionStatus:
+          protection = (p.value as int?) ?? 0;
         case PtpObjectPropCode.dateCreated:
           created = p.value as String?;
         case PtpObjectPropCode.dateModified:
@@ -117,6 +122,7 @@ abstract interface class ObjectRepository {
       parentHandle: parent,
       capturedAt: _parsePtpDate(created) ?? _parsePtpDate(modified),
       formatCode: format,
+      protectionStatus: protection,
     );
   }
 
@@ -153,7 +159,37 @@ abstract interface class ObjectRepository {
 /// 会话关闭/重连后必须 [reset](AppServices 订阅连接状态驱动),否则句柄
 /// 可能已过期。
 final class ObjectRepositoryImpl implements ObjectRepository {
-  ObjectRepositoryImpl({required this.session, this.chunkSize = 24});
+  ObjectRepositoryImpl({required this.session, this.chunkSize = 24}) {
+    // 拍照即现身:相机落卡 → ObjectAdded(0x4002,中断通道与 0x941C
+    // 轮询均汇入 session.events)→ 拉该对象 ObjectInfo 入缓存并广播,
+    // 相册免手动刷新(2026-10-16 用户复报「拍的照片要刷新才出现」;
+    // 速传/拍摄页小卡早已消费同事件,相册此前漏接)。SDRAM 对象
+    // (0xC101)不落卡不入相册,不在此列。App 生命周期订阅:仓库与会
+    // 话同寿命,接口无 dispose 不取消(测试随假件一并废弃)。
+    session.events.listen(_onEvent);
+  }
+
+  void _onEvent(PtpEvent event) {
+    if (event.code != PtpEventCode.objectAdded) return;
+    if (event.params.isEmpty) return;
+    final handle = event.params.first;
+    if (_byHandle.containsKey(handle)) return; // 重复事件:已缓存不重拉
+    final gen = _generation;
+    unawaited(() async {
+      try {
+        final info = await session.getObjectInfo(handle);
+        if (gen != _generation) return; // reset 竞态:弃
+        _byHandle[handle] = ObjectRepository.toEntry(info);
+        // 枚举进行中不另发布(其分块广播读活缓存,新对象自然带上);
+        // 日常拍照(枚举外)即时广播一次完整快照。
+        if (_loaded && _loading == null) {
+          _publish(_byHandle.length, _byHandle.length, complete: true);
+        }
+      } on Exception {
+        // 新对象已被删/拒答:静默,下次刷新对表
+      }
+    }());
+  }
 
   final PtpSession session;
 

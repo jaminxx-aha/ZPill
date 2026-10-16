@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -85,14 +87,31 @@ final class _FakeConnection implements CameraConnection {
   Future<void> disconnect() async {}
 }
 
-/// 假缩略图:即时返回路径(文件不存在 → Image.file 走占位,无动画挂起)。
+/// 1×1 PNG(解码必成):缩略出图路径的真档替身。
+final _tinyPng = base64Decode(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==');
+
+/// 假缩略图:落盘真字节(存在文件 → Image.file 可解码);[failHandles]
+/// = 取数抛错;[calls] 记取数账。
 final class _FakeThumbs implements ThumbnailCache {
+  final Set<int> failHandles;
+  final calls = <int>[];
+
+  _FakeThumbs({this.failHandles = const {}});
+
   @override
   int get previewMaxPixelSize => 2560;
 
   @override
-  Future<String> pathFor(ObjectEntry entry, ThumbSource source) async =>
-      '/tmp/nikonpill_test_thumb_${entry.handle}.jpg';
+  Future<String> pathFor(ObjectEntry entry, ThumbSource source) async {
+    calls.add(entry.handle);
+    if (failHandles.contains(entry.handle)) {
+      throw Exception('假失败:${entry.name}');
+    }
+    final path = '/tmp/nikonpill_test_thumb_${entry.handle}.jpg';
+    File(path).writeAsBytesSync(_tinyPng);
+    return path;
+  }
 
   @override
   Future<ExifCardData?> exifCardOf(ObjectEntry entry) async => null;
@@ -228,6 +247,109 @@ void main() {
     await loading;
   });
 
+  testWidgets('缩略取数失败:断图占位,3s 后限次自动重试(失败 future 不驻留)',
+      (tester) async {
+    final repo = _FakeRepo();
+    final controller = BrowserController(repository: repo);
+    final thumbs = _FakeThumbs(failHandles: {1});
+    await tester.pumpWidget(_host(PhotoGridPage(
+      controller: controller,
+      folderHandle: CameraAlbum.allPhotosHandle,
+      fallbackName: '全部照片',
+      thumbnails: thumbs,
+    )));
+
+    final loading = controller.load();
+    repo.updatesCtrl.add(AlbumsUpdate(
+        albums: [CameraAlbum.allPhotos([_photo(1), _photo(2)])],
+        loaded: 2,
+        total: 2,
+        complete: true));
+    await tester.pump();
+    expect(find.byKey(ValueKey(1)), findsOneWidget);
+    await tester.pump(); // 取数失败的错误沿下一帧上屏(微任务 → setState → 帧)
+    expect(find.byIcon(Icons.broken_image_outlined), findsOneWidget,
+        reason: '句柄 1 取数失败:断图占位');
+
+    // 3s 后自动重试(失败 future 已从缓存移除;假失败解除 → 第二次取数)
+    thumbs.failHandles.clear();
+    await tester.pump(const Duration(seconds: 3, milliseconds: 100));
+    await tester.pump();
+    expect(thumbs.calls.where((h) => h == 1), hasLength(2),
+        reason: '自动重试发出第二次取数(失败 future 不驻留)');
+
+    repo.completeLoad([CameraAlbum.allPhotos([_photo(1), _photo(2)])]);
+    await loading;
+  });
+
+  testWidgets('图档级失败:2s 去抖删坏档 + future 失效重取(死路径自愈)',
+      (tester) async {
+    final repo = _FakeRepo();
+    final controller = BrowserController(repository: repo);
+    final thumbs = _FakeThumbs();
+    final group = _photo(1);
+    await tester.pumpWidget(_host(PhotoGridPage(
+      controller: controller,
+      folderHandle: CameraAlbum.allPhotosHandle,
+      fallbackName: '全部照片',
+      thumbnails: thumbs,
+    )));
+
+    final loading = controller.load();
+    repo.updatesCtrl.add(AlbumsUpdate(
+        albums: [CameraAlbum.allPhotos([group, _photo(2)])],
+        loaded: 2,
+        total: 2,
+        complete: true));
+    await tester.pump();
+    await tester.pump();
+    expect(thumbs.calls.where((h) => h == 1), hasLength(1));
+
+    // 模拟 Image.file errorBuilder 沿(fake-async 里引擎解码失败沿落不
+    // 地,直调同款入口):future 已完成、盘档被驱逐删档 → 2s 后删档 +
+    // future 失效 + 重取
+    (tester.state(find.byType(PhotoGridPage)) as dynamic)
+        .debugRetryThumbAfterFileError(group);
+    await tester.pump(const Duration(seconds: 2, milliseconds: 100));
+    await tester.pump();
+    expect(thumbs.calls.where((h) => h == 1), hasLength(2),
+        reason: '图档级失败触发重取(死路径 future 不驻留)');
+
+    repo.completeLoad([CameraAlbum.allPhotos([group, _photo(2)])]);
+    await loading;
+  });
+
+  testWidgets('前瞻预取:构建沿窗外一窗先取(滚到即现,可视请求先入队)',
+      (tester) async {
+    final repo = _FakeRepo();
+    final controller = BrowserController(repository: repo);
+    final thumbs = _FakeThumbs();
+    final groups = [for (var i = 1; i <= 24; i++) _photo(i)];
+    await tester.pumpWidget(_host(PhotoGridPage(
+      controller: controller,
+      folderHandle: CameraAlbum.allPhotosHandle,
+      fallbackName: '全部照片',
+      thumbnails: thumbs,
+    )));
+
+    final loading = controller.load();
+    repo.updatesCtrl.add(AlbumsUpdate(
+        albums: [CameraAlbum.allPhotos(groups)],
+        loaded: 24,
+        total: 24,
+        complete: true));
+    await tester.pump();
+    // 一帧:可视 cell 构建(取数)+ post-frame 预取窗(24 张窗越过屏外)
+    await tester.pumpAndSettle();
+
+    // 假视口只能容纳前十几格,窗后段(>可视)也已被预取 = 全部 24 张入账
+    expect(thumbs.calls.toSet(), containsAll([for (var i = 1; i <= 24; i++) i]),
+        reason: '预取窗越过可视下界:滚到即现,不排队等待');
+
+    repo.completeLoad([CameraAlbum.allPhotos(groups)]);
+    await loading;
+  });
+
   testWidgets('断连:网格保留最后快照,标题取兜底名', (tester) async {
     final repo = _FakeRepo();
     final conn = _FakeConnection();
@@ -328,7 +450,8 @@ void main() {
 
   /// 装载网格并选中指定组(长按第一项进入多选);返回控制器与假引擎供断言。
   Future<(BrowserController, _FakeEngine)> selectGroups(
-      WidgetTester tester, List<PhotoGroup> groups) async {
+      WidgetTester tester, List<PhotoGroup> groups,
+      {VoidCallback? onOpenTransfers}) async {
     final repo = _FakeRepo();
     final engine = _FakeEngine();
     final controller = BrowserController(repository: repo);
@@ -339,6 +462,7 @@ void main() {
       fallbackName: '全部照片',
       thumbnails: _FakeThumbs(),
       engine: engine,
+      onOpenTransfers: onOpenTransfers,
     )));
     final album = CameraAlbum.allPhotos(groups);
     repo.updatesCtrl.add(AlbumsUpdate(
@@ -426,8 +550,10 @@ void main() {
   });
 
   testWidgets('多选全单一格式:不弹面板,整组直接入队(行为同旧版)', (tester) async {
-    final (_, engine) =
-        await selectGroups(tester, [_photo(1), _rawPhoto(201), _photo(3)]);
+    var transfersTapped = false;
+    final (_, engine) = await selectGroups(
+        tester, [_photo(1), _rawPhoto(201), _photo(3)],
+        onOpenTransfers: () => transfersTapped = true);
 
     await tester.tap(find.text('下载到应用'));
     await tester.pumpAndSettle();
@@ -437,6 +563,11 @@ void main() {
     expect(entries.map((e) => e.name),
         ['IMG_1.JPG', 'DSC_0002.NEF', 'IMG_3.JPG']);
     expect(destination, TransferDestination.app);
+
+    // SnackBar「查看进度」动作 → 传输页入口
+    await tester.tap(find.text('查看进度'));
+    await tester.pump();
+    expect(transfersTapped, isTrue, reason: 'SnackBar 动作直通传输页');
 
     await _drainSnackBar(tester);
   });

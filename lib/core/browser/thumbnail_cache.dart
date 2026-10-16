@@ -3,14 +3,17 @@
 /// 两档来源([ThumbSource]):grid = 网格小图(JPG = Nikon 0x90C4 高清
 /// ~1024px 优先,失败/不支持回落 0x100A 小图 —— N-link 手法,网格
 /// 自动受益;NEF/视频 = 0x100A,0x90C4 对 NEF 回压缩条带非 JPEG),
-/// preview = 大图预览(两席位):
-/// - 小图席位(先显,即时):JPG = Nikon 0x90C4(实测 640×424,
+/// preview = 大图预览(三席位):
+/// - FHD 席位(先显,2026-10-16 起照片通吃):Nikon 0x920F FHD JPEG
+///   (1920 级,原 640×424 小图撑满全屏太糊 —— 真机复报「点进去模糊
+///   然后一闪变清晰」的糊段压缩)。JPG/RAW 同路(0x920F 对 JPG 在册性
+///   未证:直发 + 失败会话级降级回落,直发纪律同 0x90C4/0x920F 现行);
+///   视频不试(海报无 FHD 语义)。独立键 `fhd_<内容键>`,网格不吃。
+/// - 小图席位(先显兜底):JPG = Nikon 0x90C4(实测 640×424,
 ///   **直发不查能力表** —— 无线 STA 的 op 小表是假门,查表会把大图
 ///   无谓拒成 160×120 回落,2026-10-09 装机复报「点进去很小」根因;
 ///   失败回落 GetThumb —— 2026-10-15 起网格档 JPG 同路,并加会话级
-///   降级旗标防逐张浪费 RTT);NEF = 0x920F FHD JPEG 中档直发
-///   (2026-10-13 接线:档内无大 JPEG 的旧定案被官方 FHD 通道推翻,
-///   相机拒 0xA00F 等回落 GetThumb)。
+///   降级旗标防逐张浪费 RTT);NEF = FHD 失败回落 GetThumb。
 /// - 高清席位([warmPreview],查看器页 settle 触发):整档下载 →
 ///   原生解码(iOS ImageIO,长边 ≤ [ThumbnailCache.previewMaxPixelSize],
 ///   JPG/NEF 通吃)→ 落盘 → [ThumbnailCache.previewUpgrades] 发换图
@@ -63,8 +66,8 @@ class ThumbnailCache {
     ObjectDownloader? downloader,
     RawDecoder? rawDecoder,
     this.previewMaxPixelSize = 2560,
-    this.gridLimitBytes = 32 * 1024 * 1024,
-    this.previewLimitBytes = 256 * 1024 * 1024,
+    this.gridLimitBytes = 256 * 1024 * 1024,
+    this.previewLimitBytes = 512 * 1024 * 1024,
   })  : _session = session,
         _gallery = gallery,
         _downloader = downloader ?? ObjectDownloader(session: session),
@@ -105,6 +108,12 @@ class ThumbnailCache {
   /// 高清席位升级事件总线([previewUpgrades] 的源)。
   final StreamController<PreviewUpgrade> _upgradeCtrl =
       StreamController<PreviewUpgrade>.broadcast();
+
+  /// 0x920F FHD 席位的会话降级旗标(Zf 对 JPG 的在册性未证):一拍
+  /// 失败(错误应答/单事务超时)即置位,本会话后续照片预览不再逐张
+  /// 浪费 RTT(JPG/RAW 同旗);链路类异常不置(链死时后续取数同败,
+  /// 无谓连坐)。[reset](断连)复位重新探测。
+  bool _fhdPictureDegraded = false;
 
   /// 高清预热:在途内容键 / 单槽排队(只留最新)/ 本会话已试(成败
   /// 都记,失败不重试)。
@@ -185,10 +194,16 @@ class ThumbnailCache {
   Future<String> pathFor(ObjectEntry entry, ThumbSource source) {
     final key = _keyFor(entry);
     final lru = _lruFor(source);
-    // 命中即刷到 LRU 尾部(最新端)。
+    // 命中即刷到 LRU 尾部(最新端);**盘档已无的命中当未命中**(LRU
+    // 驱逐删档/系统回收后,死路径缓存不失效会让格子永远断图 —— 索引
+    // 在而文件不在,2026-10-16 真机 440 张相册「回拉全部断图」根因)。
     _CachedThumb? refresh(String k) {
       final c = lru[k];
       if (c == null) return null;
+      if (!File(c.path).existsSync()) {
+        lru.remove(k);
+        return null;
+      }
       lru.remove(k);
       lru[k] = c;
       return c;
@@ -200,6 +215,13 @@ class ThumbnailCache {
     if (source == ThumbSource.preview) {
       final hq = refresh('hq_$key');
       if (hq != null) return Future.value(hq.path);
+    }
+    // FHD 席位次之(预览档,照片通吃 —— JPG 0x90C4 640×424 撑满太糊,
+    // 见库注):本会话/前会话已取到 FHD 的直接给。
+    if (source == ThumbSource.preview &&
+        entry.kind != ObjectKind.video) {
+      final fhd = refresh('fhd_$key');
+      if (fhd != null) return Future.value(fhd.path);
     }
     // JPG 的 0x90C4 高清档(lt_ 键)先于小图档:本会话已取到高清的
     // 直接给(见 [_fetchJpg] 的双键设计)。
@@ -251,10 +273,11 @@ class ThumbnailCache {
   }
 
   /// 断连时清内存索引;缓存键是内容键(文件名+大小),跨会话稳定,
-  /// 磁盘缓存保留,重连后直接命中。
+  /// 磁盘缓存保留,重连后直接命中。FHD 席位降级旗标同复位(新链重探)。
   void reset() {
     _grid.clear();
     _preview.clear();
+    _fhdPictureDegraded = false;
   }
 
   static const _fmtMarker = '.fmt-v2';
@@ -270,6 +293,33 @@ class ThumbnailCache {
         _remember(source, 'hq_$key', hqPath, await hqFile.length());
         await _evictIfNeeded(source);
         return hqPath;
+      }
+      // FHD 席位(照片通吃,视频海报不试):磁盘命中(前会话产物)即用;
+      // 未降级先发 0x920F 直取(不查能力表,假门教训同 0x90C4)。失败
+      // 置会话降级,后续照片直走下方小图链。
+      if (entry.kind != ObjectKind.video) {
+        final fhdPath = '$dir/fhd_$key.jpg';
+        final fhdFile = File(fhdPath);
+        if (await fhdFile.exists()) {
+          _remember(source, 'fhd_$key', fhdPath, await fhdFile.length());
+          await _evictIfNeeded(source);
+          return fhdPath;
+        }
+        if (!_fhdPictureDegraded) {
+          try {
+            final data = await _orientThumb(
+                entry, await _session.getFhdPicture(entry.handle));
+            await fhdFile.writeAsBytes(data, flush: true);
+            _remember(source, 'fhd_$key', fhdPath, data.length);
+            await _evictIfNeeded(source);
+            return fhdPath;
+          } on PtpResponseException {
+            _fhdPictureDegraded = true; // 错误应答:本会话不再逐张试
+          } on TimeoutException {
+            _fhdPictureDegraded = true; // 单事务超时:同上
+          }
+          // 链路类异常不置降级不拦:下方取数同链,死链自然冒错占位
+        }
       }
     }
     // JPG(非 RAW 照片):0x90C4 高清档优先,双键分流见 [_fetchJpg];
@@ -387,22 +437,10 @@ class ThumbnailCache {
         fmt == ObjectFormatCode.jfif;
   }
 
-  /// 大图预览的**小图席位**取数(NEF 与视频;JPG 已分流 [_fetchJpg]):
-  /// NEF = 0x920F FHD JPEG 中档直发(官方 §6.2.3.7:P1=ObjectHandle,RAW
-  /// 对象合法;0xA00F 无 FHD 数据回落 GetThumb 小图)—— 不查 op 能力表
-  /// (0x90C4 无线假门同款教训)。视频/其他 = GetThumb 直取:不试
-  /// 0x90C4(海报无高清缩略语义,单对象失败还会置会话降级旗标连累
-  /// JPG)。小图撑满是糊的 —— 高清席位见 [warmPreview](整档下载 +
-  /// 原生解码,先显后换)。
+  /// 小图末档回退(仅非 JPG 对象会到这里 —— JPG 已分流 [_fetchJpg];
+  /// 照片到此处 = FHD 席位失败/会话降级,视频 = 海报):GetThumb 直取
+  /// (Zf 160×120,撑满全屏是糊的,高清席位见 [warmPreview])。
   Future<Uint8List> _fetchPreview(ObjectEntry entry) async {
-    if (isRawFile(entry)) {
-      try {
-        return await _orientThumb(
-            entry, await _session.getFhdPicture(entry.handle));
-      } on PtpResponseException {
-        return _orientThumb(entry, await _session.getThumb(entry.handle));
-      }
-    }
     return _orientThumb(entry, await _session.getThumb(entry.handle));
   }
 

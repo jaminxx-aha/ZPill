@@ -16,6 +16,7 @@ final class PtpObjectInfo {
     required this.objectFormat,
     required this.compressedSize,
     required this.filename,
+    this.protectionStatus = 0,
     this.captureDate,
     this.modificationDate,
     this.parentHandle,
@@ -27,6 +28,12 @@ final class PtpObjectInfo {
   final int objectFormat;
   final int compressedSize;
   final String filename;
+
+  /// ProtectionStatus(ISO 15740 定长头 @6,u16):0 = 无保护/1 = 只读。
+  /// 0x1012 SetObjectProtection 的真值回读路 —— 相册列表的 GetObjectInfo
+  /// 自带,重列即新(2026-10-16 接线:查看器保护态以此为准,替代在
+  /// Zf 上不在册的 0x9803 读回)。
+  final int protectionStatus;
 
   /// PTP 日期串,形如 `YYYYMMDDThhmmss.s`(UTC);解析见 browser 层。
   final String? captureDate;
@@ -51,7 +58,7 @@ final class PtpObjectInfo {
     final r = ByteReader(dataset);
     final storageId = r.u32();
     final objectFormat = r.u16();
-    r.u16(); // ProtectionStatus
+    final protectionStatus = r.u16(); // 0 = 无保护 / 1 = 只读
     final compressedSize = r.u32();
     r.u16(); // ThumbFormat
     r.u32(); // ThumbCompressedSize
@@ -73,6 +80,7 @@ final class PtpObjectInfo {
       handle: handle,
       storageId: storageId,
       objectFormat: objectFormat,
+      protectionStatus: protectionStatus,
       compressedSize: compressedSize,
       filename: filename,
       captureDate: captureDate,
@@ -80,7 +88,4 @@ final class PtpObjectInfo {
       parentHandle: parentHandle,
     );
   }
-
-  // TODO(P0): 完整数据集字段(缩略图格式/尺寸、保护状态等)按需补充,
-  // 字段布局以规范 + tools/ptpip_probe 真机抓包为准。
 }

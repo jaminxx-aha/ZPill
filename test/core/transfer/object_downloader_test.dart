@@ -237,17 +237,18 @@ void main() {
     expect(await dir.list().toList(), isEmpty);
   });
 
-  // ── 分块在途取消(Cancel-Drain 接线)────────────────────────────
+  // ── 分块在途取消(软取消:不发 Cancel 包,2026-10-16 真机定案)──
 
   test(
-      '分块在途取消:轮询旗标 → 对在途块发 cancel,PtpCancelledException '
-      '按「取消成功」消费(非失败)', () async {
+      '分块在途取消:不发 Cancel 包(Zf 收 Cancel 掐链),等在途块跑完 '
+      '按「取消成功」收场,不再发新块', () async {
     final fake = FakePtpTransport();
     final downloader = chunkedDownloaderFor(fake);
 
     fake.reply(deviceInfoWithPartial());
     final gate = Completer<void>();
-    fake.failAfter(gate.future, const PtpCancelledException(0)); // 排水收口形
+    fake.replyAfter(gate.future,
+        _okData(Uint8List.fromList(List.filled(64, 7)))); // 在途块正常跑完
 
     var flip = false;
     final future = downloader.download(
@@ -260,13 +261,11 @@ void main() {
     await pumpEventQueue();
     expect(fake.requests.map((r) => r.opcode).last,
         PtpOperationCode.getPartialObject);
-    expect(fake.cancelInFlightCalls, 0); // 旗标未翻:不得乱发 Cancel
+    expect(fake.cancelInFlightCalls, 0,
+        reason: '分块路线不发 Cancel 包(2026-10-16 真机:取消即断链)');
 
-    flip = true; // 用户取消
-    await Future<void>.delayed(const Duration(milliseconds: 150)); // 轮询周期 50ms
-    expect(fake.cancelInFlightCalls, 1); // 一块只发一次
-
-    gate.complete(); // 相机排水收口:在途块以取消完成
+    flip = true; // 用户取消:块在途
+    gate.complete(); // 在途块跑完
     await expectLater(future, throwsA(isA<DownloadCancelledException>()));
     // 取消后不再发新块;半成品已删
     expect(fake.requests.map((r) => r.opcode),
@@ -423,7 +422,8 @@ void main() {
     expect(fake.requests.last.params, [0x12, 0, 256]);
   });
 
-  test('AIMD 接线:Cancel-Drain 取消不惩罚 —— 块大小原样带入下一档', () async {
+  test('AIMD 接线:取消路在途块跑完照常喂策略(不发 Cancel 包,档位延续)',
+      () async {
     final fake = FakePtpTransport();
     final policy = fastAlwaysPolicy(initialBytes: 128);
     final downloader = ObjectDownloader(
@@ -432,10 +432,10 @@ void main() {
       chunkPolicy: policy,
     );
 
-    // 第一档:块在途被用户取消(轮询 → Cancel-Drain → 排水收口)。
+    // 第一档:块在途用户取消(软取消:等在途块跑完)。
     fake.reply(deviceInfoWithPartial());
     final gate = Completer<void>();
-    fake.failAfter(gate.future, const PtpCancelledException(0));
+    fake.replyAfter(gate.future, _okData(filler(128)));
 
     var flip = false;
     final future = downloader.download(
@@ -449,18 +449,18 @@ void main() {
         PtpOperationCode.getPartialObject);
 
     flip = true;
-    await Future<void>.delayed(const Duration(milliseconds: 150));
-    expect(fake.cancelInFlightCalls, 1);
+    expect(fake.cancelInFlightCalls, 0,
+        reason: '分块路线不发 Cancel 包(2026-10-16 真机:Zf 收 Cancel 掐链)');
 
-    gate.complete();
+    gate.complete(); // 在途块跑完
     await expectLater(future, throwsA(isA<DownloadCancelledException>()));
-    // 取消不是链路信号:128 原样保留(没减半到 64)。
-    expect(policy.currentBytes, 128);
-
-    // 第二档(同下载器,门禁走会话缓存):首块请求从 128 起步,成功后照常续升。
-    fake.reply(_okData(filler(128)));
-    await downloader.download(_entry('DSC_0019.NEF', 128), targetDir: dir.path);
-    expect(fake.requests.last.params, [0x12, 0, 128]);
+    // 在途块成功照常喂策略:128 → 160(取消不是链路信号,不减半)。
     expect(policy.currentBytes, 160);
+
+    // 第二档(同下载器,门禁走会话缓存):首块请求从 160 起步,成功后照常续升。
+    fake.reply(_okData(filler(160)));
+    await downloader.download(_entry('DSC_0019.NEF', 160), targetDir: dir.path);
+    expect(fake.requests.last.params, [0x12, 0, 160]);
+    expect(policy.currentBytes, 192);
   });
 }
