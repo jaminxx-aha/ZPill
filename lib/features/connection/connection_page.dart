@@ -1569,10 +1569,14 @@ class _ConnectionPageState extends State<ConnectionPage>
               info?.deviceVersion ?? '--'),
           _infoRow(context, Icons.tag_outlined, 'info.serial',
               info?.serialNumber ?? '--'),
-          if (_overview.batteryPercent != null)
-            _infoRow(context, Icons.battery_std_outlined, 'info.battery',
-                '${_overview.batteryPercent}%',
-                last: true),
+          // 电池行不缺席(2026-10-16 真机反馈「电池不显示」修):数据
+          // 没到回 '--' 占位,与固件/序列号行同口径;原条件渲染让该行
+          // 整段消失、数据到货时布局跳版。
+          _infoRow(context, Icons.battery_std_outlined, 'info.battery',
+              _overview.batteryPercent == null
+                  ? '--'
+                  : '${_overview.batteryPercent}%',
+              last: true),
         ],
       ),
     );
