@@ -149,15 +149,21 @@ final class FeedTransform {
   /// 屏幕 → 图像像素(缓存逆矩阵)。
   Matrix4 get screenToImage => _inverse ??= Matrix4.inverted(imageToScreen);
 
-  /// 屏幕点 → 归一化图像坐标(0..1,钳到边;无画面 = null)。
-  /// 点按对焦走这里:缩放/旋转/变宽一次逆映射收口。
+  /// 屏幕点 → 归一化图像坐标(0..1)。点落在画面外(letterbox 空白/
+  /// 平移露底)= null —— 出界不钳边(2026-10-16 用户定案:框外点按
+  /// 不挪对焦框);边界点含在画面内(浮点尘 ±1e-9 容差,逆矩阵在角点
+  /// 会擦边);无画面 = null。点按对焦走这里:缩放/旋转/变宽一次逆映射
+  /// 收口。
   Offset? screenToNorm(Offset screen) {
     if (!hasImage) return null;
     final p = MatrixUtils.transformPoint(screenToImage, screen);
-    return Offset(
-      (p.dx / imageSize.width).clamp(0.0, 1.0),
-      (p.dy / imageSize.height).clamp(0.0, 1.0),
-    );
+    const eps = 1e-9; // 逆矩阵角点浮点尘
+    final nx = p.dx / imageSize.width;
+    final ny = p.dy / imageSize.height;
+    if (nx < -eps || nx > 1.0 + eps || ny < -eps || ny > 1.0 + eps) {
+      return null;
+    }
+    return Offset(nx.clamp(0.0, 1.0), ny.clamp(0.0, 1.0));
   }
 
   /// 图像系矩形(像素)→ 屏幕矩形(旋转为整 90°,轴对齐保持;变换

@@ -1079,8 +1079,9 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   // ── 触控对焦 ───────────────────────────────────────────────────
 
   /// 点按 → 触控对焦:取景区已把屏幕点逆映射为**归一化图像坐标**
-  /// (缩放/旋转/变宽一次收口,见 FeedTransform.screenToNorm;null = 无
-  /// 画面)。设置浮层开着时收浮层由垫层手势承担(见 _dismissSettings)
+  /// (缩放/旋转/变宽一次收口,见 FeedTransform.screenToNorm;null =
+  /// 无画面或点在画面外 —— 框外点按不挪对焦框)。设置浮层开着时收浮层
+  /// 由垫层手势承担(见 _dismissSettings)
   /// —— 这里的点按必然已越过垫层 = 浮层已收,径直对焦。
   void _handleTapFocus(TapUpDetails d, Offset? norm) {
     if (norm == null) return;
