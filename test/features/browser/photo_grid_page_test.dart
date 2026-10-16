@@ -695,15 +695,15 @@ void main() {
       ),
     ));
     await tester.tap(find.text('打开相册'));
-    await tester.pumpAndSettle();
+    await tester.pump();
 
-    final loading = controller.load();
+    // 懒枚举(2026-10-17):initState 已发起 load,块到达前 syncing 转圈,
+    // 须先喂完仓库再 pumpAndSettle;手动 load() 在途去重,不再单发。
     final album = CameraAlbum.allPhotos([g1, g2]);
     repo.updatesCtrl.add(AlbumsUpdate(
         albums: [album], loaded: 2, total: 2, complete: true));
     await tester.pump();
     repo.completeLoad([album]);
-    await loading;
     await tester.pumpAndSettle();
 
     await tester.longPress(find.byKey(ValueKey(g1.key)));

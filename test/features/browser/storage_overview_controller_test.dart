@@ -217,7 +217,8 @@ void main() {
   test('连接沿放行门:门挂住零请求,放行即上路;翻篇不追', () async {
     final fake = FakePtpTransport()
       ..reply(_ok(_idsDataset([0x00010001])))
-      ..reply(_ok(_infoDataset(description: 'Slot 1')));
+      ..reply(_ok(_infoDataset(description: 'Slot 1')))
+      ..reply(_ok(_slotDataset(0))); // 0xD1F2 尾读(0x9209 整链口径)
     final conn = _FakeConnection();
     final gate = Completer<void>();
     final controller = StorageOverviewController(
@@ -234,7 +235,7 @@ void main() {
 
     gate.complete();
     await pumpEventQueue();
-    expect(fake.requests.first.opcode, PtpOperationCode.getStorageIds,
+    expect(fake.requests.first.opcode, NikonOperationCode.getVendorStorageIds,
         reason: '门放行即上路');
   });
 }
