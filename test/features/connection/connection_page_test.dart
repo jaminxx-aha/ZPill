@@ -788,79 +788,8 @@ void main() {
       print('DBG route=${ModalRoute.of(tctx)?.runtimeType} isCurrent=${ModalRoute.of(tctx)?.isCurrent} canPop=${Navigator.of(tctx).canPop()} navigators=${find.byType(Navigator).evaluate().length}');
     });
 
-    testWidgets('STA 面板网段扫描:mDNS 无结果出「扫描网段」,点选结果走真连接流', (tester) async {
-      // 加高视口:点选结果/网段入口在面板折线下(同上)。
-      tester.view
-        ..physicalSize = const Size(800, 2400)
-        ..devicePixelRatio = 1.0;
-      addTearDown(tester.view.reset);
-      final conn = _FakeConnection();
-      final subnet = SubnetCameraScanner(
-        interfaceIps: () async => ['192.168.0.5'],
-        connectCheck: (host, port, timeout) async => host == '192.168.0.2',
-        probe: (host) async => ProbedCamera(
-            host: host, name: 'NIKON Z f', cameraGuid: Uint8List(16)),
-      );
-      final controller =
-          ConnectionController(connection: conn, subnetScanner: subnet);
-      controller.selectMethod(ConnectionMethod.sta);
-      await tester.pumpWidget(
-          MaterialApp(home: ConnectionPage(controller: controller)));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 400));
-      // mDNS 无结果:网段扫描入口在场
-      expect(find.text('扫描网段'), findsOneWidget);
-
-      await tester.tap(find.text('扫描网段'));
-      await tester.pump(); // 扫描启动(纯微任务,帧内即完成)
-      await tester.pump();
-      expect(controller.subnetScanCompleted, isTrue);
-      expect(find.text('NIKON Z f'), findsOneWidget);
-      expect(find.text('192.168.0.2'), findsOneWidget);
-
-      // 点选结果:走既有 STA 连接流(实例名 = 探测出的相机名)+ 收面板
-      await tester.tap(find.text('NIKON Z f'));
-      await tester.pump();
-      expect(conn.connectIp, '192.168.0.2');
-      expect(conn.connectInstanceName, 'NIKON Z f');
-    });
-
-    testWidgets('STA 面板网段扫描:mDNS 出结果后入口退场;空扫描出如实提示', (tester) async {
-      // 加高视口:同上(面板内容超一屏)。
-      tester.view
-        ..physicalSize = const Size(800, 2400)
-        ..devicePixelRatio = 1.0;
-      addTearDown(tester.view.reset);
-      final nsd = _FakeScanner();
-      final controller = ConnectionController(
-          connection: _FakeConnection(),
-          scanner: nsd,
-          subnetScanner: SubnetCameraScanner(
-            interfaceIps: () async => ['192.168.0.5'],
-            connectCheck: (host, port, timeout) async => false,
-          ));
-      controller.selectMethod(ConnectionMethod.sta);
-      await tester.pumpWidget(
-          MaterialApp(home: ConnectionPage(controller: controller)));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 400));
-      expect(find.text('扫描网段'), findsOneWidget);
-
-      // 扫描完无发现:如实提示(不臆造结果)
-      await controller.scanSubnet();
-      await tester.pump();
-      expect(
-          find.text('网段扫描未发现相机:请确认相机与手机在同一个 '
-              'Wi-Fi,且相机停留在「等待连接」画面'),
-          findsOneWidget);
-
-      // mDNS 出结果:网段扫描入口退场(探测免打扰,硬约束①)
-      nsd.eventsCtrl.add(const NsdCameraFound(_zfCamera));
-      await tester.pump();
-      expect(find.text('扫描网段'), findsNothing);
-      expect(find.text('Z_f_8014411'), findsOneWidget);
-    });
-
+    
+    
     testWidgets('断开后快速重连列表刷新(connected → disconnected 沿上重拉档案)', (tester) async {
       // 加高视口:「上次」列表在面板折线下(同上)。
       tester.view
@@ -898,39 +827,7 @@ void main() {
       expect(find.text('上次:Z_f_8014411'), findsOneWidget);
     });
 
-    testWidgets('STA 面板手填 IP:扫描不到时直连已知地址', (tester) async {
-      // 加高视口:手填行/连接钮在面板折线下(同上)。
-      tester.view
-        ..physicalSize = const Size(800, 2400)
-        ..devicePixelRatio = 1.0;
-      addTearDown(tester.view.reset);
-      final conn = _FakeConnection();
-      final controller = ConnectionController(connection: conn);
-      controller.selectMethod(ConnectionMethod.sta);
-      await tester.pumpWidget(
-          MaterialApp(home: ConnectionPage(controller: controller)));
-      // 原地替换(2026-10-18):选 STA 即本视图,无中央按钮;
-      // 起扫挪帧尾,一帧后到位(spinner 永不定,pumpAndSettle 不适用)。
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 400));
-      expect(find.text('STA 连接(同一 Wi-Fi)'), findsOneWidget);
-      // 独立控制器:空预填(AP 默认地址在 STA 网段是路由器,预填即误拨)
-      expect(controller.manualIpController.text, isEmpty);
-
-      // mDNS 依赖相机主动广播;扫不到但已知 IP 时手填直连
-      await tester.enterText(find.byType(TextField), '192.168.1.5');
-      await tester.tap(find.widgetWithText(FilledButton, '连接'));
-      conn.statesCtrl.add(CameraLinkState.connecting);
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 400)); // 页面退场动画走完
-      expect(conn.connectIp, '192.168.1.5');
-      // ignore: avoid_print
-      print('DBG probes: scaffolds=${find.byType(Scaffold).evaluate().length}');
-      final tctx = tester.element(find.text('STA 连接(同一 Wi-Fi)').first);
-      // ignore: avoid_print
-      print('DBG route=${ModalRoute.of(tctx)?.runtimeType} isCurrent=${ModalRoute.of(tctx)?.isCurrent} canPop=${Navigator.of(tctx).canPop()} navigators=${find.byType(Navigator).evaluate().length}');
-    });
-
+    
     testWidgets('connecting 态:中央按钮/方式选择禁用,可取消(逃生口)', (tester) async {
       final conn = _FakeConnection();
       final controller = ConnectionController(connection: conn);

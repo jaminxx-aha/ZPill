@@ -1442,14 +1442,14 @@ class _ConnectionPageState extends State<ConnectionPage>
   /// STA 页主体:扫描钮 + 结果 + 网段兜底 + 手填 IP + 已存相机。
   /// 点选连接 await 落地后 pop(mounted 防御);生产上 connecting 沿
   /// 页面监听先退,这里为兜底/测试路径。
+  /// STA 扫描视图内容(2026-10-18 定稿):扫描钮 + 空扫指引 +
+  /// mDNS 结果 + 已存相机快连。连接沿的退页由宿主 _StaScanBody 的
+  /// 无路由语义自理(状态卡在宿主视图顶部)。
   static List<Widget> _staScanContents(
     BuildContext context,
     ConnectionController controller, {
     required bool busy,
   }) {
-    // 退页单源 = _StaScanPage 的连接沿监听(connecting/connected 即
-    // pop,2026-10-18);tile 只发起连接 —— 双 pop 竞态会把 home 顶掉
-    // (canPop=false 实证)。
     return [
       SizedBox(
         width: double.infinity,
@@ -1496,99 +1496,20 @@ class _ConnectionPageState extends State<ConnectionPage>
               ? null
               : () => unawaited(controller.connectDiscovered(camera)),
         ),
-      // /24 网段扫描兜底(mDNS 无结果时;用户显式触发,不自动):
-      // 端口检查 + InitCommandRequest 轻探测(约束与真机教训见
-      // core/ptpip/probe.dart 库注)。mDNS 已有结果时不出 —— 探测
-      // 连接是对相机单连接槽位的打扰,能免则免。
-      if (controller.cameras.isEmpty) ...[
-        const SizedBox(height: 8),
-        SizedBox(
-          width: double.infinity,
-          child: OutlinedButton.icon(
-            // 扫描中 icon 槽换 spinner(全网段一轮最坏 ~10s)。
-            icon: controller.scanningSubnet
-                ? const SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.travel_explore),
-            label: Text(controller.scanningSubnet
-                ? context.t('conn.scanningSubnet')
-                : context.t('conn.scanSubnet')),
-            onPressed: busy || controller.scanningSubnet
-                ? null
-                : controller.scanSubnet,
-          ),
-        ),
-        for (final camera in controller.subnetCameras)
-          ListTile(
-            dense: true,
-            contentPadding: EdgeInsets.zero,
-            leading: const Icon(Icons.photo_camera_outlined),
-            // name 空(InitFail 被拒)→ 显示 IP;被拒相机也照连,
-            // 占用指引由连接层失败文案给出。
-            title: Text(camera.name.isNotEmpty ? camera.name : camera.host),
-            subtitle: Text(camera.rejected
-                ? context.t('conn.probeRejected')
-                : camera.host),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: busy
-                ? null
-                : () =>
-                    unawaited(controller.connectProbed(camera)),
-          ),
-        if (controller.subnetScanCompleted && controller.subnetCameras.isEmpty)
-          Padding(
-            padding: const EdgeInsets.only(top: 8),
-            child: Text(
-              context.t('conn.subnetNothing'),
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-          ),
-      ],
-      // 扫描兜底:mDNS 发现依赖相机主动广播(菜单在「等待连接」
-      // 状态才广播);已知 IP 时手填直连(独立控制器,不预填 ——
-      // 预填 AP 默认地址会误拨路由器)。
-      const SizedBox(height: 8),
-      Row(
-        children: [
-          Expanded(
-            child: TextField(
-              controller: controller.manualIpController,
-              keyboardType: TextInputType.url,
-              enabled: !busy,
-              decoration: InputDecoration(
-                labelText: context.t('conn.cameraIpManual'),
-                hintText: context.t('conn.ipExample'),
-                border: const OutlineInputBorder(),
-                isDense: true,
-              ),
-            ),
-          ),
-          const SizedBox(width: 8),
-          FilledButton(
-            onPressed: busy
-                ? null
-                : () =>
-                    unawaited(controller.connectManualIp()),
-            child: Text(context.t('conn.connect')),
-          ),
-        ],
-      ),
+      // 已存相机快连(上次连过的,按最近优先);删除 = 忘记这台
+      // 相机(清档案 + 配对过的换新身份 → 全新配对,无感)。
       if (controller.savedCameras.isNotEmpty)
         for (final saved in controller.savedCameras)
           ListTile(
             dense: true,
             contentPadding: EdgeInsets.zero,
             leading: const Icon(Icons.history),
-            title: Text(context.t('conn.lastCamera', {'name': saved.name})),
+            title:
+                Text(context.t('conn.lastCamera', {'name': saved.name})),
             subtitle: Text(saved.lastIp ?? ''),
             trailing: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                // 删除 = 忘记这台相机:清档案;配对过的同时换新
-                // 客户端身份,下次连接走全新配对(无感)。
                 IconButton(
                   icon: const Icon(Icons.delete_outline),
                   tooltip: context.t('conn.forgetCamera'),
