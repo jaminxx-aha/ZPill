@@ -8,9 +8,10 @@ import 'package:nikon_pill/core/log/app_log.dart';
 import 'package:nikon_pill/data/ble_identity_store.dart';
 import 'package:nikon_pill/features/connection/ble_pair_panel.dart';
 
-/// 配对面板 0x0399 冲突指引 + 打开自动化 + 重连取消(2026-10-17 全自动
-/// 重连定案):有身份+异 ID → 行内提示;同 ID → 无;无身份 → 无;弹层
-/// 打开即自动扫(无身份)/自动重连(有身份);扫描/拆面板废在途重连。
+/// 配对面板扫描行(设备名+电源态,deviceId 仍不显;2026-10-18)+ 打开
+/// 自动化 + 重连取消(2026-10-17 全自动重连定案):有身份+异 ID → 重连
+/// 日志指引;同 ID → 无;无身份 → 无;弹层打开即自动扫(无身份)/
+/// 自动重连(有身份);扫描/拆面板废在途重连。
 ///
 /// 基建(最小):AppServices 单例照常构建(bleGpsInject 默认关 → 零注入
 /// 驱动,面板打开即挂起),只 mock nikonpill/ble 的 scan/scanForDeviceId
@@ -25,17 +26,15 @@ import 'package:nikon_pill/features/connection/ble_pair_panel.dart';
 void main() {
   const ble = MethodChannel('nikonpill/ble');
   const bleEvents = MethodChannel('nikonpill/ble/events');
-  // _loadSaved 会查定位授权:未 mock 的通道调用在 fake-async 里永不着地
-  //(await 悬死),身份就永远进不了 _saved。
-  const location = MethodChannel('nikonpill/location');
 
-  Uint8List mfgOf(int deviceId) => Uint8List.fromList(<int>[
+  Uint8List mfgOf(int deviceId, {int? status}) => Uint8List.fromList(<int>[
         0x99,
         0x03,
         deviceId & 0xFF,
         (deviceId >> 8) & 0xFF,
         (deviceId >> 16) & 0xFF,
         (deviceId >> 24) & 0xFF,
+        if (status != null) status,
       ]);
 
   Map<String, Object?> deviceMap(Uint8List mfg) => <String, Object?>{
@@ -66,9 +65,6 @@ void main() {
     final messenger = tester.binding.defaultBinaryMessenger;
     messenger.setMockMethodCallHandler(bleEvents, (call) async => null);
     addTearDown(() => messenger.setMockMethodCallHandler(bleEvents, null));
-    messenger.setMockMethodCallHandler(location,
-        (call) async => call.method == 'authStatus' ? 'always' : null);
-    addTearDown(() => messenger.setMockMethodCallHandler(location, null));
     messenger.setMockMethodCallHandler(
         ble, (call) async => call.method == 'scan' ? scanResult : null);
     addTearDown(() => messenger.setMockMethodCallHandler(ble, null));
@@ -92,17 +88,31 @@ void main() {
     await tester.pump(drain);
   }
 
-  testWidgets('无注册身份:打开即自动扫描,广播可解析也只做结构化展示,不判冲突(首次配对无从比较)',
+  testWidgets('无注册身份:打开即自动扫描,无状态字节行纯设备名(不显设备ID)',
       (tester) async {
     await boot(tester, scanResult: [deviceMap(mfgOf(0x56781234))]);
 
-    expect(find.textContaining('设备ID 0x56781234'), findsOneWidget,
-        reason: 'mfg 调试 hex 行换成 deviceId 数值展示');
+    expect(find.text('Z f_8014411'), findsOneWidget);
+    expect(find.textContaining('设备ID'), findsNothing);
+    expect(find.textContaining('待机'), findsNothing,
+        reason: '无状态字节(mfg 不足 7B)不出电源态副文');
     expect(find.textContaining('此相机在等别的手机'), findsNothing);
     await disposePage(tester);
   });
 
-  testWidgets('有身份 + 异 ID:该行出「在等别的手机」指引(含别家 deviceId)', (tester) async {
+  testWidgets('广播带状态字节:行副文出电源态(待机 0x1F),设备ID 仍不显',
+      (tester) async {
+    await boot(tester,
+        scanResult: [deviceMap(mfgOf(0x56781234, status: 0x1F))]);
+
+    expect(find.text('Z f_8014411'), findsOneWidget);
+    expect(find.text('待机 0x1F'), findsOneWidget,
+        reason: '电源态副文还原(2026-10-18);深睡行 = 重连唤不醒的答案面');
+    expect(find.textContaining('设备ID'), findsNothing);
+    await disposePage(tester);
+  });
+
+  testWidgets('有身份 + 异 ID:行内不出指引(冲突指引收进重连日志)', (tester) async {
     await boot(tester,
         scanResult: [deviceMap(mfgOf(0x56781234))],
         saved: identityOf(0x11223301));
@@ -112,11 +122,13 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 50));
 
-    expect(find.textContaining('此相机在等别的手机(设备ID 0x56781234)'), findsOneWidget);
+    expect(find.text('Z f_8014411'), findsOneWidget);
+    expect(find.textContaining('此相机在等别的手机'), findsNothing,
+        reason: '扫描行只显设备名,冲突指引不再上墙');
     await disposePage(tester);
   });
 
-  testWidgets('有身份 + 同 ID:相机在等我们自己,不出指引', (tester) async {
+  testWidgets('有身份 + 同 ID:相机在等我们自己,无指引', (tester) async {
     await boot(tester,
         scanResult: [deviceMap(mfgOf(0x56781234))],
         saved: identityOf(0x56781234));
@@ -125,7 +137,7 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 50));
 
-    expect(find.textContaining('设备ID 0x56781234'), findsOneWidget);
+    expect(find.text('Z f_8014411'), findsOneWidget);
     expect(find.textContaining('此相机在等别的手机'), findsNothing);
     await disposePage(tester);
   });
@@ -151,9 +163,8 @@ void main() {
     await tester.pump();
     await tester.pump();
 
-    // 行内提示 1 处;重连日志并轨统一日志(AppLog ble 域),同一条指引
-    // 落 AppLog 不再上墙。
-    expect(find.textContaining('此相机在等别的手机'), findsOneWidget);
+    // 行内不提示(只显设备名);指引并轨统一日志(AppLog ble 域)。
+    expect(find.textContaining('此相机在等别的手机'), findsNothing);
     expect(
         AppLog.entries
             .where((e) => e.domain == AppLog.ble)

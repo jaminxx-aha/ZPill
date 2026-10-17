@@ -11,6 +11,7 @@ import '../../app_services.dart';
 import '../../core/browser/photo_group.dart';
 import '../../data/settings_store.dart';
 import '../../l10n/l10n.dart';
+import '../../platform/services.dart';
 import 'snapshot_controller.dart' show buildSnapshotSection;
 import 'log_section.dart' show buildLogSection;
 
@@ -169,6 +170,41 @@ class _SettingsPageState extends State<SettingsPage> {
     super.dispose();
   }
 
+  /// GPS 注入开关(唯一开关入口,2026-10-18 自连接页收编;拍摄浮层
+  /// 芯片同一条设置路):打开沿申请后台定位授权,系统弹窗异步落定后
+  /// 复查授权态定成败 —— 未到「始终」(拒授/仅使用中/通道缺失)即切
+  /// 换失败翻回,不落库;关闭直落。注入驱动刷新由 AppServices 的
+  /// settingsController 监听收口,此处不碰驱动。
+  Future<void> _setBleGpsInject(
+      BuildContext context, SettingsController controller, bool on) async {
+    if (!on) {
+      await controller.setBleGpsInject(false);
+      return;
+    }
+    var granted = false;
+    try {
+      await PlatformServices.locationStream.requestAlwaysAuthorization();
+      // 系统弹窗异步落定(原配对面板同款两拍),再查授权态定成败。
+      await Future<void>.delayed(const Duration(seconds: 2));
+      granted =
+          await PlatformServices.locationStream.authorizationStatus() ==
+              'always';
+    } on Exception {
+      granted = false;
+    }
+    if (!granted) {
+      if (context.mounted) {
+        setState(() {}); // 开关翻回(值未落库,重建即对齐)
+        ScaffoldMessenger.of(context)
+          ..removeCurrentSnackBar()
+          ..showSnackBar(
+              SnackBar(content: Text(context.t('conn.gpsAuthFailed'))));
+      }
+      return;
+    }
+    await controller.setBleGpsInject(true);
+  }
+
   @override
   Widget build(BuildContext context) {
     final controller = AppServices.instance.settingsController;
@@ -254,6 +290,16 @@ class _SettingsPageState extends State<SettingsPage> {
                   onSelectionChanged: (s) =>
                       controller.setAutoTransferFormat(s.first),
                 ),
+              ),
+              const Divider(),
+              // BLE GPS 注入总开关(2026-10-18 自连接页收编):打开沿
+              // 申请后台定位授权,失败即翻回不落库(见 _setBleGpsInject)。
+              SwitchListTile(
+                title: Text(context.t('conn.gpsInjection')),
+                subtitle: Text(context.t('conn.gpsInjectionHint')),
+                value: controller.settings.bleGpsInject,
+                onChanged: (on) =>
+                    unawaited(_setBleGpsInject(context, controller, on)),
               ),
               const Divider(),
               ListTile(

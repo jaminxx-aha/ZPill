@@ -76,14 +76,12 @@ const Map<String, String> enCatalog = {
   'ble.reconnectReuse': 'Reconnect (reuse identity)',
   'ble.binding': 'Binding…',
   'ble.bindClassic': 'Bind Classic Bluetooth',
-  'ble.requestBgLoc': 'Request Background Location',
   'ble.goSystemBt': 'Go to System Bluetooth to Finish Registration',
   'ble.reRegisterHint':
       'Not registered yet? Jump again: pair the camera in system Bluetooth (verify the passkey) → return here to reconnect automatically (usually auto-jumped once after pairing)',
   'ble.wakeWifi': 'Wake Wi-Fi',
   'ble.disconnect': 'Disconnect',
   'ble.unnamed': '(unnamed)',
-  'ble.deviceId': 'Device ID 0x{id}',
   'ble.advStandby': 'Standby 0x{b}',
   'ble.advAwake': 'Ready 0x{b}',
   'ble.waitingOtherPhone':
@@ -156,12 +154,12 @@ const Map<String, String> enCatalog = {
   'conn.descAp': 'Join the camera hotspot, then connect',
   'conn.descSta': 'Camera and phone on the same Wi-Fi; scan to find the camera',
   'conn.descBle':
-      'Tool channel for GPS injection and waking camera Wi-Fi (no camera connection)',
+      'GPS injection and remote camera connection (no camera connection)',
   'conn.wirelessNotes':
       '· The first wireless connection asks for pairing confirmation on the camera (it remembers this device; no pairing needed afterwards); press OK on the camera when prompted.\n· The camera allows only one client at a time: if SnapBridge got there first you will be rejected — close it completely first.\n· If the first connection fails, allow local network access in the system dialog and retry; keep the app in the foreground with the screen on while downloading large files.',
-  'conn.btTools': 'Bluetooth (Tools)',
+  'conn.btTools': 'Bluetooth',
   'conn.btToolsHint':
-      'No camera connection (no transfer, no remote control); only for injecting GPS coordinates while shooting (photos get native EXIF location) and waking the camera Wi-Fi. Pair the camera before first use.',
+      'No camera connection (no transfer, no remote control); only for injecting GPS coordinates while shooting (photos get native EXIF location) and remote-connecting the camera. Pair the camera before first use.',
   'conn.pairedNotConnected': 'Paired, Not Connected',
   'conn.pairCamera': 'Pair Camera',
   'conn.disconnectBt': 'Disconnect Bluetooth',
@@ -169,9 +167,10 @@ const Map<String, String> enCatalog = {
   'conn.gpsInjection': 'GPS Injection',
   'conn.gpsInjectionHint':
       'Automatically write the phone location into the camera while shooting; photos on the card get native coordinates',
-  'conn.wakeCameraWifi': 'Wake Camera Wi-Fi',
+  'conn.gpsAuthFailed':
+      'Background location not granted ("Always" required); GPS injection stays off',
+  'conn.wakeCameraWifi': 'Remote Connect Camera',
   'conn.wifiOffRequested': 'Requested the camera to turn off Wi-Fi',
-  'conn.readCredentials': 'Read Wi-Fi Credentials (0x2004)',
   'conn.pairingManage': 'Manage Pairing (log/unpair/background location)',
   'conn.wakeFailed': 'Wake failed: {e}',
   'common.unknown': 'Unknown',
@@ -188,9 +187,6 @@ const Map<String, String> enCatalog = {
       'Auto-join failed: {e} — join via system Wi-Fi manually (password on the camera screen), then choose "AP Hotspot" on the connection page and tap "Connect to camera"',
   'conn.wifiAwakeNoCred':
       'Camera Wi-Fi is awake: Bluetooth released to let the camera raise its hotspot; credentials not decoded: {e} — join via system Wi-Fi (password on the camera screen); tap "Reconnect" to resume Bluetooth after transfers',
-  'conn.hotspotDecoded':
-      'Hotspot "{ssid}" credentials decoded; see the connection page (choose "AP Hotspot")',
-  'conn.noCredentials': 'Credentials not retrieved: {e}',
   'conn.opFailed': 'Operation failed: {e}',
   'conn.methodUsb': 'Wired (USB)',
   'conn.methodAp': 'AP (Camera as Hotspot)',

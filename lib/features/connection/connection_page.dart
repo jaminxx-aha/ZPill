@@ -117,7 +117,6 @@ class ConnectionController extends ChangeNotifier {
     this.bleIdentityStore,
     this.wifiJoiner,
     this.settingsController,
-    this.onBleInjectChanged,
     this.subnetScanner,
   }) {
     connection?.states.listen(_onState);
@@ -158,10 +157,6 @@ class ConnectionController extends ChangeNotifier {
   /// iOS/ohos 未装配 → joinCameraAp 走 skipped 手动指引)。
   final WifiJoiner? wifiJoiner;
   final SettingsController? settingsController;
-
-  /// BLE 注入开关落库后的刷新钩子(装配沿接 AppServices.refreshBle
-  /// Injection,驱动按开关起停;测试注入可空)。
-  final void Function()? onBleInjectChanged;
 
   CameraLinkState state = CameraLinkState.disconnected;
 
@@ -228,10 +223,7 @@ class ConnectionController extends ChangeNotifier {
   /// 已配对身份(身份存储镜像;配对页落档后经 [loadBleIdentity] 刷新)。
   BlePairedIdentity? bleIdentity;
 
-  /// BLE 注入开关镜像(settingsController 变更即跟;未装配恒 false)。
-  bool get bleGpsInject => settingsController?.value.bleGpsInject ?? false;
-
-  /// BLE 就绪 = 会话 ready(GPS 开关/唤醒 WiFi 的门禁)。
+  /// BLE 就绪 = 会话 ready(唤醒 WiFi 的门禁)。
   bool get bleReady => bleState == BleSessionState.ready;
 
   /// BLE 通道是否装配(未装配平台不出蓝牙分段)。
@@ -265,13 +257,6 @@ class ConnectionController extends ChangeNotifier {
   /// BLE 断开(身份保留)。
   Future<void> bleDisconnect() async {
     await bleSession?.disconnect();
-  }
-
-  /// GPS 注入开关(连接页/拍摄浮层芯片双入口,同一条设置路);落库
-  /// 后经钩子刷新注入驱动。
-  Future<void> setBleGpsInject(bool on) async {
-    await settingsController?.setBleGpsInject(on);
-    onBleInjectChanged?.call();
   }
 
   /// 唤醒相机 WiFi 全程(SnapBridge 序,反编译实证 CameraConnectByWiFi
@@ -364,15 +349,6 @@ class ConnectionController extends ChangeNotifier {
   /// 相机 AP 凭据(0x2004 蓝牙通道解出;null = 未读/解密未中/未 ready)。
   /// BLE→WiFi 二期:唤醒成功沿自动读取,AP 卡凭据块展示。
   WifiCredentials? cameraApCredentials;
-
-  /// 读相机 AP 凭据(0x2004 读 + 解密;唤醒沿自动调,也可手动重读)。
-  /// 返回是否取得;失败原因看 [bleLastError]。
-  Future<bool> loadCameraApCredentials() async {
-    final creds = await bleSession?.readWifiCredentials();
-    cameraApCredentials = creds;
-    notifyListeners();
-    return creds != null;
-  }
 
   /// BLE 卡状态副文(未装配不显示卡;状态全映射)。
   String? get bleHint {
@@ -984,8 +960,7 @@ class _ConnectionPageState extends State<ConnectionPage>
       return ListView(
         keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
         padding: AppSpacing.screenPadding,
-        children: _bleToolsContents(context, controller,
-            onLoadCredentials: () => _loadApCredentials(context, controller)),
+        children: _bleToolsContents(context, controller),
       );
     }
     final theme = Theme.of(context);
@@ -1172,9 +1147,8 @@ class _ConnectionPageState extends State<ConnectionPage>
 
   static List<Widget> _bleToolsContents(
     BuildContext context,
-    ConnectionController controller, {
-    required Future<void> Function() onLoadCredentials,
-  }) {
+    ConnectionController controller,
+  ) {
     final theme = Theme.of(context);
     final ready = controller.bleReady;
     final hasIdentity = controller.bleIdentity != null;
@@ -1205,22 +1179,10 @@ class _ConnectionPageState extends State<ConnectionPage>
                   ?.copyWith(color: theme.colorScheme.error)),
         ),
       const SizedBox(height: AppSpacing.sm),
-      // GPS 注入开关(已配对即可开):开关只管注入层(定位流+GEO),
-      // 链路层(重连循环+TIME 保活)不随它走 —— 2026-10-17 全自动
-      // 重连定案。配对/重连/断开动作不在此列 —— 下方配对面板自带。
-      // 唤起 WiFi = 读 0x2004 凭据(SnapBridge 序)再写 0x2005,成功沿
-      // 断 BLE —— 相机等链路释放才开热点;关闭 = 反义 op(0x80),不断链。
+      // 相机 Wi-Fi 动作(GPS 注入开关在设置页,2026-10-18 迁出):唤起
+      // = 读 0x2004 凭据(SnapBridge 序)再写 0x2005,成功沿断 BLE ——
+      // 相机等链路释放才开热点;关闭 = 反义 op(0x80),不断链。
       ConnTileGroup(children: [
-        SwitchListTile(
-          contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-          dense: true,
-          value: controller.bleGpsInject,
-          onChanged: hasIdentity
-              ? (on) => unawaited(controller.setBleGpsInject(on))
-              : null,
-          title: Text(context.t('conn.gpsInjection')),
-          subtitle: Text(context.t('conn.gpsInjectionHint')),
-        ),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
           child: Row(children: [
@@ -1248,17 +1210,6 @@ class _ConnectionPageState extends State<ConnectionPage>
               ),
             ),
           ]),
-        ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
-          child: SizedBox(
-            width: double.infinity,
-            child: TextButton(
-              onPressed:
-                  ready ? () => unawaited(onLoadCredentials()) : null,
-              child: Text(context.t('conn.readCredentials')),
-            ),
-          ),
         ),
       ]),
       const SizedBox(height: 8),
@@ -1331,21 +1282,6 @@ class _ConnectionPageState extends State<ConnectionPage>
         duration: const Duration(seconds: 5),
       );
     }
-  }
-
-  /// 手动读凭据(唤醒早于配对/重试场景):结果如实回 SnackBar。
-  static Future<void> _loadApCredentials(
-      BuildContext context, ConnectionController controller) async {
-    final got = await controller.loadCameraApCredentials();
-    if (!context.mounted) return;
-    final creds = controller.cameraApCredentials;
-    _showHintStatic(
-        context,
-        controller,
-        got && creds != null
-            ? context.t('conn.hotspotDecoded', {'ssid': creds.ssid})
-            : context.t('conn.noCredentials',
-                {'e': controller.bleLastError ?? context.t('common.unknown')}));
   }
 
   /// 提示收口的静态面(整页组件共用):先撤在场提示再显 ——
