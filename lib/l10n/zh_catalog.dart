@@ -462,6 +462,8 @@ const Map<String, String> zhCatalog = {
       '定时 B 门自动收门失败:相机持续忙(已重试 3 次),曝光可能仍在进行,请再点一次快门收门或查看相机',
   'remote.errShutterRestore': '曝光已结束,但快门值未能自动恢复,请在快门面板手动改回',
   'remote.errBulbShutter': '快门在 B 门/Time 档:请用屏上快门钮按住曝光,或开启自拍定时组合为定时 B 门',
+  'remote.countdownDelay': '延时',
+  'remote.countdownExposure': '曝光',
   'remote.sdramNoGallery': '已拍摄(SDRAM,不入卡):未接图库通道,对象未保存',
   'remote.sdramSaved': '已拍摄并保存到图库(SDRAM,不入卡)',
   'remote.sdramSaveFailed': '已拍摄(SDRAM,不入卡):图库保存失败,可到传输页重试',
