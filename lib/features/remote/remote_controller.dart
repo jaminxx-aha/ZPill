@@ -1685,19 +1685,15 @@ final class RemoteController extends ChangeNotifier {
   }
 
   /// 对焦按钮:独立驱动一次自动对焦(取景开启是前置条件 ——
-  /// 0xA00B notLiveView 为未开取景的应答形态)。对焦中再点 = 0x9206
-  /// 取消在途 AF(事务串行,能否真的打断长对焦待真机核对;应答与
-  /// 合焦框仍由 [_driveAf] 的在途路径如实落地)。
+  /// 0xA00B notLiveView 为未开取景的应答形态)。对焦中再点 = 如实
+  /// 提示**不发包**(2026-10-17 真机定案):Zf 对 0x90C1 扣住应答直至
+  /// AF 结束(0xA002 未合焦即从该应答带回,§6.2.5.1 的「开始即回 OK +
+  /// 0x90C8 轮完成」两段流在 Zf 上不存在),AF 期间线路被在途事务
+  /// 占死(PIMA 时序:应答未读走,下一发命令上不了线),排队 0x9206
+  /// 只能到 AF 后空放一枪 —— 打断是假动作,撤包零流量。
   Future<void> afDriveNow() async {
     if (focusing) {
-      unawaited(() async {
-        try {
-          await session.afDriveCancel();
-        } on Exception {
-          // 取消失败不打断在途对焦的应答处理
-        }
-      }());
-      notice = 'remote.focusCancelled';
+      notice = 'remote.focusInProgress';
       notifyListeners();
       return;
     }

@@ -45,6 +45,15 @@ final class _ScriptTransport implements PtpTransport {
   void reply(int responseCode) =>
       script.add(PtpResult(responseCode: responseCode));
 
+  Completer<void>? _hold;
+
+  /// 下一笔应答扣住不交付(事务在途挂起)—— 模拟 Zf 对 0x90C1 扣应答
+  /// 至 AF 结束:应答已出脚本,只是不递到调用方手里,await 卡在
+  /// execute 内,线路呈「应答未读走」的在途态。
+  void holdNextReply() => _hold = Completer<void>();
+
+  void releaseHeldReply() => _hold?.complete();
+
   @override
   Future<PtpResult> execute(PtpRequest request,
       {void Function(Uint8List chunk)? onData}) async {
@@ -52,7 +61,9 @@ final class _ScriptTransport implements PtpTransport {
     if (script.isEmpty) {
       throw StateError('脚本耗尽:未预置 0x${request.opcode.toRadixString(16)}');
     }
-    return script.removeFirst() as PtpResult;
+    final next = script.removeFirst() as PtpResult;
+    await _hold?.future;
+    return next;
   }
 
   @override
@@ -2444,6 +2455,50 @@ void main() {
     await tester.tap(find.text('拉焦轮'));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('focus-dial-rail')), findsOneWidget);
+  });
+
+  testWidgets('对焦中再点对焦钮 = 零发包 + 如实提示横幅(2026-10-17 真机:'
+      'Zf 扣 0x90C1 应答至 AF 结束,0x9206 打断结构性不可能;旧「对焦中'
+      '禁点」把提示路堵死 —— 点按哑掉,提示分支成死代码)', (tester) async {
+    _portrait(tester);
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = _directRemoteController(transport, conn: conn);
+    addTearDown(controller.dispose);
+    transport
+      ..ok() // 0x9201(进页自动起景)
+      ..ok(data: _realJpeg()); // 首帧
+    final settings = ValueNotifier(const AppSettings());
+    addTearDown(settings.dispose);
+    await tester.pumpWidget(MaterialApp(
+        home: RemotePage(
+            controller: controller, settingsListenable: settings)));
+    await tester.pumpAndSettle();
+
+    // 首点:0x90C1 应答入队后扣住不交付 = Zf 扣应答至 AF 结束,事务在途
+    transport
+      ..ok() // 0x90C1
+      ..holdNextReply();
+    await tester.tap(find.byIcon(Icons.center_focus_strong));
+    await tester.pump();
+    expect(controller.focusing, isTrue);
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+
+    // 再点(修复后可点):零新流量,横幅如实提示。对焦中图标已换
+    // spinner,改走 Tooltip 找钮 —— 正是旧「对焦中禁点」堵死的路径。
+    await tester.tap(find.byTooltip('自动对焦'));
+    await tester.pump();
+    expect(
+        transport.requests
+            .where((r) => r.opcode == NikonOperationCode.afDriveCancel),
+        isEmpty,
+        reason: '0x9206 在 AF 期间上不了线,排队空放只会骗人');
+    expect(find.text('对焦进行中,远程无法打断'), findsOneWidget);
+
+    // 应答交付收口:AF 收敛,转圈落定
+    transport.releaseHeldReply();
+    await tester.pumpAndSettle();
+    expect(controller.focusing, isFalse);
   });
 
   testWidgets('机身对焦模式 MF → 对焦钮灰化盲按零流量;设置浮层常驻提示 + '

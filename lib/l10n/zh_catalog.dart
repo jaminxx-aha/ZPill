@@ -446,7 +446,7 @@ const Map<String, String> zhCatalog = {
   'remote.errMfMode': '机身对焦模式为 MF —— 远程对焦不可用,请切回 AF-S/AF-C(「对焦模式」芯片可直接切换)',
   'remote.errNoFrameFocus': '暂无取景帧,无法定位对焦点',
   'remote.errNoFrameTrack': '暂无取景帧,无法定位追踪目标',
-  'remote.focusCancelled': '已取消对焦',
+  'remote.focusInProgress': '对焦进行中,远程无法打断',
   'remote.errTrackingNeedsAuto': '主体追踪需 AF 区域为「自动」(「AF 区域」芯片可切换)',
   'remote.errModeSwitchRefused': '相机拒绝了远程切换拍摄模式 —— 请直接用机顶拨杆切换',
   'remote.errWriteDisabledMode': '参数写入已关断,无法切换拍摄模式',

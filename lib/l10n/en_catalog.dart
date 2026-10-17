@@ -509,7 +509,7 @@ const Map<String, String> enCatalog = {
       'No viewfinder frame yet; cannot place the focus point',
   'remote.errNoFrameTrack':
       'No viewfinder frame yet; cannot locate the tracking target',
-  'remote.focusCancelled': 'Focus cancelled',
+  'remote.focusInProgress': "Focusing — can't be interrupted remotely",
   'remote.errTrackingNeedsAuto':
       'Subject tracking needs the AF area set to "Auto" (switch it from the "AF Area" chip)',
   'remote.errModeSwitchRefused':
