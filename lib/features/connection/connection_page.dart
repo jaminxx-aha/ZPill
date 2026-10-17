@@ -53,6 +53,17 @@ import 'connection_status_card.dart';
 /// 连接方式(未连接视图;右上角弹层选择,中央按钮按方式直连)。
 enum ConnectionMethod { usb, ap, sta, ble }
 
+/// 持久化名 → 方式(表外值/未知名回 null,调用方兜底;data 层
+/// AppSettings.connectionMethod 只存枚举名,不反向依赖本枚举)。
+ConnectionMethod? connectionMethodFromName(String? name) {
+  for (final m in ConnectionMethod.values) {
+    if (m.name == name) {
+      return m;
+    }
+  }
+  return null;
+}
+
 /// 程序化加入相机热点的结局([ConnectionController.joinCameraAp])。
 enum ApJoinOutcome {
   /// 加入成功且已自动发起 AP 连接(状态沿走既定连接路)。
@@ -111,6 +122,9 @@ class ConnectionController extends ChangeNotifier {
       notifyListeners();
     });
     unawaited(loadBleIdentity());
+    // 上次选中的连接方式恢复:settingsController 异步装载,装载沿经
+    // 监听回填(用户本会话已选过则不覆盖,见 _onSettingsChanged)。
+    settingsController?.addListener(_onSettingsChanged);
   }
 
   final CameraConnection? connection;
@@ -144,8 +158,12 @@ class ConnectionController extends ChangeNotifier {
   /// UI 用此旗出「请在相机上按 OK」指引,不闪失败横幅。
   bool awaitingCameraConfirm = false;
 
-  /// 当前选中的连接方式(未连接视图右上角弹层选择;默认有线)。
+  /// 当前选中的连接方式(未连接视图右上角弹层选择;默认有线,冷启
+  /// 沿从设置回填上次选中 —— 记住上一次)。
   ConnectionMethod method = ConnectionMethod.usb;
+
+  /// 用户本会话是否已选过方式(选中即落库;设置装载沿不再回填覆盖)。
+  bool _methodTouched = false;
 
   /// 切换连接方式;离开 STA 时若在扫描顺手停掉(结果已不可见)。切进
   /// AP 方式清 mDNS 结果:那是旧网络(路由器网段)的发现,拿去连相机
@@ -165,7 +183,25 @@ class ConnectionController extends ChangeNotifier {
       _subnetScanCompleted = false;
     }
     method = m;
+    _methodTouched = true;
+    // 记住上一次:落库走设置页同一条 AppSettings 路(失败仅本次会话
+    // 内生效,不持久,同 SettingsController._update 口径)。
+    unawaited(settingsController?.setConnectionMethod(m.name));
     notifyListeners();
+  }
+
+  /// 设置装载/变更沿:恢复上次选中的连接方式(一次性 —— 用户本会话
+  /// 选过即以会话内选择为准;同名空转不发通知)。
+  void _onSettingsChanged() {
+    if (_methodTouched) {
+      return;
+    }
+    final restored = connectionMethodFromName(
+        settingsController?.value.connectionMethod);
+    if (restored != null && restored != method) {
+      method = restored;
+      notifyListeners();
+    }
   }
 
   /// 本次连接的无线 IP(已连接视图的「连接方式」行;USB 连接为 null)。
@@ -681,6 +717,7 @@ class ConnectionController extends ChangeNotifier {
 
   @override
   void dispose() {
+    settingsController?.removeListener(_onSettingsChanged);
     manualIpController.dispose();
     super.dispose();
   }

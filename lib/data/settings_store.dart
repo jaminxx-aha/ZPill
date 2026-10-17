@@ -115,6 +115,7 @@ final class AppSettings {
     this.sdramCapture = false,
     this.bleGpsInject = false,
     this.volumeKeyShutter = false,
+    this.connectionMethod = 'usb',
   });
 
   final bool autoTransfer;
@@ -244,6 +245,11 @@ final class AppSettings {
   /// 回吸到锚点,停用还原),ohos 未做原生拦截。
   final bool volumeKeyShutter;
 
+  /// 连接页上次选中的连接方式(枚举名:usb/ap/sta/ble)。data 层不依
+  /// 赖 features 的 ConnectionMethod 枚举,只存名字;表外值由消费侧
+  /// (ConnectionController)回落有线。
+  final String connectionMethod;
+
   /// copyWith 的「未传」哨兵:画质两字段要能把 null(跟随相机)写回,
   /// `??` 模式做不到 —— 传值(含显式 null)即覆盖,不传保持原值。
   static const Object _unset = Object();
@@ -289,6 +295,7 @@ final class AppSettings {
     bool? sdramCapture,
     bool? bleGpsInject,
     bool? volumeKeyShutter,
+    String? connectionMethod,
   }) =>
       AppSettings(
         autoTransfer: autoTransfer ?? this.autoTransfer,
@@ -336,6 +343,7 @@ final class AppSettings {
         sdramCapture: sdramCapture ?? this.sdramCapture,
         bleGpsInject: bleGpsInject ?? this.bleGpsInject,
         volumeKeyShutter: volumeKeyShutter ?? this.volumeKeyShutter,
+        connectionMethod: connectionMethod ?? this.connectionMethod,
       );
 
   @override
@@ -380,7 +388,8 @@ final class AppSettings {
       other.liveViewImageCompression == liveViewImageCompression &&
       other.sdramCapture == sdramCapture &&
       other.bleGpsInject == bleGpsInject &&
-      other.volumeKeyShutter == volumeKeyShutter;
+      other.volumeKeyShutter == volumeKeyShutter &&
+      other.connectionMethod == connectionMethod;
 
   @override
   // Object.hash 位置参上限 20,字段 37 个 → hashAll(列表序即上面 == 序)。
@@ -396,7 +405,7 @@ final class AppSettings {
         monitorWaveform, monitorScope, monitorScopeNLog, monitorLutIndex,
         liveViewOn,
         liveViewImageSize, liveViewImageCompression, sdramCapture,
-        bleGpsInject, volumeKeyShutter,
+        bleGpsInject, volumeKeyShutter, connectionMethod,
       ]);
 
   Map<String, Object?> toJson() => {
@@ -442,6 +451,7 @@ final class AppSettings {
         'sdramCapture': sdramCapture,
         'bleGpsInject': bleGpsInject,
         'volumeKeyShutter': volumeKeyShutter,
+        'connectionMethod': connectionMethod,
       };
 
   static AppSettings fromJson(Map<String, Object?> json) => AppSettings(
@@ -513,6 +523,11 @@ final class AppSettings {
         // 旧档无键回落 false(「跟随相机」同款语义:无键不覆写)。
         bleGpsInject: json['bleGpsInject'] == true,
         volumeKeyShutter: json['volumeKeyShutter'] == true,
+        // 表外值不在此钳(消费侧 ConnectionController 回落 usb)。
+        connectionMethod:
+            json['connectionMethod'] is String
+                ? json['connectionMethod'] as String
+                : 'usb',
       );
 
   /// 取景画质档反序列化:表外值(旧版本/手改文件)回落「跟随相机」。
