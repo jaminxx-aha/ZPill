@@ -55,11 +55,11 @@ import 'platform/usb/usb_host.dart';
 import 'platform/usb/watchdog_usb_host.dart';
 
 /// 连接沿侧链放行门兜底(2026-10-16 真机定案):概览/双卡槽/清事件/
-/// 对时/事件轮询与起景链(接管→模式→画质→0x9201)同在会话串行锁上
-/// 轮转,曾把 0x9201 压到十几事务深 —— 拍摄页「取景未开启」卡好几秒。
-/// 侧链整组等 RemoteController.connectedStartSettled(起景段落定,
-/// 事件驱动 —— 起景快就早放行,相机页信息卡不再白扛固定让路窗);
-/// 门含楔死自愈梯,正常 ~1-3s,超时兜底防押死。
+/// 对时/事件轮询/相册预热与起景链(接管→模式→画质→0x9201)同在会话
+/// 串行锁上轮转,曾把 0x9201 压到十几事务深 —— 拍摄页「取景未开启」
+/// 卡好几秒。侧链整组等 RemoteController.connectedStartSettled(起景
+/// 段落定,事件驱动 —— 起景快就早放行,相机页信息卡不再白扛固定让路
+/// 窗);门含楔死自愈梯,正常 ~1-3s,超时兜底防押死。
 const Duration kConnectStartGateTimeout = Duration(seconds: 3);
 
 final class AppServices {
@@ -381,6 +381,16 @@ final class AppServices {
           // 相机时钟校准(OpenZCine CameraClockSync 口径:漂移 > 5s 才写,
           // 尽力而为不影响连接)。
           unawaited(session.syncCameraClock());
+          // 相册预热:门放行后后台开枚举(分页快路 + 页间让路,与刷参
+          // 链轮转)—— 进相册页时 _ensureLoaded 去重共享在途/已成缓存,
+          // 免首屏等待。失败静默:进页时 _ensureLoaded 自然重开一轮。
+          unawaited(() async {
+            try {
+              await repository.loadAlbums();
+            } on Exception {
+              // 静默:预热是尽力而为,失败语义归进页重试
+            }
+          }());
         }());
       }
       if (s == CameraLinkState.disconnected || s == CameraLinkState.failed) {
@@ -661,8 +671,9 @@ final class AppServices {
   late final RemoteController remoteController;
 
   /// 侧链放行门:等当前连接沿的起景段落定(超时兜底见
-  /// kConnectStartGateTimeout)。概览/双卡槽/清事件/对时/轮询共此门。
-  /// 引用 late final 字段,连接沿才执行(装配早已收口),无先序问题。
+  /// kConnectStartGateTimeout)。概览/双卡槽/清事件/对时/轮询/相册预热
+  /// 共此门。引用 late final 字段,连接沿才执行(装配早已收口),无
+  /// 先序问题。
   Future<void> _connectSideChainGate() =>
       remoteController.connectedStartSettled
           .timeout(kConnectStartGateTimeout, onTimeout: () {});
