@@ -29,27 +29,25 @@ void main() {
     expect(find.text('STA 连接(同一 Wi-Fi)'), findsNothing);
     expect(find.text('扫描相机'), findsNothing);
 
-    // 右上角弹层切 AP 热点:主视图换方式 + 接管预告(直连即锁盘)。
+    // 右上角弹层:方式条目改名(2026-10-17)—— 选中即进流程,真连接
+    // 冒烟归 connection_page_test 假连接;壳冒烟只验条目与收放。
     await tester.tap(find.byIcon(Icons.usb));
     await tester.pumpAndSettle();
     expect(find.text('选择连接方式'), findsOneWidget);
-    await tester.tap(find.text('AP 热点'));
+    expect(find.text('AP 模式'), findsOneWidget);
+    expect(find.text('STA 模式'), findsOneWidget);
+    await tester.tapAt(const Offset(400, 20));
     await tester.pumpAndSettle();
-    expect(find.text('当前方式:AP 热点'), findsOneWidget);
-    expect(find.textContaining('app 将自动接管相机'), findsOneWidget);
+    expect(find.text('当前方式:有线'), findsOneWidget);
 
-    // 切同一 Wi-Fi:点「连接相机」出扫描面板。
-    await tester.tap(find.byIcon(Icons.wifi_tethering));
+    // 切 STA 模式:选中即出扫描面板(被动 mDNS;主机无插件 → 扫描
+    // 态如实)。有界 pump:面板自带永动 spinner。
+    await tester.tap(find.byIcon(Icons.usb));
     await tester.pumpAndSettle();
-    expect(find.text('选择连接方式'), findsOneWidget);
-    await tester.tap(find.text('同一 Wi-Fi'));
-    await tester.pumpAndSettle();
-    expect(find.text('当前方式:同一 Wi-Fi'), findsOneWidget);
-    await tester.tap(find.text('连接相机'));
-    // 面板进场动画走完;打开沿自动扫描的 spinner 永不定帧
-    // (pumpAndSettle 必超时),用带时长 pump。
+    await tester.tap(find.text('STA 模式'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
+    // 原地替换:STA 体没有「当前方式」副文(那是 USB/AP 主操作的)。
     expect(find.text('STA 连接(同一 Wi-Fi)'), findsOneWidget);
     // 打开沿自动扫描(平台通道在测试环境无应答,扫描态常驻)
     expect(find.text('扫描中…(点按停止)'), findsOneWidget);

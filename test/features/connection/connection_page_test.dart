@@ -729,15 +729,15 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('选择连接方式'), findsOneWidget);
       expect(find.text('有线'), findsOneWidget);
-      expect(find.text('AP 热点'), findsOneWidget);
-      expect(find.text('同一 Wi-Fi'), findsOneWidget);
+      expect(find.text('AP 模式'), findsOneWidget);
+      expect(find.text('STA 模式'), findsOneWidget);
       expect(find.text('蓝牙'), findsNothing, reason: 'BLE 未装配不出蓝牙条目');
 
-      await tester.tap(find.text('AP 热点'));
+      await tester.tap(find.text('AP 模式'));
       await tester.pumpAndSettle();
       expect(controller.method, ConnectionMethod.ap);
       expect(find.text('选择连接方式'), findsNothing, reason: '点选后收弹层');
-      expect(find.text('当前方式:AP 热点'), findsOneWidget);
+      expect(find.text('当前方式:AP 模式'), findsOneWidget);
     });
 
     testWidgets('STA 扫描面板:打开沿自动扫描,发现列表点选连接并收面板', (tester) async {
@@ -754,12 +754,9 @@ void main() {
       controller.selectMethod(ConnectionMethod.sta);
       await tester.pumpWidget(
           MaterialApp(home: ConnectionPage(controller: controller)));
+      // 原地替换(2026-10-18):选 STA 即本视图,无中央按钮;
+      // 起扫挪帧尾,一帧后到位(spinner 永不定,pumpAndSettle 不适用)。
       await tester.pump();
-
-      await tester.tap(find.text('连接相机'));
-      await tester.pump();
-      // 面板进场动画走完(零时长 pump 停在进场前,面板在屏下点按落空;
-      // 面板内 spinner 永不定,pumpAndSettle 不适用)。
       await tester.pump(const Duration(milliseconds: 400));
       expect(find.text('STA 连接(同一 Wi-Fi)'), findsOneWidget);
       // 打开沿自动扫描(mDNS 发现是慢活,转圈才有进度感)
@@ -771,14 +768,24 @@ void main() {
       expect(find.text('Z_f_8014411'), findsOneWidget);
       expect(find.text('192.168.0.104'), findsOneWidget);
 
-      // 点选相机:连接沿收面板(进度/取消在主视图状态卡)
+      // 点选相机 → 连接沿(页面监听 connecting 自动返回,进度/取消
+      // 在主视图状态卡)
+      final tile = tester.widget<ListTile>(find.ancestor(
+          of: find.text('Z_f_8014411'), matching: find.byType(ListTile)).first);
+      // ignore: avoid_print
+      print('DBG tile onTap=${tile.onTap != null} busy=${controller.state}');
       await tester.tap(find.text('Z_f_8014411'));
+      conn.statesCtrl.add(CameraLinkState.connecting);
       await tester.pump();
-      await tester.pump(const Duration(milliseconds: 400)); // 面板退场动画走完
+      await tester.pump(const Duration(milliseconds: 400)); // 页面退场动画走完
       expect(conn.connectIp, '192.168.0.104');
       expect(conn.connectInstanceName, 'Z_f_8014411');
       expect(scanner.stopCalls, 1, reason: 'connectDiscovered 自带停扫');
-      expect(find.text('STA 连接(同一 Wi-Fi)'), findsNothing, reason: '连接沿收面板');
+      // ignore: avoid_print
+      print('DBG probes: scaffolds=${find.byType(Scaffold).evaluate().length}');
+      final tctx = tester.element(find.text('STA 连接(同一 Wi-Fi)').first);
+      // ignore: avoid_print
+      print('DBG route=${ModalRoute.of(tctx)?.runtimeType} isCurrent=${ModalRoute.of(tctx)?.isCurrent} canPop=${Navigator.of(tctx).canPop()} navigators=${find.byType(Navigator).evaluate().length}');
     });
 
     testWidgets('STA 面板网段扫描:mDNS 无结果出「扫描网段」,点选结果走真连接流', (tester) async {
@@ -800,11 +807,6 @@ void main() {
       await tester.pumpWidget(
           MaterialApp(home: ConnectionPage(controller: controller)));
       await tester.pump();
-
-      await tester.tap(find.text('连接相机'));
-      await tester.pump();
-      // 面板进场动画走完(零时长 pump 停在进场前,面板在屏下点按落空;
-      // 面板内 spinner 永不定,pumpAndSettle 不适用)。
       await tester.pump(const Duration(milliseconds: 400));
       // mDNS 无结果:网段扫描入口在场
       expect(find.text('扫描网段'), findsOneWidget);
@@ -841,11 +843,6 @@ void main() {
       await tester.pumpWidget(
           MaterialApp(home: ConnectionPage(controller: controller)));
       await tester.pump();
-
-      await tester.tap(find.text('连接相机'));
-      await tester.pump();
-      // 面板进场动画走完(零时长 pump 停在进场前,面板在屏下点按落空;
-      // 面板内 spinner 永不定,pumpAndSettle 不适用)。
       await tester.pump(const Duration(milliseconds: 400));
       expect(find.text('扫描网段'), findsOneWidget);
 
@@ -881,12 +878,7 @@ void main() {
           MaterialApp(home: ConnectionPage(controller: controller)));
       await tester.pump();
 
-      // 首帧档案:STA 面板「上次」列表可见,点选直连(面板收起)
-      await tester.tap(find.text('连接相机'));
-      await tester.pump();
-      // 面板进场动画走完(零时长 pump 停在进场前,面板在屏下点按落空;
-      // 面板内 spinner 永不定,pumpAndSettle 不适用)。
-      await tester.pump(const Duration(milliseconds: 400));
+      // 首帧档案:STA 视图「上次」列表可见(原地替换,无面板),点选直连
       expect(find.text('上次:Z_f_8014411'), findsOneWidget);
       await tester.tap(find.text('上次:Z_f_8014411'));
       await tester.pump();
@@ -901,12 +893,7 @@ void main() {
       conn.statesCtrl.add(CameraLinkState.disconnected);
       await tester.pumpAndSettle();
 
-      // 重开面板:断开沿重拉的档案在场
-      await tester.tap(find.text('连接相机'));
-      await tester.pump();
-      // 面板进场动画走完(零时长 pump 停在进场前,面板在屏下点按落空;
-      // 面板内 spinner 永不定,pumpAndSettle 不适用)。
-      await tester.pump(const Duration(milliseconds: 400));
+      // 断开沿重拉的档案原地刷新(无面板可收)
       expect(find.text('上次:Z_8_ABC'), findsOneWidget, reason: '断开沿上重拉连接档案');
       expect(find.text('上次:Z_f_8014411'), findsOneWidget);
     });
@@ -922,12 +909,9 @@ void main() {
       controller.selectMethod(ConnectionMethod.sta);
       await tester.pumpWidget(
           MaterialApp(home: ConnectionPage(controller: controller)));
+      // 原地替换(2026-10-18):选 STA 即本视图,无中央按钮;
+      // 起扫挪帧尾,一帧后到位(spinner 永不定,pumpAndSettle 不适用)。
       await tester.pump();
-
-      await tester.tap(find.text('连接相机'));
-      await tester.pump();
-      // 面板进场动画走完(零时长 pump 停在进场前,面板在屏下点按落空;
-      // 面板内 spinner 永不定,pumpAndSettle 不适用)。
       await tester.pump(const Duration(milliseconds: 400));
       expect(find.text('STA 连接(同一 Wi-Fi)'), findsOneWidget);
       // 独立控制器:空预填(AP 默认地址在 STA 网段是路由器,预填即误拨)
@@ -936,10 +920,15 @@ void main() {
       // mDNS 依赖相机主动广播;扫不到但已知 IP 时手填直连
       await tester.enterText(find.byType(TextField), '192.168.1.5');
       await tester.tap(find.widgetWithText(FilledButton, '连接'));
+      conn.statesCtrl.add(CameraLinkState.connecting);
       await tester.pump();
-      await tester.pump(const Duration(milliseconds: 400)); // 面板退场动画走完
+      await tester.pump(const Duration(milliseconds: 400)); // 页面退场动画走完
       expect(conn.connectIp, '192.168.1.5');
-      expect(find.text('STA 连接(同一 Wi-Fi)'), findsNothing, reason: '连接沿收面板');
+      // ignore: avoid_print
+      print('DBG probes: scaffolds=${find.byType(Scaffold).evaluate().length}');
+      final tctx = tester.element(find.text('STA 连接(同一 Wi-Fi)').first);
+      // ignore: avoid_print
+      print('DBG route=${ModalRoute.of(tctx)?.runtimeType} isCurrent=${ModalRoute.of(tctx)?.isCurrent} canPop=${Navigator.of(tctx).canPop()} navigators=${find.byType(Navigator).evaluate().length}');
     });
 
     testWidgets('connecting 态:中央按钮/方式选择禁用,可取消(逃生口)', (tester) async {
@@ -1097,11 +1086,6 @@ void main() {
       await tester.pumpWidget(
           MaterialApp(home: ConnectionPage(controller: controller)));
       await tester.pump();
-
-      await tester.tap(find.text('连接相机'));
-      await tester.pump();
-      // 面板进场动画走完(零时长 pump 停在进场前,面板在屏下点按落空;
-      // 面板内 spinner 永不定,pumpAndSettle 不适用)。
       await tester.pump(const Duration(milliseconds: 400));
       expect(find.text('上次:Z_f_8014411'), findsOneWidget);
 
@@ -1324,9 +1308,8 @@ void main() {
     Future<void> openBleTools(WidgetTester tester) async {
       await tester.tap(find.byIcon(Icons.usb));
       await tester.pumpAndSettle();
+      // 选中即进流程:蓝牙条目点下直接弹工具面板(不再回落点连接)。
       await tester.tap(find.text('蓝牙'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('连接相机'));
       await tester.pumpAndSettle();
     }
 
@@ -1456,12 +1439,10 @@ void main() {
       expect(f.session.state, BleSessionState.idle,
           reason: '唤醒沿断链(相机等 BLE 释放才开热点),凭据已先落控制器');
 
-      // 收蓝牙面板(点弹层上方屏障),经方式弹层切 AP 热点:凭据卡在主视图
-      await tester.tapAt(const Offset(400, 20));
+      // 原地替换(无页可退):直接经方式弹层切 AP 模式,凭据卡在本视图
+      await tester.tap(find.byTooltip('选择连接方式'));
       await tester.pumpAndSettle();
-      await tester.tap(find.byIcon(Icons.bluetooth));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('AP 热点'));
+      await tester.tap(find.text('AP 模式'));
       await tester.pumpAndSettle();
       expect(find.text('相机热点凭据(蓝牙通道解出)'), findsOneWidget);
       expect(find.text('wpa2pass99'), findsOneWidget);
@@ -1484,12 +1465,10 @@ void main() {
       expect(find.byType(SnackBar), findsOneWidget);
       expect(find.textContaining('凭据未解出'), findsOneWidget);
 
-      // 切 AP 热点方式:主视图不出凭据卡
-      await tester.tapAt(const Offset(400, 20));
+      // 切 AP 模式方式:主视图不出凭据卡
+      await tester.tap(find.byTooltip('选择连接方式'));
       await tester.pumpAndSettle();
-      await tester.tap(find.byIcon(Icons.bluetooth));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('AP 热点'));
+      await tester.tap(find.text('AP 模式'));
       await tester.pumpAndSettle();
       expect(find.text('相机热点凭据(蓝牙通道解出)'), findsNothing);
     });
