@@ -20,7 +20,8 @@ void main() {
     await boot(tester);
 
     expect(find.text('相机'), findsWidgets); // AppBar 标题 + 底部 tab
-    expect(find.text('未连接'), findsOneWidget);
+    // 未连接组件退场(2026-10-17):disconnected 静置态只剩主操作。
+    expect(find.text('未连接'), findsNothing);
     expect(find.text('连接相机'), findsOneWidget); // 默认方式 = 有线,居中直连
     expect(find.text('当前方式:有线'), findsOneWidget);
     expect(find.text('扫描相机'), findsNothing); // 方式入口收进右上角弹层

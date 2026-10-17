@@ -962,34 +962,43 @@ class _ConnectionPageState extends State<ConnectionPage>
         ConnectionMethod.ble => 'conn.descBle',
       };
 
-  /// 中央按钮按当前方式直连:USB/AP 直接发起;STA 弹扫描面板;蓝牙弹
-  /// 工具面板(蓝牙不建相机连接,无「直连」可言)。
+  /// 中央按钮按当前方式直连(USB/AP;这两方式无独立连接视图)。
+  /// STA/蓝牙的视图由 body 原地替换承接,不落这里。
   void _connectPressed(BuildContext context, ConnectionController controller) {
     switch (controller.method) {
       case ConnectionMethod.usb:
         controller.connect();
       case ConnectionMethod.ap:
         controller.connectWireless();
-      case ConnectionMethod.sta:
-        _showStaScanSheet(context, controller);
-      case ConnectionMethod.ble:
-        _showBleToolsSheet(context, controller);
+      case ConnectionMethod.sta || ConnectionMethod.ble:
+        break; // 视图即流程,无中央按钮
     }
   }
 
+  /// 未连接/连接中视图(2026-10-18 原地替换定稿):STA/蓝牙选中后
+  /// **本视图直接变成该方式的连接界面**(无路由无弹窗),USB/AP 仍
+  /// 是状态卡 + 居中主操作。右上角方式图标随时切回。
   Widget _methodsView(BuildContext context, ConnectionController controller) {
+    // 蓝牙:工具内容即本视图(蓝牙不建相机连接,无 PTP 状态卡)。
+    if (controller.method == ConnectionMethod.ble) {
+      return ListView(
+        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+        padding: AppSpacing.screenPadding,
+        children: _bleToolsContents(context, controller,
+            onLoadCredentials: () => _loadApCredentials(context, controller)),
+      );
+    }
     final theme = Theme.of(context);
     final busy = _busyState(controller);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // 状态区:disconnected 灰 / connecting 红 / pairing 金 / failed
-        // 红;busy 态尾槽 spinner;失败原因并入副文(首句加粗)+ 重试
-        // 钮;connecting/reconnecting 逃生口(死 IP 超时/退避期间可取
-        // 消)。配对后的机身确认等待窗显示专属文案(不闪失败)。蓝牙
-        // 方式下不出 PTP 状态卡(蓝牙不建立相机连接,PTP 链路态与本
-        // 视图无关,防误导)。
-        if (controller.method != ConnectionMethod.ble)
+        // 状态区:connecting 红 / pairing 金 / failed 红;busy 态尾槽
+        // spinner;失败原因并入副文(首句加粗)+ 重试钮;connecting/
+        // reconnecting 逃生口(死 IP 超时/退避期间可取消)。配对后的
+        // 机身确认等待窗显示专属文案(不闪失败)。disconnected 静置态
+        // 不出卡(2026-10-17:未连接组件退场)。
+        if (controller.state != CameraLinkState.disconnected)
           Padding(
             padding: AppSpacing.screenPadding,
             child: Column(
@@ -1016,13 +1025,17 @@ class _ConnectionPageState extends State<ConnectionPage>
               ],
             ),
           ),
-        // 居中主操作(SnapBridge 式):相机图标 + 「连接相机」大按钮 +
-        // 当前方式副文。AP 方式附接管预告(连接动作即锁盘,如实告知)。
-        Expanded(
-          child: Center(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
+        // 主体:STA 模式 = 扫描视图(原地替换,进方式即起扫);USB/AP
+        // = 居中主操作(相机图标 + 「连接相机」大按钮 + 当前方式副文,
+        // AP 附接管预告 —— 连接动作即锁盘,如实告知)。
+        if (controller.method == ConnectionMethod.sta)
+          Expanded(child: _StaScanBody(controller: controller))
+        else
+          Expanded(
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
                 // 主操作 hero:相机图标套淡染圆 + hairline 描边(素图标
                 // 悬空太瘦;2026-10-17 界面对齐拍摄页语言)。
                 Container(
@@ -1100,7 +1113,11 @@ class _ConnectionPageState extends State<ConnectionPage>
 
   /// 右上角连接方式弹层:图标 + 短名 + 一句说明 + 当前项打勾。busy 时
   /// 条目禁用(连接进行中不可换方式,原分段语义)。蓝牙仅在 BLE 通道
-  /// 装配时出现(未装配平台不出)。
+  /// 装配时出现(未装配平台不出)。**选中即进该方式的连接流程**
+  /// (2026-10-17 定稿):USB/AP 当场发起连接;STA/BLE 先正常收弹层
+  /// 再推整页 —— 弹层路由出栈后 push,无 pop/push 竞态(pop 动画期
+  /// 推新路由会被吞、pop 又只弹栈顶,真机/测试双实证),不再回落主
+  /// 视图让用户再点一次「连接相机」。
   Future<void> _showModePickerSheet(
     BuildContext context,
     ConnectionController controller,
@@ -1131,6 +1148,13 @@ class _ConnectionPageState extends State<ConnectionPage>
                       ? null
                       : () {
                           controller.selectMethod(m);
+                          // USB/AP 当场发起;STA/BLE 由 body 原地替换
+                          // 承接(2026-10-18:无路由,无竞态)。
+                          if (m == ConnectionMethod.usb) {
+                            controller.connect();
+                          } else if (m == ConnectionMethod.ap) {
+                            controller.connectWireless();
+                          }
                           Navigator.pop(sheetContext);
                         },
                 ),
@@ -1145,66 +1169,12 @@ class _ConnectionPageState extends State<ConnectionPage>
   /// (不传图不遥控)。joiner 全程(唤醒→自动加入→发射 AP 连接)发起
   /// PTP 连接沿自动收面板 —— 连接进度/取消在主视图状态卡,面板不该
   /// 盖住它。
-  Future<void> _showBleToolsSheet(
-    BuildContext context,
-    ConnectionController controller,
-  ) {
-    BuildContext? sheetContext;
-    var closing = false;
-    void onControllerChanged() {
-      final s = controller.state;
-      if (closing ||
-          (s != CameraLinkState.connecting && s != CameraLinkState.connected)) {
-        return;
-      }
-      final sc = sheetContext;
-      if (sc == null || !sc.mounted) {
-        return;
-      }
-      final route = ModalRoute.of(sc);
-      // 弹层不在栈顶(用户又开了配对页等)不代收;只 pop 弹层自己的路
-      // 由,不碰底下页面。
-      if (route == null || !route.isCurrent) {
-        return;
-      }
-      closing = true;
-      // notifyListeners 可能发生在 build 期,pop 挪到帧尾再走。
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (sc.mounted) {
-          Navigator.of(sc).pop();
-        }
-      });
-    }
 
-    controller.addListener(onControllerChanged);
-    return showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      builder: (sc) {
-        sheetContext = sc;
-        return Padding(
-          padding: EdgeInsets.only(bottom: MediaQuery.of(sc).viewInsets.bottom),
-          child: SizedBox(
-            height: MediaQuery.of(sc).size.height * 0.85,
-            child: ListenableBuilder(
-              listenable: controller,
-              builder: (context, _) => ListView(
-                keyboardDismissBehavior:
-                    ScrollViewKeyboardDismissBehavior.onDrag,
-                padding: AppSpacing.screenPadding,
-                children: _bleToolsSheetContents(context, controller),
-              ),
-            ),
-          ),
-        );
-      },
-    ).whenComplete(() => controller.removeListener(onControllerChanged));
-  }
-
-  List<Widget> _bleToolsSheetContents(
+  static List<Widget> _bleToolsContents(
     BuildContext context,
-    ConnectionController controller,
-  ) {
+    ConnectionController controller, {
+    required Future<void> Function() onLoadCredentials,
+  }) {
     final theme = Theme.of(context);
     final ready = controller.bleReady;
     final hasIdentity = controller.bleIdentity != null;
@@ -1217,7 +1187,8 @@ class _ConnectionPageState extends State<ConnectionPage>
       BleSessionState.idle => theme.colorScheme.outline,
     };
     return [
-      _methodTitle(context, Icons.bluetooth, 'conn.btTools'),
+      _ConnectionPageState._methodTitle(
+          context, Icons.bluetooth, 'conn.btTools'),
       const SizedBox(height: 4),
       Text(context.t('conn.btToolsHint')),
       const SizedBox(height: AppSpacing.sm),
@@ -1258,7 +1229,7 @@ class _ConnectionPageState extends State<ConnectionPage>
                 icon: const Icon(Icons.wifi_tethering),
                 label: Text(context.t('conn.wakeCameraWifi')),
                 onPressed: ready
-                    ? () => unawaited(_wakeWifiWithCredentials(controller))
+                    ? () => unawaited(_wakeWifiWithCredentials(context, controller))
                     : null,
               ),
             ),
@@ -1270,7 +1241,7 @@ class _ConnectionPageState extends State<ConnectionPage>
                 onPressed: hasIdentity &&
                         controller.bleState != BleSessionState.pairing
                     ? () => unawaited(_bleWifiAction(
-                        controller, controller.closeCameraWifi,
+                        context, controller, controller.closeCameraWifi,
                         success: context.t('conn.wifiOffRequested')))
                     : null,
                 child: Text(context.t('common.off')),
@@ -1284,7 +1255,7 @@ class _ConnectionPageState extends State<ConnectionPage>
             width: double.infinity,
             child: TextButton(
               onPressed:
-                  ready ? () => unawaited(_loadApCredentials(controller)) : null,
+                  ready ? () => unawaited(onLoadCredentials()) : null,
               child: Text(context.t('conn.readCredentials')),
             ),
           ),
@@ -1307,11 +1278,13 @@ class _ConnectionPageState extends State<ConnectionPage>
   /// 化加入热点并自动发起 AP 连接([ConnectionController.joinCameraAp],
   /// SnapBridge 全程);否则维持手动指引(密码看相机屏幕)。GPS 注入随
   /// 断链暂停,传图完蓝牙卡「关闭」关相机 Wi-Fi、「重连」恢复蓝牙。
-  Future<void> _wakeWifiWithCredentials(ConnectionController controller) async {
+  static Future<void> _wakeWifiWithCredentials(
+      BuildContext context, ConnectionController controller) async {
     final ok = await controller.wakeCameraWifi();
-    if (!mounted) return;
+    if (!context.mounted) return;
     if (!ok) {
-      _showHint(
+      _showHintStatic(
+          context,
           controller,
           context.t('conn.wakeFailed',
               {'e': controller.bleLastError ?? context.t('common.unknown')}));
@@ -1320,7 +1293,8 @@ class _ConnectionPageState extends State<ConnectionPage>
     final creds = controller.cameraApCredentials;
     if (creds == null || controller.wifiJoiner == null) {
       // 无法自动加入(凭据未解出 / 平台未装配 joiner):手动指引如实。
-      _showHint(
+      _showHintStatic(
+        context,
         controller,
         creds != null
             ? context.t('conn.wifiAwakeCred', {'ssid': creds.ssid})
@@ -1331,17 +1305,18 @@ class _ConnectionPageState extends State<ConnectionPage>
       return;
     }
     // 自动加入路上:join 看门狗 30s 兜底,过渡提示给足时长。
-    _showHint(
+    _showHintStatic(context,
         controller, context.t('conn.joiningHotspot', {'ssid': creds.ssid}),
         duration: const Duration(seconds: 30));
     final outcome = await controller.joinCameraAp();
-    if (!mounted) return;
+    if (!context.mounted) return;
     if (outcome == ApJoinOutcome.joined) {
-      _showHint(
-          controller, context.t('conn.joinedHotspot', {'ssid': creds.ssid}),
+      _showHintStatic(
+          context, controller, context.t('conn.joinedHotspot', {'ssid': creds.ssid}),
           duration: const Duration(seconds: 5));
     } else if (outcome == ApJoinOutcome.failed) {
-      _showHint(
+      _showHintStatic(
+        context,
         controller,
         context.t('conn.autoJoinFailed',
             {'e': controller.apJoinError ?? context.t('common.unknown')}),
@@ -1349,7 +1324,8 @@ class _ConnectionPageState extends State<ConnectionPage>
       );
     } else {
       // skipped:防御路(joiner 在 wake 后被置空等)—— 手动指引兜底。
-      _showHint(
+      _showHintStatic(
+        context,
         controller,
         context.t('conn.wifiAwake', {'ssid': creds.ssid}),
         duration: const Duration(seconds: 5),
@@ -1358,11 +1334,13 @@ class _ConnectionPageState extends State<ConnectionPage>
   }
 
   /// 手动读凭据(唤醒早于配对/重试场景):结果如实回 SnackBar。
-  Future<void> _loadApCredentials(ConnectionController controller) async {
+  static Future<void> _loadApCredentials(
+      BuildContext context, ConnectionController controller) async {
     final got = await controller.loadCameraApCredentials();
-    if (!mounted) return;
+    if (!context.mounted) return;
     final creds = controller.cameraApCredentials;
-    _showHint(
+    _showHintStatic(
+        context,
         controller,
         got && creds != null
             ? context.t('conn.hotspotDecoded', {'ssid': creds.ssid})
@@ -1370,7 +1348,10 @@ class _ConnectionPageState extends State<ConnectionPage>
                 {'e': controller.bleLastError ?? context.t('common.unknown')}));
   }
 
-  void _showHint(ConnectionController controller, String message,
+  /// 提示收口的静态面(整页组件共用):先撤在场提示再显 ——
+  /// showSnackBar 是排队不替换,30s 的过渡提示会把终态消息压到 30s 后。
+  static void _showHintStatic(BuildContext context, ConnectionController controller,
+      String message,
       {Duration duration = const Duration(seconds: 3)}) {
     ScaffoldMessenger.of(context)
       // 先撤在场提示再显:showSnackBar 是排队不替换,30s 的过渡提示
@@ -1384,13 +1365,14 @@ class _ConnectionPageState extends State<ConnectionPage>
 
   /// WiFi 唤起/关闭动作收口:失败 SnackBar 如实(含原因),成功提示
   /// 下一步去向(到系统 Wi-Fi 加入热点)。
-  Future<void> _bleWifiAction(
+  static Future<void> _bleWifiAction(
+    BuildContext context,
     ConnectionController controller,
     Future<bool> Function() action, {
     required String success,
   }) async {
     final ok = await action();
-    if (!mounted) return;
+    if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(ok
           ? success
@@ -1456,73 +1438,18 @@ class _ConnectionPageState extends State<ConnectionPage>
   }
 
   /// STA 扫描面板(中央按钮在同一 Wi-Fi 方式下的去向):打开沿自动
-  /// 扫描,内容 = mDNS 扫描/结果 + 网段扫描兜底 + 手填 IP + 已存相机
-  /// 快连。点选相机/手填连接后收面板 —— 连接进度/取消走主视图状态卡。
-  /// dismiss 沿停扫(等价原「离开 STA 分段停扫」)。
-  Future<void> _showStaScanSheet(
-    BuildContext context,
-    ConnectionController controller,
-  ) async {
-    unawaited(controller.startScan());
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      builder: (sheetContext) => Padding(
-        padding: EdgeInsets.only(
-            bottom: MediaQuery.of(sheetContext).viewInsets.bottom),
-        child: SizedBox(
-          height: MediaQuery.of(sheetContext).size.height * 0.85,
-          child: ListenableBuilder(
-            listenable: controller,
-            builder: (context, _) {
-              final busy = _busyState(controller);
-              return ListView(
-                keyboardDismissBehavior:
-                    ScrollViewKeyboardDismissBehavior.onDrag,
-                padding: AppSpacing.screenPadding,
-                children: [
-                  _methodTitle(context, Icons.wifi, 'conn.methodSta'),
-                  const SizedBox(height: 4),
-                  Text(context.t('conn.staHint')),
-                  const SizedBox(height: 12),
-                  ..._staScanContents(context, sheetContext, controller,
-                      busy: busy),
-                  const SizedBox(height: AppSpacing.md),
-                  // 无线注意事项(原未连接主视图常显,随重排收进面板)。
-                  Container(
-                    padding: const EdgeInsets.all(AppSpacing.md),
-                    decoration: BoxDecoration(
-                      color: Theme.of(context).colorScheme.surfaceContainerLow,
-                      borderRadius: BorderRadius.circular(AppRadius.sm),
-                    ),
-                    child: Text(
-                      context.t('conn.wirelessNotes'),
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color:
-                              Theme.of(context).colorScheme.onSurfaceVariant),
-                    ),
-                  ),
-                ],
-              );
-            },
-          ),
-        ),
-      ),
-    );
-    if (controller.scanning) {
-      await controller.stopScan();
-    }
-  }
 
-  /// STA 面板主体:扫描钮 + 结果 + 网段兜底 + 手填 IP + 已存相机。
-  /// 点选连接先连后 pop(sheetContext 用于收面板)。
-  List<Widget> _staScanContents(
+  /// STA 页主体:扫描钮 + 结果 + 网段兜底 + 手填 IP + 已存相机。
+  /// 点选连接 await 落地后 pop(mounted 防御);生产上 connecting 沿
+  /// 页面监听先退,这里为兜底/测试路径。
+  static List<Widget> _staScanContents(
     BuildContext context,
-    BuildContext sheetContext,
     ConnectionController controller, {
     required bool busy,
   }) {
-    void closeSheet() => Navigator.of(sheetContext).pop();
+    // 退页单源 = _StaScanPage 的连接沿监听(connecting/connected 即
+    // pop,2026-10-18);tile 只发起连接 —— 双 pop 竞态会把 home 顶掉
+    // (canPop=false 实证)。
     return [
       SizedBox(
         width: double.infinity,
@@ -1567,10 +1494,7 @@ class _ConnectionPageState extends State<ConnectionPage>
           trailing: const Icon(Icons.chevron_right),
           onTap: busy
               ? null
-              : () {
-                  controller.connectDiscovered(camera);
-                  closeSheet();
-                },
+              : () => unawaited(controller.connectDiscovered(camera)),
         ),
       // /24 网段扫描兜底(mDNS 无结果时;用户显式触发,不自动):
       // 端口检查 + InitCommandRequest 轻探测(约束与真机教训见
@@ -1611,10 +1535,8 @@ class _ConnectionPageState extends State<ConnectionPage>
             trailing: const Icon(Icons.chevron_right),
             onTap: busy
                 ? null
-                : () {
-                    controller.connectProbed(camera);
-                    closeSheet();
-                  },
+                : () =>
+                    unawaited(controller.connectProbed(camera)),
           ),
         if (controller.subnetScanCompleted && controller.subnetCameras.isEmpty)
           Padding(
@@ -1648,10 +1570,8 @@ class _ConnectionPageState extends State<ConnectionPage>
           FilledButton(
             onPressed: busy
                 ? null
-                : () {
-                    controller.connectManualIp();
-                    closeSheet();
-                  },
+                : () =>
+                    unawaited(controller.connectManualIp()),
             child: Text(context.t('conn.connect')),
           ),
         ],
@@ -1681,16 +1601,13 @@ class _ConnectionPageState extends State<ConnectionPage>
             ),
             onTap: busy
                 ? null
-                : () {
-                    controller.connectSaved(saved);
-                    closeSheet();
-                  },
+                : () => unawaited(controller.connectSaved(saved)),
           ),
     ];
   }
 
   /// 删除确认:忘记这台相机(清档案 + 配对过的换新身份 → 全新配对)。
-  Future<void> _confirmRemoveSaved(
+  static Future<void> _confirmRemoveSaved(
     BuildContext context,
     ConnectionController controller,
     CameraInfo saved,
@@ -1707,12 +1624,13 @@ class _ConnectionPageState extends State<ConnectionPage>
     }
   }
 
-  Widget _methodTitle(BuildContext context, IconData icon, String text) {
+  /// 方式标题行(图标 + 短名;STA 视图头)。
+  static Widget _methodTitle(BuildContext context, IconData icon, String text) {
     return Row(
       children: [
         Icon(icon),
         const SizedBox(width: 8),
-        // 四处调用全传中文原文(即键),就地统一包 t()。
+        // 键即中文原文,就地统一包 t()。
         Text(context.t(text), style: Theme.of(context).textTheme.titleMedium),
       ],
     );
@@ -1942,6 +1860,80 @@ class _ConnectionPageState extends State<ConnectionPage>
           fallbackName: context.t('conn.cameraAlbum'),
         ),
       ),
+    );
+  }
+}
+
+
+/// STA 扫描视图体(2026-10-18 原地替换):进方式即起扫,离方式停扫
+/// (dispose);内容 = mDNS 扫描/结果 + 网段兜底 + 手填 IP + 已存相机
+/// + 无线注意事项。连接沿的状态卡在宿主视图顶部,本体不管退页 ——
+/// 没有路由可退(原地替换)。
+class _StaScanBody extends StatefulWidget {
+  const _StaScanBody({required this.controller});
+
+  final ConnectionController controller;
+
+  @override
+  State<_StaScanBody> createState() => _StaScanBodyState();
+}
+
+class _StaScanBodyState extends State<_StaScanBody> {
+  @override
+  void initState() {
+    super.initState();
+    // 帧尾起扫:initState 在 build 期,同步 startScan 会同步 notify,
+    // 炸 ListenableBuilder 的「build 期 markNeedsBuild」。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        unawaited(widget.controller.startScan());
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    // 离开 STA 视图停扫(等价原「离开 STA 分段停扫」)。
+    if (widget.controller.scanning) {
+      unawaited(widget.controller.stopScan());
+    }
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: widget.controller,
+      builder: (context, _) {
+        final busy = _ConnectionPageState._busyState(widget.controller);
+        return ListView(
+          keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+          padding: AppSpacing.screenPadding,
+          children: [
+            _ConnectionPageState._methodTitle(
+                context, Icons.wifi, 'conn.methodSta'),
+            const SizedBox(height: 4),
+            Text(context.t('conn.staHint')),
+            const SizedBox(height: 12),
+            ..._ConnectionPageState._staScanContents(
+                context, widget.controller, busy: busy),
+            const SizedBox(height: AppSpacing.md),
+            // 无线注意事项(原未连接主视图常显,随重排收进本视图)。
+            Container(
+              padding: const EdgeInsets.all(AppSpacing.md),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.surfaceContainerLow,
+                borderRadius: BorderRadius.circular(AppRadius.sm),
+              ),
+              child: Text(
+                context.t('conn.wirelessNotes'),
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant),
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 }
