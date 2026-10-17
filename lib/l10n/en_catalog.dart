@@ -37,6 +37,7 @@ const Map<String, String> enCatalog = {
   'settings.watermarkSubtitle':
       'Composite on JPG download: corner badge or photo card (EXIF card)',
   'common.off': 'Off',
+  'common.copied': 'Copied',
   'settings.badge': 'Corner Badge',
   'settings.photoCard': 'Photo Card',
   'settings.watermarkText': 'Watermark text (empty = camera model)',
