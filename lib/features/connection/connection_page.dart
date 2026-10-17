@@ -36,6 +36,7 @@ import '../../core/ptpip/subnet_scan.dart';
 import '../../data/ble_identity_store.dart';
 import '../../data/client_identity_store.dart';
 import '../../data/paired_cameras_store.dart';
+import '../../design/app_colors.dart';
 import '../../design/app_dimens.dart';
 import '../../l10n/l10n.dart';
 import '../../platform/interface_addresses.dart';
@@ -49,6 +50,7 @@ import 'ble_pair_panel.dart';
 import '../settings/settings_page.dart';
 import 'camera_overview_controller.dart';
 import 'connection_status_card.dart';
+import 'connection_widgets.dart';
 
 /// 连接方式(未连接视图;右上角弹层选择,中央按钮按方式直连)。
 enum ConnectionMethod { usb, ap, sta, ble }
@@ -121,6 +123,9 @@ class ConnectionController extends ChangeNotifier {
       bleState = s;
       notifyListeners();
     });
+    // 错误沿实时上屏:失败/成功清空都即时刷新,不等无关状态跃迁
+    //(BLE 弹层 ListenableBuilder 直吃这里)。
+    _bleErrorSub = bleSession?.errors.listen((_) => notifyListeners());
     unawaited(loadBleIdentity());
     // 上次选中的连接方式恢复:settingsController 异步装载,装载沿经
     // 监听回填(用户本会话已选过则不覆盖,见 _onSettingsChanged)。
@@ -129,6 +134,9 @@ class ConnectionController extends ChangeNotifier {
 
   final CameraConnection? connection;
   final NsdScanner? scanner;
+
+  /// BLE 错误沿订阅(lastError 实时刷新用),dispose 收。
+  StreamSubscription<String?>? _bleErrorSub;
   final PairedCamerasStore? pairedCameras;
 
   /// /24 网段扫描器(测试注入;null = 生产默认:真 socket 端口检查 +
@@ -718,13 +726,14 @@ class ConnectionController extends ChangeNotifier {
   @override
   void dispose() {
     settingsController?.removeListener(_onSettingsChanged);
+    unawaited(_bleErrorSub?.cancel());
     manualIpController.dispose();
     super.dispose();
   }
 }
 
 /// 蓝牙工具卡状态文案(未配对/已配对未连/握手中/已连接/重连中)。
-/// 返回 = t() 键(与 ble_pair_panel 共用),消费端 _bleCard 里包 t()。
+/// 返回 = t() 键,消费端 _bleCard 里包 t()。
 String bleStateLabel(ConnectionController c) => switch (c.bleState) {
       BleSessionState.pairing => 'ble.handshaking',
       BleSessionState.ready => 'conn.connected',
@@ -955,8 +964,21 @@ class _ConnectionPageState extends State<ConnectionPage>
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(Icons.photo_camera_outlined,
-                    size: 96, color: theme.colorScheme.outline),
+                // 主操作 hero:相机图标套淡染圆 + hairline 描边(素图标
+                // 悬空太瘦;2026-10-17 界面对齐拍摄页语言)。
+                Container(
+                  width: 128,
+                  height: 128,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: theme.colorScheme.secondaryContainer
+                        .withValues(alpha: 0.45),
+                    border:
+                        Border.all(color: theme.colorScheme.outlineVariant),
+                  ),
+                  child: Icon(Icons.photo_camera_outlined,
+                      size: 56, color: theme.colorScheme.onSecondaryContainer),
+                ),
                 const SizedBox(height: AppSpacing.xl),
                 SizedBox(
                   width: 260,
@@ -1127,25 +1149,24 @@ class _ConnectionPageState extends State<ConnectionPage>
     final theme = Theme.of(context);
     final ready = controller.bleReady;
     final hasIdentity = controller.bleIdentity != null;
+    // 点色走 token(2026-10-17 界面对齐):就绪绿 = AppColors.success
+    //(明暗双档),在途 = secondary,空闲 = outline;裸 Colors.* 退役。
     final stateColor = switch (controller.bleState) {
-      BleSessionState.ready => Colors.green,
-      BleSessionState.pairing || BleSessionState.reconnecting => Colors.orange,
-      BleSessionState.idle =>
-        hasIdentity ? theme.colorScheme.outline : Colors.grey,
+      BleSessionState.ready => AppColors.success(context),
+      BleSessionState.pairing ||
+      BleSessionState.reconnecting => theme.colorScheme.secondary,
+      BleSessionState.idle => theme.colorScheme.outline,
     };
     return [
       _methodTitle(context, Icons.bluetooth, 'conn.btTools'),
       const SizedBox(height: 4),
       Text(context.t('conn.btToolsHint')),
-      const SizedBox(height: 8),
-      Row(children: [
-        Icon(Icons.circle, size: 10, color: stateColor),
-        const SizedBox(width: 6),
-        Text(context.t(bleStateLabel(controller))),
-        if (hasIdentity)
-          Text('  ·  ${controller.bleIdentity!.controllerName}',
-              style: theme.textTheme.bodySmall),
-      ]),
+      const SizedBox(height: AppSpacing.sm),
+      ConnStatusPill(
+        dotColor: stateColor,
+        label: context.t(bleStateLabel(controller)),
+        trailing: hasIdentity ? controller.bleIdentity!.controllerName : null,
+      ),
       if (controller.bleHint != null)
         Padding(
           padding: const EdgeInsets.only(top: 4),
@@ -1153,55 +1174,63 @@ class _ConnectionPageState extends State<ConnectionPage>
               style: theme.textTheme.bodySmall
                   ?.copyWith(color: theme.colorScheme.error)),
         ),
-      const SizedBox(height: 8),
-      // GPS 注入开关(就绪才可用;开着时驱动自动维持重连与注入)。
-      // 配对/重连/断开动作不再单列 —— 下方配对面板自带全套(扫描、
-      // 复用重连、解除、断开),原状态动作行删。
-      SwitchListTile(
-        contentPadding: EdgeInsets.zero,
-        dense: true,
-        value: controller.bleGpsInject,
-        // 门禁:已配对即可开 —— 开关注入驱动自己会连(重连退避),
-        // 不必先手动重连成功(与拍摄浮层「GPS」芯片同语义)。
-        onChanged: hasIdentity
-            ? (on) => unawaited(controller.setBleGpsInject(on))
-            : null,
-        title: Text(context.t('conn.gpsInjection')),
-        subtitle: Text(context.t('conn.gpsInjectionHint')),
-      ),
-      // WiFi 唤起(就绪才可用):先读 0x2004 凭据(SnapBridge 序)
-      // 再写 0x2005,成功沿断 BLE —— 相机等链路释放才开热点;关闭
-      // = 反义 op(0x80),不断链。
-      Row(children: [
-        Expanded(
-          child: FilledButton.tonalIcon(
-            icon: const Icon(Icons.wifi_tethering),
-            label: Text(context.t('conn.wakeCameraWifi')),
-            onPressed: ready
-                ? () => unawaited(_wakeWifiWithCredentials(controller))
-                : null,
-          ),
+      const SizedBox(height: AppSpacing.sm),
+      // GPS 注入开关(已配对即可开):开关只管注入层(定位流+GEO),
+      // 链路层(重连循环+TIME 保活)不随它走 —— 2026-10-17 全自动
+      // 重连定案。配对/重连/断开动作不在此列 —— 下方配对面板自带。
+      // 唤起 WiFi = 读 0x2004 凭据(SnapBridge 序)再写 0x2005,成功沿
+      // 断 BLE —— 相机等链路释放才开热点;关闭 = 反义 op(0x80),不断链。
+      ConnTileGroup(children: [
+        SwitchListTile(
+          contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+          dense: true,
+          value: controller.bleGpsInject,
+          onChanged: hasIdentity
+              ? (on) => unawaited(controller.setBleGpsInject(on))
+              : null,
+          title: Text(context.t('conn.gpsInjection')),
+          subtitle: Text(context.t('conn.gpsInjectionHint')),
         ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: OutlinedButton(
-            // 门禁 = 有身份(传图后 BLE 断开是常态,方法内先补链
-            // 再写 0x80);握手/relink 中禁用。
-            onPressed:
-                hasIdentity && controller.bleState != BleSessionState.pairing
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+          child: Row(children: [
+            Expanded(
+              child: FilledButton.tonalIcon(
+                icon: const Icon(Icons.wifi_tethering),
+                label: Text(context.t('conn.wakeCameraWifi')),
+                onPressed: ready
+                    ? () => unawaited(_wakeWifiWithCredentials(controller))
+                    : null,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: OutlinedButton(
+                // 门禁 = 有身份(传图后 BLE 断开是常态,方法内先补链
+                // 再写 0x80);握手/relink 中禁用。
+                onPressed: hasIdentity &&
+                        controller.bleState != BleSessionState.pairing
                     ? () => unawaited(_bleWifiAction(
                         controller, controller.closeCameraWifi,
                         success: context.t('conn.wifiOffRequested')))
                     : null,
-            child: Text(context.t('common.off')),
+                child: Text(context.t('common.off')),
+              ),
+            ),
+          ]),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+          child: SizedBox(
+            width: double.infinity,
+            child: TextButton(
+              onPressed:
+                  ready ? () => unawaited(_loadApCredentials(controller)) : null,
+              child: Text(context.t('conn.readCredentials')),
+            ),
           ),
         ),
       ]),
-      TextButton(
-        onPressed:
-            ready ? () => unawaited(_loadApCredentials(controller)) : null,
-        child: Text(context.t('conn.readCredentials')),
-      ),
       const SizedBox(height: 8),
       // 配对面板(原独立「BLE 配对 / GPS 注入」页整体迁入):扫描点选
       // 配对、复用重连、解除、经典绑定、后台定位授权、手动件与 hex
@@ -1789,7 +1818,9 @@ class _ConnectionPageState extends State<ConnectionPage>
           // 读取中…),就地统一包 t();相机上报值未命中目录原样直返。
           SizedBox(
             width: 68,
-            child: Text(context.t(label), style: theme.textTheme.bodyMedium),
+            child: Text(context.t(label),
+                style: theme.textTheme.bodyMedium
+                    ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -1797,8 +1828,11 @@ class _ConnectionPageState extends State<ConnectionPage>
               context.t(value),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: theme.textTheme.bodyMedium
-                  ?.copyWith(fontWeight: FontWeight.w600),
+              // 数值列 tabular 数字(电量/焦距/光圈/张数跳动不抖行)。
+              style: theme.textTheme.bodyMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
             ),
           ),
         ],

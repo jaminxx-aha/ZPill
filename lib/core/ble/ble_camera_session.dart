@@ -113,10 +113,24 @@ final class BleCameraSession {
   BleSessionState get state => _state;
   final _stateCtrl = StreamController<BleSessionState>.broadcast();
   Stream<BleSessionState> get states => _stateCtrl.stream;
+  final _errorCtrl = StreamController<String?>.broadcast();
+
+  /// 错误沿(实时):lastError 变化(含 ready 沿清空)即发,UI 订阅
+  /// 即时上屏,不等无关重建。随 [_stateCtrl] 一并关闭。
+  Stream<String?> get errors => _errorCtrl.stream;
 
   /// 配对/重连成功后填充;重连以其 deviceId 扫描匹配。
   BleIdentity? identity;
-  String? lastError;
+
+  String? _lastError;
+
+  /// 最近一次失败原因;ready 沿自动清空(陈旧错误不上屏)。
+  String? get lastError => _lastError;
+  set lastError(String? v) {
+    if (v == _lastError) return;
+    _lastError = v;
+    if (!_errorCtrl.isClosed) _errorCtrl.add(v);
+  }
 
   /// 最近一次 [retryReconnect] 是否被深睡闸门拦下(下轮尝试开跑即失效;
   /// 上层配对页日志据此区分「无命中」与「被闸」)。
@@ -141,22 +155,12 @@ final class BleCameraSession {
   /// SnapBridge 同名 Progress 阶段实证)。0 = 不静默。
   Duration silentBondWait = Duration.zero;
 
-  GeoFix? _lastFix;
   GeoFix? _pendingFix;
   /// 上次成功注入的定位与时刻(去重门/保鲜锚;失败沿不更新)。
   GeoFix? _lastOkFix;
   DateTime? _lastOkAt;
   /// 上次成功 TIME 写时刻(保活档位锚;Ready 沿清零 = 首笔校时待发)。
   DateTime? _lastTimeOkAt;
-
-  /// 最近一次收到的定位(含未满足节流的;UI 可显示)。
-  GeoFix? get lastFix => _lastFix;
-
-  /// 注入诊断计数(配对页状态行):GEO/TIME 实发成功帧数与最后 GEO
-  /// 时刻 —— 0 帧 = 链路/授权没跑起来,N 帧 = 载荷已到相机。
-  int geoWriteCount = 0;
-  int timeWriteCount = 0;
-  DateTime? lastGeoAt;
 
   /// 下次重连建议退避(驱动按此定时调 [retryReconnect])。
   Duration get nextRetryDelay =>
@@ -408,6 +412,7 @@ final class BleCameraSession {
   void dispose() {
     _sub.cancel();
     _stateCtrl.close();
+    _errorCtrl.close();
   }
 
   // ------------------------------------------------------------------
@@ -423,7 +428,6 @@ final class BleCameraSession {
   /// 次成功注入 <3s 且位移 <1.1m 跳过,见 [BleKeepalive])即写 GEO;
   /// 写闸期缓存待过闸回补(不弃点)。
   void onFix(GeoFix fix) {
-    _lastFix = fix;
     if (_state != BleSessionState.ready) return;
     final t = _now();
     if (_gated(t)) {
@@ -486,8 +490,6 @@ final class BleCameraSession {
       await _host.write(kNikonCharGeo, GeoPayload().build(fix));
       _lastOkFix = fix;
       _lastOkAt = t;
-      geoWriteCount++;
-      lastGeoAt = t;
     } on Exception catch (e) {
       _pendingFix = fix;
       _gateWritesUntil = t.add(writeGate);
@@ -499,7 +501,6 @@ final class BleCameraSession {
     try {
       await _host.write(kNikonCharTime, TimePayload.build(t));
       _lastTimeOkAt = t;
-      timeWriteCount++;
     } on Exception catch (e) {
       lastError = 'TIME 写失败:$e';
     }
@@ -714,6 +715,8 @@ final class BleCameraSession {
       name: controllerName,
     );
     _backoffStep = 0;
+    // 成功沿清陈旧错误(重连几轮失败后终成,错误行不残留)。
+    lastError = null;
     // 首写门:Ready 后 writeGate 内不发 GEO/TIME(首配/重连同套 ——
     // 相机 GPS 会话未醒拒收 0x2007,HarmoNiLink 实证;2900099 瞬态同类
     // 减灾,非替代重试)。
