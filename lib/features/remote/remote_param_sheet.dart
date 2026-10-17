@@ -25,9 +25,12 @@ Future<void> showParamEditSheet(
   final state = controller.paramProps[p.code];
   final desc = state?.desc;
   // 取值域:相机 PropDesc 枚举优先(权威),拒答/无 FORM 时目录
-  // pickValues 直供(快门/对焦模式/图像区域等厂商码场景)。
-  final enums = desc?.enumValues?.whereType<int>().toList(growable: false) ??
-      p.pickValues;
+  // pickValues 直供(快门/对焦模式/图像区域等厂商码场景);目录权威表
+  // (picksAuthoritative,EV ±3 真机硬件域)再压过相机描述层。
+  final enums = p.picksAuthoritative
+      ? p.pickValues
+      : desc?.enumValues?.whereType<int>().toList(growable: false) ??
+          p.pickValues;
   final rangeMin = desc?.rangeMin as int?;
   final rangeMax = desc?.rangeMax as int?;
   final rangeStep = desc?.rangeStep as int? ?? 1;
