@@ -211,6 +211,37 @@ void main() {
     expect(name.skip(9).every((b) => b == 0), isTrue);
   });
 
+  test('lastError 变化沿 errors 流实时发(同值不发,清空发 null)', () async {
+    final seen = <String?>[];
+    final sub = session.errors.listen(seen.add);
+    session.lastError = '旧错';
+    session.lastError = '旧错'; // 同值去重,不重复上屏
+    session.lastError = '新错';
+    await pump();
+    session.lastError = null;
+    await pump();
+    await sub.cancel();
+    expect(seen, ['旧错', '新错', null]);
+  });
+
+  test('ready 沿清陈旧错误(重连几轮失败后终成,错误行不残留)', () async {
+    session.lastError = '第 1 轮无命中';
+    final done = session.pair(device);
+    host.emit(const BleConnected(
+        uuid: 'P1', characteristics: {}, writeWithoutResponseMtu: 20));
+    await pump();
+    final stage1 = PairingMessage.decode(host.lastWrite(kNikonCharPairing));
+    host.emit(BleNotified(
+        uuid: kNikonCharPairing, data: buildStage2(stage1).encode()));
+    await pump();
+    host.emit(BleNotified(
+        uuid: kNikonCharPairing, data: buildStage4().encode()));
+    await pump();
+    expect(session.state, BleSessionState.ready);
+    expect(session.lastError, isNull);
+    await done;
+  });
+
   test('stage4+名字写 → 即刻 ready(NOT1 非闸门,真机 2026-10-13)', () async {
     final done = expectLater(session.pair(device), completes);
     host.emit(const BleConnected(

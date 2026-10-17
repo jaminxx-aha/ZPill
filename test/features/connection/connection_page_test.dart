@@ -1361,8 +1361,12 @@ void main() {
       expect(find.text('蓝牙连接(工具通道)'), findsOneWidget);
       expect(find.text('未连接'), findsNothing, reason: 'PTP 状态卡在蓝牙分段下隐藏');
       expect(find.text('已配对,未连接'), findsOneWidget);
-      expect(find.text('重连(复用身份)'), findsOneWidget,
-          reason: '重连钮由配对面板自带(原状态动作行已并入面板)');
+      // 打开沿自动重连已在跑(面板硬绑 AppServices 单例;本用例页面显示
+      // 夹具自建会话,状态行不动,但面板钮同位转进行态 —— 自动化可见面)。
+      final retryBtn = tester.widget<OutlinedButton>(find.ancestor(
+          of: find.text('重连中…'), matching: find.byType(OutlinedButton)));
+      expect(retryBtn.onPressed, isNull,
+          reason: '打开沿自动重连已在跑(2026-10-17 全自动重连);钮进行态禁点');
       final wake = tester.widget<FilledButton>(find.ancestor(
           of: find.text('唤醒相机 Wi-Fi'), matching: find.byType(FilledButton)));
       expect(wake.onPressed, isNull, reason: 'WiFi 动作门禁 = 会话就绪');
@@ -1370,6 +1374,10 @@ void main() {
           tester.widget<SwitchListTile>(find.byType(SwitchListTile));
       expect(switchTile.onChanged, isNotNull,
           reason: 'GPS 开关门禁 = 已配对(开关注入驱动自己会连)');
+      // 收尾:关弹层 → 面板 dispose 废在途自动重连(退避 Timer 随取消
+      // 释放;不关则挂到用例尾判「Timer still pending」)。
+      await tester.tapAt(const Offset(400, 20));
+      await tester.pumpAndSettle();
     });
 
     testWidgets(
@@ -1401,6 +1409,9 @@ void main() {
       expect(f.session.state, BleSessionState.idle,
           reason: '写成功即断链:相机等 BLE 释放才真正开热点');
       expect(find.byType(SnackBar), findsOneWidget);
+      // 收尾:关弹层废在途自动重连(退避 Timer 随取消释放)。
+      await tester.tapAt(const Offset(400, 20));
+      await tester.pumpAndSettle();
     });
 
     testWidgets('未就绪时 WiFi 动作如实失败(controller 门禁)', (tester) async {
@@ -1510,6 +1521,9 @@ void main() {
       expect(conn.connectIp, isNull, reason: 'join 失败不发射连接');
       expect(find.textContaining('自动加入热点失败'), findsOneWidget);
       expect(find.textContaining('unavailable'), findsOneWidget);
+      // 收尾:关弹层废在途自动重连(joiner 失败不触发自动收层)。
+      await tester.tapAt(const Offset(400, 20));
+      await tester.pumpAndSettle();
     });
 
     /// 真异步排微任务(握手事件沿各排一轮;普通 test 无 fake-async 痛)。
@@ -1594,7 +1608,27 @@ void main() {
       await tester.pumpAndSettle(); // 第 2 轮无命中 → 两轮尽 → 如实失败
       expect(f.host.countWrite(kNikonCharWifi), 0, reason: '两轮无命中:不该有 0x80 写入');
       expect(f.session.state, BleSessionState.idle, reason: '无命中不进连接尝试,态不翻转');
-      expect(find.textContaining('重连无命中'), findsOneWidget);
+      expect(find.textContaining('重连无命中'), findsExactly(2),
+          reason: 'SnackBar(操作失败)+ 弹层错误行(lastError 实时上屏,2026-10-17 A2)各一处');
+      // 收尾:关弹层废在途自动重连(退避 Timer 随取消释放)。
+      await tester.tapAt(const Offset(400, 20));
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('lastError 沿实时刷新:错误落库即 notifyListeners,同值不发', (tester) async {
+      final f = (await tester.runAsync(readyFixture))!;
+      var notifications = 0;
+      f.controller.addListener(() => notifications++);
+      f.session.lastError = '注入失败:x';
+      await tester.pump();
+      final afterErr = notifications;
+      expect(afterErr, greaterThan(0), reason: '错误沿即时刷新,不等状态跃迁');
+      f.session.lastError = '注入失败:x'; // 同值去重
+      await tester.pump();
+      expect(notifications, afterErr);
+      f.session.lastError = '注入失败:y';
+      await tester.pump();
+      expect(notifications, greaterThan(afterErr));
     });
   });
 }
