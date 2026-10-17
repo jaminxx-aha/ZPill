@@ -6,10 +6,12 @@
 /// 重连由 AppServices 注入驱动按退避自动跑,面板只管首次配对与状态
 /// 查看。
 ///
-/// 手动件(2026-10-17 收敛):只剩申请后台定位(两段式授权第二段)。
-/// 写 TIME / 唤起 WiFi / 读 0x2004 退役 —— TIME 收口自动校时、WiFi
-/// 唤醒走弹层正门(带凭据全程)、凭据有「读凭据」钮,裸读 hex 无产品
-/// 价值;原始帧 hex 日志保留,排方言时用。
+/// 2026-10-17 去重定案:①会话态不在此重复(弹层顶部状态行覆盖),
+/// 面板只留档案一行 + 未配对引导 + lastError;②GEO/TIME 帧计数删;
+/// ③日志并轨统一日志(AppLog ble 域,帧级 trace 由 AppServices 常年
+/// 接线),内嵌日志框退役;④动作钮按会话态分型(就绪只剩断开,
+/// 扫描列表就绪时隐藏)。手动件只剩申请后台定位(两段式授权第二段;
+/// 写 TIME / 唤起 WiFi / 读 0x2004 已退役)。
 library;
 
 import 'dart:async';
@@ -21,6 +23,7 @@ import 'package:flutter/services.dart';
 import '../../app_services.dart';
 import '../../core/ble/adv_payload.dart';
 import '../../core/ble/ble_camera_session.dart';
+import '../../core/log/app_log.dart';
 import '../../data/ble_identity_store.dart';
 import '../../l10n/l10n.dart';
 import '../../platform/ble_scanner.dart';
@@ -51,8 +54,6 @@ class _BlePairPanelState extends State<BlePairPanel>
     with WidgetsBindingObserver {
   StreamSubscription<BleSessionState>? _stateSub;
   StreamSubscription<BleEvent>? _eventSub;
-  Timer? _statusTimer;
-  final List<String> _lines = [];
   List<BleDevice> _devices = [];
   bool _scanning = false;
   BleSessionState _sessionState = BleSessionState.idle;
@@ -74,20 +75,19 @@ class _BlePairPanelState extends State<BlePairPanel>
     // 手动配对期间挂起注入驱动(自动重连/GEO tick 会与手动流程撞车)
     AppServices.instance.suspendBleDriver();
     _sessionState = _session.state;
-    _session.onTrace = _log; // 帧级诊断(→ stage1/3、← stage2/4 全落日志)
     _stateSub = _session.states.listen((s) {
       if (mounted) setState(() => _sessionState = s);
     });
-    // 原始帧日志(M2 方言核对保留):PAIR/NOT1 帧 + 连接事件落 hex。
+    // 事件订阅:设备发现列示(实时,不等扫描窗收口)+ 流程日志。日志
+    // 全走统一日志(AppLog ble 域,通用日志页可查;帧级 trace 由
+    // AppServices 常年接线,不在此管)。
     _eventSub = PlatformServices.ble.events.listen(_onEvent);
-    // 状态行活刷新(GEO/TIME 计数每秒跟一眼;dispose 显式撤销,不靠
-    // mounted 自裁 —— 嵌入宿主(连接页弹层)拆树时须立即停摆)。
-    _statusTimer = Timer.periodic(const Duration(seconds: 1), (t) {
-      if (mounted) setState(() {});
-    });
     // 宿主喂的身份首帧即入:重连钮/冲突比较不等异步(_loadSaved 还要
     // 查定位授权,授权查询悬着时身份不能跟着悬)。
     _saved = widget.savedIdentity;
+    // 打开沿自动化(下一帧:扫描/重连路径里有 setState,initState 直调
+    // 非法)。宿主身份迟到时(控制器异步装载沿)由 didUpdateWidget 补触发。
+    WidgetsBinding.instance.addPostFrameCallback((_) => _bootstrap());
     unawaited(_loadSaved());
   }
 
@@ -107,12 +107,10 @@ class _BlePairPanelState extends State<BlePairPanel>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _retrying = false;
+    _cancelRetry(notify: false);
     AppServices.instance.resumeBleDriver();
-    _session.onTrace = null;
     _stateSub?.cancel();
     _eventSub?.cancel();
-    _statusTimer?.cancel();
     super.dispose();
   }
 
@@ -123,7 +121,13 @@ class _BlePairPanelState extends State<BlePairPanel>
     // 喂):面板 _saved 跟进,状态行与冲突比较不残留旧身份。实例不等价
     // 才动 —— 同实例回喂(普通重建)不抖。
     if (!identical(widget.savedIdentity, oldWidget.savedIdentity)) {
+      final hadIdentity = _saved != null;
       _saved = widget.savedIdentity;
+      // 身份迟到沿补触发打开沿自动化(首帧宿主控制器还没装载完 → 扫描
+      // 已误发的场景:重连靠原生 endScan 礼让收编扫描,自愈)。
+      if (!hadIdentity && _saved != null) {
+        _bootstrap();
+      }
     }
   }
 
@@ -144,16 +148,31 @@ class _BlePairPanelState extends State<BlePairPanel>
     }
   }
 
-  void _log(String line) {
-    if (!mounted) return;
-    final n = DateTime.now();
-    final stamp = '${_two(n.hour)}:${_two(n.minute)}:${_two(n.second)}'
-        '.${n.millisecond.toString().padLeft(3, '0')}';
-    setState(() {
-      _lines.add('$stamp $line');
-      if (_lines.length > 400) _lines.removeAt(0);
-    });
+  /// 打开沿自动化旗标(每支只发一次;解除配对/授权复查的 _saved 刷新
+  /// 不再触发)。
+  bool _autoScanFired = false;
+  bool _autoResumeFired = false;
+
+  /// 弹层打开即自动化(2026-10-17 全自动重连定案):无身份 → 自动扫描
+  /// (STA 弹层同款);有身份且未就绪 → 自动重连(带深睡闸门,与生命
+  /// 周期恢复同语义)。驱动此刻已挂起,自动行为由面板接管,闭合恢复
+  /// 驱动 —— 闭环自洽。判定只认宿主喂入的身份(不等盘档读盘 ——
+  /// fake-async 外真机读盘快,但自动化不该被磁盘 IO 拖住起步)。
+  void _bootstrap() {
+    if (_saved != null) {
+      if (!_autoResumeFired &&
+          _sessionState != BleSessionState.ready &&
+          _sessionState != BleSessionState.pairing) {
+        _autoResumeFired = true;
+        unawaited(_resume());
+      }
+    } else if (!_autoScanFired) {
+      _autoScanFired = true;
+      unawaited(_startScan());
+    }
   }
+
+  void _log(String line) => AppLog.i(AppLog.ble, line);
 
   void _onEvent(BleEvent event) {
     switch (event) {
@@ -181,7 +200,7 @@ class _BlePairPanelState extends State<BlePairPanel>
             .where((e) => e.key.endsWith('-3dd4-4255-8d62-6dc7b9bd5561'))
             .map((e) => '${e.key.substring(4, 8)}(${e.value})')
             .join(' ');
-        _log('LSS 特征表:$lss');
+        AppLog.d(AppLog.ble, 'LSS 特征表:$lss');
       case BlePreConnected(:final uuid):
         // 物理链路建立沿(iOS didConnect):与「已连接」(特征发现完成)
         // 两行之差 = 150ms 礼让 + 服务发现耗时,深睡重连时序取证用。
@@ -189,14 +208,18 @@ class _BlePairPanelState extends State<BlePairPanel>
       case BleDisconnected(:final uuid):
         _log('断连 $uuid');
       case BleNotified(:final uuid, :final data):
-        _log('← ${uuid.substring(4, 8)} ${hexOf(data)}');
+        AppLog.d(AppLog.ble, '← ${uuid.substring(4, 8)} ${hexOf(data)}');
       case BleError(:final code, :final message, :final uuid):
-        _log('错误 $code${uuid == null ? '' : ' @$uuid'}:$message');
+        AppLog.w(AppLog.ble,
+            '错误 $code${uuid == null ? '' : ' @$uuid'}:$message');
     }
   }
 
   Future<void> _startScan() async {
     if (_scanning || _sessionState == BleSessionState.pairing) return;
+    // 扫描与重连循环互踩(扫描互踩扫描,BLE 无线电独占):扫描起步
+    // 即废在途重连。
+    _cancelRetry();
     setState(() {
       _scanning = true;
       _devices = [];
@@ -225,6 +248,7 @@ class _BlePairPanelState extends State<BlePairPanel>
   /// 首次配对:session 四步握手 → 身份落盘 → 通知注入驱动刷新。
   Future<void> _pair(BleDevice device) async {
     final app = AppServices.instance;
+    _cancelRetry();
     _log('配对 ${device.name}(${device.uuid})…');
     _pairedName = device.name; // 经典绑定匹配用(鸿蒙)
     try {
@@ -268,21 +292,59 @@ class _BlePairPanelState extends State<BlePairPanel>
   ///
   /// [gateStandby]:重连按钮 = 显式意图绕深睡闸门(false);回前台
   /// 生命周期路 = 自动行为受闸(默认 true,待机广播不连等唤醒)。
-  bool _retrying = false;
+  bool _retryActive = false;
+
+  /// 重连循环世代号:[_cancelRetry] 自增即废在途循环;每个 await 后
+  /// 对账,不等者退场(扫描/配对/解除/拆面板沿即刻止步)。
+  int _retryGen = 0;
+  Timer? _retryWait;
+  Completer<void>? _retryWaitDone;
+
+  bool get _retrying => _retryActive;
+
+  /// 废在途重连:退避等待即刻醒(Completer 放行,await 不悬死)。
+  /// dispose 沿传 notify:false —— 此时 element 已 defunct(mounted 仍真),
+  /// setState 会炸断言。
+  void _cancelRetry({bool notify = true}) {
+    _retryGen++;
+    _retryWait?.cancel();
+    _retryWait = null;
+    final w = _retryWaitDone;
+    if (w != null && !w.isCompleted) {
+      w.complete();
+    }
+    _retryWaitDone = null;
+    if (_retryActive) {
+      _retryActive = false;
+      if (notify && mounted) setState(() {});
+    }
+  }
+
+  /// 可取消退避等待:取消沿即刻醒,不等满 delay。
+  Future<void> _retryDelayWait(Duration d) async {
+    final done = Completer<void>();
+    _retryWaitDone = done;
+    _retryWait = Timer(d, () {
+      if (!done.isCompleted) done.complete();
+    });
+    await done.future;
+  }
 
   Future<void> _resume({bool gateStandby = true}) async {
-    if (_retrying) return;
-    _retrying = true;
+    if (_retryActive) return;
+    _retryActive = true;
+    final gen = _retryGen;
     if (mounted) setState(() {});
     _log('重连(复用身份 ${_saved!.deviceId.toRadixString(16)})…');
     var hintedForeign = false;
-    for (var attempt = 1; attempt <= 6 && _retrying; attempt++) {
+    for (var attempt = 1; attempt <= 6; attempt++) {
+      if (gen != _retryGen || !mounted) break;
       if (_session.state == BleSessionState.ready) {
         _log('已就绪 ✓');
         break;
       }
       final ok = await _session.retryReconnect(gateStandby: gateStandby);
-      if (!mounted || !_retrying) break;
+      if (!mounted || gen != _retryGen) break;
       if (ok) {
         _log('重连成功 ✓');
         break;
@@ -308,10 +370,12 @@ class _BlePairPanelState extends State<BlePairPanel>
           _log(_conflictHint(context, foreignId));
         }
       }
-      await Future<void>.delayed(_session.nextRetryDelay);
+      await _retryDelayWait(_session.nextRetryDelay);
     }
-    _retrying = false;
-    if (mounted) setState(() {});
+    if (gen == _retryGen) {
+      _retryActive = false;
+      if (mounted) setState(() {});
+    }
   }
 
   /// 程序化经典蓝牙绑定(鸿蒙独有;iOS 无此 API 只能引导系统设置页)。
@@ -360,6 +424,7 @@ class _BlePairPanelState extends State<BlePairPanel>
 
   Future<void> _unpair() async {
     final app = AppServices.instance;
+    _cancelRetry();
     await app.bleIdentityStore.clear();
     _session.identity = null;
     await _session.disconnect();
@@ -426,49 +491,23 @@ class _BlePairPanelState extends State<BlePairPanel>
     return '  $suffix · $stateText';
   }
 
-  /// 状态行文案(需 context 走 t():getter 拿不到 BuildContext,消费点
-  /// 全在 build,故改带参方法)。
-  String _stateLabel(BuildContext context) => switch (_sessionState) {
-        BleSessionState.idle => _saved == null
-            ? context.t('ble.notPaired')
-            : context.t('ble.disconnected'),
-        BleSessionState.pairing => context.t('ble.handshaking'),
-        BleSessionState.ready => context.t('ble.connectedReady'),
-        BleSessionState.reconnecting => context.t(
-            'ble.reconnectBackoff', {'n': _session.nextRetryDelay.inSeconds}),
-      };
+  String _fmtDate(DateTime t) => '${t.year}-${_two(t.month)}-${_two(t.day)}';
 
   @override
   Widget build(BuildContext context) {
     final ready = _sessionState == BleSessionState.ready;
-    // 嵌入宿主滚动层(蓝牙工具弹层 ListView):整体 mainAxisSize.min,
-    // 原整页的 Expanded 弹性区改定高箱(设备列表 220 / 日志 260)。
+    // 嵌入宿主滚动层(蓝牙工具弹层 ListView):整体 mainAxisSize.min。
+    // 会话态不在此重复(弹层顶部状态行覆盖),只留档案/引导/错误。
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        const Divider(height: 1),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(children: [
-                Icon(
-                  _sessionState == BleSessionState.ready
-                      ? Icons.bluetooth_connected
-                      : Icons.bluetooth_disabled,
-                  size: 18,
-                  color: _sessionState == BleSessionState.ready
-                      ? Theme.of(context).colorScheme.primary
-                      : Theme.of(context).colorScheme.outline,
-                ),
-                const SizedBox(width: 6),
-                Text(_stateLabel(context)),
-                const Spacer(),
-                if (_auth != null)
-                  Text(context.t('ble.locAuth', {'a': _auth!}),
-                      style: Theme.of(context).textTheme.bodySmall),
-              ]),
               if (_saved != null)
                 Text(
                   context.t('ble.pairedInfo', {
@@ -476,40 +515,27 @@ class _BlePairPanelState extends State<BlePairPanel>
                     'serial': _saved!.serial.isEmpty
                         ? ''
                         : context.t('ble.serialLine', {'s': _saved!.serial}),
-                    'date': _saved!.pairedAt.toLocal(),
+                    'date': _fmtDate(_saved!.pairedAt.toLocal()),
                   }).trimRight(),
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
-              Text(
-                context.t(
-                  _session.lastError == null
-                      ? 'ble.sessionLine'
-                      : 'ble.sessionLineErr',
-                  {
-                    'state': _stateLabel(context),
-                    'fix': _session.lastFix == null
-                        ? context.t('common.none')
-                        : _session.lastFix!.utcTime
-                            .toLocal()
-                            .toString()
-                            .substring(11, 19),
-                    'geo': _session.geoWriteCount,
-                    'time': _session.timeWriteCount,
-                    if (_session.lastError != null) 'err': _session.lastError!,
-                  },
-                ),
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-              const SizedBox(height: 4),
-              Text(
-                context.t('ble.scanHint'),
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-              if (Platform.operatingSystem == 'ios')
+              if (!ready && _session.lastError != null)
                 Text(
-                  context.t('ble.iosPairHint'),
+                  _session.lastError!,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.error),
+                ),
+              if (_saved == null) ...[
+                Text(
+                  context.t('ble.scanHint'),
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
+                if (Platform.operatingSystem == 'ios')
+                  Text(
+                    context.t('ble.iosPairHint'),
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+              ],
             ],
           ),
         ),
@@ -519,15 +545,17 @@ class _BlePairPanelState extends State<BlePairPanel>
             spacing: 8,
             runSpacing: 8,
             children: [
-              FilledButton(
-                onPressed: _scanning || _sessionState == BleSessionState.pairing
-                    ? null
-                    : _startScan,
-                child: Text(_scanning
-                    ? context.t('ble.scanning')
-                    : context.t('ble.scanButton')),
-              ),
-              if (_saved != null)
+              if (!ready)
+                FilledButton(
+                  onPressed:
+                      _scanning || _sessionState == BleSessionState.pairing
+                          ? null
+                          : _startScan,
+                  child: Text(_scanning
+                      ? context.t('ble.scanning')
+                      : context.t('ble.scanButton')),
+                ),
+              if (_saved != null && !ready)
                 OutlinedButton(
                   onPressed:
                       _sessionState == BleSessionState.pairing ? null : _unpair,
@@ -554,10 +582,11 @@ class _BlePairPanelState extends State<BlePairPanel>
                       ? context.t('ble.binding')
                       : context.t('ble.bindClassic')),
                 ),
-              OutlinedButton(
-                onPressed: _auth == 'always' ? null : _requestAlways,
-                child: Text(context.t('ble.requestBgLoc')),
-              ),
+              if (_auth != 'always')
+                OutlinedButton(
+                  onPressed: _requestAlways,
+                  child: Text(context.t('ble.requestBgLoc')),
+                ),
               if (_saved != null &&
                   !ready &&
                   Platform.operatingSystem == 'ios') ...[
@@ -579,8 +608,9 @@ class _BlePairPanelState extends State<BlePairPanel>
             ],
           ),
         ),
-        const Divider(height: 1),
-        if (_devices.isNotEmpty)
+        // 扫描列表就绪态隐藏:连接后残留的扫描行只有迷惑作用。
+        if (!ready && _devices.isNotEmpty) ...[
+          const Divider(height: 1),
           LimitedBox(
             maxHeight: 220,
             child: ListView(
@@ -621,52 +651,7 @@ class _BlePairPanelState extends State<BlePairPanel>
               ],
             ),
           ),
-        SizedBox(
-          height: 260,
-          child: Container(
-            width: double.infinity,
-            color: Theme.of(context).colorScheme.surfaceContainerHighest,
-            padding: const EdgeInsets.all(8),
-            child: Column(
-              children: [
-                Row(children: [
-                  Text(context.t('ble.logHint'),
-                      style: Theme.of(context).textTheme.bodySmall),
-                  const Spacer(),
-                  IconButton(
-                    visualDensity: VisualDensity.compact,
-                    tooltip: context.t('ble.copyAllLogs'),
-                    icon: const Icon(Icons.copy, size: 18),
-                    onPressed: _lines.isEmpty
-                        ? null
-                        : () async {
-                            await Clipboard.setData(
-                                ClipboardData(text: _lines.join('\n')));
-                            if (context.mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                      content: Text(context.t('ble.logCopied')),
-                                      duration: const Duration(seconds: 1)));
-                            }
-                          },
-                  ),
-                ]),
-                Expanded(
-                  child: SelectionArea(
-                    child: ListView.builder(
-                      itemCount: _lines.length,
-                      itemBuilder: (context, index) => Text(
-                        _lines[index],
-                        style: const TextStyle(
-                            fontFamily: 'monospace', fontSize: 11),
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
+        ],
       ],
     );
   }
