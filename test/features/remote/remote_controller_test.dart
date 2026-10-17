@@ -2020,6 +2020,19 @@ void main() {
   });
 
   group('控制锁(0x200F 拒绝 → tile 锁标)', () {
+    test('非拨盘拥有参数写 0x200F → 错误文案指向 APP 接管(2026-10-17 '
+        '写族定案:闩不在拒、闩在即通,EV 0x5010 实证)', () async {
+      _scriptParams(transport);
+      _emitConnected(transport, conn);
+      await pumpEventQueue();
+
+      transport.reply(PtpResponseCode.accessDenied); // 0x1016 白平衡被拒
+      await controller.setParam(PtpDevicePropCode.whiteBalance, 4);
+      expect(controller.error, contains('请先启用「APP 接管」'));
+      expect(controller.lockedProps,
+          contains(PtpDevicePropCode.whiteBalance));
+    });
+
     test('写被拒打锁标;写通解除;断连清空', () async {
       _scriptParams(transport);
       _emitConnected(transport, conn);

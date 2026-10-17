@@ -2798,7 +2798,10 @@ final class RemoteController extends ChangeNotifier {
         error = '参数写入失败:${_nikonHint(e.responseCode) ?? e}'
             '(${_takeoverActive ? '接管已开启仍被拒 —— 该模式下此参数由相机自动控制,请检查模式转盘' : '该参数受机身物理拨盘控制,请先启用「APP 接管」'})';
       } else if (e is PtpResponseException) {
-        error = '参数写入失败:${_nikonHint(e.responseCode) ?? e}';
+        error = '参数写入失败:${_nikonHint(e.responseCode) ?? e}'
+            // 写族 0x200F = 接管闩不在(2026-10-17 真机定案,EV 0x5010
+            // 实证:未闩拒、闩在即通);拨盘拥有参数走上面的专属文案。
+            '${e.responseCode == PtpResponseCode.accessDenied ? '—— 请先启用「APP 接管」' : ''}';
       } else {
         error = '参数写入失败:$e';
       }

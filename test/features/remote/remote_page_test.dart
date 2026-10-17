@@ -156,7 +156,9 @@ Uint8List _u32Bytes(int v) => Uint8List.fromList(
 /// 目录序全量应答(模式 M · f/2.8 · 1/100s · ISO 200 · EV+0.3 ·
 /// 白平衡自动 · 色温 5500K · 闪光关闭 · 测光 2 · 对焦 AF-C · 对焦模式
 /// AF-S · 释放单张 · 画质 RAW · RAW 无损 · 尺寸 2 · 区域 FX · 校准标准,
-/// 均可写;快门/ISO 值走厂商读码裸值,末尾自动 ISO 状态(0xD054,关)),
+/// 均可写;快门/ISO 值走厂商读码裸值,取值域直供参数(EV/对焦模式/RAW
+/// 压缩/图像区域/主体检测/色调)不读 desc、值走裸读,末尾自动 ISO 状态
+/// (0xD054,关)),
 /// 与 remote_controller_test 同值。0xD1A6 模式镜像**打头**
 /// ([d1a6]:0=照片/1=视频/null=不预置 —— 连接沿串链/进页对表都是模式读
 /// 先于刷参,2026-10-11 真机反馈改制;重连流模式读应答预置在引擎重启
@@ -182,8 +184,9 @@ void _scriptParams(_ScriptTransport t,
         PtpDevicePropCode.exposureIndex, PtpDataType.uint16, 200,
         enums: [100, 200, 400, 800]))
     ..ok(data: _u32Bytes(200)) // ISO 值 = 0xD0B5 有效 ISO
-    ..ok(data: _propDescDataset(
-        PtpDevicePropCode.exposureBiasCompensation, PtpDataType.int16, 300))
+    // EV:取值域目录直供 ±3(2026-10-17,相机描述层 ±5000 高估弃读),
+    // 值走裸读 i16 = +0.3
+    ..ok(data: Uint8List.fromList([0x2C, 0x01]))
     ..ok(data: _propDescDataset(
         PtpDevicePropCode.whiteBalance, PtpDataType.uint16, 2,
         enums: [2, 4, 5, 6, 7, 0x8010]))
@@ -671,16 +674,24 @@ void main() {
         conn: conn, setPropGate: () => true);
     addTearDown(controller.dispose);
     _scriptAutoStart(transport); // 进页自动起景先吃 FIFO 头两位
-    _scriptParams(transport); // EV PropDesc 无 FORM:无枚举无范围
+    _scriptParams(transport);
     await tester
         .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
     conn.statesCtrl.add(CameraLinkState.connected);
     await tester.pumpAndSettle();
 
-    // EV tile 在设置浮层(全量构建,无横滚定位):展开直点
+    // EV 已转拨盘拥有 + 目录 ±3 直供(2026-10-17,见 EV 面板专测);
+    // 域未知分支改由白平衡注入无 FORM 描述层覆盖。
+    controller.paramProps[PtpDevicePropCode.whiteBalance] = PropState(
+        value: 2,
+        desc: PtpDevicePropDesc(
+            code: PtpDevicePropCode.whiteBalance,
+            dataType: PtpDataType.uint16,
+            getSet: true,
+            currentValue: 2));
     await tester.tap(find.byIcon(Icons.tune));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('EV'));
+    await tester.tap(find.text('白平衡'));
     await tester.pumpAndSettle();
     expect(find.text('该属性的取值域未知,暂不可调(待真机核对)'),
         findsOneWidget);
@@ -688,6 +699,66 @@ void main() {
         transport.requests
             .where((r) => r.opcode == PtpOperationCode.setDevicePropValue),
         isEmpty);
+  });
+
+  testWidgets('EV(拨盘拥有,2026-10-17 定案):面板先出接管区 → 启用 → '
+      '目录 ±3 直供列表压过相机描述层 ±5000 → 直写 0x5010', (tester) async {
+    _portrait(tester);
+    PtpSession.kSetPropEnabled = true;
+    addTearDown(() => PtpSession.kSetPropEnabled = true);
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = _directRemoteController(transport,
+        conn: conn, setPropGate: () => true);
+    addTearDown(controller.dispose);
+    _scriptAutoStart(transport); // 进页自动起景先吃 FIFO 头两位
+    _scriptParams(transport);
+    transport
+      ..ok() // 0x90C2 [1] 启用接管
+      ..ok() // 0x1016 写 0x5010 = 666(+0.7)
+      ..ok(data: Uint8List.fromList([0x9A, 0x02])); // 回读 0x5010 裸值 666
+    await tester
+        .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
+    conn.statesCtrl.add(CameraLinkState.connected);
+    await tester.pumpAndSettle();
+
+    // 真机描述层形态:范围域 -5000..+5000(2026-10-17 用户:app 滑条
+    // 出到 ±5,硬件 EV 拨盘只 ±3)—— 目录 ±3 权威表应压过它。
+    controller.paramProps[PtpDevicePropCode.exposureBiasCompensation] =
+        PropState(
+            value: 0,
+            desc: PtpDevicePropDesc(
+                code: PtpDevicePropCode.exposureBiasCompensation,
+                dataType: PtpDataType.int16,
+                getSet: true,
+                currentValue: 0,
+                rangeMin: -5000,
+                rangeMax: 5000,
+                rangeStep: 333));
+
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('EV'));
+    await tester.pumpAndSettle();
+    // 拨盘拥有(Zf 物理 EV 拨盘):接管区先行 —— 用户报告的缺口正是
+    // 「改 EV 被拒 0x200F 却无接管提示」
+    expect(find.text('启用 APP 接管控制?'), findsOneWidget);
+    await tester.tap(find.text('启用'));
+    await tester.pumpAndSettle();
+    expect(controller.takeoverActive, isTrue);
+
+    // 目录 ±3 列表(非滑条、非相机 ±5 泛规格域)
+    expect(find.text('+3.0'), findsOneWidget);
+    expect(find.text('-3.0'), findsOneWidget);
+    expect(find.text('+5.0'), findsNothing);
+    await tester.tap(find.text('+0.7'));
+    await tester.pumpAndSettle();
+
+    final write = transport.requests.singleWhere(
+        (r) => r.opcode == PtpOperationCode.setDevicePropValue);
+    expect(write.params, [PtpDevicePropCode.exposureBiasCompensation]);
+    expect(write.dataOut, Uint8List.fromList([0x9A, 0x02]),
+        reason: '+0.7 = 666(i16 LE)');
   });
 
   testWidgets('切回拍摄 tab / 回前台 → 参数对表刷新(机身侧改动兜底)',

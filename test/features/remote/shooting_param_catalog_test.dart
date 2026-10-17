@@ -32,6 +32,19 @@ void main() {
     ]);
   });
 
+  test('EV:拨盘拥有 + 目录 ±3 权威表(2026-10-17 定案:相机描述层报 '
+      '±5000 泛规格域,硬件 EV 拨盘只 ±3,目录表压过)', () {
+    final p = _param(PtpDevicePropCode.exposureBiasCompensation);
+    expect(p.dialOwned, isTrue, reason: 'Zf 物理 EV 拨盘,面板先出接管区');
+    expect(p.picksAuthoritative, isTrue);
+    expect(p.pickValues!.first, -3000);
+    expect(p.pickValues!.last, 3000);
+    expect(p.pickValues!.length, 19, reason: '±3 全 1/3 步');
+    expect(p.pickValues, contains(333));
+    expect(p.pickValues, isNot(contains(500)), reason: '1/2 步不属 1/3 步域');
+    expect(p.display(333), '+0.3');
+  });
+
   test('display:模式尼康方言表(2=P/3=A/4=S,U 段与场景段齐)',
       () {
     expect(_param(PtpDevicePropCode.exposureProgramMode).display(1), 'param.modeM');
