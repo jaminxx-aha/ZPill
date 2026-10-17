@@ -40,7 +40,7 @@ class CaptureControlRow extends StatelessWidget {
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           _focusButton(context, live, controller),
-          _shutterButton(live, controller, mode: mode),
+          _shutterButton(context, live, controller, mode: mode),
           CaptureCircleButton(
             icon: Icons.tune,
             tooltip: context.t('remote.settingsTooltip'),
@@ -108,7 +108,7 @@ class CaptureShutterColumn extends StatelessWidget {
           onTap: onOpenSettings,
         ),
         const SizedBox(height: 8),
-        _shutterButton(live, controller, mode: mode),
+        _shutterButton(context, live, controller, mode: mode),
         const SizedBox(height: 8),
         _focusButton(context, live, controller),
         const SizedBox(height: 8),
@@ -207,13 +207,15 @@ Widget _focusButton(BuildContext context, LivePalette live, RemoteController con
 /// 按住连拍(连续释放档按住 = 连拍括持链发、抬起终止;B 门/Time 按住
 /// = 开闩曝光,自拍定时组合 = 定时 B 门:倒计时到点开门 → 曝光倒计时
 /// → 到点自动收门;普通档点按 = 自拍倒计时后单张)—— onTapDown/Up
-/// 语义全不变。钮芯倒计时三态:自拍延时 / 定时 B 门曝光剩余 / 拍照
-/// spinner。**视频模式**(iPhone 语义):红芯(进入即红,非仅录制中),
+/// 语义全不变。钮芯倒计时:两段各带段位小标(延时=芯色不变 / 曝光=
+/// 红芯白字,2026-10-17 用户实测两段裸数字连跑分不清「在等」还是
+/// 「在拍」,红芯取录像 REC 同语义)+ 拍照 spinner。**视频模式**(iPhone 语义):红芯(进入即红,非仅录制中),
 /// 整段点按起/停录像(onTap,不挂按下/抬起);录制中芯上叠白色停止
 /// 方块且保持全不透明(停录要醒目)。取景开启是录像前置(toggleRecord
 /// 的门,提前到视觉层降透明)。尺寸两向同 78(2026-10-12 用户定案
 /// 「横屏按钮保持和竖屏大小一样」,原横屏 64 废除)。
-Widget _shutterButton(LivePalette live, RemoteController controller,
+Widget _shutterButton(BuildContext context, LivePalette live,
+    RemoteController controller,
     {required CaptureMode mode}) {
   const size = 78.0;
   final photo = mode == CaptureMode.photo;
@@ -269,24 +271,24 @@ Widget _shutterButton(LivePalette live, RemoteController controller,
                 shape: BoxShape.circle,
                 color: !photo
                     ? live.bad
-                    : controller.capturing
-                        ? live.shutterCoreBusy
-                        : live.shutterCore,
+                    : controller.bulbExposureCountdown != null
+                        ? live.bad
+                        : controller.capturing
+                            ? live.shutterCoreBusy
+                            : live.shutterCore,
               ),
               child: Center(
                 child: photo
                     ? (controller.selfTimerCountdown != null
-                        ? Text('${controller.selfTimerCountdown}',
-                            style: TextStyle(
-                                fontSize: size >= 72 ? 24 : 20,
-                                fontWeight: FontWeight.bold,
-                                color: live.onAccent))
+                        ? _shutterCountdown(
+                            context, '${controller.selfTimerCountdown}',
+                            'remote.countdownDelay',
+                            color: live.onAccent)
                         : controller.bulbExposureCountdown != null
-                            ? Text('${controller.bulbExposureCountdown}',
-                                style: TextStyle(
-                                    fontSize: size >= 72 ? 24 : 20,
-                                    fontWeight: FontWeight.bold,
-                                    color: live.onAccent))
+                            ? _shutterCountdown(context,
+                                '${controller.bulbExposureCountdown}',
+                                'remote.countdownExposure',
+                                color: Colors.white)
                             : controller.capturing
                                 ? SizedBox(
                                     width: 22,
@@ -313,6 +315,21 @@ Widget _shutterButton(LivePalette live, RemoteController controller,
       ),
     ),
   );
+}
+
+/// 钮芯倒计时:大数字 + 段位小标(延时/曝光)。定时 B 门两段连跑,
+/// 2026-10-17 用户实测「等了两倍时间」分不清哪段在等哪段在拍;
+/// 曝光段另配红芯(快门开着在拍,录像 REC 同语义)。
+Widget _shutterCountdown(BuildContext context, String value, String labelKey,
+    {required Color color}) {
+  return Column(mainAxisSize: MainAxisSize.min, children: [
+    Text(value,
+        style: TextStyle(
+            fontSize: 24, fontWeight: FontWeight.bold, color: color)),
+    Text(context.t(labelKey),
+        style: TextStyle(
+            fontSize: 10, fontWeight: FontWeight.w600, color: color)),
+  ]);
 }
 
 /// 相册缩略图钮:最近一拍的即拍图([RemoteController.reviewThumb],
