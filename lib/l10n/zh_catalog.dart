@@ -532,7 +532,6 @@ const Map<String, String> zhCatalog = {
   'fmt.anyNote': '有什么下什么(缺哪个格式就只下另一个)',
   'fmt.videoOnlyNote': '只下视频,照片全部跳过',
   'libpage.all': '全部',
-  'libpage.select': '选择',
   'libpage.filter': '筛选',
   'libpage.filterColon': '筛选:',
   'libpage.sort': '排序',

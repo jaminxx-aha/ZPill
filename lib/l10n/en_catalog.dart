@@ -623,7 +623,6 @@ const Map<String, String> enCatalog = {
       'Download whatever is there (if one format is missing, only the other downloads)',
   'fmt.videoOnlyNote': 'Videos only; all photos are skipped',
   'libpage.all': 'All',
-  'libpage.select': 'Select',
   'libpage.filter': 'Filter',
   'libpage.filterColon': 'Filter:',
   'libpage.sort': 'Sort',
