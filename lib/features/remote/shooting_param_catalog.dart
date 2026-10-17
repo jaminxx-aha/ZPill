@@ -52,6 +52,7 @@ final class ShootingParam {
     this.writeConvert,
     this.pickValues,
     this.dialOwned = false,
+    this.picksAuthoritative = false,
     this.readOnly = false,
     this.videoOnly = false,
   });
@@ -94,6 +95,11 @@ final class ShootingParam {
   /// 受机身物理拨盘控制的参数(快门等):调节前弹「APP 接管控制」
   /// 确认(0x90C2 remote 模式,影控台同款;接管期间机身拨盘锁定)。
   final bool dialOwned;
+
+  /// 目录取值域表压过相机 PropDesc(pickValues 权威):描述层高估
+  /// 硬件域时用 —— EV 0x5010 相机报范围 ±5000,硬件 EV 拨盘只 ±3
+  /// (2026-10-17 用户真机比对)。
+  final bool picksAuthoritative;
 
   /// 机身物理件拥有、接管也不开放的参数(模式转盘):遥控只读。
   final bool readOnly;
@@ -179,6 +185,16 @@ const _shutterStops = <(int, int)>[
 final _kShutterPickValues = <int>[
   for (final nd in _shutterStops) (nd.$1 << 16) | nd.$2,
   0xFFFFFFFF, // Bulb
+];
+
+/// EV 取值域直供表(0x5010):±3 EV、1/3 步,值 = EV×1000(规格
+/// §6.5.1.13 值域 ±5 是全规格泛表,Zf 物理 EV 拨盘只 ±3,描述层
+/// 报的范围域 -5000..+5000 高于硬件 —— 目录表压过相机域
+/// [ShootingParam.picksAuthoritative],2026-10-17 用户真机比对:
+/// 相机只有 -3..+3,app 滑条出到 ±5)。
+final _kEvPickValues = <int>[
+  -3000, -2666, -2333, -2000, -1666, -1333, -1000, -666, -333, 0, //
+  333, 666, 1000, 1333, 1666, 2000, 2333, 2666, 3000,
 ];
 
 /// 白平衡色温 0xD01E:开尔文裸值。
@@ -282,10 +298,18 @@ final kShootingParams = <ShootingParam>[
       readCode: PtpDevicePropCode.isoControlSensitivity,
       writeCode: PtpDevicePropCode.exposureIndexEx,
       writeType: PtpDataType.uint32),
+  // EV(0x5010,i16,规格 §6.5.1.13 值 = EV×1000):**可写,门 = APP
+  // 接管闩**(2026-10-17 用户真机:未闩 0x200F AccessDenied,与曝光
+  // 模式 P/M 无关)。dialOwned 同快门/ISO —— Zf 有物理 EV 拨盘,面板
+  // 先出接管区;取值域目录直供 ±3(picksAuthoritative,见
+  // _kEvPickValues 注)。
   ShootingParam(
       code: PtpDevicePropCode.exposureBiasCompensation,
       label: 'EV',
-      format: _formatEv),
+      format: _formatEv,
+      pickValues: _kEvPickValues,
+      picksAuthoritative: true,
+      dialOwned: true),
   // 白平衡:尼康方言候选表(2=自动、4=直射阳光…;ISO 标准表 1=手动
   // 对尼康不成立 —— 表外值裸显)。0x8012 = 色温档:WB 处于该档时
   // 0xD01E 的开尔文值才生效(见色温条目)。
