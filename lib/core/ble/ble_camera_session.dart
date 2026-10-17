@@ -29,6 +29,7 @@ import 'dart:typed_data';
 import '../../platform/ble_scanner.dart';
 
 import '../log/app_log.dart';
+import 'adv_payload.dart';
 import 'ble_keepalive.dart';
 import 'gatt_uuids.dart';
 import 'geo_payload.dart';
@@ -117,6 +118,10 @@ final class BleCameraSession {
   BleIdentity? identity;
   String? lastError;
 
+  /// 最近一次 [retryReconnect] 是否被深睡闸门拦下(下轮尝试开跑即失效;
+  /// 上层配对页日志据此区分「无命中」与「被闸」)。
+  bool lastRetryGated = false;
+
   Completer<void>? _handshake;
   PairingMessage? _stage1;
   bool _stage3Sent = false;
@@ -125,6 +130,8 @@ final class BleCameraSession {
   bool _resuming = false;
   String? _serial;
   int _backoffStep = 0;
+  /// 深睡闸门连续跳过轮数(episode 限频日志用;非闸沿归零)。
+  int _standbySkips = 0;
   DateTime? _gateWritesUntil;
   /// 首配注册等待(NOT1 01 00 = 相机侧注册完成信号;2026-10-13 定案:
   /// 注册在配对事务的 bond 落地后完成,NOT1 此前从不出现)。
@@ -189,7 +196,13 @@ final class BleCameraSession {
   /// 已存 device/nonce 复用握手。无命中只推进退避(返回 false)。
   /// reconnecting = 断连退避档;idle 且已有身份 = 冷启恢复档(盘载
   /// 身份直接进重试循环,免重走相机菜单配对)。
-  Future<bool> retryReconnect() async {
+  ///
+  /// [gateStandby] 深睡闸门(默认开):扫到广播待机位(bit0=1,Zf
+  /// 0x1E/0x1F 真机实证)不连 —— 连接会打断深睡(Z6 III 固件 7.5s
+  /// 监督超时掐链,Zf 深睡被动重连固有开销 ~12s),而被动扫描不惊动
+  /// 相机;闸门期退避冻结在 2s,相机唤醒(半按快门,bit0=0)后下一
+  /// 轮即快连。手动重连(显式用户意图)传 false 绕闸。
+  Future<bool> retryReconnect({bool gateStandby = true}) async {
     if (identity == null ||
         (_state != BleSessionState.reconnecting &&
             _state != BleSessionState.idle)) {
@@ -197,11 +210,24 @@ final class BleCameraSession {
     }
     final devices = await _host
         .scanForDeviceId(identity!.deviceId, timeout: const Duration(seconds: 8));
+    lastRetryGated = false;
     final match = devices.isEmpty ? null : devices.first;
     if (match == null) {
       _backoffStep = min(_backoffStep + 1, _backoffSeconds.length - 1);
       return false;
     }
+    if (gateStandby &&
+        advertisedPowerState(match.mfgData) == NikonAdvPowerState.standby) {
+      // 首闸落一行日志(episode 级限频,防待机数小时刷屏)。
+      if (_standbySkips == 0) {
+        AppLog.i(AppLog.ble, '深睡闸门:相机广播待机位,暂缓连接等唤醒');
+      }
+      _standbySkips++;
+      lastRetryGated = true;
+      _backoffStep = min(1, _backoffSeconds.length - 1);
+      return false;
+    }
+    _standbySkips = 0;
     _resuming = true;
     _serial = null;
     _setState(BleSessionState.pairing);
@@ -488,6 +514,9 @@ final class BleCameraSession {
 
   Future<void> _onEvent(BleEvent event) async {
     switch (event) {
+      case BlePreConnected():
+        // 物理链路建立沿:会话状态机零动作(时序取证事件,页面日志消费)。
+        return;
       case BleConnected(:final uuid):
         if (_state != BleSessionState.pairing) return;
         _connectedUuid = uuid;

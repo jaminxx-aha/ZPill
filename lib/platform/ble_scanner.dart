@@ -82,6 +82,11 @@ final class BleConnected extends BleEvent {
   final int writeWithoutResponseMtu;
 }
 
+final class BlePreConnected extends BleEvent {
+  const BlePreConnected(this.uuid);
+  final String uuid;
+}
+
 final class BleDisconnected extends BleEvent {
   const BleDisconnected(this.uuid);
   final String uuid;
@@ -218,6 +223,8 @@ final class MethodChannelBleHost implements BleHost {
           characteristics: chars,
           writeWithoutResponseMtu: map['mtu'] as int? ?? 20,
         );
+      case 'preconnected':
+        yield BlePreConnected(map['uuid'] as String? ?? '');
       case 'disconnected':
         yield BleDisconnected(map['uuid'] as String? ?? '');
       case 'notify':

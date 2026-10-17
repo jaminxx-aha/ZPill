@@ -592,6 +592,8 @@ final class AppServices {
     if (!_bleRunning) return;
     _bleRetry = Timer(bleSession.nextRetryDelay, () async {
       if (!_bleRunning) return;
+      // 无参调用 = 深睡闸门开:扫到待机广播不连,被动扫描等唤醒沿
+      // 快连(手动重连路一律显式绕闸);此循环无人值守常跑数小时。
       final ok = await bleSession.retryReconnect();
       if (!ok &&
           _bleRunning &&

@@ -42,3 +42,29 @@ bool cameraWaitsForOtherController(Uint8List? mfg, int? ownDeviceId) {
   final expected = expectedControllerDeviceId(mfg);
   return expected != null && ownDeviceId != null && expected != ownDeviceId;
 }
+
+/// 相机广播电源态(厂商数据字节 6 的状态标志,bit0 = 待机位)。
+enum NikonAdvPowerState { awake, standby }
+
+/// 解析广播厂商数据里的电源态(字节 6 为状态字节,bit0 = 待机位):
+/// Z6 III 抓包(photools 口径)见 0x1C(就绪)/0x1D(深睡);**Zf 真机
+/// 实证 2026-10-17:0x1E(就绪)/0x1F(深睡),bit0 同样跟随翻转** ——
+/// 全字节值随机型漂移,判定只认 bit0,永不锁全字节。
+///
+/// 消费点目前仅展示探针(原始字节同显);若升级为重连闸门,同样只按
+/// bit0。返回 null = 无状态字节可读:mfg 短于 7B(多数广播或止于
+/// 6B)/ 空 / 公司 ID 不符。
+NikonAdvPowerState? advertisedPowerState(Uint8List? mfg) {
+  if (mfg == null || mfg.length < 7) return null;
+  if (mfg[0] != 0x99 || mfg[1] != 0x03) return null;
+  return (mfg[6] & 0x01) != 0
+      ? NikonAdvPowerState.standby
+      : NikonAdvPowerState.awake;
+}
+
+/// 状态字节原始值(字节 6;不足 7B / 公司 ID 不符返回 null)。
+int? advertisedStatusByte(Uint8List? mfg) {
+  if (mfg == null || mfg.length < 7) return null;
+  if (mfg[0] != 0x99 || mfg[1] != 0x03) return null;
+  return mfg[6];
+}

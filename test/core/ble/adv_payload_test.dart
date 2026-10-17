@@ -58,6 +58,49 @@ void main() {
     });
   });
 
+  group('advertisedPowerState / advertisedStatusByte(状态字节探针)', () {
+    Uint8List mfgWithStatus(int deviceId, int status) =>
+        Uint8List.fromList(<int>[...mfgOf(deviceId), status]);
+
+    test('Zf 真机实证 2026-10-17:0x1F→standby / 0x1E→awake', () {
+      expect(advertisedPowerState(mfgWithStatus(0x11223301, 0x1F)),
+          NikonAdvPowerState.standby);
+      expect(advertisedPowerState(mfgWithStatus(0x11223301, 0x1E)),
+          NikonAdvPowerState.awake);
+    });
+
+    test('photools Z6 III 抓包值:0x1D→standby / 0x1C→awake', () {
+      expect(advertisedPowerState(mfgWithStatus(0x11223301, 0x1D)),
+          NikonAdvPowerState.standby);
+      expect(advertisedPowerState(mfgWithStatus(0x11223301, 0x1C)),
+          NikonAdvPowerState.awake);
+    });
+
+    test('状态字节原始值同显(方言核对用)', () {
+      expect(advertisedStatusByte(mfgWithStatus(0x11223301, 0x1D)), 0x1D);
+    });
+
+    test('短于 7B(止于 deviceId 的 6B 广播):null,无从判电源态', () {
+      expect(advertisedPowerState(mfgOf(0x11223301)), isNull);
+      expect(advertisedStatusByte(mfgOf(0x11223301)), isNull);
+      expect(advertisedPowerState(null), isNull);
+      expect(advertisedStatusByte(null), isNull);
+    });
+
+    test('公司 ID 不符:null(状态位概念仅对尼康厂商数据成立)', () {
+      final wrong = Uint8List.fromList(<int>[0x98, 0x03, 1, 2, 3, 4, 0x1D]);
+      expect(advertisedPowerState(wrong), isNull);
+      expect(advertisedStatusByte(wrong), isNull);
+    });
+
+    test('7B 之外尾随字节忽略', () {
+      final mfg =
+          Uint8List.fromList(<int>[...mfgOf(0x11223301), 0x1D, 0xAB]);
+      expect(advertisedPowerState(mfg), NikonAdvPowerState.standby);
+      expect(advertisedStatusByte(mfg), 0x1D);
+    });
+  });
+
   group('cameraWaitsForOtherController(冲突判定)', () {
     test('有注册身份 + 异 ID:在等别的手机', () {
       expect(cameraWaitsForOtherController(mfgOf(0x56781234), 0x11223301),

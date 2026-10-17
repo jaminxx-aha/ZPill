@@ -21,6 +21,8 @@ final class FakeBleHost implements BleHost {
   Object? writeError;
   Object? readError;
   int? reconnectDeviceId;
+  Uint8List? reconnectMfg;
+  final connects = <String>[];
 
   void emit(BleEvent event) => eventCtrl.add(event);
 
@@ -47,13 +49,18 @@ final class FakeBleHost implements BleHost {
   Future<List<BleDevice>> scanForDeviceId(int deviceId,
       {Duration timeout = const Duration(seconds: 10)}) async {
     if (reconnectDeviceId == deviceId) {
-      return [const BleDevice(name: 'Z f_x', uuid: 'P1', rssi: -50)];
+      return [
+        BleDevice(
+            name: 'Z f_x', uuid: 'P1', rssi: -50, mfgData: reconnectMfg)
+      ];
     }
     return const [];
   }
 
   @override
-  Future<void> connectPaired(String peripheralUuid) async {}
+  Future<void> connectPaired(String peripheralUuid) async {
+    connects.add(peripheralUuid);
+  }
 
   @override
   Future<void> setNotify(String characteristicUuid) async {
@@ -154,11 +161,13 @@ void main() {
 
   /// 驱动完整握手:连接 → stage1 → stage2 → stage4 → NOT1。
   Future<void> runHandshake(
-      {bool resume = false, BleCameraSession? target}) async {
+      {bool resume = false,
+      BleCameraSession? target,
+      bool? gateStandby}) async {
     final s = target ?? session;
     Object? ok;
     final done = resume
-        ? s.retryReconnect().then((v) => ok = v)
+        ? s.retryReconnect(gateStandby: gateStandby ?? true).then((v) => ok = v)
         : s.pair(device);
     host.emit(const BleConnected(
         uuid: 'P1', characteristics: {}, writeWithoutResponseMtu: 20));
@@ -371,6 +380,51 @@ void main() {
       expect(ok, isFalse);
       expect(session.nextRetryDelay, Duration(seconds: expected));
     }
+  });
+
+  test('深睡闸门:自动重连扫到待机广播(bit0=1)不连,退避冻结 2s', () async {
+    await runHandshake();
+    host.emit(const BleDisconnected('P1'));
+    await pump();
+    host.reconnectDeviceId = session.identity!.deviceId;
+    // Zf 真机 2026-10-17:待机 0x1F(bit0=1;字节布局 99 03 + deviceId + 状态)。
+    host.reconnectMfg =
+        Uint8List.fromList([0x99, 0x03, 0x44, 0x5d, 0x4b, 0x24, 0x1f]);
+    host.connects.clear(); // 首配的连接记账清掉,只看闸门期
+    for (var i = 0; i < 3; i++) {
+      expect(await session.retryReconnect(), isFalse);
+    }
+    expect(session.state, BleSessionState.reconnecting);
+    expect(session.nextRetryDelay, const Duration(seconds: 2)); // 冻结不推进
+    expect(session.lastRetryGated, isTrue); // 上层日志据此区分「被闸/无命中」
+    expect(host.connects, isEmpty); // 一次连接都没发起
+  });
+
+  test('深睡闸门放行:广播转就绪(bit0=0)即连,复用握手到 ready', () async {
+    await runHandshake();
+    host.emit(const BleDisconnected('P1'));
+    await pump();
+    host.reconnectDeviceId = session.identity!.deviceId;
+    host.reconnectMfg =
+        Uint8List.fromList([0x99, 0x03, 0x44, 0x5d, 0x4b, 0x24, 0x1e]);
+    host.connects.clear();
+    await runHandshake(resume: true); // 默认闸门开:0x1E 非待机 → 放行
+    expect(session.state, BleSessionState.ready);
+    expect(session.lastRetryGated, isFalse);
+    expect(host.connects, ['P1']);
+  });
+
+  test('手动重连绕闸:待机广播 + gateStandby:false 照连', () async {
+    await runHandshake();
+    host.emit(const BleDisconnected('P1'));
+    await pump();
+    host.reconnectDeviceId = session.identity!.deviceId;
+    host.reconnectMfg =
+        Uint8List.fromList([0x99, 0x03, 0x44, 0x5d, 0x4b, 0x24, 0x1f]);
+    host.connects.clear();
+    await runHandshake(resume: true, gateStandby: false);
+    expect(session.state, BleSessionState.ready);
+    expect(host.connects, ['P1']);
   });
 
   test('重连后写闸:2.5s 内不写,过闸恢复 GEO/TIME;首写门重连同套', () async {
