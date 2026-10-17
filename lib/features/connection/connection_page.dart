@@ -5,9 +5,12 @@
 /// 面板;蓝牙弹工具面板),右上角 AppBar 按钮弹底部弹层切换连接方式
 /// (有线 USB / AP 热点 / 同一 Wi-Fi / 蓝牙)。蓝牙是**工具通道**(不
 /// 建立相机 PTP 连接,不传图不遥控),只承载 GPS 注入与唤醒相机 WiFi
-/// (2026-10-14)。已连接:信息卡组(连接/机身/镜头/存储卡)+「进入
-/// 拍摄」(主操作,全屏 push 遥控监看页 —— 2026-10-08 拍摄页从底栏
-/// tab 改制,置状态卡正下方不滚动即可见)+「相册」入口 +「断开连接」。
+/// (2026-10-14)。已连接(2026-10-17 bento 卡片风 v24 交付稿定样):
+/// 状态行(绿点 + 电池 + 链路纯图标 pill,点按弹详情/断开弹层)+
+/// 机身整行卡(竖线居中:型号 pill | 固件/序列号裸值)+ 镜头信息|
+/// 存储双列卡 + 底部双钮(左相册灰右进入拍摄黄;「进入拍摄」全屏
+/// push 遥控监看页 —— 2026-10-08 拍摄页从底栏 tab 改制;断开连接在
+/// 弹层)。图标扛语义(固件/序列号/焦距/光圈沿用原 info 行图标)。
 ///
 /// Controller = ViewModel(ChangeNotifier);**所有按钮必须绑定到
 /// Controller 方法**,禁止 UI 层直连协议层(TODO.md §三 注意事项)。
@@ -49,6 +52,7 @@ import '../remote/remote_page.dart';
 import 'ble_pair_panel.dart';
 import '../settings/settings_page.dart';
 import 'camera_overview_controller.dart';
+import 'connected_overview.dart';
 import 'connection_status_card.dart';
 import 'connection_widgets.dart';
 
@@ -782,18 +786,71 @@ class _ConnectionPageState extends State<ConnectionPage>
   /// 状态机上一拍(只在「连接 → 断开」沿上刷新档案列表,防通知循环)。
   CameraLinkState? _lastState;
 
+  /// 已连接期间的拍摄模式轮询(2s 单读 0xD1A6):0x4006 事件沿依赖
+  /// 拍摄页的厂商事件队列轮询,连接页不开取景就收不到 —— 拨杆翻转
+  /// 在这里只能靠轮询跟随(2026-10-17 实证:连接沿初读后不再更新)。
+  /// triggerRefresh:false 不拉参数链(本页无参数面板,且不与拍摄页
+  /// 争锁)。断开/离页即停。
+  Timer? _modePollTimer;
+
+  /// 视频档代持取景可见性(2026-10-17):帧头 @816 只随取景帧来,
+  /// 连接页视频档时恢复拉帧(setViewerVisible(true) —— 相机侧取景
+  /// 连接沿已开,只是 app 侧挂起),可录时长与拍摄页同源。拍摄页
+  /// 打开期间可见性主权归它,代持即让;切回照片档代持即撤。
+  bool _viewerByConnPage = false;
+
+  /// 拍摄页在前台(路由在册):此时 setViewerVisible 主权归拍摄页。
+  bool _shootingOpen = false;
+
+  void _syncModePoll() {
+    final connected = _controller.state == CameraLinkState.connected;
+    if (connected && _modePollTimer == null) {
+      _modePollTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+        unawaited(() async {
+          await _remote.refreshCameraMode(triggerRefresh: false);
+          _syncViewerForMode();
+        }());
+      });
+    } else if (!connected && _modePollTimer != null) {
+      _modePollTimer?.cancel();
+      _modePollTimer = null;
+    }
+  }
+
+  /// 按当前档位代持/撤回取景可见性。只在「视频档 + 自己前台」时顶
+  /// 真;照片档或断开只撤自己顶的(拍摄页顶的不动 —— 它在照片档
+  /// 取景合法)。
+  void _syncViewerForMode() {
+    if (_shootingOpen) return;
+    final video = _controller.state == CameraLinkState.connected &&
+        _remote.cameraMode == CaptureMode.video;
+    if (video && !_viewerByConnPage) {
+      _remote.setViewerVisible(true);
+      _viewerByConnPage = true;
+    } else if (!video && _viewerByConnPage) {
+      _remote.setViewerVisible(false);
+      _viewerByConnPage = false;
+    }
+  }
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _controller.addListener(_onControllerChanged);
     _controller.loadSaved();
+    _syncModePoll();
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _controller.removeListener(_onControllerChanged);
+    _modePollTimer?.cancel();
+    if (_viewerByConnPage) {
+      _remote.setViewerVisible(false);
+      _viewerByConnPage = false;
+    }
     super.dispose();
   }
 
@@ -807,6 +864,8 @@ class _ConnectionPageState extends State<ConnectionPage>
   }
 
   void _onControllerChanged() {
+    // 连接沿起停模式轮询(已连接才轮)。
+    _syncModePoll();
     final controller = _controller;
     // 无感配对:验证码仅展示用(不回传相机,0x935A 参数与码无关),
     // 进 pairing 态即自动确认 —— 用户全程不感知,状态卡橙灯一闪而过。
@@ -1662,192 +1721,216 @@ class _ConnectionPageState extends State<ConnectionPage>
   // ── 已连接:相机信息总览 ─────────────────────────────────────────
 
   Widget _connectedView(BuildContext context, ConnectionController controller) {
+    final scheme = Theme.of(context).colorScheme;
+    final c = controller.connection;
+    final wireless = c?.isWireless ?? false;
     return ListenableBuilder(
-      listenable: _overview,
+      // 存储卡脚注随档位/可录时长走(帧头 @816),拍摄模式镜像在
+      // RemoteController 上 —— 与总览一并监听。
+      listenable: Listenable.merge([_overview, _remote]),
       builder: (context, _) => ListView(
         padding: AppSpacing.screenPadding,
         children: [
-          ConnectionStatusCard(state: controller.state),
-          const SizedBox(height: AppSpacing.md),
-          // 主操作:进入拍摄(遥控监看)。连上后第一动作,置状态卡
-          // 正下方不滚动即可见;全屏 push,底栏不占监看画面,拍摄页
-          // 自带返回钮。
-          SizedBox(
-            height: 48,
-            child: FilledButton.icon(
-              onPressed: _openRemote,
-              icon: const Icon(Icons.camera),
-              label: Text(context.t('conn.enterShooting')),
-            ),
+          // 状态行:绿点已连接 + 电池 + 链路纯图标 pill;整行可点弹
+          // 详情/断开弹层(设备名/链路串随迁,2026-10-17 定稿)。
+          ConnectedHeader(
+            batteryPercent: _overview.batteryPercent,
+            linkIcon: wireless ? Icons.wifi : Icons.usb,
+            onTap: () => _showConnectionSheet(context, controller),
           ),
           const SizedBox(height: AppSpacing.md),
-          _linkCard(context, controller),
+          // 整行:机身卡(竖线居中:型号 pill | 固件/序列号裸值)。
+          CameraCard(
+            model: _overview.deviceInfo?.model,
+            firmware: _overview.deviceInfo?.deviceVersion,
+            serial: _overview.deviceInfo?.serialNumber,
+          ),
           const SizedBox(height: AppSpacing.md),
-          _bodyCard(context),
-          const SizedBox(height: AppSpacing.md),
-          _lensCard(context),
-          const SizedBox(height: AppSpacing.md),
-          const StoragePanel(),
+          // 双列:镜头信息卡(名+焦距+光圈)| 存储卡(卡型/已用条)。
+          IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(
+                  child: LensCard(
+                    lensName: _overview.lensDisplay,
+                    focalMm: _overview.focalLengthMm,
+                    fNumber: _overview.fNumber,
+                  ),
+                ),
+                const SizedBox(width: AppSpacing.md),
+                Expanded(
+                  child: StorageCard(
+                    model: _overview.deviceInfo?.model,
+                    mode: _remote.cameraMode,
+                    videoRemainingMs: _remote.videoRemainingMs,
+                  ),
+                ),
+              ],
+            ),
+          ),
           const SizedBox(height: AppSpacing.lg),
-          SizedBox(
-            height: 48,
-            child: FilledButton.tonalIcon(
-              onPressed: _openAlbum,
-              icon: const Icon(Icons.photo_library_outlined),
-              label: Text(context.t('conn.album')),
-            ),
-          ),
-          const SizedBox(height: 8),
-          SizedBox(
-            height: 48,
-            child: OutlinedButton(
-              onPressed: controller.disconnect,
-              child: Text(context.t('conn.disconnectConn')),
-            ),
+          // 底部双钮:左相册(灰底次级)右进入拍摄(黄主钮);断开
+          // 连接移入状态行弹层(2026-10-17 定稿)。
+          Row(
+            children: [
+              Expanded(
+                child: SizedBox(
+                  height: 48,
+                  child: FilledButton.tonalIcon(
+                    onPressed: _openAlbum,
+                    icon: const Icon(Icons.photo_library_outlined),
+                    label: Text(context.t('conn.album')),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: scheme.surfaceContainerHigh,
+                      foregroundColor: scheme.onSurface,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: AppSpacing.md),
+              Expanded(
+                child: SizedBox(
+                  height: 48,
+                  // 进入拍摄(遥控监看):全屏 push,底栏不占监看画面,
+                  // 拍摄页自带返回钮。
+                  child: FilledButton.icon(
+                    onPressed: _openRemote,
+                    icon: const Icon(Icons.camera),
+                    label: Text(context.t('conn.enterShooting')),
+                  ),
+                ),
+              ),
+            ],
           ),
         ],
       ),
     );
   }
 
-  /// 连接信息卡:链路方式(有线/无线·IP)+ 设备名。
-  Widget _linkCard(BuildContext context, ConnectionController controller) {
+  /// 状态行点按 → 连接详情弹层:设备名/型号/链路/电池四行 + 红色
+  /// 「断开连接」。设备名与链路串从主页面收编至此(2026-10-17)。
+  void _showConnectionSheet(
+      BuildContext context, ConnectionController controller) {
     final c = controller.connection;
     final wireless = c?.isWireless ?? false;
+    // 链路串:无线带 IP(动态串直通),USB 复用既有本地化文案。
     final link = wireless
-        ? (controller.activeIp == null
-            ? 'Wi-Fi'
-            : 'Wi-Fi(${controller.activeIp})')
+        ? (controller.activeIp == null ? 'Wi-Fi' : 'Wi-Fi(${controller.activeIp})')
         : context.t('conn.usbCable');
-    return Card(
-      child: Column(
-        children: [
-          _infoRow(context, Icons.link, 'info.link', link),
-          _infoRow(context, Icons.photo_camera_outlined, 'info.device',
-              c?.deviceName ?? '--',
-              last: true),
-        ],
-      ),
-    );
-  }
-
-  /// 机身信息卡:GetDeviceInfo(型号/固件/序列号)+ 电池(属性门禁)。
-  Widget _bodyCard(BuildContext context) {
-    final info = _overview.deviceInfo;
-    return Card(
-      child: Column(
-        children: [
-          _infoRow(context, Icons.camera_outlined, 'info.model',
-              info?.model ?? 'info.loading'),
-          _infoRow(context, Icons.system_update_alt_outlined, 'info.firmware',
-              info?.deviceVersion ?? '--'),
-          _infoRow(context, Icons.tag_outlined, 'info.serial',
-              info?.serialNumber ?? '--'),
-          // 电池行不缺席(2026-10-16 真机反馈「电池不显示」修):数据
-          // 没到回 '--' 占位,与固件/序列号行同口径;原条件渲染让该行
-          // 整段消失、数据到货时布局跳版。
-          _infoRow(
-              context,
-              Icons.battery_std_outlined,
-              'info.battery',
-              _overview.batteryPercent == null
-                  ? '--'
-                  : '${_overview.batteryPercent}%',
-              last: true),
-        ],
-      ),
-    );
-  }
-
-  /// 镜头信息卡:型号([CameraOverviewController.lensDisplay] ——
-  /// LensID 映射营销名全称,未收录退规格描述,不拍照)+ 焦距/光圈
-  /// (属性门禁)。光圈 0x5007 是 f 值 ×100、焦距 0x5008 是 0.01mm
-  /// (ISO 15740 定点族)。
-  Widget _lensCard(BuildContext context) {
-    final overview = _overview;
-    final f = overview.fNumber;
-    return Card(
-      child: Column(
-        children: [
-          _infoRow(context, Icons.camera, 'info.lensModel',
-              overview.lensDisplay ?? '--'),
-          _infoRow(
-            context,
-            Icons.straighten_outlined,
-            'info.focal',
-            overview.focalLengthMm == null
-                ? '--'
-                : _formatFocalMm(overview.focalLengthMm!),
-          ),
-          _infoRow(
-            context,
-            // 光圈叶片环形(filter_tilt_shift):型号行已占 camera_outlined,
-            // 同卡撞图标(2026-10-16 真机反馈)。
-            Icons.filter_tilt_shift,
-            'info.aperture',
-            f == null ? '--' : 'ƒ/${(f / 100).toStringAsFixed(1)}',
-            last: true,
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// 焦距显示:整值不带小数(40mm),非整带一位(35.5mm)。
-  String _formatFocalMm(double mm) => mm == mm.roundToDouble()
-      ? '${mm.toInt()}mm'
-      : '${mm.toStringAsFixed(1)}mm';
-
-  Widget _infoRow(
-    BuildContext context,
-    IconData icon,
-    String label,
-    String value, {
-    bool last = false,
-  }) {
-    final theme = Theme.of(context);
-    return Padding(
-      padding: EdgeInsets.fromLTRB(16, 6, 16, last ? 10 : 6),
-      child: Row(
-        children: [
-          Icon(icon, size: 20, color: theme.colorScheme.onSurfaceVariant),
-          const SizedBox(width: 12),
-          // 定宽标签列 + 左对齐值列:各卡所有行同 x 起点成表格状
-          //(2026-10-09 真机反馈「数据歪歪扭扭」修 —— 原右对齐值列
-          // 左缘参差)。label/值都可能传 UI 中文(连接方式/USB 数据线/
-          // 读取中…),就地统一包 t();相机上报值未命中目录原样直返。
-          SizedBox(
-            width: 68,
-            child: Text(context.t(label),
-                style: theme.textTheme.bodyMedium
-                    ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Text(
-              context.t(value),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              // 数值列 tabular 数字(电量/焦距/光圈/张数跳动不抖行)。
-              style: theme.textTheme.bodyMedium?.copyWith(
-                fontWeight: FontWeight.w600,
-                fontFeatures: const [FontFeature.tabularFigures()],
+    Widget row(String labelKey, String value) => Padding(
+          padding: const EdgeInsets.symmetric(vertical: 7),
+          child: Row(
+            children: [
+              // 标签列定宽,数值列统一左对齐成一条(v25/v26 定稿)。
+              SizedBox(
+                width: 56,
+                child: Text(context.t(labelKey),
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color:
+                            Theme.of(context).colorScheme.onSurfaceVariant)),
               ),
+              const SizedBox(width: AppSpacing.md),
+              Expanded(
+                child: Text(
+                  value,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                      fontFeatures: const [FontFeature.tabularFigures()]),
+                ),
+              ),
+            ],
+          ),
+        );
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (sheetContext) {
+        final scheme = Theme.of(sheetContext).colorScheme;
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(
+                AppSpacing.lg, AppSpacing.sm, AppSpacing.lg, AppSpacing.lg),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 32,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: scheme.outlineVariant,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.md),
+                Row(
+                  children: [
+                    Container(
+                      width: 9,
+                      height: 9,
+                      decoration: BoxDecoration(
+                        color: AppColors.success(sheetContext),
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const SizedBox(width: AppSpacing.sm),
+                    Text(
+                      sheetContext.t('conn.connected'),
+                      style: Theme.of(sheetContext).textTheme.titleMedium
+                          ?.copyWith(fontWeight: FontWeight.w700),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: AppSpacing.sm),
+                row('conn.sheetDevice', c?.deviceName ?? '--'),
+                row('conn.sheetModel', _overview.deviceInfo?.model ?? '--'),
+                row('conn.sheetLink', link),
+                const SizedBox(height: AppSpacing.sm),
+                Divider(color: scheme.outlineVariant, height: 1),
+                const SizedBox(height: AppSpacing.sm),
+                SizedBox(
+                  width: double.infinity,
+                  height: 48,
+                  child: TextButton(
+                    onPressed: () {
+                      Navigator.of(sheetContext).pop();
+                      controller.disconnect();
+                    },
+                    style: TextButton.styleFrom(foregroundColor: scheme.error),
+                    child: Text(
+                      sheetContext.t('conn.disconnectConn'),
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 
   /// 进入拍摄:全屏 push 遥控监看页(返回即回相机页;拍摄页离页自动
   /// 挂起帧轮询,取景生命周期跟连接走,相机侧保持取景)。
   void _openRemote() {
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => RemotePage(controller: _remote),
-      ),
-    );
+    // 拍摄页在前台:可见性主权移交(setViewerVisible 由它汇报),
+    // 连接页的模式轮询不再代持顶真;返回沿收回主权并按档位重判。
+    _shootingOpen = true;
+    Navigator.of(context)
+        .push(
+          MaterialPageRoute<void>(
+            builder: (_) => RemotePage(controller: _remote),
+          ),
+        )
+        .whenComplete(() {
+      _shootingOpen = false;
+      _syncViewerForMode();
+    });
   }
 
   void _openAlbum() {
