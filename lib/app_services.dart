@@ -246,15 +246,15 @@ final class AppServices {
       scanner: PlatformServices.nsd,
       pairedCameras: pairedCameras,
       identityStore: identityStore,
-      // 蓝牙工具通道(连接页「蓝牙」分段):GPS 注入 / 唤醒 WiFi;
-      // 开关落库沿接注入驱动刷新(同 refreshBleInjection 收口)。
+      // 蓝牙工具通道(连接页「蓝牙」分段):唤醒 WiFi(不建相机连接)。
+      // GPS 注入开关在设置页 —— 落库沿经 settingsController 监听
+      // (_updateBleInjection)刷新注入驱动,此处无需专钩。
       bleSession: bleSession,
       bleIdentityStore: bleIdentityStore,
       // 程序化加入相机热点(Android 落地;iOS/ohos 未装配自动回落
       // 手动指引)—— BLE→WiFi 交接最后一段,SnapBridge 全程。
       wifiJoiner: PlatformServices.wifiJoiner,
       settingsController: settingsController,
-      onBleInjectChanged: refreshBleInjection,
     );
     browserController = BrowserController(
       repository: repository,
