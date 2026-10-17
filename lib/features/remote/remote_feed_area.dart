@@ -138,18 +138,20 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea> {
     // 纯净监看隐藏中不走双击检测:任意点按都须送达页面恢复 chrome
     // (2026-10-17 「再点击出现」—— 隐藏态连点两下同位若被双击吞掉,
     // chrome 就再也回不来);隐藏态无缩放,双击复位本无从谈起。
+    // 双击拦截只在缩放/平移态吞第二击(复位缩放);原倍态第二击放行
+    // —— 同点再点 = 对焦(2026-10-17 用户定案「点两下 = 移动 + 对焦」
+    // 正要这一击;旧口径吞击是因为第一击已自动对过,挪框不自动 AF 后
+    // 第二击就是那次对焦)。
     if (!widget.hideChrome &&
         last != null &&
         lastPos != null &&
         now.difference(last) <= const Duration(milliseconds: 300) &&
-        (d.localPosition - lastPos).distance <= 48) {
-      // 双击复位(第二击不再对焦 —— 第一击已对过)。
-      if (_zoom != 1.0 || _pan != Offset.zero) {
-        setState(() {
-          _zoom = 1.0;
-          _pan = Offset.zero;
-        });
-      }
+        (d.localPosition - lastPos).distance <= 48 &&
+        (_zoom != 1.0 || _pan != Offset.zero)) {
+      setState(() {
+        _zoom = 1.0;
+        _pan = Offset.zero;
+      });
       return;
     }
     widget.onTapFocus(d, t.hasImage ? t.screenToNorm(d.localPosition) : null);

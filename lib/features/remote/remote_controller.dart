@@ -1495,9 +1495,10 @@ final class RemoteController extends ChangeNotifier {
     _dialFailures.removeWhere((t) => t.isBefore(cutoff));
   }
 
-  /// AF 驱动(点按对焦/对焦按钮)抢占在途滚轮:代数自增即止续发,
+  /// AF 驱动(同点再点对焦/对焦按钮)抢占在途滚轮:代数自增即止续发,
   /// 余量清零(AF 改变了焦点位置,攒的像素是陈旧意图);端点态同样
   /// 作废(AF 移焦后镜头不再顶在已记端点,nico clearMfLimits 同款)。
+  /// 挪框(0x9205)**不**走这里 —— 不动镜,端点/余量照旧有效。
   void _preemptFocusDial() {
     _dialGen++;
     _dialAccum = 0;
@@ -1588,16 +1589,29 @@ final class RemoteController extends ChangeNotifier {
     return true;
   }
 
-  /// 0x9205 忙重试(OpenZCine 同款策略:对焦区域移动遇 0x2019 短退避重试)。
-  static const _afBusyRetries = 3;
-  static const _afBusyRetryDelay = Duration(milliseconds: 200);
+  /// 对焦链忙(0x2019)重试(0x9205 挪框 / 0x90C1 驱动共用):瞬时忙是
+  /// 常态 —— 在途 0x9204 滚轮驱动物理拉镜可达 2s+、AF 收敛、机身自忙,
+  /// 对焦操作即撞忙窗(2026-10-17 真机:旧预算 3 次×200ms 耗不尽忙窗 →
+  /// 假失败「对焦区域移动失败」)。按拉焦轮同款口径退避静默重试,宽限
+  /// 墙钟(与 [_dialRefusalGrace] 同 4s)内不报错,超宽限才如实报。
+  static const _afBusyBackoff = Duration(milliseconds: 150);
+  static const _afBusyGrace = Duration(seconds: 4);
 
-  /// 触控对焦:点按取景画面 [nx]/[ny](归一化 0..1,取景图像坐标系)→
-  /// **whole-size 坐标系**(帧头 @16/18,如 6048×3400;OpenZCine 重置对焦
-  /// 用 coordinateWidth/2 为中心点实证 —— 0x9205 参数不在 JPEG 像素空间)
-  /// → 0x9205 ChangeAfArea 移动对焦区域,随即驱动一次 AF(点按即合焦的
-  /// 常规预期)。头不可用回退链:当前头 → 最近头(OpenZCine 同款缓存)→
-  /// SOF 帧尺寸(末级候选,比例同但缩尺不同,待真机核对)。
+  /// 「同点再点」判定半径(画面归一化,约半指节):指头点按有精度,
+  /// 落点在上次框位容差内即视为同一处 —— 不重发 0x9205,直接驱动 AF。
+  static const _afBoxTapRadius = 0.05;
+
+  /// 触控对焦两手势(2026-10-17 用户定案:挪框不自动对焦 —— 省一趟
+  /// 马达,对焦单独控):
+  /// - 点按空白处 → 0x9205 移动对焦区域,框上屏红(未合焦);**不跟发
+  ///   AF、不抢占滚轮**(0x9205 只挪框不动镜,端点态/攒余量仍有效)。
+  /// - 点在上次框位([_afBoxTapRadius] 容差内)→ 不重发 0x9205,直接
+  ///   0x90C1 驱动 AF 并抢占滚轮(点两下 = 移动 + 对焦;同点重发挪框
+  ///   是纯冗余)。
+  /// 坐标系:归一化 0..1 → **whole-size**(帧头 @16/18,如 6048×3400;
+  /// OpenZCine 重置对焦用 coordinateWidth/2 实证 —— 0x9205 参数不在
+  /// JPEG 像素空间)。头不可用回退链:当前头 → 最近头(OpenZCine 同款
+  /// 缓存)→ SOF 帧尺寸(末级候选,比例同但缩尺不同,待真机核对)。
   /// 对焦框上屏直到下次点按/停取景;帧头 AF 框(真实尺寸)另行叠加。
   Future<void> touchFocus(double nx, double ny) async {
     if (!_linkUp) {
@@ -1607,7 +1621,6 @@ final class RemoteController extends ChangeNotifier {
     }
     if (!liveViewActive || focusing) return; // 无取景/对焦中:静默忽略
     if (_rejectIfFocusModeMf()) return; // 机身 MF:远程对焦失效
-    _preemptFocusDial(); // AF 抢占在途滚轮驱动(焦点位置将改变)
     final h = engine.header.value;
     final size = h != null && h.coordinateWidth > 0 && h.coordinateHeight > 0
         ? (width: h.coordinateWidth, height: h.coordinateHeight)
@@ -1617,28 +1630,43 @@ final class RemoteController extends ChangeNotifier {
       notifyListeners();
       return;
     }
+    error = null;
+    final box = afBox;
+    final sameSpot = box != null &&
+        (nx - box.nx).abs() < _afBoxTapRadius &&
+        (ny - box.ny).abs() < _afBoxTapRadius;
+    if (sameSpot) {
+      _preemptFocusDial(); // AF 抢占在途滚轮驱动(焦点位置将改变)
+      notifyListeners();
+      await _driveAf();
+      return;
+    }
     final x = (nx * size.width).round().clamp(0, size.width);
     final y = (ny * size.height).round().clamp(0, size.height);
-    error = null;
+    // 框先上屏(未定红):忙窗重试可达秒级,无框点按形同「没反应」;
+    // 失败留在点按处红框 + 报错(同 _driveAf 失败语义)。
+    afBox = AfBox(nx: nx, ny: ny);
     notifyListeners();
-    for (var attempt = 0;; attempt++) {
+    final busyDeadline = DateTime.now().add(_afBusyGrace);
+    for (;;) {
       try {
         await session.changeAfArea(x, y);
         break;
       } on PtpResponseException catch (e) {
         if (e.responseCode != PtpResponseCode.deviceBusy ||
-            attempt >= _afBusyRetries) {
+            DateTime.now().isAfter(busyDeadline)) {
           error = '对焦区域移动失败:${_nikonHint(e.responseCode) ?? e}';
           notifyListeners();
           return;
         }
-        await _delay(_afBusyRetryDelay);
+        await _delay(_afBusyBackoff);
+      } on Exception catch (e) {
+        if (!_linkUp) return; // 断连收口已清状态,迟到异常不横幅
+        error = '对焦区域移动失败:$e';
+        notifyListeners();
+        return;
       }
     }
-    if (!_linkUp) return;
-    afBox = AfBox(nx: nx, ny: ny);
-    notifyListeners();
-    await _driveAf();
   }
 
   /// 对焦按钮:独立驱动一次自动对焦(取景开启是前置条件 ——
@@ -1669,7 +1697,7 @@ final class RemoteController extends ChangeNotifier {
       return;
     }
     if (_rejectIfFocusModeMf()) return; // 机身 MF:远程对焦失效
-    _preemptFocusDial(); // 同 touchFocus:AF 抢占在途滚轮驱动
+    _preemptFocusDial(); // AF 抢占在途滚轮驱动(同点再点同此)
     error = null;
     notifyListeners();
     await _driveAf();
@@ -1689,8 +1717,22 @@ final class RemoteController extends ChangeNotifier {
     engine.pause();
     bool? focused;
     try {
-      await session.afDrive();
-      focused = true;
+      final busyDeadline = DateTime.now().add(_afBusyGrace);
+      for (;;) {
+        try {
+          await session.afDrive();
+          focused = true;
+          break;
+        } on PtpResponseException catch (e) {
+          // 0x90C1 同吃忙窗:滚轮驱动/挪框在途时「同点再点对焦」第二拍
+          // 必撞 0x2019 —— 宽限内静默续发(同 touchFocus 挪框口径)。
+          if (e.responseCode != PtpResponseCode.deviceBusy ||
+              DateTime.now().isAfter(busyDeadline)) {
+            rethrow;
+          }
+          await _delay(_afBusyBackoff);
+        }
+      }
     } on PtpResponseException catch (e) {
       focused = e.responseCode == NikonResponseCode.outOfFocus ? false : null;
       error = '对焦失败:${_nikonHint(e.responseCode) ?? e}';

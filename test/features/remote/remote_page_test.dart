@@ -736,9 +736,7 @@ void main() {
     expect(controller.frameSize.value, (width: 32, height: 24));
     expect(find.byType(Image), findsOneWidget, reason: '首帧已上屏');
 
-    transport
-      ..ok() // changeAfArea
-      ..ok(); // afDrive
+    transport.ok(); // 第一击 changeAfArea:挪框
     // contain 居中:画面中心 = 图像中心 → 归一化 (0.5, 0.5)。
     // Image 住图像坐标系且 Transform transformHitTests: false —— 点按
     // 由外层取景手势(屏幕系收口)接收,命不中 Image 本体是设计使然。
@@ -751,14 +749,23 @@ void main() {
     expect(
         transport.requests
             .where((r) => r.opcode == NikonOperationCode.afDrive),
-        hasLength(1));
+        isEmpty,
+        reason: '挪框不自动 AF(2026-10-17 定案)');
     // contain 映射有浮点误差(0.49999…),归一化坐标近似断言即可;
     // 像素坐标已 round,精确 [16, 12]。
     expect(controller.afBox!.nx, closeTo(0.5, 1e-6));
     expect(controller.afBox!.ny, closeTo(0.5, 1e-6));
     expect(controller.error, isNull);
-    // 对焦框回投:合焦绿框(0xFF2EC76B,机身屏同款;2026-10-12 用户需求
-    // 「跟相机对齐」—— 合焦绿/未合焦红)描边方块画上屏
+    // 同点再点 = 对焦(点两下 = 移动 + 对焦):合焦绿框
+    // (0xFF2EC76B,机身屏同款;2026-10-12 用户需求「跟相机对齐」——
+    // 合焦绿/未合焦红)描边方块画上屏
+    transport.ok(); // 同点对焦 afDrive 合焦
+    await tester.tap(find.byType(Image).first, warnIfMissed: false);
+    await tester.pumpAndSettle();
+    expect(
+        transport.requests
+            .where((r) => r.opcode == NikonOperationCode.afDrive),
+        hasLength(1));
     const focusGreen = Color(0xFF2EC76B);
     expect(
         find.byWidgetPredicate((w) {
@@ -780,13 +787,15 @@ void main() {
     addTearDown(controller.dispose);
 
     _scriptAutoStart(transport); // 进页自动起景(0x9201 + 首帧)
-    transport
-      ..ok() // changeAfArea
-      ..reply(NikonResponseCode.outOfFocus); // afDrive 未合焦
+    transport.ok(); // 第一击 changeAfArea:挪框
     await tester
         .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
     await tester.pumpAndSettle();
 
+    await tester.tap(find.byType(Image).first, warnIfMissed: false);
+    await tester.pumpAndSettle();
+    expect(controller.afBox!.focused, isNull, reason: '挪框未对焦:未定红');
+    transport.reply(NikonResponseCode.outOfFocus); // 同点再点 AF:未合焦
     await tester.tap(find.byType(Image).first, warnIfMissed: false);
     await tester.pumpAndSettle();
     expect(controller.afBox!.focused, isFalse, reason: '0xA002 → 未合焦');
@@ -841,16 +850,19 @@ void main() {
         findsOneWidget,
         reason: '角标显倍率(如 1.3×)');
 
-    // ② 缩放态点画面 → 对焦照常(screenToNorm 逆映射含缩放/平移;
+    // ② 缩放态点画面 → 挪框照常(screenToNorm 逆映射含缩放/平移;
     //    点图像中心,归一化仍是 (0.5, 0.5))
-    transport
-      ..ok() // changeAfArea
-      ..ok(); // afDrive
+    transport.ok(); // changeAfArea:挪框
     await tester.tap(find.byType(Image).first, warnIfMissed: false);
     await tester.pumpAndSettle();
     final af = transport.requests.singleWhere(
         (r) => r.opcode == NikonOperationCode.changeAfArea);
     expect(af.params, [16, 12], reason: '缩放/平移后逆映射仍回图像中心');
+    expect(
+        transport.requests
+            .where((r) => r.opcode == NikonOperationCode.afDrive),
+        isEmpty,
+        reason: '挪框不自动 AF');
 
     // ③ 点角标复位
     await tester.tap(find.byKey(const ValueKey('feed-zoom-badge')));
@@ -858,7 +870,8 @@ void main() {
     expect(find.byKey(const ValueKey('feed-zoom-badge')), findsNothing,
         reason: '角标点按复位');
 
-    // ④ 再放大后双击画面复位(第二击不再对焦)
+    // ④ 再放大后双击画面复位(缩放态第二击仍被双击吞掉 ——
+    //    原倍态才放行给同点对焦)
     final c3 = await tester.startGesture(const Offset(300, 1100), pointer: 3);
     final c4 = await tester.startGesture(const Offset(500, 1100), pointer: 4);
     await tester.pump();
@@ -873,9 +886,10 @@ void main() {
     final focusCountBefore = transport.requests
         .where((r) => r.opcode == NikonOperationCode.changeAfArea)
         .length;
-    transport
-      ..ok() // 双击第一击的 changeAfArea
-      ..ok(); // afDrive
+    final afCountBefore = transport.requests
+        .where((r) => r.opcode == NikonOperationCode.afDrive)
+        .length;
+    transport.ok(); // 双击第一击:同点位 → 对焦(挪框不重发)
     await tester.tap(find.byType(Image).first, warnIfMissed: false);
     await tester.pump(const Duration(milliseconds: 100)); // 双击窗内(<300ms)
     await tester.tap(find.byType(Image).first, warnIfMissed: false);
@@ -886,8 +900,14 @@ void main() {
         transport.requests
             .where((r) => r.opcode == NikonOperationCode.changeAfArea)
             .length,
-        focusCountBefore + 1,
-        reason: '双击的第二击不再对焦(只有第一击对焦一次)');
+        focusCountBefore,
+        reason: '缩放态双击第一击 = 同点对焦(不重发挪框)');
+    expect(
+        transport.requests
+            .where((r) => r.opcode == NikonOperationCode.afDrive)
+            .length,
+        afCountBefore + 1,
+        reason: '第二击被双击吞掉复位缩放,只第一击对焦一次');
 
     // ⑤ 内收(缩小)钳到 1:不出角标不出 letterbox
     final c5 = await tester.startGesture(const Offset(300, 1100), pointer: 5);
@@ -1638,9 +1658,7 @@ void main() {
     // 对表刷参,AF 点按两应答随后。
     _scriptAutoStart(transport);
     _scriptParams(transport);
-    transport
-      ..ok() // changeAfArea(浮层收起后再点画面)
-      ..ok(); // afDrive
+    transport.ok(); // changeAfArea(浮层收起后再点画面,挪框单应答)
     await tester
         .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
     conn.statesCtrl.add(CameraLinkState.connected);
@@ -2584,8 +2602,7 @@ void main() {
     transport
       ..ok() // 0x9201(进页自动起景)
       ..ok(data: _realJpeg()) // 首帧
-      ..ok() // changeAfArea(浮层收起后再点画面)
-      ..ok(); // afDrive
+      ..ok(); // changeAfArea(浮层收起后再点画面,挪框单应答)
     await tester
         .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
     await tester.pumpAndSettle();
