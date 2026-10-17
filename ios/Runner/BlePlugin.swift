@@ -324,11 +324,26 @@ public final class BlePlugin: NSObject, FlutterPlugin, CBCentralManagerDelegate,
   }
 
   public func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
-    NativeLog.w("ble", "BLE 已连接(\(peripheral.identifier.uuidString.lowercased())),开始发现服务")
+    // didConnect 时刻进页面事件流(preconnected):「物理连接建立」与
+    // 「已连接(特征发现完成)」两行之差 = 礼让 + 服务发现耗时,深睡
+    // 相机重连时序判定靠它分段。
+    emit(["type": "preconnected",
+          "uuid": peripheral.identifier.uuidString.lowercased()])
+    NativeLog.w("ble", "BLE 已连接(\(peripheral.identifier.uuidString.lowercased())),150ms 礼让后开始发现服务")
     self.peripheral = peripheral
     peripheral.delegate = self
     servicesPendingDiscovery.removeAll()
-    peripheral.discoverServices(nil)
+    // 150ms 礼让(photools Z6 III 抓包口径,2026-10-17,只借思路):
+    // didConnect 立即 discoverServices 会让 iOS bluetoothd 抢在相机前
+    // (78~87ms)发 Exchange MTU 185,深睡待机中的相机固件不处理该请求,
+    // 链路双向静默 7.5s 后监督超时断开(HCI 0x08);礼让 150ms 让相机
+    // 先发 MTU 515 协商,待机重连一发必中。就绪态相机不受影响(协商本
+    // 就由相机先发)。延迟到期须外设仍为本会话连接外设,防断连/换连竞态。
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+      guard let self, self.peripheral === peripheral,
+            peripheral.state == .connected else { return }
+      peripheral.discoverServices(nil)
+    }
   }
 
   public func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral,
