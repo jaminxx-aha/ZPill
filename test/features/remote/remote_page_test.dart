@@ -3059,6 +3059,69 @@ void main() {
         reason: '退订后音量键零快门请求');
   });
 
+  testWidgets('定时 B 门两段倒计时:延时段「延时」小标芯色不变 / 曝光段红芯'
+      '白字「曝光」小标(2026-10-17 用户实测两段裸数字连跑,分不清'
+      '「在等」还是「在拍」)', (tester) async {
+    _portrait(tester);
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    // 与 _directRemoteController 同构,唯控制器 delay 用真定时器:自拍/
+    // 曝光两段秒针要能被测试假时钟推进(引擎/AE 仍驻停不抢脚本)。
+    final controller = RemoteController(
+        session: PtpSession(transport: transport),
+        connection: conn,
+        engine: LiveViewEngine(
+            session: PtpSession(transport: transport), delay: _parkedDelay),
+        delay: Future<void>.delayed,
+        aeDelay: _parkedDelay);
+    addTearDown(controller.dispose);
+    _scriptAutoStart(transport);
+    transport
+      ..ok() // 0x9207(延时段到点 → 开门)
+      ..ok(); // 0x920C(曝光段到点 → 自动收门)
+    await tester
+        .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
+    await tester.pumpAndSettle();
+
+    controller.paramProps[PtpDevicePropCode.exposureTime] =
+        const PropState(value: 0xFFFFFFFF);
+    controller.setSelfTimer(2);
+    final press = controller.capturePressed();
+    await tester.pump(); // 按下微任务落定:进延时段
+    expect(controller.selfTimerCountdown, 2);
+    expect(find.text('延时'), findsOneWidget);
+    expect(find.text('曝光'), findsNothing);
+    final live = LiveDesign.of(tester.element(find.text('延时')));
+    expect(tester.widget<Text>(find.text('延时')).style?.color, live.onAccent,
+        reason: '延时段芯色不变,前景 = onAccent');
+
+    await tester.pump(const Duration(seconds: 1));
+    expect(controller.selfTimerCountdown, 1);
+    await tester.pump(const Duration(seconds: 1)); // 到点开门 → 曝光段
+    await tester.pump();
+    expect(controller.selfTimerCountdown, isNull);
+    expect(controller.bulbExposureCountdown, 2);
+    expect(find.text('曝光'), findsOneWidget);
+    expect(find.text('延时'), findsNothing);
+    expect(tester.widget<Text>(find.text('曝光')).style?.color, Colors.white,
+        reason: '曝光段红芯白字(录像 REC 同语义)');
+
+    await tester.pump(const Duration(seconds: 1));
+    expect(controller.bulbExposureCountdown, 1);
+    await tester.pump(const Duration(seconds: 1)); // 到点自动收门
+    await press;
+    expect(controller.bulbExposureCountdown, isNull);
+    expect(controller.selfTimerCountdown, isNull);
+    expect(
+        transport.requests.where((r) =>
+            r.opcode == NikonOperationCode.initiateCaptureRecInMedia),
+        hasLength(1));
+    expect(
+        transport.requests
+            .where((r) => r.opcode == NikonOperationCode.terminateCapture),
+        hasLength(1));
+  });
+
   testWidgets('间隔拍摄:设置面板入口 → 参数底单开始 → 状态行/互锁灰化 → 停止',
       (tester) async {
     _portrait(tester);
