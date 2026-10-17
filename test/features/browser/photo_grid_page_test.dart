@@ -645,6 +645,38 @@ void main() {
     await _drainSnackBar(tester);
   });
 
+  testWidgets('两段式展开后改选/全选:回落单「下载」钮重新起段', (tester) async {
+    final (_, engine) = await selectGroups(tester, [_photo(1), _photo(2)]);
+
+    // 先取消一项再展开:1 项选中,底栏显单「下载」。
+    await tester.tap(find.byKey(ValueKey(2)));
+    await tester.pump();
+    expect(find.text('已选 1 项'), findsOneWidget);
+    await tester.tap(find.text('下载'));
+    await tester.pump();
+    expect(find.text('下载到应用'), findsOneWidget);
+
+    // 全选:选择集一变即复位,不得直显双目的地(旧 UI 观感,
+    // 2026-10-17 真机反馈)。
+    await tester.tap(find.byIcon(Icons.select_all));
+    await tester.pump();
+    expect(find.text('已选 2 项'), findsOneWidget);
+    expect(find.text('下载'), findsOneWidget);
+    expect(find.text('下载到相册'), findsNothing);
+    expect(find.text('下载到应用'), findsNothing);
+
+    // 复位后两段照常走完。
+    await tester.tap(find.text('下载'));
+    await tester.pump();
+    await tester.tap(find.text('下载到应用'));
+    await tester.pumpAndSettle();
+    final (entries, destination) = engine.calls.single;
+    expect(entries.map((e) => e.name), ['IMG_1.JPG', 'IMG_2.JPG']);
+    expect(destination, TransferDestination.app);
+
+    await _drainSnackBar(tester);
+  });
+
   testWidgets('筛选定格式仅 JPG:下载跳过面板直接收集,缺格式组跳过',
       (tester) async {
     final repo = _FakeRepo();

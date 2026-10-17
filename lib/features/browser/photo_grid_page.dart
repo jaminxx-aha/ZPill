@@ -144,7 +144,8 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
   _FormatFilter _formatFilter = _FormatFilter.all;
 
   /// 底栏两段式下载:「下载」钮点按后换出「到相册/到应用」双目的地;
-  /// 选择清空(下载完成/手动取消)复位,下次多选重新从「下载」起。
+  /// 选择集一变(改选/整日/全选/切相册/清空)即复位,重新从「下载」
+  /// 第一段起(2026-10-17 真机:展开态残留,全选后直显双目的地)。
   bool _revealDownload = false;
 
   /// 缩略图 Future 按代表文件句柄缓存:主文件变化(渐进配对完成
@@ -311,6 +312,7 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
     setState(() {
       _filterHandle = handle;
       _selected.clear();
+      _revealDownload = false;
       _lastAlbum = null;
     });
   }
@@ -320,6 +322,7 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
       if (!_selected.remove(group.key)) {
         _selected.add(group.key);
       }
+      _revealDownload = false;
     });
   }
 
@@ -329,6 +332,7 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
       _selected
         ..clear()
         ..addAll(items.map((group) => group.key));
+      _revealDownload = false;
     });
   }
 
@@ -338,6 +342,7 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
     final allSelected = keys.every(_selected.contains);
     setState(() {
       allSelected ? _selected.removeAll(keys) : _selected.addAll(keys);
+      _revealDownload = false;
     });
   }
 
