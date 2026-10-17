@@ -1,17 +1,14 @@
-/// 连接页状态卡与存储余量卡:连接状态的进度感(connecting/pairing
-/// 内嵌 spinner)、失败原因两段排版 + 重试;双卡槽余量条。
+/// 连接页状态卡:连接状态的进度感(connecting/pairing 内嵌 spinner)、
+/// 失败原因两段排版 + 重试。未连接视图专用 —— 已连接总览(bento 卡)
+/// 见 connected_overview.dart,存储余量组随其迁出。
 library;
 
 import 'package:flutter/material.dart';
 
-import '../../app_services.dart';
-import '../../core/browser/storage_info.dart';
 import '../../core/camera/camera_connection.dart';
 import '../../design/app_colors.dart';
 import '../../design/app_dimens.dart';
 import '../../l10n/l10n.dart';
-import '../browser/storage_overview_controller.dart';
-import '../common/format.dart';
 
 /// 连接状态卡:状态色一行 + 阶段文案;connecting/pairing/detecting
 /// 尾槽 14px spinner(死 IP 的 TCP 超时最长 ~5s,转圈才有「在干活」的
@@ -142,173 +139,6 @@ class _HintText extends StatelessWidget {
         Text(localized.substring(0, idx + 1),
             style: style.copyWith(fontWeight: FontWeight.w600)),
         Text(localized.substring(idx + 1), style: style),
-      ],
-    );
-  }
-}
-
-/// 双卡槽余量卡(读卡器信息):每槽一行(名 + 剩余/总容量 + 余量进度
-/// 条 + 写入中徽标),卡尾可拍张数一行。相机未上报容量只显示名字;
-/// 无槽不占位。(相册页删除后随相机信息卡组落户此处。)
-class StoragePanel extends StatelessWidget {
-  const StoragePanel({super.key, this.overview});
-
-  /// 测试缝:缺省走 AppServices 全局单例。
-  final StorageOverviewController? overview;
-
-  @override
-  Widget build(BuildContext context) {
-    final source = overview ?? AppServices.instance.storageOverview;
-    return ListenableBuilder(
-      listenable: source,
-      builder: (context, _) {
-        final storages = source.storages;
-        if (storages.isEmpty) {
-          return const SizedBox.shrink();
-        }
-        final slot = source.activeSlot;
-        // 可拍张数真机两卡沿严格相等(0x1005 自报值),取首个 >0 卡尾一行。
-        final shots = storages
-            .map((s) => s.freeSpaceImages)
-            .firstWhere((n) => n > 0, orElse: () => 0);
-        return Card(
-          margin: EdgeInsets.zero,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(
-                horizontal: AppSpacing.md, vertical: AppSpacing.sm),
-            child: Column(
-              children: [
-                for (var i = 0; i < storages.length; i++)
-                  Padding(
-                    padding:
-                        const EdgeInsets.symmetric(vertical: AppSpacing.xs),
-                    child: _StorageRow(
-                      storage: storages[i],
-                      ordinal: i,
-                      // 记录槽 0xD1F2:1=槽1/2=槽2/3=双槽(0/未知不标)。
-                      writing: slot != null && (slot == i + 1 || slot == 3),
-                    ),
-                  ),
-                if (shots > 0)
-                  Padding(
-                    padding: const EdgeInsets.only(top: AppSpacing.xs),
-                    child: Align(
-                      alignment: Alignment.centerLeft,
-                      child: Text(
-                        context.t('conn.shotsLeft', {'n': '$shots'}),
-                        style: Theme.of(context)
-                            .textTheme
-                            .bodySmall
-                            ?.copyWith(
-                                color: Theme.of(context)
-                                    .colorScheme
-                                    .onSurfaceVariant),
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-}
-
-class _StorageRow extends StatelessWidget {
-  const _StorageRow({
-    required this.storage,
-    required this.ordinal,
-    required this.writing,
-  });
-
-  final CameraStorage storage;
-  final int ordinal;
-
-  /// 当前记录槽命中本行(写卡中)。
-  final bool writing;
-
-  /// 展示名:相机描述 → 卷标 → 「插槽 n」按行序兜底(不走模型 hex
-  /// 兜底,真机 description/volumeLabel 均空时键名兜底)。
-  String _label(BuildContext context) {
-    final d = storage.description;
-    if (d != null && d.isNotEmpty) return d;
-    final v = storage.volumeLabel;
-    if (v != null && v.isNotEmpty) return v;
-    return context.t('conn.slot', {'n': '${ordinal + 1}'});
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final ratio = storage.freeRatio;
-    final colorScheme = Theme.of(context).colorScheme;
-    // 低余量(<10%)转警示色。
-    final barColor =
-        ratio != null && ratio < 0.1 ? colorScheme.error : colorScheme.primary;
-    return Row(
-      children: [
-        Icon(Icons.sd_card_outlined,
-            size: 20, color: colorScheme.onSurfaceVariant),
-        const SizedBox(width: AppSpacing.sm),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Flexible(
-                    child: Text(_label(context),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.bodyMedium),
-                  ),
-                  if (writing) ...[
-                    const SizedBox(width: AppSpacing.xs),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 6, vertical: 1),
-                      decoration: BoxDecoration(
-                        color: colorScheme.secondaryContainer,
-                        borderRadius: BorderRadius.circular(999),
-                      ),
-                      child: Text(
-                        context.t('conn.writing'),
-                        style: Theme.of(context)
-                            .textTheme
-                            .labelSmall
-                            ?.copyWith(
-                                color: colorScheme.onSecondaryContainer),
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-              if (ratio != null) ...[
-                const SizedBox(height: AppSpacing.xs),
-                LinearProgressIndicator(
-                  value: 1 - ratio, // 已用占比
-                  minHeight: 4,
-                  borderRadius: BorderRadius.circular(2),
-                  backgroundColor: colorScheme.surfaceContainerHighest,
-                  color: barColor,
-                ),
-              ],
-            ],
-          ),
-        ),
-        const SizedBox(width: AppSpacing.md),
-        Text(
-          storage.maxCapacityBytes > 0
-              ? context.t('conn.capacity', {
-                  'free': formatBytes(storage.freeSpaceBytes),
-                  'total': formatBytes(storage.maxCapacityBytes)
-                })
-              : context.t('conn.capacityUnknown'),
-          style: Theme.of(context)
-              .textTheme
-              .bodySmall
-              ?.copyWith(color: colorScheme.onSurfaceVariant),
-        ),
       ],
     );
   }

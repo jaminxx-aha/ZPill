@@ -1115,9 +1115,10 @@ void main() {
       expect(find.text('上次:Z_f_8014411'), findsNothing);
     });
 
-    testWidgets('已连接视图:信息卡组(链路/机身/镜头)+ 进入拍摄 + 相册 + 断开连接',
-        (WidgetTester tester) async {
-      // 加高视口:信息卡组较长,断开按钮在折线下(点空)。
+    testWidgets(
+        '已连接视图:bento 卡 v24(状态行/机身/镜头信息/存储)+ 底部双钮'
+        '+ 状态行弹层(详情/断开)', (WidgetTester tester) async {
+      // 加高视口:卡片网格较长,底部双钮在折线下(点空)。
       tester.view
         ..physicalSize = const Size(800, 2400)
         ..devicePixelRatio = 1.0;
@@ -1185,26 +1186,29 @@ void main() {
       conn.statesCtrl.add(CameraLinkState.connected);
       await tester.pumpAndSettle();
 
-      // 连接卡:USB 链路 + 设备名
-      expect(find.text('USB 数据线'), findsOneWidget);
-      expect(find.text('NIKON ZF'), findsOneWidget);
-      // 机身卡:GetDeviceInfo + 电池(属性门禁读到)
+      // 状态行:绿点 + 已连接 + 电池壳(电量数字嵌壳内);设备名/链路串收进弹层,pill 只留图标。
+      expect(find.text('已连接'), findsOneWidget);
+      expect(find.text('80'), findsOneWidget,
+          reason: '电池壳内嵌电量数字,无百分号(v26)');
+      expect(find.text('USB 数据线'), findsNothing,
+          reason: '链路 pill 只留图标,详情在弹层');
+      expect(find.text('NIKON ZF'), findsNothing, reason: '设备名移入弹层');
+      // 机身卡:型号 pill + 固件/序列号裸值(标签字删,原图标扛语义)。
       expect(find.text('TestModel'), findsOneWidget);
       expect(find.text('V1.00'), findsOneWidget);
       // 序列号:Zf 定宽 32 左补零方言在解析层剥前导零
       expect(find.text('12345678901'), findsOneWidget);
-      expect(find.text('80%'), findsOneWidget);
-      // 镜头卡:ID 未收录映射表 → 型号回规格描述,属性在册读到
+      // 镜头信息卡:名 + 焦距 + 光圈(ID 未收录映射表 → 型号回规格描述)。
+      expect(find.textContaining('40mm ƒ/2'), findsOneWidget);
       expect(find.text('40mm'), findsOneWidget);
       expect(find.text('ƒ/2.8'), findsOneWidget);
-      expect(find.textContaining('40mm ƒ/2'), findsOneWidget,
-          reason: '不拍照即知挂机镜头(规格路)');
       expect(find.textContaining('· '), findsNothing,
           reason: '出处小标注(· 规格 等)已整删');
-      // 动作:进入拍摄(主操作,状态卡正下方)+ 相册 + 断开
+      // 底部双钮:左相册右进入拍摄;断开连接不在主页面(弹层里)。
       expect(find.text('进入拍摄'), findsOneWidget);
       expect(find.text('相册'), findsOneWidget);
-      expect(find.text('断开连接'), findsOneWidget);
+      expect(find.text('断开连接'), findsNothing,
+          reason: '断开连接移入状态行弹层');
 
       // 进入拍摄:全屏 push 遥控监看页;信息胶囊带返回钮,pop 即回。
       await tester.tap(find.text('进入拍摄'));
@@ -1223,8 +1227,21 @@ void main() {
       expect(find.byType(RemotePage), findsNothing, reason: '返回即回相机页');
       expect(find.text('进入拍摄'), findsOneWidget);
 
+      // 状态行点按 → 详情弹层:四行读数 + 红色断开连接。
+      await tester.tap(find.text('已连接'));
+      await tester.pumpAndSettle();
+      expect(find.text('设备名'), findsOneWidget);
+      expect(find.text('NIKON ZF'), findsOneWidget);
+      expect(find.text('型号'), findsOneWidget);
+      expect(find.text('TestModel'), findsNWidgets(2),
+          reason: '机身卡 pill + 弹层值各一');
+      expect(find.text('链路'), findsOneWidget);
+      expect(find.text('USB 数据线'), findsOneWidget, reason: '详情收进弹层');
+      expect(find.text('电池'), findsNothing,
+          reason: '电池行已删(电量只在状态行电池壳)');
+
       await tester.tap(find.text('断开连接'));
-      await tester.pump();
+      await tester.pumpAndSettle();
       expect(conn.disconnectCalls, 1);
     });
   });
