@@ -131,7 +131,7 @@ class RemoteInfoPill extends StatelessWidget {
               controller.cameraMode == CaptureMode.video &&
               controller.videoRemainingMs != null) ...[
             const SizedBox(width: 10),
-            Text(_recRemainingLabel(controller.videoRemainingMs!),
+            Text(recRemainingLabel(controller.videoRemainingMs!),
                 style: TextStyle(
                     fontSize: 12,
                     color: live.muted,
@@ -212,8 +212,9 @@ String recDurationLabel(int? seconds) {
 }
 
 /// 剩余可录时长标签(帧头 @816 毫秒 → h:mm:ss / m:ss;官方上限
-/// 7500000ms ≈ 2 小时,超小时补位避免 125:00 式怪读)。
-String _recRemainingLabel(int ms) {
+/// 7500000ms ≈ 2 小时,超小时补位避免 125:00 式怪读)。公开给连接页
+/// 存储卡脚注复用(2026-10-17 视频档「可录」同源同口径)。
+String recRemainingLabel(int ms) {
   final s = (ms / 1000).round();
   final h = s ~/ 3600;
   final m = (s % 3600) ~/ 60;
