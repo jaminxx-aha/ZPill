@@ -181,13 +181,15 @@ void main() {
     expect(afAreaAxisHint(null), isNull);
   });
 
-  test('快门取值域直供表:标准档打包值 + Bulb 哨兵(无 Time/X 同步)', () {
+  test('快门取值域直供表:标准档打包值 + Bulb 哨兵(X 同步/Time 仍拨盘位)', () {
     final pick = _param(PtpDevicePropCode.exposureTime).pickValues!;
     expect(pick.first, 1 << 16 | 8000, reason: '1/8000s 打包');
     expect(pick, containsAll(<int>[1 << 16 | 100, 13 << 16 | 10, 30 << 16 | 1]));
-    expect(pick.last, 0xFFFFFFFF, reason: 'Bulb');
-    expect(pick, isNot(contains(0xFFFFFFFD)), reason: 'Time 是机顶拨盘位');
-    expect(pick, isNot(contains(0xFFFFFFFE)), reason: 'X 同步是机顶拨盘位');
+    expect(pick.last, 0xFFFFFFFF, reason: 'Bulb 收尾');
+    expect(pick, isNot(contains(0xFFFFFFFD)),
+        reason: 'T 门不入表(2026-10-17 真机定案:0xD100 写入合法但 0x9207 '
+            '拍照路径官方规格明文拒绝,能选不能拍;机顶拨 T 读回仍显 param.time)');
+    expect(pick, isNot(contains(0xFFFFFFFE)), reason: 'X 同步仍是机顶拨盘位');
     // 其余参数取值域仍走相机 PropDesc
     expect(_param(PtpDevicePropCode.exposureIndex).pickValues, isNull);
   });
