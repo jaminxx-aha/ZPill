@@ -45,8 +45,6 @@ const Map<String, String> zhCatalog = {
   'settings.desqueezeSubtitle': '变形宽银幕镜头的水平挤压按倍率还原显示;当前 {v}×',
   'settings.transferQuality': '传输质量',
   'settings.transferQualitySubtitle': '原图直传(压缩传输待后续版本)',
-  'settings.bleGps': 'BLE 配对 / GPS 注入',
-  'settings.bleGpsSubtitle': '相机智能设备模式配对;拍进卡的照片原生带 EXIF 坐标',
   'ble.notPaired': '未配对',
   'ble.disconnected': '已断开',
   'ble.handshaking': '握手中…',
@@ -72,12 +70,12 @@ const Map<String, String> zhCatalog = {
   'ble.goSystemBt': '去系统蓝牙完成注册',
   'ble.reRegisterHint':
       '未注册时可再跳一次:系统蓝牙页点相机配对(核对配对码)→ 回本页自动重连(配对成功后通常已自动跳过一次)',
-  'ble.writeTime': '写 TIME',
   'ble.wakeWifi': '唤起 WiFi',
-  'ble.read2004': '读 0x2004',
   'ble.disconnect': '断开',
   'ble.unnamed': '(无名)',
   'ble.deviceId': '设备ID 0x{id}',
+  'ble.advStandby': '待机 0x{b}',
+  'ble.advAwake': '就绪 0x{b}',
   'ble.waitingOtherPhone':
       '此相机在等别的手机(设备ID 0x{id}):请在相机「已配对设备」菜单断开现有连接或改选本机,或确认相机没被其他手机(如 SnapBridge)占用',
   'ble.logHint': '日志(长按可选中,或点右侧复制全部)',

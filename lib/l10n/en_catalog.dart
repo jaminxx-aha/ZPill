@@ -59,9 +59,6 @@ const Map<String, String> enCatalog = {
   'settings.transferQuality': 'Transfer Quality',
   'settings.transferQualitySubtitle':
       'Originals as-is (compressed transfer in a later version)',
-  'settings.bleGps': 'BLE Pairing / GPS Injection',
-  'settings.bleGpsSubtitle':
-      'Pair the camera in smart-device mode; photos shot to card get native EXIF coordinates',
   'ble.notPaired': 'Not Paired',
   'ble.disconnected': 'Disconnected',
   'ble.handshaking': 'Handshaking…',
@@ -90,12 +87,12 @@ const Map<String, String> enCatalog = {
   'ble.goSystemBt': 'Go to System Bluetooth to Finish Registration',
   'ble.reRegisterHint':
       'Not registered yet? Jump again: pair the camera in system Bluetooth (verify the passkey) → return here to reconnect automatically (usually auto-jumped once after pairing)',
-  'ble.writeTime': 'Write TIME',
   'ble.wakeWifi': 'Wake Wi-Fi',
-  'ble.read2004': 'Read 0x2004',
   'ble.disconnect': 'Disconnect',
   'ble.unnamed': '(unnamed)',
   'ble.deviceId': 'Device ID 0x{id}',
+  'ble.advStandby': 'Standby 0x{b}',
+  'ble.advAwake': 'Ready 0x{b}',
   'ble.waitingOtherPhone':
       'This camera is waiting for another phone (device ID 0x{id}): disconnect the existing connection or switch to this phone in the camera\'s "Paired Devices" menu, or make sure the camera is not occupied by another phone (e.g. SnapBridge)',
   'ble.logHint': 'Log (long-press to select, or copy all on the right)',

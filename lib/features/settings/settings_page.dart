@@ -11,7 +11,6 @@ import '../../app_services.dart';
 import '../../core/browser/photo_group.dart';
 import '../../data/settings_store.dart';
 import '../../l10n/l10n.dart';
-import 'ble_pair_page.dart';
 import 'snapshot_controller.dart' show buildSnapshotSection;
 import 'log_section.dart' show buildLogSection;
 
@@ -421,15 +420,6 @@ class _SettingsPageState extends State<SettingsPage> {
                 title: Text(context.t('settings.transferQuality')),
                 subtitle: Text(context.t('settings.transferQualitySubtitle')),
                 enabled: false,
-              ),
-              ListTile(
-                title: Text(context.t('settings.bleGps')),
-                subtitle: Text(
-                    context.t('settings.bleGpsSubtitle')),
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                      builder: (_) => const BlePairPage()),
-                ),
               ),
               buildSnapshotSection(context),
               buildLogSection(context),
