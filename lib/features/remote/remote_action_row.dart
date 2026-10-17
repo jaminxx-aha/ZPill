@@ -165,8 +165,11 @@ class CaptureCircleButton extends StatelessWidget {
 
 /// 对焦钮(快门左侧):**只负责对焦,点按即驱动一次 AF**(0x90C1,
 /// [RemoteController.afDriveNow];2026-10-12 用户定案 —— 原对焦浮层的
-/// MF 步进/拉焦轮移拍摄设置浮层)。对焦中转圈禁点(防重入);未连接/
-/// 未开取景/机身 MF 档灰化(控制器拦截是第二道,这里先不给出可点姿态)。
+/// MF 步进/拉焦轮移拍摄设置浮层)。对焦中仍可点 = 如实提示「对焦进行中」
+/// (2026-10-17 真机定案:Zf 扣 0x90C1 应答至 AF 结束,远程打断结构性
+/// 不可能 —— 旧「对焦中禁点」把提示路堵死,点按哑掉,用户不明所以);
+/// 未连接/未开取景/机身 MF 档灰化(控制器拦截是第二道,这里先不给出
+/// 可点姿态)。
 Widget _focusButton(BuildContext context, LivePalette live, RemoteController controller) {
   final usable = controller.linkUp &&
       controller.liveViewActive &&
@@ -180,9 +183,7 @@ Widget _focusButton(BuildContext context, LivePalette live, RemoteController con
         color: live.glass,
         shape: CircleBorder(side: BorderSide(color: live.hairline)),
         child: InkWell(
-          onTap: usable && !controller.focusing
-              ? controller.afDriveNow
-              : null,
+          onTap: usable ? controller.afDriveNow : null,
           customBorder: const CircleBorder(),
           child: Center(
             child: controller.focusing
