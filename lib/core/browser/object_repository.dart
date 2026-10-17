@@ -37,8 +37,9 @@ final class AlbumsUpdate {
 }
 
 abstract interface class ObjectRepository {
-  /// 相册枚举(渐进):GetObjectHandles 后分块取 ObjectInfo,每块合并入
-  /// 缓存并广播到 [updates];本 Future 在**全部块完成**时给出最终快照
+  /// 相册枚举(渐进):GetObjectHandles 后按日期目录分页取属性
+  /// (0x9805,逐对象回退),每页/每块合并入缓存并广播到 [updates];
+  /// 本 Future 在**全部完成**时给出最终快照
   /// (失败则抛出,部分结果已通过 [updates] 发布)。
   /// 并发调用共享同一次枚举(_loading 去重),各订阅者仍能收到全部块。
   Future<List<CameraAlbum>> loadAlbums();
@@ -142,18 +143,21 @@ abstract interface class ObjectRepository {
   }
 }
 
-/// 基于 [PtpSession] 的实现:GetObjectHandles 一次全量,然后**分块**逐个
-/// GetObjectInfo,每块完成即合并入缓存并广播 —— UI 渐进显示最新照片,
-/// 其余对象后台同步,不再全屏阻塞等全部 N+1 次往返。
+/// 基于 [PtpSession] 的实现:GetObjectHandles 一次全量句柄,然后**按
+/// 日期目录分页**取属性(0x9805 depth=1,页到即合并即广播)—— UI 首页
+/// 照片 ~1s 亮相,不等全库(2026-10-17 真机探针:0x9805 编目成本按对象
+/// 数线性、相机端无固定编目成本,全库一笔 3.8~8.3s;分页不省总时长但
+/// 消首屏等待)。根层没探出日期目录或批量路降级/被拒时,逐对象
+/// GetObjectInfo 分块补齐(断点续传语义同路)。
 ///
 /// 填充顺序:句柄倒序(尼康句柄升序 ≈ 拍摄顺序,最新照片低延迟亮相;
 /// probe --objmeta 相关性结论若证伪则删反转 —— 只影响出现先后,不影响
-/// 最终排序)。批量快路走 MTP 0x9805 GetObjectPropList(官方 §6.2.11.5,
-/// 2026-10-15 落地);Nikon 0x9434 GetObjectsMetaData 是候选替代路
-/// (探针先行,留真机对比)。
+/// 最终排序)。Nikon 0x9434 GetObjectsMetaData 是候选替代路(探针先行,
+/// 留真机对比)。
 ///
 /// Zf 真机语义(2026-09-27 实测):parent=0 才是全量枚举(602 个对象,
-/// 0xFFFFFFFF 只回根层),故全量走 [GetObjectHandlesParams.parentRoot]。
+/// 0xFFFFFFFF 只回根层),故全量走 [GetObjectHandlesParams.parentRoot],
+/// 分页的页发现(根层)走 parentAll。
 ///
 /// 断点续传:中途失败部分结果保留在缓存,重试只补缺失对象。缓存失效:
 /// 会话关闭/重连后必须 [reset](AppServices 订阅连接状态驱动),否则句柄
@@ -265,10 +269,13 @@ final class ObjectRepositoryImpl implements ObjectRepository {
     });
   }
 
-  /// 全量枚举(渐进):GetObjectHandles(Zf 语义 parent=0)→ 句柄倒序 →
-  /// 跳过已缓存(断点续传)→ **批量快路 0x9805**(一把拿全部对象属性,
-  /// 失败/降级静默回退)→ 缺口分块逐个 GetObjectInfo,每块合并入缓存并
-  /// 广播到 [updates]。
+  /// 全量枚举(渐进,分页快路):GetObjectHandles(Zf 语义 parent=0)
+  /// 全量句柄 → 根层逐根 0x9805 depth=1 探日期目录 → 目录按名降序逐页
+  /// 0x9805 depth=1(页 = 日期目录),每页合并入缓存即广播,页间留
+  /// [pageGap] 让取景帧插队 —— 首页照片 ~1s 亮相,不等全库。根层没探
+  /// 出日期目录时退全库一笔(旧全量形);批量特有失败(降级/拒答/
+  /// 数据集不可信)整段弃页单,由逐对象缺口对账兜底(行为不回归);链路
+  /// 级异常(超时/断链)不吞照旧上抛。
   Future<void> _loadAll() async {
     final generation = _generation;
     // Zf 把 0 与 0xFFFFFFFF 的语义做反了:parent 必须传 0 才是全量。
@@ -285,56 +292,89 @@ final class ObjectRepositoryImpl implements ObjectRepository {
       for (final h in ordered)
         if (!_byHandle.containsKey(h)) h,
     ];
+    var loaded = ordered.length - pending.length;
 
-    // ── 批量快路(0x9805,官方 §6.2.11.5):全部对象 × 全部属性一把拿,
-    // 1×RTT 替代 N×GetObjectInfo(参数五参全量形 = n-link 生产同款)。
-    // 真发失败/数据集不可信在会话层置降级旗标,本会话后续枚举直接
-    // 跳过本段;三类批量特有失败在此吞掉走逐对象(行为不回归),链路
-    // 级异常(超时/断链)不吞照旧上抛终止枚举。真机核对项:Zf 对
-    // 0x9805 的实际支持面与首屏提速实测。
-    if (pending.isNotEmpty) {
-      List<PtpObjectProp>? props;
+    // ── 分页快路(0x9805 按日期目录分片,官方 §6.2.11.5):根层(Zf
+    // 语义 parent=0xFFFFFFFF 只回根对象)逐根 depth=1 展开一层即日期
+    // 目录,目录对象顺带入册得具名;页序名降序 = 新目录先出(尼康目录
+    // 号随时间递增)。任一笔批量失败整段弃页单走逐对象。
+    final pages = <({int handle, String name})>[];
+    if (pending.isNotEmpty && !session.objectPropListDegraded) {
       try {
-        props = await session.getObjectPropList(
-          0xFFFFFFFF, // P1:全部对象
-          formatCode: 0x00000000, // P2:全部格式
-          propCode: 0xFFFFFFFF, // P3:全部属性
-          depth: 0xFFFFFFFF, // P5:整个层级(P4 组码补 0)
-        );
+        final roots = await session.getObjectHandles(
+            parent: GetObjectHandlesParams.parentAll);
+        if (generation != _generation) return;
+        for (final root in roots) {
+          final added = _absorbProps(
+            await session.getObjectPropList(root, depth: 1),
+            handleSet,
+          );
+          if (generation != _generation) return;
+          loaded += added.length;
+          // 页 = 被探根的直接子目录(0xDC04 parentObject 定归属;根自身
+          // parent=0 天然排除)。
+          for (final f in added) {
+            if (f.isFolder && f.parentHandle == root) {
+              pages.add((handle: f.handle, name: f.name));
+            }
+          }
+        }
+        // 同名页(双槽同名目录)取大句柄兜底稳定。
+        pages.sort((a, b) {
+          final byName = b.name.compareTo(a.name);
+          return byName != 0 ? byName : b.handle.compareTo(a.handle);
+        });
+        for (var i = 0; i < pages.length; i++) {
+          if (i > 0) {
+            // 页间让路:页事务 ~0.5-1s 占住串行锁,缝里让排队的取景帧
+            // 插队(帧 50ms 一轮,150ms 够走 2-3 帧),起景后预热不打
+            // 取景(首页前不留缝,首屏不付此税)。
+            await Future<void>.delayed(pageGap);
+            if (generation != _generation) return;
+          }
+          loaded += _absorbProps(
+            await session.getObjectPropList(pages[i].handle, depth: 1),
+            handleSet,
+          ).length;
+          if (generation != _generation) return;
+          // 页到即发:该目录的照片此沿亮相,不等其余页与缺口。
+          _publish(loaded, ordered.length, complete: false);
+        }
+        if (pages.isEmpty) {
+          // 根层没探出日期目录(根枚举空/子层无目录):退全库一笔(旧
+          // 全量形,n-link 生产同款),别把几百个对象全推给逐对象。
+          loaded += _absorbProps(
+            await session.getObjectPropList(
+              0xFFFFFFFF, // P1:全部对象
+              formatCode: 0x00000000, // P2:全部格式
+              propCode: 0xFFFFFFFF, // P3:全部属性
+              depth: 0xFFFFFFFF, // P5:整个层级(P4 组码补 0)
+            ),
+            handleSet,
+          ).length;
+          if (generation != _generation) return;
+        }
       } on UnsupportedError {
-        // 本会话已降级(含本次真发失败后的秒拒):直接走逐对象。
+        // 本会话已降级(含本次真发失败后的秒拒):弃页单,走逐对象。
       } on PtpResponseException {
         // 相机拒绝 0x9805(op 不在册/参数拒):会话已降级,走逐对象。
       } on FormatException {
         // 数据集不可信(未知类型/计数不符):会话已降级,走逐对象。
       }
-      if (generation != _generation) return; // 每个 await 后、写缓存前
-      if (props != null) {
-        // 按句柄归并(同对象多属性条目分散在流中);不在 GetObjectHandles
-        // 结果里的句柄忽略(句柄只能来自 GetObjectHandles,TODO 注意事项 2)。
-        final byHandle = <int, List<PtpObjectProp>>{};
-        for (final p in props) {
-          if (!handleSet.contains(p.handle)) continue;
-          byHandle.putIfAbsent(p.handle, () => []).add(p);
-        }
-        for (final e in byHandle.entries) {
-          final entry = ObjectRepository.toEntryFromProps(e.key, e.value);
-          if (entry != null) _byHandle[e.key] = entry;
-        }
-      }
     }
 
-    // 批量缺口(含批量路整体缺席/条目被弃)由既有逐对象路径补齐 ——
-    // 断点续传语义天然复用:循环只问缓存里还没有的。
+    // 分页未覆盖的缺口(MISC 等非日期目录内容、被弃条目、降级弃单)
+    // 由既有逐对象路径补齐 —— 断点续传语义天然复用:循环只问缓存里
+    // 还没有的。
     final gaps = [
       for (final h in pending)
         if (!_byHandle.containsKey(h)) h,
     ];
+    loaded = ordered.length - gaps.length;
     if (gaps.length < pending.length) {
-      // 批量确有产出:先广播一次「批量已到、缺口未补」的快照。
-      _publish(ordered.length - gaps.length, ordered.length, complete: false);
+      // 分页/兜底确有产出:先广播一次「批量已到、缺口未补」的快照。
+      _publish(loaded, ordered.length, complete: false);
     }
-    var loaded = ordered.length - gaps.length;
     var consecutiveFailures = 0;
     for (var start = 0; start < gaps.length; start += chunkSize) {
       final end = math.min(start + chunkSize, gaps.length);
@@ -364,6 +404,31 @@ final class ObjectRepositoryImpl implements ObjectRepository {
     _loaded = true;
     // 完成事件兜底:空相机 / 续传零缺口(块循环没跑)也要有确定终态。
     _publish(loaded, ordered.length, complete: true);
+  }
+
+  /// 分页快路页间让路窗(见 _loadAll 页循环)。
+  static const Duration pageGap = Duration(milliseconds: 150);
+
+  /// 0x9805 批量属性合并入缓存:仅收 [handleSet] 内句柄(句柄只能来自
+  /// GetObjectHandles,TODO 注意事项 2)、无名/无格式条目弃单、已在册
+  /// 跳过(断点续传),返回本次新增的 entry(页发现与进度计数用)。
+  List<ObjectEntry> _absorbProps(
+      List<PtpObjectProp> props, Set<int> handleSet) {
+    final byHandle = <int, List<PtpObjectProp>>{};
+    for (final p in props) {
+      if (!handleSet.contains(p.handle)) continue;
+      byHandle.putIfAbsent(p.handle, () => []).add(p);
+    }
+    final added = <ObjectEntry>[];
+    for (final e in byHandle.entries) {
+      if (_byHandle.containsKey(e.key)) continue;
+      final entry = ObjectRepository.toEntryFromProps(e.key, e.value);
+      if (entry != null) {
+        _byHandle[e.key] = entry;
+        added.add(entry);
+      }
+    }
+    return added;
   }
 
   /// 广播一次增量快照;未完成发布丢弃未具名文件夹相册(见 _buildAlbums)。

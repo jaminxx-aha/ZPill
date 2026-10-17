@@ -251,6 +251,39 @@ void main() {
     await loading;
   });
 
+  testWidgets('首块前骨架:枚举在途显网格形占位,首块到达切真网格',
+      (tester) async {
+    final repo = _FakeRepo();
+    final controller = BrowserController(repository: repo);
+    await tester.pumpWidget(_host(PhotoGridPage(
+      controller: controller,
+      folderHandle: CameraAlbum.allPhotosHandle,
+      fallbackName: '全部照片',
+      thumbnails: _FakeThumbs(),
+    )));
+    await tester.pump(); // initState 懒枚举已发起,块未到:骨架态
+
+    // 骨架占位 + 编目文案;旧空心转圈退役,「在动」反馈只留 AppBar 细条。
+    expect(find.byKey(const ValueKey('gridSkeleton')), findsOneWidget);
+    expect(find.text('正在连接相机读取对象…'), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+    expect(find.byType(LinearProgressIndicator), findsOneWidget);
+
+    // 首块到达:骨架退场,真网格上屏。
+    repo.updatesCtrl.add(AlbumsUpdate(
+        albums: [CameraAlbum.allPhotos([_photo(1)])],
+        loaded: 1,
+        total: 2,
+        complete: false));
+    await tester.pump();
+    expect(find.byKey(const ValueKey('gridSkeleton')), findsNothing);
+    expect(find.byKey(ValueKey(1)), findsOneWidget);
+
+    repo.completeLoad([CameraAlbum.allPhotos([_photo(1)])]);
+    await tester.pumpAndSettle();
+    expect(find.byType(LinearProgressIndicator), findsNothing);
+  });
+
   testWidgets('缩略取数失败:断图占位,3s 后限次自动重试(失败 future 不驻留)',
       (tester) async {
     final repo = _FakeRepo();
