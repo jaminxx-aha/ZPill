@@ -3552,6 +3552,29 @@ void main() {
       expect(gallery.enqueued, isEmpty);
     });
 
+    test('SDRAM 直拍 + B 门:本地跳过 0x90CB 零流量,0x9207 开门照旧入卡',
+        () async {
+      controller.sdramCapture = true;
+      controller.paramProps[PtpDevicePropCode.exposureTime] =
+          const PropState(value: 0xFFFFFFFF);
+      transport
+        ..ok() // 0x9207(Bulb 开)—— 直拍码被本地门挡下
+        ..ok(); // 0x920C(抬起结束)
+      final press = controller.capturePressed();
+      await pumpEventQueue();
+      expect(transport.count(NikonOperationCode.afAndCaptureRecInSdram), 0,
+          reason: 'B 门/Time 是直拍族规格死门(0xA008/0xA204,官方 §6.2.4.2/'
+              '.3,2026-10-17 真机实证),本地跳过不发冤枉流量');
+      expect(controller.notice, contains('已改常规拍摄入卡'),
+          reason: '改道机制必须如实带出(横幅在曝光开始前显示)');
+      await controller.captureReleased();
+      delay.release(); // 按住等待环收口
+      await press;
+      expect(transport.count(NikonOperationCode.initiateCaptureRecInMedia), 1);
+      expect(transport.count(NikonOperationCode.terminateCapture), 1);
+      expect(controller.error, isNull);
+    });
+
     test('断链 → tracking/AE 锁旗标清零(会话级状态不跨会话)', () async {
       await startLiveView();
       controller.paramProps[PtpDevicePropCode.stillFocusMeteringMode] =

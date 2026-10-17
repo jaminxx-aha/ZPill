@@ -28,6 +28,7 @@ const Map<String, String> zhCatalog = {
   'settings.watermark': '水印',
   'settings.watermarkSubtitle': '下载 JPG 时合成:角标或摄影卡片(EXIF 卡)',
   'common.off': '关闭',
+  'common.copied': '已复制',
   'settings.badge': '角标',
   'settings.photoCard': '摄影卡',
   'settings.watermarkText': '水印文本(空 = 相机型号)',
