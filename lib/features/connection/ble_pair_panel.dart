@@ -10,8 +10,8 @@
 /// 面板只留档案一行 + 未配对引导 + lastError;②GEO/TIME 帧计数删;
 /// ③日志并轨统一日志(AppLog ble 域,帧级 trace 由 AppServices 常年
 /// 接线),内嵌日志框退役;④动作钮按会话态分型(就绪只剩断开,
-/// 扫描列表就绪时隐藏)。手动件只剩申请后台定位(两段式授权第二段;
-/// 写 TIME / 唤起 WiFi / 读 0x2004 已退役)。
+/// 扫描列表就绪时隐藏)。手动件全退(申请后台定位 2026-10-18 收编进
+/// 设置页 GPS 注入开关;写 TIME / 唤起 WiFi / 读 0x2004 已退役)。
 library;
 
 import 'dart:async';
@@ -58,7 +58,6 @@ class _BlePairPanelState extends State<BlePairPanel>
   bool _scanning = false;
   BleSessionState _sessionState = BleSessionState.idle;
   BlePairedIdentity? _saved;
-  String? _auth;
 
   /// 本次配对设备的 BLE 广播名(鸿蒙经典绑定按名匹配用)。
   String _pairedName = '';
@@ -82,8 +81,8 @@ class _BlePairPanelState extends State<BlePairPanel>
     // 全走统一日志(AppLog ble 域,通用日志页可查;帧级 trace 由
     // AppServices 常年接线,不在此管)。
     _eventSub = PlatformServices.ble.events.listen(_onEvent);
-    // 宿主喂的身份首帧即入:重连钮/冲突比较不等异步(_loadSaved 还要
-    // 查定位授权,授权查询悬着时身份不能跟着悬)。
+    // 宿主喂的身份首帧即入:重连钮/冲突比较不等异步(盘档读盘悬着时
+    // 身份不能跟着悬)。
     _saved = widget.savedIdentity;
     // 打开沿自动化(下一帧:扫描/重连路径里有 setState,initState 直调
     // 非法)。宿主身份迟到时(控制器异步装载沿)由 didUpdateWidget 补触发。
@@ -134,17 +133,8 @@ class _BlePairPanelState extends State<BlePairPanel>
   Future<void> _loadSaved() async {
     final saved = widget.savedIdentity ??
         await AppServices.instance.bleIdentityStore.load();
-    String? auth;
-    try {
-      auth = await PlatformServices.locationStream.authorizationStatus();
-    } on Exception {
-      auth = null;
-    }
     if (mounted) {
-      setState(() {
-        _saved = saved;
-        _auth = auth;
-      });
+      setState(() => _saved = saved);
     }
   }
 
@@ -378,6 +368,15 @@ class _BlePairPanelState extends State<BlePairPanel>
     }
   }
 
+  /// 手动唤醒重连:点按即显式意图 —— 打断在场(受闸)自动循环,绕闸
+  /// 直连待机相机(深睡唤醒 ~12s 开销真机实测,6490990 闸门前老行为);
+  /// 自动路仍受闸守望,深睡不背景打扰。世代号废旧循环、退避等待即刻
+  /// 醒,新循环走 [_resume] 同一收尾路。
+  Future<void> _manualResume() async {
+    _cancelRetry();
+    await _resume(gateStandby: false);
+  }
+
   /// 程序化经典蓝牙绑定(鸿蒙独有;iOS 无此 API 只能引导系统设置页)。
   /// 相机须先断开 BLE 才暴露经典蓝牙 —— 配对成功后先「断开」再点此钮;
   /// 绑定完成(系统弹窗确认)后再「重连」即注册落档。
@@ -434,20 +433,6 @@ class _BlePairPanelState extends State<BlePairPanel>
     widget.onIdentityChanged?.call();
   }
 
-  Future<void> _requestAlways() async {
-    try {
-      await PlatformServices.locationStream.requestAlwaysAuthorization();
-    } on Exception catch (e) {
-      _log('申请后台定位失败:$e');
-      return;
-    }
-    // 系统弹窗异步落定,延迟两拍再查授权态。
-    unawaited(() async {
-      await Future<void>.delayed(const Duration(seconds: 2));
-      await _loadSaved();
-    }());
-  }
-
   /// 我方注册身份的 deviceId(已存档优先,会话内存兜底;null = 首次
   /// 配对,无从比较冲突)。
   int? get _ownDeviceId => _saved?.deviceId ?? _session.identity?.deviceId;
@@ -470,28 +455,38 @@ class _BlePairPanelState extends State<BlePairPanel>
     return null;
   }
 
-  /// 广告厂商数据展示:0x0399 可解 → 结构化 deviceId(相机当前配对
-  /// 关系的 ID)+ 电源态(状态字节 bit0,Zf 已实证 0x1E/0x1F,原始
-  /// 字节同显);不可解(配对菜单态无 0x0399 / 异厂商数据)保底 hex
-  /// 供方言核对。
-  String _mfgSuffix(BuildContext context, BleDevice device) {
-    final mfg = device.mfgData;
-    if (mfg == null) return '';
-    final id = expectedControllerDeviceId(mfg);
-    if (id == null) return '  mfg ${hexOf(mfg)}';
-    final suffix =
-        context.t('ble.deviceId', {'id': id.toRadixString(16).toUpperCase()});
-    final status = advertisedStatusByte(mfg);
-    if (status == null) return '  $suffix';
-    final stateText = advertisedPowerState(mfg) == NikonAdvPowerState.standby
-        ? context.t('ble.advStandby',
-            {'b': status.toRadixString(16).toUpperCase().padLeft(2, '0')})
-        : context.t('ble.advAwake',
-            {'b': status.toRadixString(16).toUpperCase().padLeft(2, '0')});
-    return '  $suffix · $stateText';
+  String _fmtDate(DateTime t) => '${t.year}-${_two(t.month)}-${_two(t.day)}';
+
+  /// 扫描行电源态副文(2026-10-18 还原):bit0 待机位,全字节同显供
+  /// 方言核对;无状态字节(mfg 不足 7B:配对菜单态/异厂商)不出行。
+  /// 待机行是「点重连为何唤不醒」的答案面:深睡广播稀,闸门等物理唤醒。
+  String? _powerStateText(BuildContext context, BleDevice device) {
+    final status = advertisedStatusByte(device.mfgData);
+    if (status == null) return null;
+    final b = status.toRadixString(16).toUpperCase().padLeft(2, '0');
+    return context.t(
+        advertisedPowerState(device.mfgData) == NikonAdvPowerState.standby
+            ? 'ble.advStandby'
+            : 'ble.advAwake',
+        {'b': b});
   }
 
-  String _fmtDate(DateTime t) => '${t.year}-${_two(t.month)}-${_two(t.day)}';
+  /// 扫描行:设备名 + 电源态副文;deviceId/冲突指引不显(冲突指引在
+  /// 重连日志 AppLog)。
+  Widget _scanRow(BuildContext context, BleDevice device) {
+    final state = _powerStateText(context, device);
+    return ListTile(
+      dense: true,
+      enabled: _sessionState == BleSessionState.idle ||
+          _sessionState == BleSessionState.reconnecting,
+      leading: const Icon(Icons.camera_alt_outlined),
+      title: Text(device.name.isEmpty
+          ? context.t('ble.unnamed')
+          : device.name),
+      subtitle: state == null ? null : Text(state),
+      onTap: () => unawaited(_pair(device)),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -565,9 +560,11 @@ class _BlePairPanelState extends State<BlePairPanel>
                   (_sessionState == BleSessionState.idle ||
                       _sessionState == BleSessionState.reconnecting))
                 OutlinedButton(
-                  onPressed: _retrying
-                      ? null
-                      : () => unawaited(_resume(gateStandby: false)),
+                  // 点按即唤醒(2026-10-18 还原):深睡闸门只闸自动路,
+                  // 手动点 = 显式意图 —— 打断在场受闸循环绕闸直连,深睡
+                  // 相机 ~12s 开销唤醒(6490990 闸门前老行为)。自动路
+                  // 仍受闸守望,待机不背景打扰。
+                  onPressed: () => unawaited(_manualResume()),
                   child: Text(_retrying
                       ? context.t('ble.reconnecting')
                       : context.t('ble.reconnectReuse')),
@@ -581,11 +578,6 @@ class _BlePairPanelState extends State<BlePairPanel>
                   child: Text(_binding
                       ? context.t('ble.binding')
                       : context.t('ble.bindClassic')),
-                ),
-              if (_auth != 'always')
-                OutlinedButton(
-                  onPressed: _requestAlways,
-                  child: Text(context.t('ble.requestBgLoc')),
                 ),
               if (_saved != null &&
                   !ready &&
@@ -616,38 +608,7 @@ class _BlePairPanelState extends State<BlePairPanel>
             child: ListView(
               shrinkWrap: true,
               children: [
-                for (final device in _devices)
-                  ListTile(
-                    dense: true,
-                    enabled: _sessionState == BleSessionState.idle ||
-                        _sessionState == BleSessionState.reconnecting,
-                    leading: const Icon(Icons.camera_alt_outlined),
-                    title: Text(device.name.isEmpty
-                        ? context.t('ble.unnamed')
-                        : device.name),
-                    subtitle: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('${device.uuid}  RSSI ${device.rssi}'
-                            '${_mfgSuffix(context, device)}'),
-                        // 冲突指引(HarmoNiLink 口径):相机广播的是它
-                        // 当前配对目标的 deviceId —— 解出来不是我们 =
-                        // 它在等别的手机,点连必被拒。
-                        if (cameraWaitsForOtherController(
-                            device.mfgData, _ownDeviceId))
-                          Text(
-                            _conflictHint(context,
-                                expectedControllerDeviceId(device.mfgData)!),
-                            style: Theme.of(context)
-                                .textTheme
-                                .bodySmall
-                                ?.copyWith(
-                                    color: Theme.of(context).colorScheme.error),
-                          ),
-                      ],
-                    ),
-                    onTap: () => unawaited(_pair(device)),
-                  ),
+                for (final device in _devices) _scanRow(context, device),
               ],
             ),
           ),

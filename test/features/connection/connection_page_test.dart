@@ -1157,14 +1157,12 @@ void main() {
       final identityStore = await tempIdentityStore();
       final settingsStore = _FakeSettingsStore();
       final settings = SettingsController(store: settingsStore);
-      var refreshCalls = 0;
       final controller = ConnectionController(
         connection: connection,
         bleSession: session,
         bleIdentityStore: identityStore,
         wifiJoiner: joiner,
         settingsController: settings,
-        onBleInjectChanged: () => refreshCalls++,
       );
       // 预存身份(卡片「已配对」态;设备侧无关紧要,真身在新配对沿写)。
       await identityStore.save(BlePairedIdentity(
@@ -1255,22 +1253,20 @@ void main() {
           MaterialApp(home: ConnectionPage(controller: f.controller)));
       await tester.pumpAndSettle();
       await openBleTools(tester);
-      expect(find.text('蓝牙连接(工具通道)'), findsOneWidget);
+      expect(find.text('蓝牙连接'), findsOneWidget);
       expect(find.text('未连接'), findsNothing, reason: 'PTP 状态卡在蓝牙分段下隐藏');
       expect(find.text('已配对,未连接'), findsOneWidget);
       // 打开沿自动重连已在跑(面板硬绑 AppServices 单例;本用例页面显示
       // 夹具自建会话,状态行不动,但面板钮同位转进行态 —— 自动化可见面)。
       final retryBtn = tester.widget<OutlinedButton>(find.ancestor(
           of: find.text('重连中…'), matching: find.byType(OutlinedButton)));
-      expect(retryBtn.onPressed, isNull,
-          reason: '打开沿自动重连已在跑(2026-10-17 全自动重连);钮进行态禁点');
+      expect(retryBtn.onPressed, isNotNull,
+          reason: '点按即唤醒(2026-10-18):重连进行中可点,打断受闸循环绕闸直连');
       final wake = tester.widget<FilledButton>(find.ancestor(
-          of: find.text('唤醒相机 Wi-Fi'), matching: find.byType(FilledButton)));
+          of: find.text('远程连接相机'), matching: find.byType(FilledButton)));
       expect(wake.onPressed, isNull, reason: 'WiFi 动作门禁 = 会话就绪');
-      final switchTile =
-          tester.widget<SwitchListTile>(find.byType(SwitchListTile));
-      expect(switchTile.onChanged, isNotNull,
-          reason: 'GPS 开关门禁 = 已配对(开关注入驱动自己会连)');
+      // GPS 注入开关已迁设置页(2026-10-18),蓝牙页不再有开关。
+      expect(find.byType(SwitchListTile), findsNothing);
       // 收尾:关弹层 → 面板 dispose 废在途自动重连(退避 Timer 随取消
       // 释放;不关则挂到用例尾判「Timer still pending」)。
       await tester.tapAt(const Offset(400, 20));
@@ -1278,8 +1274,8 @@ void main() {
     });
 
     testWidgets(
-        'ready 后:GPS 开关拨通落库 + 刷新钩子;关闭/唤醒写 0x2005;'
-        '唤醒沿断链(相机等 BLE 释放才开热点)', (tester) async {
+        'ready 后:关闭/唤醒写 0x2005;唤醒沿断链(相机等 BLE 释放才开热点)',
+        (tester) async {
       // 夹具有真文件 IO(临时目录/身份存档),testWidgets 的
       // fake-async zone 吃不到 —— 必须 runAsync 放行。
       final f = (await tester.runAsync(readyFixture))!;
@@ -1289,18 +1285,13 @@ void main() {
       await openBleTools(tester);
       expect(find.text('已连接'), findsOneWidget);
 
-      await tester.tap(find.byType(SwitchListTile));
-      await tester.pumpAndSettle();
-      expect(f.settingsStore.value.bleGpsInject, isTrue);
-      expect(f.controller.bleGpsInject, isTrue);
-
       // 关闭先测(须 ready 态;唤醒沿会断链,0x80 不断链)。
       await tester.tap(find.text('关闭'));
       await tester.pumpAndSettle();
       expect(f.host.lastWrite(kNikonCharWifi), Uint8List.fromList([0x80]));
       expect(f.session.state, BleSessionState.ready);
 
-      await tester.tap(find.text('唤醒相机 Wi-Fi'));
+      await tester.tap(find.text('远程连接相机'));
       await tester.pumpAndSettle();
       expect(f.host.lastWrite(kNikonCharWifi), Uint8List.fromList([0x01]));
       expect(f.session.state, BleSessionState.idle,
@@ -1328,7 +1319,7 @@ void main() {
       await tester.pumpAndSettle();
       await openBleTools(tester);
 
-      await tester.tap(find.text('唤醒相机 Wi-Fi'));
+      await tester.tap(find.text('远程连接相机'));
       await tester.pumpAndSettle();
       expect(f.host.lastWrite(kNikonCharWifi), Uint8List.fromList([0x01]));
       expect(f.controller.cameraApCredentials, isNotNull);
@@ -1354,7 +1345,7 @@ void main() {
       await tester.pumpAndSettle();
       await openBleTools(tester);
 
-      await tester.tap(find.text('唤醒相机 Wi-Fi'));
+      await tester.tap(find.text('远程连接相机'));
       await tester.pumpAndSettle();
       expect(f.controller.cameraApCredentials, isNull);
       expect(f.session.state, BleSessionState.idle,
@@ -1383,7 +1374,7 @@ void main() {
       await tester.pumpAndSettle();
       await openBleTools(tester);
 
-      await tester.tap(find.text('唤醒相机 Wi-Fi'));
+      await tester.tap(find.text('远程连接相机'));
       await tester.pumpAndSettle();
       expect(f.host.lastWrite(kNikonCharWifi), Uint8List.fromList([0x01]));
       expect(f.session.state, BleSessionState.idle, reason: '交接沿断链');
@@ -1408,7 +1399,7 @@ void main() {
       await tester.pumpAndSettle();
       await openBleTools(tester);
 
-      await tester.tap(find.text('唤醒相机 Wi-Fi'));
+      await tester.tap(find.text('远程连接相机'));
       await tester.pumpAndSettle();
       expect(joiner.joinedSsid, 'Zf_80114411', reason: '凭据在手仍尝试加入,失败才回落');
       expect(conn.connectIp, isNull, reason: 'join 失败不发射连接');
