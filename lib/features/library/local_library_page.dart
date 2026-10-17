@@ -19,7 +19,7 @@
 /// 开关,非阻塞点了才变速静音;Android/ohos 通道待补回落海报帧 +
 /// 说明文案)。查看器可删除/把文件补导入系统相册。
 ///
-/// 多选:AppBar「选择」或长按任意格进入(长按格预选);多选中点格
+/// 多选:长按任意格进入(长按格预选);多选中点格
 /// = 勾/取消(连拍格整段原子勾),AppBar 变「已选 {n} 项」+ 全选/
 /// 退出,底部操作栏批量删除(确认把关)/批量导出系统相册(导出后
 /// 应用内文件保留)。单删收进多选(选 1 删 1);查看器内单删不动。
@@ -291,11 +291,6 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
                 // 传输徽标:进行中任务数角标,点击进传输页看任务列表。
                 _transfersBadge(context, activeCount),
                 _filterMenuAnchor(context),
-                if (files.isNotEmpty)
-                  TextButton(
-                    onPressed: _enterSelect,
-                    child: Text(context.t('libpage.select')),
-                  ),
                 const SizedBox(width: 8),
               ],
             ],
@@ -701,9 +696,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     );
   }
 
-  // ── 多选(选择钮 / 长按格进场;底部操作栏批量删/导出)──
-
-  void _enterSelect() => setState(() => _selectMode = true);
+  // ── 多选(长按格进场;底部操作栏批量删/导出)──
 
   void _exitSelect() => setState(() {
         _selectMode = false;

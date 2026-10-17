@@ -553,7 +553,7 @@ void main() {
   });
 
   // ── 筛选弹层/多选(2026-10-16:iPhone 图库式收口,筛选进弹层,
-  // 选择钮/长按格进多选,操作栏批量删/导出)──
+  // 长按格进多选,操作栏批量删/导出)──
 
   testWidgets('筛选弹层:分区头在场,当前项打勾,换档勾随迁、点行即收',
       (tester) async {
@@ -590,8 +590,7 @@ void main() {
     expect(find.byType(MenuItemButton), findsNothing);
   });
 
-  testWidgets('「选择」进多选:空选禁用操作栏,勾选启用,退出复原',
-      (tester) async {
+  testWidgets('长按进多选:勾选启用操作栏,空选禁用,退出复原', (tester) async {
     writeFile('a.jpg', modified: DateTime(2026, 10, 1));
     writeFile('b.jpg', modified: DateTime(2026, 10, 2));
     final gallery = _FakeGallery(dir);
@@ -600,16 +599,21 @@ void main() {
     await tester.pumpWidget(host(gallery, controller));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('选择'));
+    await tester.longPress(find.byType(Image).first); // b(最新在前)预选
     await tester.pumpAndSettle();
-    expect(find.text('已选 0 项'), findsOneWidget);
+    expect(find.text('已选 1 项'), findsOneWidget);
     expect(find.byTooltip('全选'), findsOneWidget);
     expect(find.byTooltip('取消选择'), findsOneWidget);
     FilledButton exportBtn() => tester.widget<FilledButton>(find.ancestor(
         of: find.text('导出到系统相册'), matching: find.byType(FilledButton)));
+    expect(exportBtn().onPressed, isNotNull); // 勾选即启用
+
+    await tester.tap(find.byType(Image).first); // b 再点 = 取消
+    await tester.pumpAndSettle();
+    expect(find.text('已选 0 项'), findsOneWidget);
     expect(exportBtn().onPressed, isNull); // 空选禁用
 
-    await tester.tap(find.byType(Image).first);
+    await tester.tap(find.byType(Image).at(1)); // a 勾上
     await tester.pumpAndSettle();
     expect(find.text('已选 1 项'), findsOneWidget);
     expect(exportBtn().onPressed, isNotNull); // 勾选即启用
@@ -682,7 +686,7 @@ void main() {
     await tester.pumpWidget(host(gallery, controller));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('选择'));
+    await tester.longPress(find.byType(Image).first); // v.mov(最新在前)预选
     await tester.pumpAndSettle();
     await tester.tap(find.byTooltip('全选'));
     await tester.pumpAndSettle();
@@ -729,15 +733,6 @@ void main() {
 
     await tester.pump(const Duration(seconds: 5));
     await tester.pumpAndSettle();
-  });
-
-  testWidgets('空目录不出「选择」钮', (tester) async {
-    final gallery = _FakeGallery(dir);
-    final controller =
-        TransfersController(engine: _FakeEngine(), gallery: gallery);
-    await tester.pumpWidget(host(gallery, controller));
-    await tester.pumpAndSettle();
-    expect(find.text('选择'), findsNothing);
   });
 
   testWidgets('传输徽标:进行中任务数角标;点击进传输页', (tester) async {
