@@ -795,20 +795,29 @@ final class RemoteController extends ChangeNotifier {
   Future<(bool, String?)> _fireShutter() async {
     String? fallbackNotice;
     if (sdramCapture && !_sdramCaptureDropped) {
-      try {
-        await session.afAndCaptureRecInSdram();
-        return (true, null);
-      } on PtpResponseException catch (e) {
-        if (!_captureFallbackFrom.contains(e.responseCode)) rethrow;
-        // 0x90CB 码级被拒:记回落提示后**贯穿**到常规拍摄链(照片必须
-        // 实拍入卡,这里只换机制)。模型级拒绝(0x2005)记本会话不再
-        // 重试;状态类(0x200F/0x2013)逐拍回试 —— 拨杆拨回、卡归位后
-        // 直拍仍可用。
-        final dropped = e.responseCode == PtpResponseCode.operationNotSupported;
-        if (dropped) _sdramCaptureDropped = true;
-        final code = '0x${e.responseCode.toRadixString(16).toUpperCase()}';
-        fallbackNotice = 'SDRAM 直拍被拒〔$code〕,已改常规拍摄入卡'
-            '${dropped ? ',本连接不再重试' : ''}';
+      if (_shutterIsOpenShutter) {
+        // B 门/Time 哨兵:直拍族(0x90C0/0x90CB)规格明文不支持长曝档
+        //(0xA008 Shutter_Speed_Bulb / 0xA204 Shutter_Speed_Time,官方
+        // §6.2.4.2/.3;2026-10-17 真机实证)—— 本地跳过零流量,直接走
+        // 0x9207 按住/定时 B 门路,照片照旧入卡,如实提示。
+        fallbackNotice = 'SDRAM 直拍不支持 B 门长曝,已改常规拍摄入卡';
+      } else {
+        try {
+          await session.afAndCaptureRecInSdram();
+          return (true, null);
+        } on PtpResponseException catch (e) {
+          if (!_captureFallbackFrom.contains(e.responseCode)) rethrow;
+          // 0x90CB 码级被拒:记回落提示后**贯穿**到常规拍摄链(照片必须
+          // 实拍入卡,这里只换机制)。模型级拒绝(0x2005)记本会话不再
+          // 重试;状态类(0x200F/0x2013)逐拍回试 —— 拨杆拨回、卡归位后
+          // 直拍仍可用。
+          final dropped =
+              e.responseCode == PtpResponseCode.operationNotSupported;
+          if (dropped) _sdramCaptureDropped = true;
+          final code = '0x${e.responseCode.toRadixString(16).toUpperCase()}';
+          fallbackNotice = 'SDRAM 直拍被拒〔$code〕,已改常规拍摄入卡'
+              '${dropped ? ',本连接不再重试' : ''}';
+        }
       }
     }
     final pref = _captureOpPref;
@@ -1041,7 +1050,13 @@ final class RemoteController extends ChangeNotifier {
     final wasLive = liveViewActive;
     if (wasLive) engine.pause();
     try {
-      await _fireShutter();
+      final (_, sdramFallback) = await _fireShutter();
+      if (sdramFallback != null) {
+        // 直拍-B 门互斥改道等机制提示:曝光开始前如实带出(capture()
+        // 路径的回落提示在收口带出,按住路径这里等效提前)。
+        notice = sdramFallback;
+        notifyListeners();
+      }
       _bulbOpening = false;
       if (_bulbClosePending) {
         // 抬起先于开拍落地(极速点按):落地即收门,曝光开了就关。
