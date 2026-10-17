@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""从仓库根 nikonpill.png 生成 iOS 与 ohos 应用图标。
+"""从仓库根 nikonpill.png 生成 iOS 与 ohos 应用图标及三端启动占位图。
 
 原图本身已是完整的方形图标设计(黄底上 56° 斜向飞行的药丸,
 红头右上、金尾左下),因此按原图方向与构图原样导出:
@@ -11,6 +11,9 @@
 - ohos/AppScope/resources/base/media/app_icon.png(114px,圆角 23,四角透明)
 - ohos/entry/src/main/resources/base/media/icon.png(同上)
 - ohos/entry/src/ohosTest/resources/base/media/icon.png(同上)
+- ios/Runner/Assets.xcassets/LaunchImage.imageset/*(120pt 三档,圆角,启动屏居中占位)
+- android/.../mipmap-{m,h,x,xh,xxh,xxxh}dpi/launch_image.png(96dp 网格,圆角)
+- android/.../mipmap-{m,h,x,xh,xxh,xxxh}dpi/ic_launcher.png(48dp 网格,圆角,替换默认 Flutter 图)
 
 用法:python3 tools/make_icons.py [源图](默认 <repo>/nikonpill.png)
 依赖:Pillow。
@@ -25,6 +28,8 @@ from PIL import Image, ImageDraw
 ROOT = Path(__file__).resolve().parents[1]
 
 IOS_ICONSET = ROOT / "ios/Runner/Assets.xcassets/AppIcon.appiconset"
+IOS_LAUNCH_IMAGESET = ROOT / "ios/Runner/Assets.xcassets/LaunchImage.imageset"
+ANDROID_RES = ROOT / "android/app/src/main/res"
 OHOS_ICONS = [
     ROOT / "ohos/AppScope/resources/base/media/app_icon.png",
     ROOT / "ohos/entry/src/main/resources/base/media/icon.png",
@@ -32,6 +37,11 @@ OHOS_ICONS = [
 ]
 OHOS_SIZE = 114
 OHOS_RADIUS = 23  # 与 flutter-ohos 模板默认图标一致(114 边长圆角 23,四角透明)
+ROUND_RATIO = OHOS_RADIUS / OHOS_SIZE
+LAUNCH_IOS_PT = 120  # iOS 启动屏 @1x 点尺寸,约屏宽 1/3
+LAUNCH_ANDROID_DP = 96
+LAUNCHER_ANDROID_DP = 48
+ANDROID_LAUNCH_DPI = {"mdpi": 1, "hdpi": 1.5, "xhdpi": 2, "xxhdpi": 3, "xxxhdpi": 4}
 
 
 # ---------------------------------------------------------------- 导出
@@ -48,16 +58,49 @@ def export_ios(master):
         yield fn, px
 
 
-def ohos_icon(master):
-    """114px 圆角图标:4x 超采样圆角蒙板保证边缘平滑,四角透明。"""
-    s = OHOS_SIZE
-    base = master.resize((s, s), Image.LANCZOS).convert("RGBA")
+def rounded(master, size):
+    """size px 圆角方形:4x 超采样蒙板保证边缘平滑,四角透明。
+
+    圆角比例与 ohos 应用图标一致(23/114),启动占位图沿用同一观感。
+    """
     ss = 4
-    m = Image.new("L", (s * ss, s * ss), 0)
-    ImageDraw.Draw(m).rounded_rectangle([0, 0, s * ss - 1, s * ss - 1], radius=OHOS_RADIUS * ss, fill=255)
-    alpha = m.resize((s, s), Image.LANCZOS)
-    base.putalpha(alpha)
+    base = master.resize((size, size), Image.LANCZOS).convert("RGBA")
+    m = Image.new("L", (size * ss, size * ss), 0)
+    ImageDraw.Draw(m).rounded_rectangle(
+        [0, 0, size * ss - 1, size * ss - 1],
+        radius=round(size * ROUND_RATIO) * ss,
+        fill=255,
+    )
+    base.putalpha(m.resize((size, size), Image.LANCZOS))
     return base
+
+
+def ohos_icon(master):
+    return rounded(master, OHOS_SIZE)
+
+
+def export_launch(master):
+    for suffix, px in (("", LAUNCH_IOS_PT), ("@2x", LAUNCH_IOS_PT * 2), ("@3x", LAUNCH_IOS_PT * 3)):
+        out = rounded(master, px)
+        out.save(IOS_LAUNCH_IMAGESET / f"LaunchImage{suffix}.png")
+        print(f"ios   LaunchImage{suffix}.png  {px}px rgba")
+    for dpi, mult in ANDROID_LAUNCH_DPI.items():
+        px = round(LAUNCH_ANDROID_DP * mult)
+        out = rounded(master, px)
+        target = ANDROID_RES / f"mipmap-{dpi}" / "launch_image.png"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        out.save(target)
+        print(f"android mipmap-{dpi}/launch_image.png  {px}px rgba")
+
+
+def export_launcher(master):
+    for dpi, mult in ANDROID_LAUNCH_DPI.items():
+        px = round(LAUNCHER_ANDROID_DP * mult)
+        out = rounded(master, px)
+        target = ANDROID_RES / f"mipmap-{dpi}" / "ic_launcher.png"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        out.save(target)
+        print(f"android mipmap-{dpi}/ic_launcher.png  {px}px rgba")
 
 
 def main():
@@ -73,6 +116,8 @@ def main():
         target.parent.mkdir(parents=True, exist_ok=True)
         icon.save(target)
         print(f"ohos {target.relative_to(ROOT)}  {icon.size[0]}px rgba")
+    export_launch(master)
+    export_launcher(master)
 
 
 if __name__ == "__main__":
