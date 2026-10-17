@@ -170,7 +170,10 @@ const _shutterStops = <(int, int)>[
 ];
 
 /// 快门取值域直供表:标准档打包值(num<<16|den,快→慢)+ Bulb 哨兵
-/// (OpenZCine 选择器同款;Time/X 同步是机顶拨盘位,不入选)。
+/// (OpenZCine 选择器同款;X 同步/Time 仍是机顶拨盘位不入选 —— T 门
+/// 0xFFFFFFFD 2026-10-17 真机定案:0xD100 写入合法收下,但 0x9207
+/// 拍照路径官方规格明文拒绝(Invalid_Status = "The shutter speed is
+/// set to Time",§6.2.4.1),能选不能拍,不进表)。
 /// (const 列表不支持 for 元素、记录解构 for 会崩 analyzer —— 用 $1/$2
 /// 取值的惰性 final。)
 final _kShutterPickValues = <int>[
