@@ -533,6 +533,8 @@ const Map<String, String> enCatalog = {
       'The exposure has ended, but the shutter value could not be restored automatically; set it back from the shutter panel',
   'remote.errBulbShutter':
       'Shutter is in Bulb/Time: hold the on-screen shutter button to expose, or enable the self-timer to combine it into a timed Bulb exposure',
+  'remote.countdownDelay': 'Delay',
+  'remote.countdownExposure': 'Exposure',
   'remote.sdramNoGallery':
       'Captured (SDRAM, not to card): no gallery channel attached; object not saved',
   'remote.sdramSaved':
