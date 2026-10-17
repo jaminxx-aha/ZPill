@@ -981,11 +981,31 @@ class _EnumSkeleton extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     return SingleChildScrollView(
       physics: const NeverScrollableScrollPhysics(),
-      padding: const EdgeInsets.only(bottom: AppSpacing.lg),
+      padding: const EdgeInsets.only(top: 20, bottom: AppSpacing.lg),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          for (var g = 0; g < 3; g++) _skeletonGroup(scheme, first: g == 0),
+          // 平铺方块骨架:枚举中相册分野未定,不预设日期分组,只给
+          // 「照片正在到来」的形状感。
+          for (var r = 0; r < 6; r++)
+            Row(
+              children: [
+                for (var c = 0; c < 4; c++)
+                  Expanded(
+                    child: AspectRatio(
+                      aspectRatio: 1,
+                      child: Container(
+                        margin: const EdgeInsets.all(1),
+                        decoration: BoxDecoration(
+                          color: scheme.onSurface.withValues(alpha: 0.06),
+                          borderRadius:
+                              BorderRadius.circular(AppRadius.lg),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
           if (message != null)
             Padding(
               padding: const EdgeInsets.only(top: AppSpacing.lg),
@@ -997,52 +1017,6 @@ class _EnumSkeleton extends StatelessWidget {
             ),
         ],
       ),
-    );
-  }
-
-  /// 一组 = 日期头条 + 2 行 4 列方块(形状对齐分段日期网格)。
-  Widget _skeletonGroup(ColorScheme scheme, {required bool first}) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: EdgeInsets.fromLTRB(12, first ? 20 : 28, 12, 8),
-          child: Container(
-            width: 96,
-            height: 12,
-            decoration: BoxDecoration(
-              color: scheme.onSurface.withValues(alpha: 0.10),
-              borderRadius: BorderRadius.circular(6),
-            ),
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 2),
-          child: Column(
-            children: [
-              for (var r = 0; r < 2; r++)
-                Row(
-                  children: [
-                    for (var c = 0; c < 4; c++)
-                      Expanded(
-                        child: AspectRatio(
-                          aspectRatio: 1,
-                          child: Container(
-                            margin: const EdgeInsets.all(1),
-                            decoration: BoxDecoration(
-                              color: scheme.onSurface.withValues(alpha: 0.06),
-                              borderRadius:
-                                  BorderRadius.circular(AppRadius.lg),
-                            ),
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-            ],
-          ),
-        ),
-      ],
     );
   }
 }
