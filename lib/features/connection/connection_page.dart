@@ -45,7 +45,7 @@ import '../browser/photo_grid_page.dart';
 import '../common/widgets/confirm_dialog.dart';
 import '../remote/remote_controller.dart';
 import '../remote/remote_page.dart';
-import '../settings/ble_pair_page.dart';
+import 'ble_pair_panel.dart';
 import '../settings/settings_page.dart';
 import 'camera_overview_controller.dart';
 import 'connection_status_card.dart';
@@ -152,6 +152,7 @@ class ConnectionController extends ChangeNotifier {
   final void Function()? onBleInjectChanged;
 
   CameraLinkState state = CameraLinkState.disconnected;
+
   /// 配对后的机身确认等待窗:pairing → connecting 沿置位(连接层此窗
   /// 保持 connecting 安静重试),离开 connecting 即清。真机(2026-10-06):
   /// 0x935A 后相机弹「配对完成」等机身上按 OK,按之前重连全被拒 ——
@@ -196,8 +197,8 @@ class ConnectionController extends ChangeNotifier {
     if (_methodTouched) {
       return;
     }
-    final restored = connectionMethodFromName(
-        settingsController?.value.connectionMethod);
+    final restored =
+        connectionMethodFromName(settingsController?.value.connectionMethod);
     if (restored != null && restored != method) {
       method = restored;
       notifyListeners();
@@ -222,8 +223,7 @@ class ConnectionController extends ChangeNotifier {
   bool get bleReady => bleState == BleSessionState.ready;
 
   /// BLE 通道是否装配(未装配平台不出蓝牙分段)。
-  bool get bleEnabled =>
-      bleSession != null && bleIdentityStore != null;
+  bool get bleEnabled => bleSession != null && bleIdentityStore != null;
 
   /// 重载已配对身份(页面进沿/配对页返回沿调用;身份落档后卡片即从
   /// 「未配对」翻到「已配对」)。
@@ -246,7 +246,8 @@ class ConnectionController extends ChangeNotifier {
             bleState != BleSessionState.reconnecting)) {
       return;
     }
-    await session.retryReconnect();
+    // 手动重连 = 显式用户意图,绕深睡闸门(retryReconnect 默认闸)。
+    await session.retryReconnect(gateStandby: false);
   }
 
   /// BLE 断开(身份保留)。
@@ -333,7 +334,8 @@ class ConnectionController extends ChangeNotifier {
     if (bleState != BleSessionState.ready) {
       var reconnected = false;
       for (var attempt = 0; attempt < 2 && !reconnected; attempt++) {
-        reconnected = await session.retryReconnect();
+        // 用户刚点「关闭 Wi-Fi」= 要够得着相机,绕深睡闸门。
+        reconnected = await session.retryReconnect(gateStandby: false);
         if (!reconnected && attempt == 0) {
           await Future<void>.delayed(session.nextRetryDelay);
         }
@@ -367,8 +369,7 @@ class ConnectionController extends ChangeNotifier {
       return null;
     }
     if (bleState == BleSessionState.reconnecting ||
-        (bleState == BleSessionState.idle &&
-            session.lastError != null)) {
+        (bleState == BleSessionState.idle && session.lastError != null)) {
       return session.lastError;
     }
     return null;
@@ -525,8 +526,7 @@ class ConnectionController extends ChangeNotifier {
 
   /// /24 扫描结果(相机名/name 空 = 相机被拒 InitFail,UI 以 IP 展示)。
   final _subnetCameras = <ProbedCamera>[];
-  List<ProbedCamera> get subnetCameras =>
-      List.unmodifiable(_subnetCameras);
+  List<ProbedCamera> get subnetCameras => List.unmodifiable(_subnetCameras);
 
   /// /24 扫描进行中(入口按钮转圈/禁用)。
   bool scanningSubnet = false;
@@ -724,7 +724,7 @@ class ConnectionController extends ChangeNotifier {
 }
 
 /// 蓝牙工具卡状态文案(未配对/已配对未连/握手中/已连接/重连中)。
-/// 返回 = t() 键(与 ble_pair_page 共用),消费端 _bleCard 里包 t()。
+/// 返回 = t() 键(与 ble_pair_panel 共用),消费端 _bleCard 里包 t()。
 String bleStateLabel(ConnectionController c) => switch (c.bleState) {
       BleSessionState.pairing => 'ble.handshaking',
       BleSessionState.ready => 'conn.connected',
@@ -1044,9 +1044,8 @@ class _ConnectionPageState extends State<ConnectionPage>
                   leading: Icon(_methodIcon(m)),
                   title: Text(context.t(_methodLabel(m))),
                   subtitle: Text(context.t(_methodDesc(m))),
-                  trailing: controller.method == m
-                      ? const Icon(Icons.check)
-                      : null,
+                  trailing:
+                      controller.method == m ? const Icon(Icons.check) : null,
                   onTap: busy
                       ? null
                       : () {
@@ -1074,8 +1073,7 @@ class _ConnectionPageState extends State<ConnectionPage>
     void onControllerChanged() {
       final s = controller.state;
       if (closing ||
-          (s != CameraLinkState.connecting &&
-              s != CameraLinkState.connected)) {
+          (s != CameraLinkState.connecting && s != CameraLinkState.connected)) {
         return;
       }
       final sc = sheetContext;
@@ -1104,8 +1102,7 @@ class _ConnectionPageState extends State<ConnectionPage>
       builder: (sc) {
         sheetContext = sc;
         return Padding(
-          padding: EdgeInsets.only(
-              bottom: MediaQuery.of(sc).viewInsets.bottom),
+          padding: EdgeInsets.only(bottom: MediaQuery.of(sc).viewInsets.bottom),
           child: SizedBox(
             height: MediaQuery.of(sc).size.height * 0.85,
             child: ListenableBuilder(
@@ -1156,34 +1153,10 @@ class _ConnectionPageState extends State<ConnectionPage>
               style: theme.textTheme.bodySmall
                   ?.copyWith(color: theme.colorScheme.error)),
         ),
-      const SizedBox(height: 12),
-      // 状态动作行:未配对 → 配对;已配对未连 → 重连;就绪 → 断开。
-      SizedBox(
-        width: double.infinity,
-        child: !hasIdentity
-            ? FilledButton.icon(
-                icon: const Icon(Icons.bluetooth_searching),
-                label: Text(context.t('conn.pairCamera')),
-                onPressed: () => _openBlePairPage(controller),
-              )
-            : (ready
-                ? OutlinedButton(
-                    onPressed: controller.bleDisconnect,
-                    child: Text(context.t('conn.disconnectBt')),
-                  )
-                : OutlinedButton(
-                    onPressed: controller.bleState ==
-                            BleSessionState.pairing
-                        ? null
-                        : () => unawaited(controller.bleReconnect()),
-                    child: Text(
-                        controller.bleState == BleSessionState.pairing
-                            ? context.t('ble.handshaking')
-                            : context.t('conn.reconnect')),
-                  )),
-      ),
       const SizedBox(height: 8),
       // GPS 注入开关(就绪才可用;开着时驱动自动维持重连与注入)。
+      // 配对/重连/断开动作不再单列 —— 下方配对面板自带全套(扫描、
+      // 复用重连、解除、断开),原状态动作行删。
       SwitchListTile(
         contentPadding: EdgeInsets.zero,
         dense: true,
@@ -1214,25 +1187,28 @@ class _ConnectionPageState extends State<ConnectionPage>
           child: OutlinedButton(
             // 门禁 = 有身份(传图后 BLE 断开是常态,方法内先补链
             // 再写 0x80);握手/relink 中禁用。
-            onPressed: hasIdentity &&
-                    controller.bleState != BleSessionState.pairing
-                ? () => unawaited(_bleWifiAction(
-                    controller, controller.closeCameraWifi,
-                    success: context.t('conn.wifiOffRequested')))
-                : null,
+            onPressed:
+                hasIdentity && controller.bleState != BleSessionState.pairing
+                    ? () => unawaited(_bleWifiAction(
+                        controller, controller.closeCameraWifi,
+                        success: context.t('conn.wifiOffRequested')))
+                    : null,
             child: Text(context.t('common.off')),
           ),
         ),
       ]),
       TextButton(
-        onPressed: ready
-            ? () => unawaited(_loadApCredentials(controller))
-            : null,
+        onPressed:
+            ready ? () => unawaited(_loadApCredentials(controller)) : null,
         child: Text(context.t('conn.readCredentials')),
       ),
-      TextButton(
-        onPressed: () => _openBlePairPage(controller),
-        child: Text(context.t('conn.pairingManage')),
+      const SizedBox(height: 8),
+      // 配对面板(原独立「BLE 配对 / GPS 注入」页整体迁入):扫描点选
+      // 配对、复用重连、解除、经典绑定、后台定位授权、手动件与 hex
+      // 日志。身份落盘/解除沿回调重载 controller.bleIdentity。
+      BlePairPanel(
+        savedIdentity: controller.bleIdentity,
+        onIdentityChanged: () => unawaited(controller.loadBleIdentity()),
       ),
     ];
   }
@@ -1259,11 +1235,8 @@ class _ConnectionPageState extends State<ConnectionPage>
       _showHint(
         controller,
         creds != null
-            ? context.t(
-                'conn.wifiAwakeCred',
-                {'ssid': creds.ssid})
-            : context.t(
-                'conn.wifiAwakeNoCred',
+            ? context.t('conn.wifiAwakeCred', {'ssid': creds.ssid})
+            : context.t('conn.wifiAwakeNoCred',
                 {'e': controller.bleLastError ?? context.t('conn.notSent')}),
         duration: const Duration(seconds: 5),
       );
@@ -1271,17 +1244,13 @@ class _ConnectionPageState extends State<ConnectionPage>
     }
     // 自动加入路上:join 看门狗 30s 兜底,过渡提示给足时长。
     _showHint(
-        controller,
-        context.t('conn.joiningHotspot',
-            {'ssid': creds.ssid}),
+        controller, context.t('conn.joiningHotspot', {'ssid': creds.ssid}),
         duration: const Duration(seconds: 30));
     final outcome = await controller.joinCameraAp();
     if (!mounted) return;
     if (outcome == ApJoinOutcome.joined) {
       _showHint(
-          controller,
-          context.t('conn.joinedHotspot',
-              {'ssid': creds.ssid}),
+          controller, context.t('conn.joinedHotspot', {'ssid': creds.ssid}),
           duration: const Duration(seconds: 5));
     } else if (outcome == ApJoinOutcome.failed) {
       _showHint(
@@ -1294,9 +1263,7 @@ class _ConnectionPageState extends State<ConnectionPage>
       // skipped:防御路(joiner 在 wake 后被置空等)—— 手动指引兜底。
       _showHint(
         controller,
-        context.t(
-            'conn.wifiAwake',
-            {'ssid': creds.ssid}),
+        context.t('conn.wifiAwake', {'ssid': creds.ssid}),
         duration: const Duration(seconds: 5),
       );
     }
@@ -1310,8 +1277,7 @@ class _ConnectionPageState extends State<ConnectionPage>
     _showHint(
         controller,
         got && creds != null
-            ? context.t('conn.hotspotDecoded',
-                {'ssid': creds.ssid})
+            ? context.t('conn.hotspotDecoded', {'ssid': creds.ssid})
             : context.t('conn.noCredentials',
                 {'e': controller.bleLastError ?? context.t('common.unknown')}));
   }
@@ -1326,14 +1292,6 @@ class _ConnectionPageState extends State<ConnectionPage>
         content: Text(message),
         duration: duration,
       ));
-  }
-
-  /// 配对页往返:返回沿重载身份(配对/解除后卡片状态即翻新)。
-  Future<void> _openBlePairPage(ConnectionController controller) async {
-    await Navigator.of(context).push(
-      MaterialPageRoute<void>(builder: (_) => const BlePairPage()),
-    );
-    await controller.loadBleIdentity();
   }
 
   /// WiFi 唤起/关闭动作收口:失败 SnackBar 如实(含原因),成功提示
@@ -1371,9 +1329,7 @@ class _ConnectionPageState extends State<ConnectionPage>
       _credentialRow(context, 'SSID', creds.ssid),
       if (creds.password.isNotEmpty)
         _credentialRow(context, 'conn.password', creds.password),
-      Text(
-          context.t('conn.security',
-              {'s': creds.securityLabel}),
+      Text(context.t('conn.security', {'s': creds.securityLabel}),
           style: Theme.of(context).textTheme.bodySmall),
     ];
   }
@@ -1400,8 +1356,8 @@ class _ConnectionPageState extends State<ConnectionPage>
             await Clipboard.setData(ClipboardData(text: value));
             if (context.mounted) {
               ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                content: Text(context.t('conn.copiedLabel',
-                    {'label': localizedLabel})),
+                content: Text(
+                    context.t('conn.copiedLabel', {'label': localizedLabel})),
                 duration: const Duration(seconds: 2),
               ));
             }
@@ -1424,8 +1380,8 @@ class _ConnectionPageState extends State<ConnectionPage>
       context: context,
       isScrollControlled: true,
       builder: (sheetContext) => Padding(
-        padding:
-            EdgeInsets.only(bottom: MediaQuery.of(sheetContext).viewInsets.bottom),
+        padding: EdgeInsets.only(
+            bottom: MediaQuery.of(sheetContext).viewInsets.bottom),
         child: SizedBox(
           height: MediaQuery.of(sheetContext).size.height * 0.85,
           child: ListenableBuilder(
@@ -1448,8 +1404,7 @@ class _ConnectionPageState extends State<ConnectionPage>
                   Container(
                     padding: const EdgeInsets.all(AppSpacing.md),
                     decoration: BoxDecoration(
-                      color:
-                          Theme.of(context).colorScheme.surfaceContainerLow,
+                      color: Theme.of(context).colorScheme.surfaceContainerLow,
                       borderRadius: BorderRadius.circular(AppRadius.sm),
                     ),
                     child: Text(
@@ -1561,8 +1516,7 @@ class _ConnectionPageState extends State<ConnectionPage>
             leading: const Icon(Icons.photo_camera_outlined),
             // name 空(InitFail 被拒)→ 显示 IP;被拒相机也照连,
             // 占用指引由连接层失败文案给出。
-            title: Text(
-                camera.name.isNotEmpty ? camera.name : camera.host),
+            title: Text(camera.name.isNotEmpty ? camera.name : camera.host),
             subtitle: Text(camera.rejected
                 ? context.t('conn.probeRejected')
                 : camera.host),
@@ -1574,8 +1528,7 @@ class _ConnectionPageState extends State<ConnectionPage>
                     closeSheet();
                   },
           ),
-        if (controller.subnetScanCompleted &&
-            controller.subnetCameras.isEmpty)
+        if (controller.subnetScanCompleted && controller.subnetCameras.isEmpty)
           Padding(
             padding: const EdgeInsets.only(top: 8),
             child: Text(
@@ -1657,9 +1610,7 @@ class _ConnectionPageState extends State<ConnectionPage>
     final confirmed = await showConfirmDialog(
       context,
       title: context.t('conn.forgetConfirm'),
-      content: context.t(
-          'conn.forgetBody',
-          {'name': saved.name}),
+      content: context.t('conn.forgetBody', {'name': saved.name}),
       confirmLabel: context.t('common.delete'),
       destructive: true,
     );
@@ -1743,8 +1694,8 @@ class _ConnectionPageState extends State<ConnectionPage>
       child: Column(
         children: [
           _infoRow(context, Icons.link, 'info.link', link),
-          _infoRow(
-              context, Icons.photo_camera_outlined, 'info.device', c?.deviceName ?? '--',
+          _infoRow(context, Icons.photo_camera_outlined, 'info.device',
+              c?.deviceName ?? '--',
               last: true),
         ],
       ),
@@ -1757,7 +1708,8 @@ class _ConnectionPageState extends State<ConnectionPage>
     return Card(
       child: Column(
         children: [
-          _infoRow(context, Icons.camera_outlined, 'info.model', info?.model ?? 'info.loading'),
+          _infoRow(context, Icons.camera_outlined, 'info.model',
+              info?.model ?? 'info.loading'),
           _infoRow(context, Icons.system_update_alt_outlined, 'info.firmware',
               info?.deviceVersion ?? '--'),
           _infoRow(context, Icons.tag_outlined, 'info.serial',
@@ -1765,7 +1717,10 @@ class _ConnectionPageState extends State<ConnectionPage>
           // 电池行不缺席(2026-10-16 真机反馈「电池不显示」修):数据
           // 没到回 '--' 占位,与固件/序列号行同口径;原条件渲染让该行
           // 整段消失、数据到货时布局跳版。
-          _infoRow(context, Icons.battery_std_outlined, 'info.battery',
+          _infoRow(
+              context,
+              Icons.battery_std_outlined,
+              'info.battery',
               _overview.batteryPercent == null
                   ? '--'
                   : '${_overview.batteryPercent}%',
@@ -1834,8 +1789,7 @@ class _ConnectionPageState extends State<ConnectionPage>
           // 读取中…),就地统一包 t();相机上报值未命中目录原样直返。
           SizedBox(
             width: 68,
-            child: Text(context.t(label),
-                style: theme.textTheme.bodyMedium),
+            child: Text(context.t(label), style: theme.textTheme.bodyMedium),
           ),
           const SizedBox(width: 12),
           Expanded(

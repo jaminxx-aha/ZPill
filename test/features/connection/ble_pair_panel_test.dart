@@ -5,19 +5,19 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:nikon_pill/app_services.dart';
 import 'package:nikon_pill/core/ble/ble_camera_session.dart';
 import 'package:nikon_pill/data/ble_identity_store.dart';
-import 'package:nikon_pill/features/settings/ble_pair_page.dart';
+import 'package:nikon_pill/features/connection/ble_pair_panel.dart';
 
-/// 配对页 0x0399 冲突指引:有身份+异 ID → 行内提示;同 ID → 无;
-/// 无身份 → 无;重连未命中(本页扫描结果里有别家相机)→ 日志复用
+/// 配对面板 0x0399 冲突指引:有身份+异 ID → 行内提示;同 ID → 无;
+/// 无身份 → 无;重连未命中(面板扫描结果里有别家相机)→ 日志复用
 /// 同一条指引。
 ///
 /// 基建(最小):AppServices 单例照常构建(bleGpsInject 默认关 → 零注入
 /// 驱动 Timer),只 mock nikonpill/ble 的 scan/scanForDeviceId(喂设备
 /// 列表/喂空)与 nikonpill/ble/events 的 listen(事件通道空挂)。身份
-/// 不走真盘档 —— File IO 在 fake-async 里永不落地,经 [BlePairPage.
+/// 不走真盘档 —— File IO 在 fake-async 里永不落地,经 [BlePairPanel.
 /// savedIdentity] 注入(生产不传,行为不变)。
 ///
-/// 收尾纪律:addTearDown 晚于「树已拆仍有 Timer」不变量检查,拆页 +
+/// 收尾纪律:addTearDown 晚于「树已拆仍有 Timer」不变量检查,拆面板 +
 /// 放掉 1s 状态行 Timer(与重连退避延迟)必须写在用例体内。
 void main() {
   const ble = MethodChannel('nikonpill/ble');
@@ -62,25 +62,24 @@ void main() {
     addTearDown(tester.view.reset);
     final messenger = tester.binding.defaultBinaryMessenger;
     messenger.setMockMethodCallHandler(bleEvents, (call) async => null);
-    addTearDown(
-        () => messenger.setMockMethodCallHandler(bleEvents, null));
-    messenger.setMockMethodCallHandler(
-        location, (call) async => call.method == 'authStatus' ? 'always' : null);
-    addTearDown(
-        () => messenger.setMockMethodCallHandler(location, null));
+    addTearDown(() => messenger.setMockMethodCallHandler(bleEvents, null));
+    messenger.setMockMethodCallHandler(location,
+        (call) async => call.method == 'authStatus' ? 'always' : null);
+    addTearDown(() => messenger.setMockMethodCallHandler(location, null));
     messenger.setMockMethodCallHandler(
         ble, (call) async => call.method == 'scan' ? scanResult : null);
     addTearDown(() => messenger.setMockMethodCallHandler(ble, null));
 
-    await tester
-        .pumpWidget(MaterialApp(home: BlePairPage(savedIdentity: saved)));
+    // 面板自身无 Scaffold(嵌入连接页弹层):测试桩补 Material 祖先。
+    await tester.pumpWidget(
+        MaterialApp(home: Scaffold(body: BlePairPanel(savedIdentity: saved))));
     await tester.pump();
     await tester.tap(find.text('扫描(30s)'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 50));
   }
 
-  /// 用例体收尾:拆页 + 放掉 1s 状态行周期 Timer(挂着的周期 Timer 按
+  /// 用例体收尾:拆面板 + 放掉 1s 状态行周期 Timer(挂着的周期 Timer 按
   /// 「树已拆仍有 Timer」判失败)。[drain] 须盖过用例遗留的延时(重连
   /// 退避 2s → 3s 起步)。
   Future<void> disposePage(WidgetTester tester,
@@ -103,9 +102,7 @@ void main() {
         scanResult: [deviceMap(mfgOf(0x56781234))],
         saved: identityOf(0x11223301));
 
-    expect(
-        find.textContaining('此相机在等别的手机(设备ID 0x56781234)'),
-        findsOneWidget);
+    expect(find.textContaining('此相机在等别的手机(设备ID 0x56781234)'), findsOneWidget);
     await disposePage(tester);
   });
 
@@ -119,7 +116,7 @@ void main() {
     await disposePage(tester);
   });
 
-  testWidgets('重连未命中:本页扫描结果里有别家相机 → 日志复用同一条指引', (tester) async {
+  testWidgets('重连未命中:面板扫描结果里有别家相机 → 日志复用同一条指引', (tester) async {
     // 会话身份一并注入:重连轮真实走到 scanForDeviceId(mock 喂空)。
     AppServices.instance.bleSession.identity = BleIdentity(
       peripheralUuid: 'P1',
@@ -138,7 +135,7 @@ void main() {
 
     // 行内提示 1 + 重连日志 1 = 同一条指引出现两处。
     expect(find.textContaining('此相机在等别的手机'), findsNWidgets(2));
-    // 拆页 + 排干重连退避(失败 1 轮 → 退避 2s)与 1s 状态行 Timer。
+    // 拆面板 + 排干重连退避(失败 1 轮 → 退避 2s)与 1s 状态行 Timer。
     await disposePage(tester, drain: const Duration(seconds: 3));
   });
 }
