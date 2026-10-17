@@ -3310,14 +3310,14 @@ void main() {
       await pumpEventQueue();
     }
 
-    test('对焦中再点对焦钮 → 0x9206 取消 + notice(打断实效待真机核对)',
+    test('对焦中再点对焦钮 → 零发包 + 如实提示(2026-10-17 真机定案)',
         () async {
       controller.focusing = true;
-      transport.ok(); // 0x9206
       await controller.afDriveNow();
-      expect(transport.requests.single.opcode,
-          NikonOperationCode.afDriveCancel);
-      expect(controller.notice, 'remote.focusCancelled');
+      expect(transport.requests, isEmpty,
+          reason: 'Zf 对 0x90C1 扣应答至 AF 结束,AF 期间线路被占死,'
+              '0x9206 只能排队到 AF 后空放 —— 假动作撤,零流量');
+      expect(controller.notice, 'remote.focusInProgress');
       expect(controller.error, isNull);
     });
 

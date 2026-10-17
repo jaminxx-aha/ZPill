@@ -1194,9 +1194,12 @@ final class PtpSession {
     _ensureOk(result, NikonOperationCode.afDrive);
   }
 
-  /// Nikon AfDriveCancel(0x9206,候选码,待真机核对):取消进行中的
-  /// 自动对焦。注意:PtpSession 事务全局串行,afDrive 的响应未回前本
-  /// 操作只能排队 —— 能否真的打断长对焦待真机核对,先入库备用。
+  /// Nikon AfDriveCancel(0x9206,官方 §6.2.5.2)。**2026-10-17 真机
+  /// 定案:生产已无调用方** —— Zf 对 0x90C1 扣住应答直至 AF 结束
+  /// (0xA002 未合焦即从该应答带回),AF 期间线路被在途事务占死,
+  /// 本操作排队只能到 AF 后空放;对焦钮改零发包如实提示
+  /// (remote.focusInProgress)。方法留档备将来「开始即回 OK」两段流
+  /// AF 的机身。
   Future<void> afDriveCancel() async {
     final result = await _serialized(() => transport
         .execute(const PtpRequest(opcode: NikonOperationCode.afDriveCancel)));
