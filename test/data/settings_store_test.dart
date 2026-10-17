@@ -326,4 +326,31 @@ void main() {
       expect((await reloaded.current()).language, AppLanguage.en);
     });
   });
+
+  group('连接方式记忆持久化(2026-10-17 连接页记住上次选中)', () {
+    test('默认 usb;copyWith/JSON 往返;旧档缺键/非字符串值回落 usb', () {
+      expect(const AppSettings().connectionMethod, 'usb');
+
+      final ap = const AppSettings().copyWith(connectionMethod: 'ap');
+      expect(ap.connectionMethod, 'ap');
+      expect(AppSettings.fromJson(ap.toJson()).connectionMethod, 'ap');
+
+      final bare = AppSettings.fromJson({'autoTransfer': true});
+      expect(bare.connectionMethod, 'usb',
+          reason: '旧版本文件无此键 → 默认有线');
+      expect(AppSettings.fromJson({'connectionMethod': 7}).connectionMethod,
+          'usb',
+          reason: '非字符串(手改文件)回落有线;表外名由消费侧兜底');
+    });
+
+    test('文件落盘往返(FileSettingsStore)', () async {
+      final dir = await Directory.systemTemp.createTemp('np_settings_conn');
+      addTearDown(() => dir.delete(recursive: true));
+      final store = FileSettingsStore(dataDir: () async => dir.path);
+      await store
+          .update(const AppSettings().copyWith(connectionMethod: 'ble'));
+      final reloaded = FileSettingsStore(dataDir: () async => dir.path);
+      expect((await reloaded.current()).connectionMethod, 'ble');
+    });
+  });
 }

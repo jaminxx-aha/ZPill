@@ -95,6 +95,11 @@ class SettingsController extends ChangeNotifier
   Future<void> setBleGpsInject(bool value) =>
       _update(settings.copyWith(bleGpsInject: value));
 
+  /// 连接页上次选中的连接方式(存 ConnectionMethod 枚举名;恢复在
+  /// ConnectionController,本控制器只管落库)。
+  Future<void> setConnectionMethod(String value) =>
+      _update(settings.copyWith(connectionMethod: value));
+
   Future<void> _update(AppSettings next) async {
     settings = next;
     notifyListeners();

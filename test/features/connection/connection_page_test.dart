@@ -338,6 +338,65 @@ void main() {
           reason: 'AP 方式在相机热点网段,STA 扫描的旧结果跨网段,作废');
     });
 
+    group('连接方式记忆(上次选中经 AppSettings 持久化)', () {
+      test('冷启恢复:设置里存的方式装载沿回填', () async {
+        final settingsStore = _FakeSettingsStore()
+          ..value = const AppSettings().copyWith(connectionMethod: 'sta');
+        final settings = SettingsController(store: settingsStore);
+        final controller = ConnectionController(
+          connection: _FakeConnection(),
+          settingsController: settings,
+        );
+        expect(controller.method, ConnectionMethod.usb,
+            reason: '装载沿前保持默认有线');
+        await pumpEventQueue();
+        expect(controller.method, ConnectionMethod.sta);
+      });
+
+      test('表外持久化名不回填(保持默认有线)', () async {
+        final settingsStore = _FakeSettingsStore()
+          ..value = const AppSettings().copyWith(connectionMethod: 'bogus');
+        final settings = SettingsController(store: settingsStore);
+        final controller = ConnectionController(
+          connection: _FakeConnection(),
+          settingsController: settings,
+        );
+        await pumpEventQueue();
+        expect(controller.method, ConnectionMethod.usb);
+      });
+
+      test('选中即落库(写侧走 SettingsController 同一条 AppSettings 路)',
+          () async {
+        final settingsStore = _FakeSettingsStore();
+        final settings = SettingsController(store: settingsStore);
+        final controller = ConnectionController(
+          connection: _FakeConnection(),
+          settingsController: settings,
+        );
+        await pumpEventQueue(); // 先让装载沿走完(默认档不动作)
+        controller.selectMethod(ConnectionMethod.ap);
+        await pumpEventQueue();
+        expect(settingsStore.value.connectionMethod, 'ap');
+        expect(settingsStore.updateCalls, 1);
+        expect(controller.method, ConnectionMethod.ap);
+      });
+
+      test('会话内已选过:装载沿不再回填(用户选择不被旧档覆盖)', () async {
+        final settingsStore = _FakeSettingsStore()
+          ..value = const AppSettings().copyWith(connectionMethod: 'ap');
+        final settings = SettingsController(store: settingsStore);
+        final controller = ConnectionController(
+          connection: _FakeConnection(),
+          settingsController: settings,
+        );
+        // 装载在途(构造沿已发起)用户先选:落库且随后到货的旧档不覆盖。
+        controller.selectMethod(ConnectionMethod.sta);
+        await pumpEventQueue();
+        expect(controller.method, ConnectionMethod.sta);
+        expect(settingsStore.value.connectionMethod, 'sta');
+      });
+    });
+
     test('hint:connected 无提示(信息视图自释);pairing/failed 保留', () async {
       final conn = _FakeConnection()..deviceName = 'NIKON ZF';
       final controller = ConnectionController(connection: conn);
