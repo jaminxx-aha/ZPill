@@ -61,17 +61,9 @@ const Map<String, String> enCatalog = {
   'settings.transferQualitySubtitle':
       'Originals as-is (compressed transfer in a later version)',
   'ble.notPaired': 'Not Paired',
-  'ble.disconnected': 'Disconnected',
   'ble.handshaking': 'Handshaking…',
-  'ble.connectedReady': 'Connected (injection ready)',
-  'ble.reconnectBackoff': 'Reconnecting (backoff {n}s)',
-  'ble.locAuth': 'Location auth: {a}',
   'ble.pairedInfo': 'Paired: {name}{serial}  {date}',
   'ble.serialLine': '  S/N {s}',
-  'ble.sessionLine':
-      'Session: {state} · Location: {fix} · GEO {geo} frames · TIME {time} frames',
-  'ble.sessionLineErr':
-      'Session: {state} · Location: {fix} · GEO {geo} frames · TIME {time} frames · Error: {err}',
   'common.none': 'None',
   'ble.scanHint':
       'On the camera, open the "Connect to Smart Device" menu first (advertising window ~30s), then tap Scan.',
@@ -96,9 +88,6 @@ const Map<String, String> enCatalog = {
   'ble.advAwake': 'Ready 0x{b}',
   'ble.waitingOtherPhone':
       'This camera is waiting for another phone (device ID 0x{id}): disconnect the existing connection or switch to this phone in the camera\'s "Paired Devices" menu, or make sure the camera is not occupied by another phone (e.g. SnapBridge)',
-  'ble.logHint': 'Log (long-press to select, or copy all on the right)',
-  'ble.copyAllLogs': 'Copy all logs',
-  'ble.logCopied': 'Log copied',
   'snapshot.title': 'Shooting Config Snapshots',
   'snapshot.subtitle':
       'Save current camera settings as a named preset, or restore a preset back to the camera',
