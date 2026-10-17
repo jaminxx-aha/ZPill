@@ -1,12 +1,34 @@
 /// 连接页本地组件(2026-10-17 界面对齐现代语言):拍摄页信息胶囊
 /// (remote_info_pill)同款语言 —— 圆角 999 / 1px hairline 描边 / 状态
 /// 点,配色走 M3 + [AppColors](连接页活在常规明暗主题,不引 LiveDesign
-/// 黑chrome)。就两个件,再多就该升 lib/design 了。
+/// 黑chrome)。三个件(胶囊/节头/分组容器)。
 library;
 
 import 'package:flutter/material.dart';
 
 import '../../design/app_dimens.dart';
+import '../../l10n/l10n.dart';
+
+/// 分组节头(iOS 设置组标题语言):小号次级色,左对齐组内 tile 文字。
+/// 传键就地 t()(消费点统一包 t() 约定)。
+class ConnSectionHeader extends StatelessWidget {
+  const ConnSectionHeader({super.key, required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(left: 16, bottom: 6),
+      child: Text(
+        context.t(label),
+        style: theme.textTheme.labelMedium
+            ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+      ),
+    );
+  }
+}
 
 /// 状态胶囊:8px 状态点 + 状态词(+可选尾随名)。
 class ConnStatusPill extends StatelessWidget {
