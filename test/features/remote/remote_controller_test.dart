@@ -2580,19 +2580,20 @@ void main() {
       expect(controller.frameSize.value, (width: 32, height: 24));
     }
 
-    test('点按 → 0x9205 帧像素坐标 + 0x90C1 驱动 + 对焦框上屏', () async {
+    test('点按 → 0x9205 挪框不自动 AF(2026-10-17 定案)+ 对焦框上屏',
+        () async {
       await startLiveView();
-      transport
-        ..ok() // changeAfArea
-        ..ok(); // afDrive
+      transport.ok(); // changeAfArea
       await controller.touchFocus(0.5, 0.25);
       final af = transport.requests
           .singleWhere((r) => r.opcode == NikonOperationCode.changeAfArea);
       expect(af.params, [16, 6], reason: '0.5×32、0.25×24(无头退回 SOF 帧)');
-      expect(transport.count(NikonOperationCode.afDrive), 1);
+      expect(transport.count(NikonOperationCode.afDrive), 0,
+          reason: '挪框只挪框,不跟发 AF');
       expect(controller.afBox, isNotNull);
       expect(controller.afBox!.nx, 0.5);
       expect(controller.afBox!.ny, 0.25);
+      expect(controller.afBox!.focused, isNull, reason: '未对焦:框回未定红');
       expect(controller.error, isNull);
       expect(controller.focusing, isFalse);
     });
@@ -2601,9 +2602,7 @@ void main() {
       await startLiveView();
       controller.engine.header.value =
           parseLiveViewHeader(_minimalHeaderFrame(recording: false));
-      transport
-        ..ok() // changeAfArea
-        ..ok(); // afDrive
+      transport.ok(); // changeAfArea
       await controller.touchFocus(0.5, 0.25);
       final af = transport.requests
           .singleWhere((r) => r.opcode == NikonOperationCode.changeAfArea);
@@ -2620,21 +2619,98 @@ void main() {
       expect(controller.recording, isFalse, reason: '被拒不翻转录制态');
     });
 
-    test('0x9205 忙(0x2019)→ 短退避重试后成功', () async {
+    test('0x9205 忙(0x2019)→ 宽限内逐拍退避静默续发(拉焦轮同款口径)',
+        () async {
       await startLiveView();
-      transport
-        ..reply(PtpResponseCode.deviceBusy)
-        ..reply(PtpResponseCode.deviceBusy)
-        ..ok() // changeAfArea 第 3 次成功
-        ..ok(); // afDrive
+      // 五连忙(超旧 3 次预算 —— 在途 0x9204 驱动窗可达 2s+):宽限
+      // (4s 墙钟)内一律静默续发,第 6 拍成功;超宽限暂停沿走
+      // DateTime 真钟,桩测不造假钟不覆盖(拉焦轮宽限用例同政策)。
+      for (var i = 0; i < 5; i++) {
+        transport.reply(PtpResponseCode.deviceBusy);
+      }
+      transport.ok(); // changeAfArea 第 6 拍成功(挪框不驱动 AF,无后续应答)
       final f = controller.touchFocus(0.25, 0.25);
       await pumpEventQueue();
-      delay.release(); // 第 1 次退避
-      await pumpEventQueue();
-      delay.release(); // 第 2 次退避
+      for (var i = 0; i < 5; i++) {
+        delay.release(); // 第 1..5 次退避
+        await pumpEventQueue();
+      }
       await f;
-      expect(transport.count(NikonOperationCode.changeAfArea), 3);
+      expect(transport.count(NikonOperationCode.changeAfArea), 6);
       expect(controller.afBox, isNotNull);
+      expect(controller.error, isNull);
+      expect(controller.notice, isNull, reason: '宽限内静默不提示');
+    });
+
+    test('同点再点 = 只驱动 AF 不重发 0x9205(点两下 = 移动 + 对焦);'
+        '容差内算同点、大位移算挪框', () async {
+      await startLiveView();
+      transport
+        ..ok() // 第一击 changeAfArea:挪框
+        ..ok() // 第二击 afDrive:同点对焦合焦
+        ..ok() // 第三击 afDrive:容差内同点(0.02 < 0.05)再对焦
+        ..ok() // 第四击 changeAfArea:大位移(0.1 > 0.05)挪框
+        ..ok(); // 第五击 afDrive:新位同点对焦
+      await controller.touchFocus(0.5, 0.5); // 挪框,无 AF
+      expect(transport.count(NikonOperationCode.changeAfArea), 1);
+      expect(transport.count(NikonOperationCode.afDrive), 0,
+          reason: '挪框不自动 AF');
+
+      await controller.touchFocus(0.5, 0.5); // 同点再点 → AF
+      expect(transport.count(NikonOperationCode.changeAfArea), 1,
+          reason: '同点不重发 0x9205(挪框纯冗余)');
+      expect(transport.count(NikonOperationCode.afDrive), 1);
+      expect(controller.afBox!.focused, isTrue, reason: '合焦绿框');
+
+      await controller.touchFocus(0.52, 0.51); // 容差内(0.02/0.01)仍同点
+      expect(transport.count(NikonOperationCode.changeAfArea), 1);
+      expect(transport.count(NikonOperationCode.afDrive), 2);
+
+      await controller.touchFocus(0.6, 0.5); // 大位移 → 挪框
+      expect(transport.count(NikonOperationCode.changeAfArea), 2);
+      expect(transport.count(NikonOperationCode.afDrive), 2,
+          reason: '挪框不驱动');
+      await controller.touchFocus(0.6, 0.5); // 新位同点 → AF
+      expect(transport.count(NikonOperationCode.afDrive), 3);
+      expect(controller.error, isNull);
+    });
+
+    test('同点对焦抢占滚轮(端点作废);挪框不抢占(端点/余量照旧)', () async {
+      await startLiveView();
+      transport.reply(NikonResponseCode.mfDriveStepEnd);
+      await controller.mfDriveStep(towardNear: true);
+      expect(controller.mfNearEnd, isTrue);
+
+      // 挪框(不同点):镜头不动,端点态保留(旧口径经 touchFocus 抢占
+      // 已随「挪框不自动 AF」一并撤除)。
+      transport.ok(); // changeAfArea
+      await controller.touchFocus(0.2, 0.8);
+      expect(controller.mfNearEnd, isTrue, reason: '挪框不动镜,端点仍有效');
+
+      // 同点再点 = AF:抢占,端点作废(nico clearMfLimits 同款)。
+      transport.ok(); // afDrive
+      await controller.touchFocus(0.2, 0.8);
+      expect(controller.mfNearEnd, isFalse, reason: 'AF 移焦后近端旗作废');
+    });
+
+    test('0x90C1 忙(0x2019)→ 同款宽限内逐拍退避静默续发', () async {
+      await startLiveView();
+      transport.ok(); // 第一击挪框
+      await controller.touchFocus(0.5, 0.5);
+      // 滚轮驱动在途(模拟):同点再点,AF 连吃四连忙后第 5 拍成功。
+      for (var i = 0; i < 4; i++) {
+        transport.reply(PtpResponseCode.deviceBusy);
+      }
+      transport.ok(); // afDrive 第 5 拍成功
+      final f = controller.touchFocus(0.5, 0.5);
+      await pumpEventQueue();
+      for (var i = 0; i < 4; i++) {
+        delay.release(); // 第 1..4 次退避
+        await pumpEventQueue();
+      }
+      await f;
+      expect(transport.count(NikonOperationCode.afDrive), 5);
+      expect(controller.afBox!.focused, isTrue, reason: '合焦绿框');
       expect(controller.error, isNull);
     });
 
@@ -2673,16 +2749,19 @@ void main() {
       expect(controller.error, contains('未合焦'));
       expect(controller.focusing, isFalse);
 
-      // 框色随判:触控对焦框 0xA002 后 focused=false(红),合焦后 true
-      transport
-        ..ok() // changeAfArea
-        ..reply(NikonResponseCode.outOfFocus); // afDrive 未合焦
+      // 框色随判:挪框后框回未定红;同点再点对焦,0xA002 → false(红),
+      // 合焦 → true(绿)
+      transport.ok(); // changeAfArea(挪框)
+      await controller.touchFocus(0.5, 0.25);
+      expect(controller.afBox!.focused, isNull, reason: '未对焦:未定红');
+      transport.reply(NikonResponseCode.outOfFocus); // 同点 AF 未合焦
       await controller.touchFocus(0.5, 0.25);
       expect(controller.afBox!.focused, isFalse, reason: '未合焦红框');
       transport
-        ..ok() // changeAfArea
-        ..ok(); // afDrive 合焦
-      await controller.touchFocus(0.5, 0.25);
+        ..ok() // changeAfArea(挪框到新位)
+        ..ok(); // 同点 AF 合焦
+      await controller.touchFocus(0.7, 0.25);
+      await controller.touchFocus(0.7, 0.25);
       expect(controller.afBox!.focused, isTrue, reason: '合焦绿框');
     });
 
@@ -2698,9 +2777,7 @@ void main() {
 
     test('对焦框:停取景即清', () async {
       await startLiveView();
-      transport
-        ..ok()
-        ..ok();
+      transport.ok(); // changeAfArea(挪框)
       await controller.touchFocus(0.5, 0.5);
       expect(controller.afBox, isNotNull);
       transport.ok(); // 0x9202
@@ -2930,10 +3007,12 @@ void main() {
       await controller.mfDriveStep(towardNear: false);
       expect(controller.dialNetPulses.value, 300, reason: '拒答弃单不入账');
 
-      // AF 移焦抢占:鼓面不回卷(避免视觉跳变;镜头新位置不回推账本)。
+      // AF 移焦抢占(同点再点对焦):鼓面不回卷(避免视觉跳变;镜头
+      // 新位置不回推账本);挪框一击同样不动鼓面账。
       transport
-        ..ok() // changeAfArea
-        ..ok(); // afDrive
+        ..ok() // changeAfArea(挪框)
+        ..ok(); // afDrive(同点对焦)
+      await controller.touchFocus(0.5, 0.5);
       await controller.touchFocus(0.5, 0.5);
       await pumpEventQueue();
       expect(controller.dialNetPulses.value, 300, reason: 'AF 抢占不回卷鼓面');
@@ -2943,29 +3022,18 @@ void main() {
       expect(controller.dialNetPulses.value, 0);
     });
 
-    test('AF 驱动移焦 → 端点态作废(nico clearMfLimits 同款)', () async {
-      await startLiveView();
-      transport.reply(NikonResponseCode.mfDriveStepEnd);
-      await controller.mfDriveStep(towardNear: true);
-      expect(controller.mfNearEnd, isTrue);
-
-      // 触控对焦(AF 移焦):端点旗随抢占清空。
-      transport
-        ..ok() // changeAfArea
-        ..ok(); // afDrive
-      await controller.touchFocus(0.5, 0.5);
-      await pumpEventQueue();
-      expect(controller.mfNearEnd, isFalse, reason: 'AF 移焦后近端旗作废');
-    });
-
     test('0xD061 值未知(desc 拒答未读到)→ 不锁,触控对焦照常', () async {
       await startLiveView();
       // paramProps 无 stillFocusMode 条目 = 值未知(fail-open,不把可用
       // 控制锁死)。
       transport
-        ..ok() // changeAfArea
-        ..ok(); // afDrive
+        ..ok() // changeAfArea(挪框)
+        ..ok(); // afDrive(同点对焦)
       await controller.touchFocus(0.5, 0.5);
+      expect(transport.count(NikonOperationCode.changeAfArea), 1);
+      expect(transport.count(NikonOperationCode.afDrive), 0,
+          reason: '挪框不自动 AF(值未知不锁,照常发 0x9205)');
+      await controller.touchFocus(0.5, 0.5); // 同点再点 → AF
       expect(transport.count(NikonOperationCode.afDrive), 1);
       expect(controller.notice, isNull);
     });
