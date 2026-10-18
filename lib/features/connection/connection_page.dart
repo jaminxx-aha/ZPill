@@ -279,11 +279,6 @@ class ConnectionController extends ChangeNotifier {
     await session.retryReconnect(gateStandby: false);
   }
 
-  /// BLE 断开(身份保留)。
-  Future<void> bleDisconnect() async {
-    await bleSession?.disconnect();
-  }
-
   /// 唤醒相机 WiFi 全程(SnapBridge 序,反编译实证 CameraConnectByWiFi
   /// UseCase):①ready 态先读 0x2004(凭据配对期已生成,官方读在写前;
   /// 读失败不清旧值 —— 凭据随机身配置不轮换,瞬时失败不该抹掉已展示
