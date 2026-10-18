@@ -24,6 +24,7 @@ void main() {
       nonce: 0x1234ABCD,
       serial: '1641397',
       controllerName: 'NikonPill',
+      cameraName: 'Z f_8014411',
       pairedAt: DateTime.utc(2026, 10, 13, 8, 0, 0),
     );
     await store.save(id);
@@ -34,6 +35,8 @@ void main() {
     expect(back.nonce, 0x1234ABCD);
     expect(back.serial, '1641397');
     expect(back.controllerName, 'NikonPill');
+    expect(back.cameraName, 'Z f_8014411');
+    expect(back.displayName, 'Z f_8014411');
     expect(back.pairedAt, DateTime.utc(2026, 10, 13, 8, 0, 0));
   });
 
@@ -43,12 +46,15 @@ void main() {
     expect(await store.load(), isNull);
   });
 
-  test('旧档缺 serial/name → 空串/默认名回落', () async {
+  test('旧档缺 serial/name/cameraName → 空串/默认名回落', () async {
     await File('${dir.path}/ble_identity.json').writeAsString('''
 {"peripheralUuid": "P2", "deviceId": 7, "nonce": 9, "pairedAt": "2026-10-13T08:00:00.000Z"}''');
     final back = await store.load();
     expect(back!.serial, isEmpty);
     expect(back.controllerName, 'NikonPill');
+    expect(back.cameraName, isEmpty);
+    expect(back.displayName, 'NikonPill',
+        reason: '旧档无相机名 → 展示名回落控制器名');
   });
 
   test('clear 后 load 返回 null', () async {

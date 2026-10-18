@@ -12,6 +12,9 @@
 /// 接线),内嵌日志框退役;④动作钮按会话态分型(就绪只剩断开,
 /// 扫描列表就绪时隐藏)。手动件全退(申请后台定位 2026-10-18 收编进
 /// 设置页 GPS 注入开关;写 TIME / 唤起 WiFi / 读 0x2004 已退役)。
+/// 2026-10-19 版式定稿:已配对设备行 = 图标 设备 解除配对 连接
+/// (序列/日期文字行退役);扫描钮独立一行(不与配对设备同行);
+/// iOS「去系统蓝牙完成注册」手动件退役(首配成功沿自动深链保留)。
 library;
 
 import 'dart:async';
@@ -25,14 +28,14 @@ import '../../core/ble/adv_payload.dart';
 import '../../core/ble/ble_camera_session.dart';
 import '../../core/log/app_log.dart';
 import '../../data/ble_identity_store.dart';
+import '../../design/app_colors.dart';
+import '../../design/app_dimens.dart';
 import '../../l10n/l10n.dart';
 import '../../platform/ble_scanner.dart';
 import '../../platform/services.dart';
 
 String hexOf(List<int> bytes) =>
     bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ');
-
-String _two(int v) => v.toString().padLeft(2, '0');
 
 class BlePairPanel extends StatefulWidget {
   const BlePairPanel({super.key, this.savedIdentity, this.onIdentityChanged});
@@ -84,7 +87,7 @@ class _BlePairPanelState extends State<BlePairPanel>
     // 宿主喂的身份首帧即入:重连钮/冲突比较不等异步(盘档读盘悬着时
     // 身份不能跟着悬)。
     _saved = widget.savedIdentity;
-    // 打开沿自动化(下一帧:扫描/重连路径里有 setState,initState 直调
+    // 打开沿自动回链(下一帧:重连路径里有 setState,initState 直调
     // 非法)。宿主身份迟到时(控制器异步装载沿)由 didUpdateWidget 补触发。
     WidgetsBinding.instance.addPostFrameCallback((_) => _bootstrap());
     unawaited(_loadSaved());
@@ -92,13 +95,13 @@ class _BlePairPanelState extends State<BlePairPanel>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    // 从系统蓝牙页回来:自动复用重连(注册闭环的最后一步,免手点)。
-    // 自动行为受深睡闸门:待机广播不连,被动扫描等唤醒(按钮路才绕闸)。
+    // 回前台:受闸自动回链(2026-10-19 定稿恢复:被动守候 —— 相机睡
+    // 时不碰不扰,它自己醒来重新广播即回链;iOS 注册闭环同靠这一步)。
     if (state == AppLifecycleState.resumed &&
         _saved != null &&
         !_binding &&
         _sessionState == BleSessionState.idle) {
-      _log('回到前台:自动重连…');
+      _log('回到前台:自动回链…');
       unawaited(_resume());
     }
   }
@@ -117,16 +120,13 @@ class _BlePairPanelState extends State<BlePairPanel>
   void didUpdateWidget(covariant BlePairPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
     // 宿主身份镜像沿(配对/解除 → onIdentityChanged → 控制器重载 → 回
-    // 喂):面板 _saved 跟进,状态行与冲突比较不残留旧身份。实例不等价
-    // 才动 —— 同实例回喂(普通重建)不抖。
+    // 喂):面板 _saved 跟进,设备行与冲突比较不残留旧身份。实例不等价
+    // 才动 —— 同实例回喂(普通重建)不抖。**身份迟到沿不触发自动回链**
+    //(2026-10-19 用户定稿:首次配对流程未走完不主动重连 —— 握手落档
+    //≠ 配对完成,iOS 侧还有系统蓝牙注册段,回链只由打开沿/回前台的
+    // 受闸守候承担)。
     if (!identical(widget.savedIdentity, oldWidget.savedIdentity)) {
-      final hadIdentity = _saved != null;
       _saved = widget.savedIdentity;
-      // 身份迟到沿补触发打开沿自动化(首帧宿主控制器还没装载完 → 扫描
-      // 已误发的场景:重连靠原生 endScan 礼让收编扫描,自愈)。
-      if (!hadIdentity && _saved != null) {
-        _bootstrap();
-      }
     }
   }
 
@@ -138,16 +138,18 @@ class _BlePairPanelState extends State<BlePairPanel>
     }
   }
 
-  /// 打开沿自动化旗标(每支只发一次;解除配对/授权复查的 _saved 刷新
-  /// 不再触发)。
-  bool _autoScanFired = false;
+  void _log(String line) => AppLog.i(AppLog.ble, line);
+
+  /// 打开沿自动回链旗标(每支只发一次;解除配对沿的 _saved 刷新不再
+  /// 触发)。
   bool _autoResumeFired = false;
 
-  /// 弹层打开即自动化(2026-10-17 全自动重连定案):无身份 → 自动扫描
-  /// (STA 弹层同款);有身份且未就绪 → 自动重连(带深睡闸门,与生命
-  /// 周期恢复同语义)。驱动此刻已挂起,自动行为由面板接管,闭合恢复
-  /// 驱动 —— 闭环自洽。判定只认宿主喂入的身份(不等盘档读盘 ——
-  /// fake-async 外真机读盘快,但自动化不该被磁盘 IO 拖住起步)。
+  /// 打开沿自动化(2026-10-19 定稿):有身份且未就绪 → **受闸自动回链**
+  /// —— 深睡闸门开着,相机睡时不碰不扰,它自己醒来重新广播即回链;
+  /// 点按「连接」才是显式绕闸点醒。**无身份不自动扫描**(2026-10-19
+  /// 用户定稿:扫描只认显式点按)。驱动此刻已挂起,自动行为由面板接
+  /// 管,闭合恢复驱动 —— 闭环自洽。判定只认宿主喂入的身份(不等盘档
+  /// 读盘 —— 自动化不该被磁盘 IO 拖住起步)。
   void _bootstrap() {
     if (_saved != null) {
       if (!_autoResumeFired &&
@@ -156,13 +158,8 @@ class _BlePairPanelState extends State<BlePairPanel>
         _autoResumeFired = true;
         unawaited(_resume());
       }
-    } else if (!_autoScanFired) {
-      _autoScanFired = true;
-      unawaited(_startScan());
     }
   }
-
-  void _log(String line) => AppLog.i(AppLog.ble, line);
 
   void _onEvent(BleEvent event) {
     switch (event) {
@@ -255,6 +252,9 @@ class _BlePairPanelState extends State<BlePairPanel>
       nonce: id.nonce,
       serial: id.serial,
       controllerName: id.name,
+      // 相机广播名只在扫描时见过,握手帧里没有 —— 此刻不存就没地方
+      // 再拿(设备行展示名,见 BlePairedIdentity.cameraName)。
+      cameraName: device.name,
       pairedAt: DateTime.now(),
     ));
     app.refreshBleInjection();
@@ -455,26 +455,29 @@ class _BlePairPanelState extends State<BlePairPanel>
     return null;
   }
 
-  String _fmtDate(DateTime t) => '${t.year}-${_two(t.month)}-${_two(t.day)}';
-
-  /// 扫描行电源态副文(2026-10-18 还原):bit0 待机位,全字节同显供
-  /// 方言核对;无状态字节(mfg 不足 7B:配对菜单态/异厂商)不出行。
-  /// 待机行是「点重连为何唤不醒」的答案面:深睡广播稀,闸门等物理唤醒。
-  String? _powerStateText(BuildContext context, BleDevice device) {
+  /// 扫描行电源态点(2026-10-19 用户定稿:文字换色点):待机黄点
+  /// (accentYellow)/ 就绪绿点(success);无状态字节(mfg 不足 7B:
+  /// 配对菜单态/异厂商)不出点。待机点是「点连接为何唤不醒」的答案
+  /// 面:深睡广播稀,闸门等物理唤醒。
+  Widget? _powerStateDot(BuildContext context, BleDevice device) {
     final status = advertisedStatusByte(device.mfgData);
     if (status == null) return null;
-    final b = status.toRadixString(16).toUpperCase().padLeft(2, '0');
-    return context.t(
-        advertisedPowerState(device.mfgData) == NikonAdvPowerState.standby
-            ? 'ble.advStandby'
-            : 'ble.advAwake',
-        {'b': b});
+    final standby =
+        advertisedPowerState(device.mfgData) == NikonAdvPowerState.standby;
+    return Container(
+      width: 8,
+      height: 8,
+      decoration: BoxDecoration(
+        color:
+            standby ? AppColors.accentYellow : AppColors.success(context),
+        shape: BoxShape.circle,
+      ),
+    );
   }
 
-  /// 扫描行:设备名 + 电源态副文;deviceId/冲突指引不显(冲突指引在
-  /// 重连日志 AppLog)。
+  /// 扫描行:设备名 + 电源态色点(尾槽);deviceId/冲突指引不显
+  /// (冲突指引在重连日志 AppLog)。
   Widget _scanRow(BuildContext context, BleDevice device) {
-    final state = _powerStateText(context, device);
     return ListTile(
       dense: true,
       enabled: _sessionState == BleSessionState.idle ||
@@ -483,64 +486,124 @@ class _BlePairPanelState extends State<BlePairPanel>
       title: Text(device.name.isEmpty
           ? context.t('ble.unnamed')
           : device.name),
-      subtitle: state == null ? null : Text(state),
+      trailing: _powerStateDot(context, device),
       onTap: () => unawaited(_pair(device)),
     );
   }
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     final ready = _sessionState == BleSessionState.ready;
-    // 嵌入宿主滚动层(蓝牙工具弹层 ListView):整体 mainAxisSize.min。
-    // 会话态不在此重复(弹层顶部状态行覆盖),只留档案/引导/错误。
+    // 嵌入宿主滚动层(蓝牙方式视图 ListView,页面级 padding 由宿主
+    // 给):整体 mainAxisSize.min,水平不另缩进(与状态胶囊对齐)。
+    // 会话态不在此重复(宿主状态行覆盖),只留档案/引导/错误。
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const Divider(height: 1),
+        // 未就绪有档:设备行(2026-10-19 用户定稿:图标 设备 解除配对
+        // 连接;序列/日期文字行退役)——连接 = 点按即唤醒(深睡闸门只
+        // 闸自动路,手动点 = 显式意图绕闸直连)。
+        if (!ready && _saved != null)
+          Padding(
+            padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+            child: ListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.camera_alt_outlined),
+              // 展示名 = 相机广播名(旧档缺字段回落控制器名)——
+              // controllerName 是本机在相机侧的注册名,不是相机。
+              title: Text(_saved!.displayName),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (_sessionState != BleSessionState.pairing)
+                    OutlinedButton(
+                      onPressed: _unpair,
+                      child: Text(context.t('ble.unpair')),
+                    ),
+                  if (_sessionState == BleSessionState.idle ||
+                      _sessionState == BleSessionState.reconnecting)
+                    OutlinedButton(
+                      // 点按即唤醒(2026-10-18 还原):深睡闸门只闸自动
+                      // 路,手动点 = 显式意图 —— 打断在场受闸循环绕闸
+                      // 直连;自动路仍受闸守望,待机不背景打扰。
+                      onPressed: () => unawaited(_manualResume()),
+                      child: Text(_retrying
+                          ? context.t('ble.reconnecting')
+                          : context.t('ble.connect')),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        // 就绪态只留断开(2026-10-19 用户定稿:设备行/标签不驻留)。
+        if (ready)
+          Padding(
+            padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: OutlinedButton(
+                onPressed: () => _session.disconnect(),
+                child: Text(context.t('ble.disconnect')),
+              ),
+            ),
+          ),
         Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          padding: const EdgeInsets.only(bottom: AppSpacing.sm),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              if (_saved != null)
-                Text(
-                  context.t('ble.pairedInfo', {
-                    'name': _saved!.controllerName,
-                    'serial': _saved!.serial.isEmpty
-                        ? ''
-                        : context.t('ble.serialLine', {'s': _saved!.serial}),
-                    'date': _fmtDate(_saved!.pairedAt.toLocal()),
-                  }).trimRight(),
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
               if (!ready && _session.lastError != null)
-                Text(
-                  _session.lastError!,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: Theme.of(context).colorScheme.error),
-                ),
-              if (_saved == null) ...[
-                Text(
-                  context.t('ble.scanHint'),
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-                if (Platform.operatingSystem == 'ios')
-                  Text(
-                    context.t('ble.iosPairHint'),
-                    style: Theme.of(context).textTheme.bodySmall,
+                Padding(
+                  padding: const EdgeInsets.only(top: AppSpacing.xs),
+                  child: Text(
+                    _session.lastError!,
+                    style: theme.textTheme.bodySmall
+                        ?.copyWith(color: theme.colorScheme.error),
                   ),
-              ],
+                ),
+              if (_saved == null)
+                Container(
+                  width: double.infinity,
+                  margin: const EdgeInsets.only(top: AppSpacing.xs),
+                  padding: const EdgeInsets.all(AppSpacing.md),
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.surfaceContainerLow,
+                    borderRadius: BorderRadius.circular(AppRadius.md),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        context.t('ble.scanHint'),
+                        style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant),
+                      ),
+                      if (Platform.operatingSystem == 'ios') ...[
+                        const SizedBox(height: AppSpacing.xs),
+                        Text(
+                          context.t('ble.iosPairHint'),
+                          style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
             ],
           ),
         ),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          child: Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              if (!ready)
+        // 扫描独立一行(2026-10-19 用户定稿:不与配对设备同行);鸿蒙
+        // 经典绑定钉在扫描行旁(同为「准备连接」动作,不进设备行)。
+        if (!ready)
+          Padding(
+            padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
                 FilledButton(
                   onPressed:
                       _scanning || _sessionState == BleSessionState.pairing
@@ -550,69 +613,45 @@ class _BlePairPanelState extends State<BlePairPanel>
                       ? context.t('ble.scanning')
                       : context.t('ble.scanButton')),
                 ),
-              if (_saved != null && !ready)
-                OutlinedButton(
-                  onPressed:
-                      _sessionState == BleSessionState.pairing ? null : _unpair,
-                  child: Text(context.t('ble.unpair')),
-                ),
-              if (_saved != null &&
-                  (_sessionState == BleSessionState.idle ||
-                      _sessionState == BleSessionState.reconnecting))
-                OutlinedButton(
-                  // 点按即唤醒(2026-10-18 还原):深睡闸门只闸自动路,
-                  // 手动点 = 显式意图 —— 打断在场受闸循环绕闸直连,深睡
-                  // 相机 ~12s 开销唤醒(6490990 闸门前老行为)。自动路
-                  // 仍受闸守望,待机不背景打扰。
-                  onPressed: () => unawaited(_manualResume()),
-                  child: Text(_retrying
-                      ? context.t('ble.reconnecting')
-                      : context.t('ble.reconnectReuse')),
-                ),
-              if (_saved != null &&
-                  (_sessionState == BleSessionState.idle ||
-                      _sessionState == BleSessionState.reconnecting) &&
-                  Platform.operatingSystem == 'ohos')
-                OutlinedButton(
-                  onPressed: _binding ? null : () => unawaited(_bondClassic()),
-                  child: Text(_binding
-                      ? context.t('ble.binding')
-                      : context.t('ble.bindClassic')),
-                ),
-              if (_saved != null &&
-                  !ready &&
-                  Platform.operatingSystem == 'ios') ...[
-                OutlinedButton(
-                  onPressed: () => unawaited(_goSystemBluetooth()),
-                  child: Text(context.t('ble.goSystemBt')),
-                ),
-                Text(
-                  context.t('ble.reRegisterHint'),
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              ],
-              if (ready) ...[
-                OutlinedButton(
-                  onPressed: () => _session.disconnect(),
-                  child: Text(context.t('ble.disconnect')),
-                ),
-              ],
-            ],
-          ),
-        ),
-        // 扫描列表就绪态隐藏:连接后残留的扫描行只有迷惑作用。
-        if (!ready && _devices.isNotEmpty) ...[
-          const Divider(height: 1),
-          LimitedBox(
-            maxHeight: 220,
-            child: ListView(
-              shrinkWrap: true,
-              children: [
-                for (final device in _devices) _scanRow(context, device),
+                if (_saved != null &&
+                    (_sessionState == BleSessionState.idle ||
+                        _sessionState == BleSessionState.reconnecting) &&
+                    Platform.operatingSystem == 'ohos')
+                  OutlinedButton(
+                    onPressed:
+                        _binding ? null : () => unawaited(_bondClassic()),
+                    child: Text(_binding
+                        ? context.t('ble.binding')
+                        : context.t('ble.bindClassic')),
+                  ),
               ],
             ),
           ),
-        ],
+        // 扫描列表就绪态隐藏:连接后残留的扫描行只有迷惑作用。
+        // 圆角浅底容器包行(iOS 设置组语言),替代裸 Divider 分隔。
+        if (!ready && _devices.isNotEmpty)
+          Container(
+            decoration: BoxDecoration(
+              color: theme.colorScheme.surfaceContainerLow,
+              borderRadius: BorderRadius.circular(AppRadius.md),
+            ),
+            clipBehavior: Clip.antiAlias,
+            // ListTile 在最近 Material 祖先上画底/墨效:透明 Material
+            // 垫在 DecoratedBox 与子项之间(ConnTileGroup 同款)。
+            child: Material(
+              type: MaterialType.transparency,
+              child: LimitedBox(
+                maxHeight: 220,
+                child: ListView(
+                  shrinkWrap: true,
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  children: [
+                    for (final device in _devices) _scanRow(context, device),
+                  ],
+                ),
+              ),
+            ),
+          ),
       ],
     );
   }
