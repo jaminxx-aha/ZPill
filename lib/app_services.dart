@@ -355,7 +355,14 @@ final class AppServices {
     });
     // BLE 持有独立订阅(广播流;注入驱动的 _bleStateSub 只在驱动在跑
     // 期存活,配对页挂起期链路仍在 —— 持有须全程跟随会话状态)。
-    bleSession.states.listen((_) => _syncBleBackgroundHold());
+    bleSession.states.listen((s) {
+      _syncBleBackgroundHold();
+      if (s == BleSessionState.ready) {
+        // ready 沿旧档相机名回填(配对页挂起期的手动重连路也覆盖;
+        // 幂等,新档同值即短路)。
+        unawaited(connectionController.healCameraName());
+      }
+    });
 
     // 尼康事件轮询(GetEventEx 0x941C):重要事件走厂商轮询通道而非
     // 异步事件通道(OpenZCine/libgphoto2 口径)—— 连接期间定时拉取

@@ -239,6 +239,31 @@ class ConnectionController extends ChangeNotifier {
     }
   }
 
+  /// ready 沿旧档相机名回填(2026-10-19):cameraName 自配对沿起才落
+  /// 档,此前配过的旧档案缺字段 —— 重连扫描沿广播名再现时补写,免解
+  /// 除重配一次。幂等(档已对即短路);只认「会话现役身份 = 档案身
+  /// 份」的沿,跨相机残留名不回填。AppServices 常驻 states 监听在
+  /// ready 沿触发(配对沿档案已带名,此路自然空转)。
+  Future<void> healCameraName() async {
+    final session = bleSession;
+    final id = session?.identity;
+    final name = session?.lastMatchName ?? '';
+    if (session == null || id == null || name.isEmpty) return;
+    final saved = await bleIdentityStore?.load();
+    if (saved == null || saved.deviceId != id.deviceId) return;
+    if (saved.cameraName == name) return;
+    await bleIdentityStore!.save(BlePairedIdentity(
+      peripheralUuid: saved.peripheralUuid,
+      deviceId: saved.deviceId,
+      nonce: saved.nonce,
+      serial: saved.serial,
+      controllerName: saved.controllerName,
+      cameraName: name,
+      pairedAt: saved.pairedAt,
+    ));
+    await loadBleIdentity();
+  }
+
   /// BLE 手动重连一次(复用身份;失败原因看会话 lastError,UI 读
   /// [bleHint])。自动重连由注入驱动承担(开关开着时),此钮覆盖「只
   /// 想唤醒 WiFi 不开注入」的场景。
@@ -319,51 +344,11 @@ class ConnectionController extends ChangeNotifier {
     return ApJoinOutcome.joined;
   }
 
-  /// 关闭相机 Wi-Fi(0x2005=0x80)。「关闭」接口必须传图后够得着:
-  /// 传图全程 BLE 断开,故非 ready 态先补链(retryReconnect 至多 2 轮)
-  /// 再写。相机热点期可能不广播蓝牙(n-link 实证 Z50II 热点在 PTP 会话
-  /// 结束 ~34s 后自行消失 —— 机身本就有自动收尾,0x80 是显式关断的补
-  /// 充),两轮无命中如实落 lastError,相机菜单可关。成功后 BLE 保持
-  /// 连接(无线单元空出),注入驱动 ready 沿自动续定位流。
-  Future<bool> closeCameraWifi() async {
-    final session = bleSession;
-    if (session == null) return false;
-    if (bleState != BleSessionState.ready) {
-      var reconnected = false;
-      for (var attempt = 0; attempt < 2 && !reconnected; attempt++) {
-        // 用户刚点「关闭 Wi-Fi」= 要够得着相机,绕深睡闸门。
-        reconnected = await session.retryReconnect(gateStandby: false);
-        if (!reconnected && attempt == 0) {
-          await Future<void>.delayed(session.nextRetryDelay);
-        }
-      }
-      if (!reconnected) {
-        session.lastError = '重连无命中(相机热点期可能不广播蓝牙),'
-            '可从相机菜单关闭 Wi-Fi';
-        return false;
-      }
-    }
-    return await session.closeCameraWifi();
-  }
-
   /// 相机 AP 凭据(0x2004 蓝牙通道解出;null = 未读/解密未中/未 ready)。
   /// BLE→WiFi 二期:唤醒成功沿自动读取,AP 卡凭据块展示。
   WifiCredentials? cameraApCredentials;
 
-  /// BLE 卡状态副文(未装配不显示卡;状态全映射)。
-  String? get bleHint {
-    final session = bleSession;
-    if (session == null) {
-      return null;
-    }
-    if (bleState == BleSessionState.reconnecting ||
-        (bleState == BleSessionState.idle && session.lastError != null)) {
-      return session.lastError;
-    }
-    return null;
-  }
-
-  /// 最近一次会话错误(WiFi 动作失败的 SnackBar 用;bleHint 只在
+  /// 最近一次会话错误(WiFi 动作失败的 SnackBar 用;面板错误行只在
   /// 重连/断开态回错误,ready 态写失败也能如实带出原因)。
   String? get bleLastError => bleSession?.lastError;
 
@@ -1161,66 +1146,109 @@ class _ConnectionPageState extends State<ConnectionPage>
       BleSessionState.idle => theme.colorScheme.outline,
     };
     return [
-      _ConnectionPageState._methodTitle(
-          context, Icons.bluetooth, 'conn.btTools'),
-      const SizedBox(height: 4),
-      Text(context.t('conn.btToolsHint')),
+      // 标题行可点(尾随 ⓘ 示意):「工具通道」定位长文案收进说明层,
+      // 正文不再常驻(2026-10-18 定稿)。
+      InkWell(
+        borderRadius: BorderRadius.circular(AppRadius.sm),
+        onTap: () => _showBleInfoSheet(context),
+        child: Row(
+          children: [
+            const Icon(Icons.bluetooth),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(context.t('conn.btTools'),
+                  style: theme.textTheme.titleMedium),
+            ),
+            Icon(Icons.info_outline,
+                size: 20, color: theme.colorScheme.onSurfaceVariant),
+          ],
+        ),
+      ),
       const SizedBox(height: AppSpacing.sm),
       ConnStatusPill(
         dotColor: stateColor,
         label: context.t(bleStateLabel(controller)),
-        trailing: hasIdentity ? controller.bleIdentity!.controllerName : null,
+        trailing: hasIdentity ? controller.bleIdentity!.displayName : null,
       ),
-      if (controller.bleHint != null)
-        Padding(
-          padding: const EdgeInsets.only(top: 4),
-          child: Text(controller.bleHint!,
-              style: theme.textTheme.bodySmall
-                  ?.copyWith(color: theme.colorScheme.error)),
-        ),
-      const SizedBox(height: AppSpacing.sm),
-      // 相机 Wi-Fi 动作(GPS 注入开关在设置页,2026-10-18 迁出):唤起
-      // = 读 0x2004 凭据(SnapBridge 序)再写 0x2005,成功沿断 BLE ——
-      // 相机等链路释放才开热点;关闭 = 反义 op(0x80),不断链。
-      ConnTileGroup(children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-          child: Row(children: [
-            Expanded(
-              child: FilledButton.tonalIcon(
-                icon: const Icon(Icons.wifi_tethering),
-                label: Text(context.t('conn.wakeCameraWifi')),
-                onPressed: ready
-                    ? () => unawaited(_wakeWifiWithCredentials(context, controller))
-                    : null,
-              ),
+      // 相机 Wi-Fi 动作(2026-10-19 用户定稿:只留远程连接,就绪才挂
+      // —— 关闭钮退役,相机自动收尾(PTP 会话结束 ~34s 热点自消)/
+      // 菜单兜底):唤醒 = 读 0x2004 凭据(SnapBridge 序)再写 0x2005,
+      // 成功沿断 BLE —— 相机等链路释放才开热点,须会话就绪。
+      if (ready) ...[
+        const SizedBox(height: AppSpacing.md),
+        ConnTileGroup(children: [
+          Padding(
+            padding: const EdgeInsets.all(AppSpacing.lg),
+            child: FilledButton.tonalIcon(
+              icon: const Icon(Icons.wifi_tethering),
+              label: Text(context.t('conn.wakeCameraWifi')),
+              onPressed: () =>
+                  unawaited(_wakeWifiWithCredentials(context, controller)),
             ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: OutlinedButton(
-                // 门禁 = 有身份(传图后 BLE 断开是常态,方法内先补链
-                // 再写 0x80);握手/relink 中禁用。
-                onPressed: hasIdentity &&
-                        controller.bleState != BleSessionState.pairing
-                    ? () => unawaited(_bleWifiAction(
-                        context, controller, controller.closeCameraWifi,
-                        success: context.t('conn.wifiOffRequested')))
-                    : null,
-                child: Text(context.t('common.off')),
-              ),
-            ),
-          ]),
-        ),
-      ]),
-      const SizedBox(height: 8),
+          ),
+        ]),
+      ],
+      const SizedBox(height: AppSpacing.md),
       // 配对面板(原独立「BLE 配对 / GPS 注入」页整体迁入):扫描点选
-      // 配对、复用重连、解除、经典绑定、后台定位授权、手动件与 hex
-      // 日志。身份落盘/解除沿回调重载 controller.bleIdentity。
+      // 配对、复用重连、解除、经典绑定与 iOS 系统引导。身份落盘/解除沿
+      // 回调重载 controller.bleIdentity。
       BlePairPanel(
         savedIdentity: controller.bleIdentity,
         onIdentityChanged: () => unawaited(controller.loadBleIdentity()),
       ),
     ];
+  }
+
+  /// 蓝牙方式说明层(标题行点按):工具通道定位 + 用途一句。视觉对齐
+  /// 连接详情弹层(拖把条 + 标题行 + 正文)。
+  static Future<void> _showBleInfoSheet(BuildContext context) {
+    final theme = Theme.of(context);
+    return showModalBottomSheet<void>(
+      context: context,
+      builder: (sheetContext) {
+        final scheme = Theme.of(sheetContext).colorScheme;
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.sm,
+                AppSpacing.lg, AppSpacing.lg),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 32,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: scheme.outlineVariant,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.md),
+                Row(
+                  children: [
+                    const Icon(Icons.bluetooth),
+                    const SizedBox(width: AppSpacing.sm),
+                    Text(
+                      context.t('conn.btTools'),
+                      style: theme.textTheme.titleMedium
+                          ?.copyWith(fontWeight: FontWeight.w700),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: AppSpacing.sm),
+                Text(
+                  context.t('conn.btToolsHint'),
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                      height: 1.5, color: scheme.onSurfaceVariant),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
   }
 
   /// 唤醒相机 WiFi(BLE→WiFi 交接):[ConnectionController.wakeCameraWifi]
@@ -1297,25 +1325,6 @@ class _ConnectionPageState extends State<ConnectionPage>
         content: Text(message),
         duration: duration,
       ));
-  }
-
-  /// WiFi 唤起/关闭动作收口:失败 SnackBar 如实(含原因),成功提示
-  /// 下一步去向(到系统 Wi-Fi 加入热点)。
-  static Future<void> _bleWifiAction(
-    BuildContext context,
-    ConnectionController controller,
-    Future<bool> Function() action, {
-    required String success,
-  }) async {
-    final ok = await action();
-    if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(ok
-          ? success
-          : context.t('conn.opFailed',
-              {'e': controller.bleLastError ?? context.t('common.unknown')})),
-      duration: const Duration(seconds: 3),
-    ));
   }
 
   /// AP 方式凭据块(蓝牙通道解出才显示):SSID/密码/安全 + 复制钮 ——

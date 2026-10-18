@@ -14,6 +14,7 @@ final class BlePairedIdentity {
     required this.nonce,
     required this.serial,
     required this.controllerName,
+    this.cameraName = '',
     required this.pairedAt,
   });
 
@@ -25,7 +26,17 @@ final class BlePairedIdentity {
   /// 相机 BLE 侧序列号(stage4 帧,独立于 USB 序列;握手期未到时空)。
   final String serial;
   final String controllerName;
+
+  /// 相机 BLE 广播名(如 Z f_8014411;配对沿从扫描行捕获)——设备行
+  /// 展示名。注意 [controllerName] 是**本机**写进相机 0x2002 的名字
+  /// (相机「已配对设备」菜单里代表这部手机),别混。旧档无此字段
+  /// 为空,显示沿回落 [displayName]。
+  final String cameraName;
   final DateTime pairedAt;
+
+  /// 展示名:相机名优先,旧档(未存相机名)回落控制器名。
+  String get displayName =>
+      cameraName.isNotEmpty ? cameraName : controllerName;
 
   Map<String, Object?> toJson() => {
         'peripheralUuid': peripheralUuid,
@@ -33,6 +44,7 @@ final class BlePairedIdentity {
         'nonce': nonce,
         'serial': serial,
         'controllerName': controllerName,
+        'cameraName': cameraName,
         'pairedAt': pairedAt.toIso8601String(),
       };
 
@@ -48,6 +60,7 @@ final class BlePairedIdentity {
       nonce: nonce,
       serial: json['serial'] as String? ?? '',
       controllerName: json['controllerName'] as String? ?? 'NikonPill',
+      cameraName: json['cameraName'] as String? ?? '',
       pairedAt:
           pairedAtRaw == null ? DateTime.now() : DateTime.parse(pairedAtRaw),
     );
