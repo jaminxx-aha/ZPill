@@ -559,14 +559,28 @@ final class AppServices {
     _updateBleInjection();
   }
 
+  /// 用户显式断开意图(蓝牙页「断开」沿置位):压制一切自动回链 ——
+  /// 驱动冷启动/空闲沿续轮询/面板打开沿与回前台守候全哑,直到显式
+  /// 「连接」/重新配对沿清除。仅内存态:冷启 App 即回归默认守候。
+  bool _bleManualOff = false;
+  bool get bleManualOff => _bleManualOff;
+  set bleManualOff(bool v) {
+    if (_bleManualOff == v) return;
+    _bleManualOff = v;
+    refreshBleInjection(); // 翻面沿驱动跟随(置位收链路层,清除恢复守候)
+  }
+
   /// 配对页配对成功/解除后刷新(设置监听之外的显式入口)。
   void refreshBleInjection() => _updateBleInjection();
 
   void _updateBleInjection() {
-    // 双层门(2026-10-17 全自动重连定案):链路层只认「已配对+未挂起」
-    // —— 重连循环与 TIME 保活是链路义务,不随 GPS 开关走;注入层 =
-    // 链路层之上再叠加开关,只管定位流+GEO。
-    final wantLink = !_bleSuspended && bleSession.identity != null;
+    // 三层门(2026-10-17 全自动重连定案 + 2026-10-19 手动断开意图):
+    // 链路层只认「已配对+未挂起+非用户显式断开」—— 重连循环与 TIME
+    // 保活是链路义务,不随 GPS 开关走;注入层 = 链路层之上再叠加开关,
+    // 只管定位流+GEO。
+    final wantLink = !_bleSuspended &&
+        bleSession.identity != null &&
+        !_bleManualOff;
     final wantInject = wantLink && settingsController.value.bleGpsInject;
     if (wantLink == _bleRunning && wantInject == _bleInjecting) return;
     final wasRunning = _bleRunning;
