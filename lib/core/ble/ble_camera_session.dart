@@ -26,6 +26,8 @@ import 'dart:async';
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:flutter/services.dart' show PlatformException;
+
 import '../../platform/ble_scanner.dart';
 
 import '../log/app_log.dart';
@@ -136,6 +138,12 @@ final class BleCameraSession {
   /// 上层配对页日志据此区分「无命中」与「被闸」)。
   bool lastRetryGated = false;
 
+  /// 最近一次命中设备的广播名([pair]/[retryReconnect] 命中沿更新;
+  /// iOS 系统缓存 GAP 名基本恒有,Android 重连广播可能无名 = 空)——
+  /// ready 沿旧档相机名回填(ConnectionController.healCameraName)消费,
+  /// 旧版档案缺 cameraName 字段时免重配补名。
+  String lastMatchName = '';
+
   Completer<void>? _handshake;
   PairingMessage? _stage1;
   bool _stage3Sent = false;
@@ -177,6 +185,7 @@ final class BleCameraSession {
     if (_state != BleSessionState.idle) {
       throw StateError('会话非 idle(state=$_state)');
     }
+    lastMatchName = device.name;
     _resuming = false;
     _serial = null;
     _setState(BleSessionState.pairing);
@@ -216,6 +225,7 @@ final class BleCameraSession {
         .scanForDeviceId(identity!.deviceId, timeout: const Duration(seconds: 8));
     lastRetryGated = false;
     final match = devices.isEmpty ? null : devices.first;
+    lastMatchName = match?.name ?? '';
     if (match == null) {
       _backoffStep = min(_backoffStep + 1, _backoffSeconds.length - 1);
       return false;
@@ -403,6 +413,11 @@ final class BleCameraSession {
       await _host.write(kNikonCharWifi, Uint8List.fromList([value]));
       _trace('$label → 0x2005=0x${value.toRadixString(16)}');
       return true;
+    } on PlatformException catch (e) {
+      // 上屏文案只取 message(裸 PlatformException dump 是四段噪音,
+      // 用户要看的是「连接已断开」不是构造参数)。
+      lastError = '$label 失败:${e.message ?? e.code}';
+      return false;
     } on Exception catch (e) {
       lastError = '$label 失败:$e';
       return false;

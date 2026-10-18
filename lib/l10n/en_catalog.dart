@@ -62,28 +62,21 @@ const Map<String, String> enCatalog = {
       'Originals as-is (compressed transfer in a later version)',
   'ble.notPaired': 'Not Paired',
   'ble.handshaking': 'Handshaking…',
-  'ble.pairedInfo': 'Paired: {name}{serial}  {date}',
-  'ble.serialLine': '  S/N {s}',
   'common.none': 'None',
   'ble.scanHint':
       'On the camera, open the "Connect to Smart Device" menu first (advertising window ~30s), then tap Scan.',
   'ble.iosPairHint':
       'iOS: after pairing succeeds, the app disconnects and opens the system Bluetooth page; tap the camera there to finish pairing (verify the passkey) → return here to reconnect and register automatically.',
   'ble.scanning': 'Scanning…',
-  'ble.scanButton': 'Scan (30s)',
+  'ble.scanButton': 'Scan',
   'ble.unpair': 'Unpair',
   'ble.reconnecting': 'Reconnecting…',
-  'ble.reconnectReuse': 'Reconnect (reuse identity)',
+  'ble.connect': 'Connect',
   'ble.binding': 'Binding…',
   'ble.bindClassic': 'Bind Classic Bluetooth',
-  'ble.goSystemBt': 'Go to System Bluetooth to Finish Registration',
-  'ble.reRegisterHint':
-      'Not registered yet? Jump again: pair the camera in system Bluetooth (verify the passkey) → return here to reconnect automatically (usually auto-jumped once after pairing)',
   'ble.wakeWifi': 'Wake Wi-Fi',
   'ble.disconnect': 'Disconnect',
   'ble.unnamed': '(unnamed)',
-  'ble.advStandby': 'Standby 0x{b}',
-  'ble.advAwake': 'Ready 0x{b}',
   'ble.waitingOtherPhone':
       'This camera is waiting for another phone (device ID 0x{id}): disconnect the existing connection or switch to this phone in the camera\'s "Paired Devices" menu, or make sure the camera is not occupied by another phone (e.g. SnapBridge)',
   'snapshot.title': 'Shooting Config Snapshots',
@@ -170,7 +163,6 @@ const Map<String, String> enCatalog = {
   'conn.gpsAuthFailed':
       'Background location not granted ("Always" required); GPS injection stays off',
   'conn.wakeCameraWifi': 'Remote Connect Camera',
-  'conn.wifiOffRequested': 'Requested the camera to turn off Wi-Fi',
   'conn.pairingManage': 'Manage Pairing (log/unpair/background location)',
   'conn.wakeFailed': 'Wake failed: {e}',
   'common.unknown': 'Unknown',
@@ -187,7 +179,6 @@ const Map<String, String> enCatalog = {
       'Auto-join failed: {e} — join via system Wi-Fi manually (password on the camera screen), then choose "AP Hotspot" on the connection page and tap "Connect to camera"',
   'conn.wifiAwakeNoCred':
       'Camera Wi-Fi is awake: Bluetooth released to let the camera raise its hotspot; credentials not decoded: {e} — join via system Wi-Fi (password on the camera screen); tap "Reconnect" to resume Bluetooth after transfers',
-  'conn.opFailed': 'Operation failed: {e}',
   'conn.methodUsb': 'Wired (USB)',
   'conn.methodAp': 'AP (Camera as Hotspot)',
   'conn.methodSta': 'STA (Same Wi-Fi)',

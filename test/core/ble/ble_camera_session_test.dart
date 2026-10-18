@@ -456,6 +456,8 @@ void main() {
     await runHandshake(resume: true, gateStandby: false);
     expect(session.state, BleSessionState.ready);
     expect(host.connects, ['P1']);
+    expect(session.lastMatchName, 'Z f_x',
+        reason: '重连命中沿记录广播名(ready 沿旧档相机名回填消费)');
   });
 
   test('重连后写闸:2.5s 内不写,过闸恢复 GEO/TIME;首写门重连同套', () async {
