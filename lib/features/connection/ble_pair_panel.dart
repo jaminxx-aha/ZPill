@@ -100,6 +100,7 @@ class _BlePairPanelState extends State<BlePairPanel>
     if (state == AppLifecycleState.resumed &&
         _saved != null &&
         !_binding &&
+        !AppServices.instance.bleManualOff &&
         _sessionState == BleSessionState.idle) {
       _log('回到前台:自动回链…');
       unawaited(_resume());
@@ -153,6 +154,7 @@ class _BlePairPanelState extends State<BlePairPanel>
   void _bootstrap() {
     if (_saved != null) {
       if (!_autoResumeFired &&
+          !AppServices.instance.bleManualOff &&
           _sessionState != BleSessionState.ready &&
           _sessionState != BleSessionState.pairing) {
         _autoResumeFired = true;
@@ -236,6 +238,7 @@ class _BlePairPanelState extends State<BlePairPanel>
   Future<void> _pair(BleDevice device) async {
     final app = AppServices.instance;
     _cancelRetry();
+    app.bleManualOff = false; // 新配对 = 连接意图,解除手动断开压制
     _log('配对 ${device.name}(${device.uuid})…');
     _pairedName = device.name; // 经典绑定匹配用(鸿蒙)
     try {
@@ -373,6 +376,8 @@ class _BlePairPanelState extends State<BlePairPanel>
   /// 自动路仍受闸守望,深睡不背景打扰。世代号废旧循环、退避等待即刻
   /// 醒,新循环走 [_resume] 同一收尾路。
   Future<void> _manualResume() async {
+    // 显式连接 = 解除手动断开意图(守候/驱动恢复资格)。
+    AppServices.instance.bleManualOff = false;
     _cancelRetry();
     await _resume(gateStandby: false);
   }
@@ -424,6 +429,7 @@ class _BlePairPanelState extends State<BlePairPanel>
   Future<void> _unpair() async {
     final app = AppServices.instance;
     _cancelRetry();
+    app.bleManualOff = false; // 解除配对清意图(下次配对干净起步)
     await app.bleIdentityStore.clear();
     _session.identity = null;
     await _session.disconnect();
@@ -545,7 +551,13 @@ class _BlePairPanelState extends State<BlePairPanel>
             child: Align(
               alignment: Alignment.centerLeft,
               child: OutlinedButton(
-                onPressed: () => _session.disconnect(),
+                // 显式断开 = 用户意图保持断开:置 manualOff 压制一切
+                // 自动回链(驱动冷启/打开沿/回前台守候全哑),显式
+                // 「连接」/重新配对沿解除。
+                onPressed: () {
+                  AppServices.instance.bleManualOff = true;
+                  unawaited(_session.disconnect());
+                },
                 child: Text(context.t('ble.disconnect')),
               ),
             ),
