@@ -1222,7 +1222,7 @@ void main() {
     });
 
     testWidgets(
-        '已配对未连(idle):重连钮在场,WiFi 钮禁用;'
+        '已配对未连(idle):重连钮在场可点,远程连接钮退场(未连接不挂 WiFi 动作);'
         'PTP 状态卡不出(工具通道不混链路态)', (tester) async {
       // 夹具有真文件 IO(临时目录/身份存档),testWidgets 的
       // fake-async zone 吃不到 —— 必须 runAsync 放行。此态只建夹具不
@@ -1256,15 +1256,17 @@ void main() {
       expect(find.text('蓝牙连接'), findsOneWidget);
       expect(find.text('未连接'), findsNothing, reason: 'PTP 状态卡在蓝牙分段下隐藏');
       expect(find.text('已配对,未连接'), findsOneWidget);
-      // 打开沿自动重连已在跑(面板硬绑 AppServices 单例;本用例页面显示
-      // 夹具自建会话,状态行不动,但面板钮同位转进行态 —— 自动化可见面)。
+      // 打开沿受闸自动回链已在跑(面板硬绑 AppServices 单例;本用例页
+      // 面显示夹具自建会话,状态行不动,但面板钮同位转进行态 —— 自动
+      // 化可见面)。相机睡时闸门拦下不碰,自己醒来即回链。
       final retryBtn = tester.widget<OutlinedButton>(find.ancestor(
           of: find.text('重连中…'), matching: find.byType(OutlinedButton)));
       expect(retryBtn.onPressed, isNotNull,
-          reason: '点按即唤醒(2026-10-18):重连进行中可点,打断受闸循环绕闸直连');
-      final wake = tester.widget<FilledButton>(find.ancestor(
-          of: find.text('远程连接相机'), matching: find.byType(FilledButton)));
-      expect(wake.onPressed, isNull, reason: 'WiFi 动作门禁 = 会话就绪');
+          reason: '点按即唤醒(2026-10-18):回链进行中可点,打断受闸循环绕闸直连');
+      // WiFi 动作组就绪才挂(2026-10-19 定稿:关闭钮整个退役):未
+      // 连接整组退场,远程连接相机/关闭都不出。
+      expect(find.text('远程连接相机'), findsNothing);
+      expect(find.text('关闭'), findsNothing);
       // GPS 注入开关已迁设置页(2026-10-18),蓝牙页不再有开关。
       expect(find.byType(SwitchListTile), findsNothing);
       // 收尾:关弹层 → 面板 dispose 废在途自动重连(退避 Timer 随取消
@@ -1273,8 +1275,45 @@ void main() {
       await tester.pumpAndSettle();
     });
 
+    testWidgets('标题点按弹说明层:工具通道长文案收进弹窗,正文不常驻', (tester) async {
+      // 夹具同 idle 用例(真文件 IO 须 runAsync;面板硬绑 AppServices
+      // 单例,自动化照常跑,与本用例断言无关)。
+      final controller = (await tester.runAsync(() async {
+        final session = BleCameraSession(host: FakeBleHost());
+        final identityStore = await tempIdentityStore();
+        final controller = ConnectionController(
+          bleSession: session,
+          bleIdentityStore: identityStore,
+          settingsController: SettingsController(store: _FakeSettingsStore()),
+        );
+        await identityStore.save(BlePairedIdentity(
+          peripheralUuid: 'P1',
+          deviceId: 0x11223344,
+          nonce: 0x55667788,
+          serial: '1641397',
+          controllerName: 'NikonPill',
+          pairedAt: DateTime(2026, 10, 14),
+        ));
+        await controller.loadBleIdentity();
+        return controller;
+      }))!;
+      await tester.pumpWidget(
+          MaterialApp(home: ConnectionPage(controller: controller)));
+      await tester.pumpAndSettle();
+      await openBleTools(tester);
+
+      // 正文不再常驻长文案(2026-10-18 定稿:收进标题点按的说明层)。
+      expect(find.textContaining('不建立相机连接'), findsNothing);
+      await tester.tap(find.text('蓝牙连接'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('不建立相机连接'), findsOneWidget);
+      // 收尾:撤说明层(面板在途重连随树拆废)。
+      await tester.tapAt(const Offset(400, 20));
+      await tester.pumpAndSettle();
+    });
+
     testWidgets(
-        'ready 后:关闭/唤醒写 0x2005;唤醒沿断链(相机等 BLE 释放才开热点)',
+        'ready 后:唤醒写 0x2005;唤醒沿断链(相机等 BLE 释放才开热点)',
         (tester) async {
       // 夹具有真文件 IO(临时目录/身份存档),testWidgets 的
       // fake-async zone 吃不到 —— 必须 runAsync 放行。
@@ -1285,12 +1324,6 @@ void main() {
       await openBleTools(tester);
       expect(find.text('已连接'), findsOneWidget);
 
-      // 关闭先测(须 ready 态;唤醒沿会断链,0x80 不断链)。
-      await tester.tap(find.text('关闭'));
-      await tester.pumpAndSettle();
-      expect(f.host.lastWrite(kNikonCharWifi), Uint8List.fromList([0x80]));
-      expect(f.session.state, BleSessionState.ready);
-
       await tester.tap(find.text('远程连接相机'));
       await tester.pumpAndSettle();
       expect(f.host.lastWrite(kNikonCharWifi), Uint8List.fromList([0x01]));
@@ -1300,6 +1333,36 @@ void main() {
       // 收尾:关弹层废在途自动重连(退避 Timer 随取消释放)。
       await tester.tapAt(const Offset(400, 20));
       await tester.pumpAndSettle();
+    });
+
+    testWidgets('ready 沿旧档相机名回填:档案补 cameraName,展示名随更',
+        (tester) async {
+      // 真文件 IO 须 runAsync 放行。直调回填(AppServices 常驻监听
+      // ready 沿同参)。
+      final f = (await tester.runAsync(readyFixture))!;
+      expect(f.controller.bleIdentity!.displayName, 'NikonPill');
+      // 跨相机残留名不回填:档案 deviceId ≠ 会话现役身份 → 短路。
+      f.session.lastMatchName = 'Z f_8014411';
+      await tester.runAsync(() => f.controller.healCameraName());
+      expect(f.controller.bleIdentity!.cameraName, isEmpty);
+      // 档案对齐会话现役身份(旧档真实形态:档自 session.identity 落
+      // 盘)→ 回填 + 展示名随更。
+      final id = f.session.identity!;
+      await tester.runAsync(() => f.identityStore.save(BlePairedIdentity(
+            peripheralUuid: id.peripheralUuid,
+            deviceId: id.deviceId,
+            nonce: id.nonce,
+            serial: id.serial,
+            controllerName: 'NikonPill',
+            pairedAt: DateTime(2026, 10, 14),
+          )));
+      await tester.runAsync(() => f.controller.loadBleIdentity());
+      await tester.runAsync(() => f.controller.healCameraName());
+      expect(f.controller.bleIdentity!.cameraName, 'Z f_8014411');
+      expect(f.controller.bleIdentity!.displayName, 'Z f_8014411');
+      // 幂等:同沿再跑不变形。
+      await tester.runAsync(() => f.controller.healCameraName());
+      expect(f.controller.bleIdentity!.cameraName, 'Z f_8014411');
     });
 
     testWidgets('未就绪时 WiFi 动作如实失败(controller 门禁)', (tester) async {
@@ -1406,95 +1469,6 @@ void main() {
       expect(find.textContaining('自动加入热点失败'), findsOneWidget);
       expect(find.textContaining('unavailable'), findsOneWidget);
       // 收尾:关弹层废在途自动重连(joiner 失败不触发自动收层)。
-      await tester.tapAt(const Offset(400, 20));
-      await tester.pumpAndSettle();
-    });
-
-    /// 真异步排微任务(握手事件沿各排一轮;普通 test 无 fake-async 痛)。
-    Future<void> drainMicrotasks() async {
-      for (var i = 0; i < 8; i++) {
-        await Future<void>.delayed(Duration.zero);
-      }
-    }
-
-    test('关闭 Wi-Fi(BLE 断态):先补链再写 0x80,链路保持 —— 控制器层', () async {
-      // 握手舞步靠事件沿驱动,widget 测试的 fake-async zone 排不动
-      // 这条微任务链 —— 下放到控制器层普通 test(真异步)。
-      final host = FakeBleHost();
-      final session = BleCameraSession(host: host);
-      final identityStore = await tempIdentityStore();
-      final controller = ConnectionController(
-        bleSession: session,
-        bleIdentityStore: identityStore,
-      );
-      await identityStore.save(BlePairedIdentity(
-        peripheralUuid: 'P1',
-        deviceId: 0x11223344,
-        nonce: 0x55667788,
-        serial: '1641397',
-        controllerName: 'NikonPill',
-        pairedAt: DateTime(2026, 10, 14),
-      ));
-      await controller.loadBleIdentity();
-      // 先到 ready(完整握手),再断到 idle —— 传图后常态。
-      final done = session
-          .pair(const BleDevice(name: 'Z f_8014411', uuid: 'P1', rssi: -50));
-      await drainMicrotasks();
-      host.emit(const BleConnected(
-          uuid: 'P1', characteristics: {}, writeWithoutResponseMtu: 20));
-      await drainMicrotasks();
-      final stage1 = PairingMessage.decode(host.lastWrite(kNikonCharPairing));
-      host.emit(BleNotified(
-          uuid: kNikonCharPairing, data: buildStage2(stage1).encode()));
-      await drainMicrotasks();
-      host.emit(
-          BleNotified(uuid: kNikonCharPairing, data: buildStage4().encode()));
-      await drainMicrotasks();
-      await done;
-      expect(session.state, BleSessionState.ready);
-      await session.disconnect();
-      await drainMicrotasks(); // 控制器 bleState 镜像(流异步投递)跟到 idle
-      expect(session.state, BleSessionState.idle);
-
-      // 补链关 Wi-Fi:重连命中 → 复用握手 → 写 0x80 → 链路保持。
-      // reconnectDeviceId 用会话现役身份的 deviceId(pair 沿 stage4
-      // 派生,与 store 存档值无关 —— 会话层测试同款口径)。
-      host.reconnectDeviceId = session.identity!.deviceId;
-      final closeFut = controller.closeCameraWifi();
-      await drainMicrotasks();
-      host.emit(const BleConnected(
-          uuid: 'P1', characteristics: {}, writeWithoutResponseMtu: 20));
-      await drainMicrotasks();
-      final stage1r = PairingMessage.decode(host.lastWrite(kNikonCharPairing));
-      host.emit(BleNotified(
-          uuid: kNikonCharPairing, data: buildStage2(stage1r).encode()));
-      await drainMicrotasks();
-      host.emit(
-          BleNotified(uuid: kNikonCharPairing, data: buildStage4().encode()));
-      expect(await closeFut, isTrue);
-      expect(host.lastWrite(kNikonCharWifi), Uint8List.fromList([0x80]));
-      expect(session.state, BleSessionState.ready,
-          reason: '关 Wi-Fi 后无线单元空出,BLE 保持连接(注入续上)');
-    });
-
-    testWidgets('关闭 Wi-Fi(补链无命中):如实失败,态回落可重试', (tester) async {
-      final f = (await tester.runAsync(readyFixture))!;
-      await f.session.disconnect(); // BLE 断;host 未预置重连命中
-      await tester.pumpWidget(
-          MaterialApp(home: ConnectionPage(controller: f.controller)));
-      await tester.pumpAndSettle();
-      await openBleTools(tester);
-
-      await tester.ensureVisible(find.text('关闭')); // 断态卡多一行,钮可能折出视口
-      await tester.tap(find.text('关闭'));
-      await tester.pumpAndSettle(); // 第 1 轮扫描无命中 → 退避定时器挂起
-      await tester.pump(const Duration(seconds: 2)); // 退避(1s 档)到点
-      await tester.pumpAndSettle(); // 第 2 轮无命中 → 两轮尽 → 如实失败
-      expect(f.host.countWrite(kNikonCharWifi), 0, reason: '两轮无命中:不该有 0x80 写入');
-      expect(f.session.state, BleSessionState.idle, reason: '无命中不进连接尝试,态不翻转');
-      expect(find.textContaining('重连无命中'), findsExactly(2),
-          reason: 'SnackBar(操作失败)+ 弹层错误行(lastError 实时上屏,2026-10-17 A2)各一处');
-      // 收尾:关弹层废在途自动重连(退避 Timer 随取消释放)。
       await tester.tapAt(const Offset(400, 20));
       await tester.pumpAndSettle();
     });

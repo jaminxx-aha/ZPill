@@ -8,10 +8,11 @@ import 'package:nikon_pill/core/log/app_log.dart';
 import 'package:nikon_pill/data/ble_identity_store.dart';
 import 'package:nikon_pill/features/connection/ble_pair_panel.dart';
 
-/// 配对面板扫描行(设备名+电源态,deviceId 仍不显;2026-10-18)+ 打开
-/// 自动化 + 重连取消(2026-10-17 全自动重连定案):有身份+异 ID → 重连
-/// 日志指引;同 ID → 无;无身份 → 无;弹层打开即自动扫(无身份)/
-/// 自动重连(有身份);扫描/拆面板废在途重连。
+/// 配对面板扫描行(设备名+电源态点,deviceId 仍不显;2026-10-19)+
+/// 打开自动化 + 重连取消(2026-10-17 全自动重连定案):有身份+异 ID →
+/// 重连日志指引;同 ID → 无;无身份 → 无;弹层打开即受闸自动回链
+/// (有身份,睡不扰醒即回;2026-10-19 定稿恢复),无身份不自动扫描
+/// (点扫描才扫);扫描/拆面板废在途重连。
 ///
 /// 基建(最小):AppServices 单例照常构建(bleGpsInject 默认关 → 零注入
 /// 驱动,面板打开即挂起),只 mock nikonpill/ble 的 scan/scanForDeviceId
@@ -44,12 +45,14 @@ void main() {
         'mfg': mfg,
       };
 
-  BlePairedIdentity identityOf(int deviceId) => BlePairedIdentity(
+  BlePairedIdentity identityOf(int deviceId, {String cameraName = ''}) =>
+      BlePairedIdentity(
         peripheralUuid: 'P1',
         deviceId: deviceId,
         nonce: 0x70,
         serial: 'S',
         controllerName: 'NikonPill',
+        cameraName: cameraName,
         pairedAt: DateTime(2026, 10, 15),
       );
 
@@ -88,9 +91,15 @@ void main() {
     await tester.pump(drain);
   }
 
-  testWidgets('无注册身份:打开即自动扫描,无状态字节行纯设备名(不显设备ID)',
+  testWidgets('无注册身份:打开不自动扫描,点扫描才列;行纯设备名(不显设备ID)',
       (tester) async {
     await boot(tester, scanResult: [deviceMap(mfgOf(0x56781234))]);
+
+    expect(find.text('Z f_8014411'), findsNothing,
+        reason: '打开沿不自动扫描(2026-10-19 用户定稿):扫描只认显式点按');
+    await tester.tap(find.text('扫描'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
 
     expect(find.text('Z f_8014411'), findsOneWidget);
     expect(find.textContaining('设备ID'), findsNothing);
@@ -100,14 +109,25 @@ void main() {
     await disposePage(tester);
   });
 
-  testWidgets('广播带状态字节:行副文出电源态(待机 0x1F),设备ID 仍不显',
+  testWidgets('广播带状态字节:行尾出电源态色点(待机黄),设备ID/文字副文不显',
       (tester) async {
     await boot(tester,
         scanResult: [deviceMap(mfgOf(0x56781234, status: 0x1F))]);
 
+    await tester.tap(find.text('扫描'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
     expect(find.text('Z f_8014411'), findsOneWidget);
-    expect(find.text('待机 0x1F'), findsOneWidget,
-        reason: '电源态副文还原(2026-10-18);深睡行 = 重连唤不醒的答案面');
+    expect(find.textContaining('待机'), findsNothing,
+        reason: '电源态文字退役(2026-10-19 换色点)');
+    expect(
+        find.byWidgetPredicate((w) =>
+            w is Container &&
+            w.decoration is BoxDecoration &&
+            (w.decoration as BoxDecoration).shape == BoxShape.circle),
+        findsOneWidget,
+        reason: '待机黄点(深睡行 = 点连接唤不醒的答案面)');
     expect(find.textContaining('设备ID'), findsNothing);
     await disposePage(tester);
   });
@@ -118,7 +138,7 @@ void main() {
         saved: identityOf(0x11223301));
 
     // 有身份 → 打开沿走自动重连不出列表;点扫描填列表(顺带废在途重连)。
-    await tester.tap(find.text('扫描(30s)'));
+    await tester.tap(find.text('扫描'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 50));
 
@@ -133,7 +153,7 @@ void main() {
         scanResult: [deviceMap(mfgOf(0x56781234))],
         saved: identityOf(0x56781234));
 
-    await tester.tap(find.text('扫描(30s)'));
+    await tester.tap(find.text('扫描'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 50));
 
@@ -156,10 +176,10 @@ void main() {
         saved: identityOf(0x11223301));
 
     // 打开沿自动重连已在跑:先扫描(废在途重连)填列表,再点重连。
-    await tester.tap(find.text('扫描(30s)'));
+    await tester.tap(find.text('扫描'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 50));
-    await tester.tap(find.text('重连(复用身份)'));
+    await tester.tap(find.text('连接'));
     await tester.pump();
     await tester.pump();
 
@@ -173,10 +193,26 @@ void main() {
     await disposePage(tester);
   });
 
+  testWidgets('设备行展示相机广播名;旧档未存回落控制器名', (tester) async {
+    await boot(tester,
+        scanResult: [],
+        saved: identityOf(0x11223301, cameraName: 'Z f_8014411'));
+    expect(find.text('Z f_8014411'), findsOneWidget,
+        reason: '设备行 = 相机名(cameraName);controllerName 是本机'
+            '在相机侧的注册名,不当相机名用');
+    await disposePage(tester);
+
+    await boot(tester, scanResult: [], saved: identityOf(0x11223301));
+    expect(find.text('NikonPill'), findsOneWidget,
+        reason: '旧档缺 cameraName → 展示名回落 controllerName');
+    await disposePage(tester);
+  });
+
   testWidgets('拆面板废在途重连:退避即刻醒,退避到点也不续跑(取消语义)', (tester) async {
     await boot(tester, scanResult: [], saved: identityOf(0x11223301));
-    // 首轮已在 boot 内发出(当时挂的是 boot mock,未计数);换计数 mock
-    // 只盯后续:若无取消语义,2s 退避到点会发第 2 轮,计数必涨。
+    // 首轮已在 boot 内发出(打开沿受闸自动回链;当时挂的是 boot mock,
+    // 未计数);换计数 mock 只盯后续:若无取消语义,2s 退避到点会发第
+    // 2 轮,计数必涨。
     var scanIdCalls = 0;
     tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(ble,
         (call) async {
@@ -187,7 +223,7 @@ void main() {
     });
     addTearDown(() => tester.binding.defaultBinaryMessenger
         .setMockMethodCallHandler(ble, null));
-    expect(scanIdCalls, 0, reason: '首轮在 boot 内已发,计数 mock 从此盯后续');
+    expect(scanIdCalls, 0, reason: '首轮在点按内已发,计数 mock 从此盯后续');
     await tester.pump(const Duration(milliseconds: 500));
     expect(scanIdCalls, 0, reason: '退避等待期不再扫');
     await disposePage(tester, drain: const Duration(seconds: 3));
