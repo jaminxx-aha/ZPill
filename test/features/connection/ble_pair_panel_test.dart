@@ -208,6 +208,22 @@ void main() {
     await disposePage(tester);
   });
 
+  testWidgets('手动断开后:打开沿不自动回链(bleManualOff 压制),显式连接解除',
+      (tester) async {
+    AppServices.instance.bleManualOff = true;
+    addTearDown(() => AppServices.instance.bleManualOff = false);
+    await boot(tester, scanResult: [], saved: identityOf(0x11223301));
+
+    expect(find.text('重连中…'), findsNothing,
+        reason: '用户显式断开意图压制打开沿守候(2026-10-19 定稿)');
+    expect(find.text('连接'), findsOneWidget);
+    await tester.tap(find.text('连接'));
+    await tester.pump();
+    expect(AppServices.instance.bleManualOff, isFalse,
+        reason: '显式连接沿解除手动断开意图,守候/驱动恢复资格');
+    await disposePage(tester);
+  });
+
   testWidgets('拆面板废在途重连:退避即刻醒,退避到点也不续跑(取消语义)', (tester) async {
     await boot(tester, scanResult: [], saved: identityOf(0x11223301));
     // 首轮已在 boot 内发出(打开沿受闸自动回链;当时挂的是 boot mock,
