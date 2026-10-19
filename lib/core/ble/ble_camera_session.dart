@@ -151,6 +151,13 @@ final class BleCameraSession {
   String? _connectedUuid;
   bool _resuming = false;
   String? _serial;
+
+  /// 取消纪元(十三轮):[disconnect] 沿推进 —— 在途连接尝试
+  /// (retryReconnect/reconnectDirect/reconnectScan)的迟到收口不再把
+  /// 状态翻回 reconnecting。用户取消沿状态已回 idle,若无此闸,握手的
+  /// 60s 超时会迟到触发把页面「复活」成连接中(且 manualOff 压着驱动,
+  /// 谁也不会真的再连 —— 假在途卡死)。
+  int _cancelEpoch = 0;
   int _backoffStep = 0;
   /// 深睡闸门连续跳过轮数(episode 限频日志用;非闸沿归零)。
   int _standbySkips = 0;
@@ -178,6 +185,11 @@ final class BleCameraSession {
   Future<List<BleDevice>> scanForPairing(
           {Duration timeout = const Duration(seconds: 30)}) =>
       _host.scan(timeout: timeout);
+
+  /// 停配对扫描(十四轮):显式重连(manualResume)沿停面板在途自动扫
+  /// —— 扫描互踩扫描(BLE 无线电独占),重连的 scanForDeviceId 与自页
+  /// 30s 扫描窗并行 = 全程无命中,「断开后怎么都连不上」主因之一。
+  Future<void> stopScan() => _host.stopScan();
 
   /// 与已发现设备完整配对:连接 → 4 步握手 → 写控制器名。
   /// 成功填 [identity] 并转 ready;失败抛 [BlePairingException] 回 idle。
@@ -221,6 +233,7 @@ final class BleCameraSession {
             _state != BleSessionState.idle)) {
       return false;
     }
+    final epoch = _cancelEpoch; // 十三轮:取消沿迟到收口不推态。
     final devices = await _host
         .scanForDeviceId(identity!.deviceId, timeout: const Duration(seconds: 8));
     lastRetryGated = false;
@@ -241,6 +254,10 @@ final class BleCameraSession {
       _backoffStep = min(1, _backoffSeconds.length - 1);
       return false;
     }
+    if (epoch != _cancelEpoch) {
+      return false; // 已取消:预连接沿也不再推进 —— 否则取消落在扫描窗
+      // 内时本尝试照旧入 pairing,僵尸态把后续尝试全挡在门外(十四轮)。
+    }
     _standbySkips = 0;
     _resuming = true;
     _serial = null;
@@ -252,12 +269,14 @@ final class BleCameraSession {
       return true;
     } on TimeoutException {
       _abandonHandshake(done);
+      if (epoch != _cancelEpoch) return false; // 已取消:状态留在 idle。
       // 重连超时:留在 reconnecting(退避推进),重试循环继续,不塌回
       // idle 停摆 —— 相机唤醒窗错过的场景下一轮再试。
       _setState(BleSessionState.reconnecting);
       _backoffStep = min(_backoffStep + 1, _backoffSeconds.length - 1);
       return false;
     } on Exception {
+      if (epoch != _cancelEpoch) return false; // 已取消:状态留在 idle。
       _setState(BleSessionState.reconnecting);
       _backoffStep = min(_backoffStep + 1, _backoffSeconds.length - 1);
       return false;
@@ -285,6 +304,7 @@ final class BleCameraSession {
             _state != BleSessionState.reconnecting)) {
       return false;
     }
+    final epoch = _cancelEpoch; // 十三轮:取消沿迟到收口不推态。
     _resuming = true;
     _serial = null;
     _setState(BleSessionState.pairing);
@@ -300,11 +320,13 @@ final class BleCameraSession {
     } on TimeoutException {
       lastError = linked ? '二段握手超时(弹窗确认窗满)' : '二段直连超时(相机不应答)';
       _abandonHandshake(done);
+      if (epoch != _cancelEpoch) return false; // 已取消:状态留在 idle。
       _setState(BleSessionState.reconnecting);
       _backoffStep = min(_backoffStep + 1, _backoffSeconds.length - 1);
       return false;
     } on Exception catch (e) {
       lastError = '第二段连接失败:$e';
+      if (epoch != _cancelEpoch) return false; // 已取消:状态留在 idle。
       _setState(BleSessionState.reconnecting);
       _backoffStep = min(_backoffStep + 1, _backoffSeconds.length - 1);
       return false;
@@ -324,6 +346,7 @@ final class BleCameraSession {
       return false;
     }
     silentBondWait = Duration.zero;
+    final epoch = _cancelEpoch; // 十三轮:取消沿迟到收口不推态。
     final devices = await _host.scan(timeout: scanTimeout);
     if (devices.isEmpty) {
       lastError = '二段扫描无相机广播';
@@ -331,6 +354,9 @@ final class BleCameraSession {
       return false;
     }
     final target = devices.first;
+    if (epoch != _cancelEpoch) {
+      return false; // 已取消:预连接沿也不再推进(十四轮,同 retryReconnect)。
+    }
     _resuming = true;
     _serial = null;
     _setState(BleSessionState.pairing);
@@ -344,19 +370,31 @@ final class BleCameraSession {
     } on TimeoutException {
       lastError = linked ? '二段握手超时(弹窗确认窗满)' : '二段连接超时(相机不应答)';
       _abandonHandshake(done);
+      if (epoch != _cancelEpoch) return false; // 已取消:状态留在 idle。
       _setState(BleSessionState.reconnecting);
       _backoffStep = min(_backoffStep + 1, _backoffSeconds.length - 1);
       return false;
     } on Exception catch (e) {
       lastError = '二段连接失败:$e';
+      if (epoch != _cancelEpoch) return false; // 已取消:状态留在 idle。
       _setState(BleSessionState.reconnecting);
       _backoffStep = min(_backoffStep + 1, _backoffSeconds.length - 1);
       return false;
     }
   }
 
-  /// 断开回 idle(身份保留;重连仍可复用)。
+  /// 断开回 idle(身份保留;重连仍可复用)。十三轮:在途握手一并弃局
+  /// —— 立刻 completeError 让等待沿当场收口(迟到的 60s 超时不再复活
+  /// 状态),纪元推进让各尝试的 catch 不再推 reconnecting。
   Future<void> disconnect() async {
+    _cancelEpoch++;
+    final pending = _handshake;
+    if (pending != null) {
+      _abandonHandshake(pending);
+      if (!pending.isCompleted) {
+        pending.completeError(BlePairingException('已取消'));
+      }
+    }
     try {
       await _host.disconnect();
     } on Exception {
@@ -401,7 +439,10 @@ final class BleCameraSession {
       }
       final creds = decodeWifiCredentials(blob);
       if (creds == null) {
-        lastError = 'AP 凭据解密未中(候选密钥全试未命中,blob 已落诊断日志)';
+        // 十七轮:解密未中**不上 lastError**(错误位)—— 唤醒流程下
+        // 相机 Wi-Fi 已开,错误位让位「去系统连 Wi-Fi」红字提醒;细节
+        // 落 AppLog(blob 已 trace,候选密钥增补用)。
+        AppLog.w(AppLog.ble, 'AP 凭据解密未中(候选密钥全试未命中,blob 已落诊断日志)');
       }
       return creds;
     } on Exception catch (e) {
@@ -473,21 +514,34 @@ final class BleCameraSession {
   }
 
   /// 过闸写入体(tick 与首写自发沿 [_deferredFirstWrite] 共用)。
+  ///
+  /// 十六轮单飞:tick(驱动周期)与首写自发沿并发进入会对同一特征
+  /// (TIME/GEO)各发一笔 withResponse 写,后笔撞原生「同特征已有写在
+  /// 途」busy(iOS 逐特征闸);写是周期性保活,丢一拍下一拍兜底,
+  /// 单飞跳过不排队。
+  bool _flushing = false;
+
   Future<void> _flushDueWrites(DateTime t) async {
-    final pending = _pendingFix;
-    if (pending != null) {
-      _pendingFix = null;
-      await _sendGeo(pending, t);
-      if (_gated(_now())) return; // GEO 失败重进闸:后续写等下一拍
-    }
-    if (_keepalive.timeDue(t, _lastTimeOkAt)) {
-      await _sendTime(t);
-    }
-    final lastOk = _lastOkFix;
-    if (lastOk != null &&
-        _lastOkAt != null &&
-        t.difference(_lastOkAt!) >= _keepAlive) {
-      await _sendGeo(lastOk, t);
+    if (_flushing) return;
+    _flushing = true;
+    try {
+      final pending = _pendingFix;
+      if (pending != null) {
+        _pendingFix = null;
+        await _sendGeo(pending, t);
+        if (_gated(_now())) return; // GEO 失败重进闸:后续写等下一拍
+      }
+      if (_keepalive.timeDue(t, _lastTimeOkAt)) {
+        await _sendTime(t);
+      }
+      final lastOk = _lastOkFix;
+      if (lastOk != null &&
+          _lastOkAt != null &&
+          t.difference(_lastOkAt!) >= _keepAlive) {
+        await _sendGeo(lastOk, t);
+      }
+    } finally {
+      _flushing = false;
     }
   }
 

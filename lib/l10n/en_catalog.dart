@@ -64,13 +64,22 @@ const Map<String, String> enCatalog = {
   'ble.handshaking': 'Handshaking…',
   'common.none': 'None',
   'ble.scanHint':
-      'On the camera, open the "Connect to Smart Device" menu first (advertising window ~30s), then tap Scan.',
+      'On the camera, open the "Connect to Smart Device" menu first (advertising window ~30s); this page scans for it automatically.',
   'ble.iosPairHint':
-      'iOS: after pairing succeeds, the app disconnects and opens the system Bluetooth page; tap the camera there to finish pairing (verify the passkey) → return here to reconnect and register automatically.',
+      'iOS: after pairing succeeds, finish classic pairing in system Bluetooth (see the red guide on this page), then return here and tap "Connect".',
+  'ble.awaitSystemBond': 'Waiting for System Pairing',
+  'ble.bondCardTitle':
+      'Bluetooth verification done — finish pairing in system Bluetooth',
+  'ble.bondStep1':
+      'First disconnect the camera\'s existing entry in the phone\'s Bluetooth',
+  'ble.bondStep2':
+      'Open Settings > Bluetooth and tap the camera name to finish pairing',
+  'ble.bondStep3': 'When done, return here and tap "Connect"',
+  'ble.openSystemBluetooth': 'Open System Bluetooth Settings',
   'ble.scanning': 'Scanning…',
   'ble.scanButton': 'Scan',
   'ble.unpair': 'Unpair',
-  'ble.reconnecting': 'Reconnecting…',
+  'ble.reconnecting': 'Connecting…',
   'ble.connect': 'Connect',
   'ble.binding': 'Binding…',
   'ble.bindClassic': 'Bind Classic Bluetooth',
@@ -134,8 +143,6 @@ const Map<String, String> enCatalog = {
   'conn.usage': '{used}/{total}',
   'conn.shotsLeft': '{n} shots left',
   'conn.recTimeLeft': 'Rec {t}',
-  'conn.cancelReconnect': 'Cancel Reconnect',
-  'conn.cancelConnect': 'Cancel Connection',
   'conn.wired': 'Wired',
   'conn.apHotspot': 'AP Mode',
   'conn.sameWifi': 'STA Mode',
@@ -163,6 +170,16 @@ const Map<String, String> enCatalog = {
   'conn.gpsAuthFailed':
       'Background location not granted ("Always" required); GPS injection stays off',
   'conn.wakeCameraWifi': 'Remote Connect Camera',
+  'conn.hintToggle': 'Connection Info',
+  'conn.wifiAwakeCardTitle': 'Camera Wi-Fi is on — join it manually',
+  'conn.wifiAwakeStep1':
+      'Open Settings > Wi-Fi and join the hotspot "{ssid}"',
+  'conn.wifiAwakeStep2':
+      'Password below (fetched over the secure Bluetooth channel)',
+  'conn.wifiAwakeStep3':
+      'After joining, return here and tap "Joined — Connect to Camera"',
+  'conn.wifiAwakeJoin': 'Joined — Connect to Camera',
+  'conn.openWifiSettings': 'Open System Wi-Fi Settings',
   'conn.pairingManage': 'Manage Pairing (log/unpair/background location)',
   'conn.wakeFailed': 'Wake failed: {e}',
   'common.unknown': 'Unknown',
@@ -177,8 +194,8 @@ const Map<String, String> enCatalog = {
       'Joined camera hotspot "{ssid}"; connecting to the camera…',
   'conn.autoJoinFailed':
       'Auto-join failed: {e} — join via system Wi-Fi manually (password on the camera screen), then choose "AP Hotspot" on the connection page and tap "Connect to camera"',
-  'conn.wifiAwakeNoCred':
-      'Camera Wi-Fi is awake: Bluetooth released to let the camera raise its hotspot; credentials not decoded: {e} — join via system Wi-Fi (password on the camera screen); tap "Reconnect" to resume Bluetooth after transfers',
+  'conn.wifiManualConnectHint':
+      'Camera Wi-Fi is on — join the camera hotspot in system Wi-Fi (password on the camera screen); tap "Reconnect" to resume Bluetooth after transfers',
   'conn.methodUsb': 'Wired (USB)',
   'conn.methodAp': 'AP (Camera as Hotspot)',
   'conn.methodSta': 'STA (Same Wi-Fi)',
@@ -207,6 +224,11 @@ const Map<String, String> enCatalog = {
   'conn.subnetNothing':
       'No camera found on this subnet: make sure the camera and phone are on the same Wi-Fi, and the camera stays on the "Waiting for connection" screen',
   'conn.connect': 'Connect',
+  'conn.sectionPaired': 'Paired',
+  'conn.sectionOthers': 'Other Devices',
+  'conn.recent': 'Recent',
+  'conn.noPairedDevices': 'No paired devices',
+  'conn.noOtherDevices': 'No devices found',
   'conn.lastCamera': 'Last: {name}',
   'conn.forgetCamera': 'Forget This Camera',
   'conn.forgetConfirm': 'Forget This Camera?',
