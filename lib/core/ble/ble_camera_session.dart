@@ -289,13 +289,16 @@ final class BleCameraSession {
     _serial = null;
     _setState(BleSessionState.pairing);
     final done = _handshake = Completer<void>();
+    var linked = false;
     try {
       await _host
           .connectPaired(identity!.peripheralUuid)
           .timeout(const Duration(seconds: 20));
+      linked = true;
       await done.future.timeout(const Duration(seconds: 60));
       return true;
     } on TimeoutException {
+      lastError = linked ? '二段握手超时(弹窗确认窗满)' : '二段直连超时(相机不应答)';
       _abandonHandshake(done);
       _setState(BleSessionState.reconnecting);
       _backoffStep = min(_backoffStep + 1, _backoffSeconds.length - 1);
@@ -332,11 +335,14 @@ final class BleCameraSession {
     _serial = null;
     _setState(BleSessionState.pairing);
     final done = _handshake = Completer<void>();
+    var linked = false;
     try {
       await _host.connectPaired(target.uuid).timeout(const Duration(seconds: 20));
+      linked = true;
       await done.future.timeout(const Duration(seconds: 45));
       return true;
     } on TimeoutException {
+      lastError = linked ? '二段握手超时(弹窗确认窗满)' : '二段连接超时(相机不应答)';
       _abandonHandshake(done);
       _setState(BleSessionState.reconnecting);
       _backoffStep = min(_backoffStep + 1, _backoffSeconds.length - 1);
@@ -601,7 +607,7 @@ final class BleCameraSession {
         } else if (uuid == kNikonCharStatusForControl ||
             uuid == kNikonCharControlPoint) {
           _trace(
-              '${uuid.substring(4, 8)} ← ${data.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}');
+              '${_shortId(uuid)} ← ${data.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}');
         }
       case BleDisconnected():
         if (_state == BleSessionState.pairing) {
@@ -680,6 +686,12 @@ final class BleCameraSession {
 
   static String hex(List<int> bytes) =>
       bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ');
+
+  /// 特征短标识(日志用):SIG 采纳的 16 位 UUID 在 iOS 侧是 4 字符短串
+  /// (CBUUID.uuidString 直出),截 4-8 位会 RangeError —— Error 不被
+  /// `on Exception` 拦,直接炸断事件处理。短串原样,全长取 4-8。
+  static String _shortId(String uuid) =>
+      uuid.length <= 8 ? uuid : uuid.substring(4, 8);
 
   /// 挂在原连接上等注册完成信号(NOT1 01 00;相机在注册挂起态可能于
   /// 原连接上延迟发安全请求 → 用户确认 → bond → 注册 → NOT1)。
