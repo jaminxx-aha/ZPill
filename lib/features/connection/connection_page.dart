@@ -35,6 +35,7 @@ library;
 
 import 'dart:async';
 import 'dart:io' show Platform;
+import 'dart:math' show pi;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -952,7 +953,13 @@ class _ConnectionPageState extends State<ConnectionPage>
               return IconButton(
                 key: const ValueKey('conn_mode_picker'),
                 tooltip: context.t('conn.chooseMethod'),
-                icon: const Icon(Icons.link),
+                // 十八轮:链环斜扣(用户从设计稿选 J)——「正在接上」的
+                // 动作方向;十九轮:再转 90°,共 135° 换另一条对角线。
+                // 命中区仍是按钮 48dp,旋转只动绘制。
+                icon: Transform.rotate(
+                  angle: 3 * pi / 4,
+                  child: const Icon(Icons.link),
+                ),
                 onPressed: busy
                     ? null
                     : () => _showModePickerSheet(context, controller),
