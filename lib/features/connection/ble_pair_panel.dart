@@ -198,7 +198,10 @@ class _BlePairPanelState extends State<BlePairPanel>
       case BleDisconnected(:final uuid):
         _log('断连 $uuid');
       case BleNotified(:final uuid, :final data):
-        AppLog.d(AppLog.ble, '← ${uuid.substring(4, 8)} ${hexOf(data)}');
+        // iOS 对 SIG 采纳 16 位 UUID 回 4 字符短串,裸 substring(4,8) 会
+        // RangeError 炸断事件链(2026-10-19 真机实证)。
+        AppLog.d(AppLog.ble,
+            '← ${uuid.length <= 8 ? uuid : uuid.substring(4, 8)} ${hexOf(data)}');
       case BleError(:final code, :final message, :final uuid):
         AppLog.w(AppLog.ble,
             '错误 $code${uuid == null ? '' : ' @$uuid'}:$message');
