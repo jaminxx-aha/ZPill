@@ -8,6 +8,7 @@ import 'package:nikon_pill/core/ble/gatt_uuids.dart';
 import 'package:nikon_pill/core/ble/geo_payload.dart';
 import 'package:nikon_pill/core/ble/pairing_engine.dart';
 import 'package:nikon_pill/core/ble/pairing_message.dart';
+import 'package:nikon_pill/core/log/app_log.dart';
 import 'package:nikon_pill/platform/ble_scanner.dart';
 
 import 'wifi_credentials_test.dart' show craftBlob;
@@ -23,6 +24,13 @@ final class FakeBleHost implements BleHost {
   int? reconnectDeviceId;
   Uint8List? reconnectMfg;
   final connects = <String>[];
+
+  /// scanForDeviceId 调用数(连接页 hero 测试断言「重连循环真发了扫」)。
+  int scanIdCalls = 0;
+
+  /// 扫描闸(可空):非空时 scanForDeviceId 挂起等放行 —— 取消沿落在
+  /// 扫描窗内的竞态用例(预连接纪元闸)。
+  Completer<void>? scanGate;
 
   void emit(BleEvent event) => eventCtrl.add(event);
 
@@ -48,6 +56,11 @@ final class FakeBleHost implements BleHost {
   @override
   Future<List<BleDevice>> scanForDeviceId(int deviceId,
       {Duration timeout = const Duration(seconds: 10)}) async {
+    scanIdCalls++;
+    final gate = scanGate;
+    if (gate != null) {
+      await gate.future;
+    }
     if (reconnectDeviceId == deviceId) {
       return [
         BleDevice(
@@ -315,6 +328,32 @@ void main() {
     expect(session.state, BleSessionState.idle);
   });
 
+  test('取消落在重连扫描窗内:命中也不入 pairing(十五轮预连接纪元闸)',
+      () async {
+    final zombieHost = FakeBleHost()
+      ..reconnectDeviceId = 0x11223344
+      ..scanGate = Completer<void>();
+    final zombieSession = BleCameraSession(host: zombieHost);
+    zombieSession.identity = BleIdentity(
+        peripheralUuid: 'P1',
+        deviceId: 0x11223344,
+        nonce: 0x70,
+        serial: 'S',
+        name: 'N');
+    final attempt = zombieSession.retryReconnect(gateStandby: false);
+    await pump();
+    expect(zombieSession.state, BleSessionState.idle,
+        reason: '尝试在扫描窗内等待');
+    // 取消沿(纪元推进)→ 扫描才放行命中:不得再入 pairing —— 否则
+    // 僵尸 pairing 把后续尝试全挡在 guard 外(「断开后怎么都连不上」)。
+    await zombieSession.disconnect();
+    zombieHost.scanGate!.complete();
+    expect(await attempt, isFalse);
+    await pump();
+    expect(zombieSession.state, BleSessionState.idle,
+        reason: '预连接沿纪元闸:取消后命中也不推进状态');
+  });
+
   test('GEO 去重门:首点过闸发;<3s 且 <1.1m 跳;位移 ≥1.1m 发;≥3s 发', () async {
     await runHandshake();
     int geoCount() => host.countWrite(kNikonCharGeo);
@@ -358,6 +397,19 @@ void main() {
     await session.tick(); // 过重闸:回补成功 + 首笔 TIME
     expect(host.countWrite(kNikonCharGeo), 2);
     expect(host.countWrite(kNikonCharTime), 1);
+  });
+
+  test('flushDueWrites 单飞:并发进入不重发 TIME(十六轮 busy 防)', () async {
+    await runHandshake();
+    now = now.add(const Duration(seconds: 3)); // 过首写门
+    // 驱动拍与首写自发沿并发的形状:两笔 withResponse 写同特征,后笔
+    // 撞 iOS 原生「同特征已有写在途」busy(真机 TIME 写失败实证)。
+    final t1 = session.tick();
+    final t2 = session.tick();
+    await t1;
+    await t2;
+    expect(host.countWrite(kNikonCharTime), 1,
+        reason: '十六轮:并发 flush 单飞,丢一拍下一拍兜底');
   });
 
   test('保鲜与保活:30s 无成功注入重发 GEO;TIME 45s 档到点写', () async {
@@ -606,8 +658,16 @@ void main() {
 
       host.reads[kNikonCharConfig] =
           Uint8List.fromList(List<int>.generate(97, (i) => (i * 7 + 3) & 0xFF));
+      final errBefore = session.lastError;
       expect(await session.readWifiCredentials(), isNull);
-      expect(session.lastError, contains('解密未中'));
+      // 十七轮:解密未中不上 lastError(错误位让位「去系统连 Wi-Fi」
+      // 红字提醒),改写 AppLog ble 域。
+      expect(session.lastError, errBefore);
+      expect(
+          AppLog.entries
+              .where((e) => e.domain == AppLog.ble)
+              .map((e) => e.message),
+          contains(contains('解密未中')));
     });
 
     test('读失败(特征不在/断链)→ null 带原因', () async {
