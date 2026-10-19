@@ -99,6 +99,8 @@ public final class BlePlugin: NSObject, FlutterPlugin, CBCentralManagerDelegate,
       disconnect(result: result)
     case "openBluetoothSettings":
       openBluetoothSettings(result: result)
+    case "openWifiSettings":
+      openWifiSettings(result: result)
     default:
       result(FlutterMethodNotImplemented)
     }
@@ -238,6 +240,12 @@ public final class BlePlugin: NSObject, FlutterPlugin, CBCentralManagerDelegate,
     if let peripheral {
       central?.cancelPeripheralConnection(peripheral)
       self.peripheral = nil  // 立即释放:随后的 connect 不再撞 busy 守卫
+      // 十六轮:取消沿在途读/写立即落错。didDisconnect 的冲洗有身份门
+      //(self.peripheral 已置 nil → 不匹配 → failPendingOps 跳过),
+      // 逐特征闸位会占死:之后该特征每笔 withResponse 写/读都报 busy
+      // (「TIME 写失败 busy」真机实证 2026-10-19)。迟到回调安全:
+      // 闸位已清,回调里的 removeValue 扑空,不会二次应答。
+      failPendingOps("disconnected")
     }
     result(nil)
   }
@@ -246,6 +254,26 @@ public final class BlePlugin: NSObject, FlutterPlugin, CBCentralManagerDelegate,
   /// 回落本 app 设置页);result = 是否直达蓝牙页成功。
   private func openBluetoothSettings(result: @escaping FlutterResult) {
     guard let url = URL(string: "App-Prefs:root=Bluetooth") else {
+      result(false)
+      return
+    }
+    UIApplication.shared.open(url, options: [:]) { ok in
+      if ok {
+        result(true)
+        return
+      }
+      if let appSettings = URL(string: UIApplication.openSettingsURLString) {
+        UIApplication.shared.open(appSettings, options: [:])
+      }
+      result(false)
+    }
+  }
+
+  /// 直达系统 Wi-Fi 设置页(App-Prefs 私有 scheme,新 iOS 可能失效 →
+  /// 回落本 app 设置页);result = 是否直达 Wi-Fi 页成功。蓝牙页 Wi-Fi
+  /// 红卡手动按钮用(2026-10-19 改版:App 不主动跳,点了才跳)。
+  private func openWifiSettings(result: @escaping FlutterResult) {
+    guard let url = URL(string: "App-Prefs:root=WIFI") else {
       result(false)
       return
     }

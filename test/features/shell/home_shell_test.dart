@@ -531,8 +531,10 @@ void main() {
     await tester.pumpAndSettle();
     expect(f.remote.liveViewActive, isFalse);
     expect(find.byType(RemotePage), findsNothing, reason: '断连即退页');
-    expect(find.text('连接相机'), findsOneWidget,
-        reason: '相机页回未连接主视图(居中连接按钮,默认有线)');
+    expect(find.text('有线'), findsOneWidget,
+        reason: '相机页回未连接主视图(方式行,默认有线)');
+    expect(find.byKey(const ValueKey('conn_method_hero')), findsOneWidget,
+        reason: 'hero 在场(点按即连接;五轮中央连接钮退役)');
     expect(find.text('进入拍摄'), findsNothing, reason: '入口随断连消失');
   });
 

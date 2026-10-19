@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:nikon_pill/app_services.dart';
 import 'package:nikon_pill/core/camera/camera_connection.dart';
 import 'package:nikon_pill/core/camera/camera_discovery.dart';
 import 'package:nikon_pill/core/camera/camera_info.dart';
@@ -23,6 +24,7 @@ import 'package:nikon_pill/core/utils/byte_writer.dart';
 import 'package:nikon_pill/data/ble_identity_store.dart';
 import 'package:nikon_pill/data/paired_cameras_store.dart';
 import 'package:nikon_pill/data/settings_store.dart';
+import 'package:nikon_pill/design/app_colors.dart';
 import 'package:nikon_pill/features/connection/camera_overview_controller.dart';
 import 'package:nikon_pill/features/connection/connection_page.dart';
 import 'package:nikon_pill/features/remote/remote_controller.dart';
@@ -692,43 +694,70 @@ void main() {
   });
 
   group('ConnectionPage', () {
-    testWidgets('未连接主视图:居中「连接相机」,有线直连;AP 方式候选序直连', (WidgetTester tester) async {
+    testWidgets('未连接主视图:方式行 + hero 点按直连;说明收进方式行 ⓘ', (WidgetTester tester) async {
       final conn = _FakeConnection();
       final controller = ConnectionController(connection: conn);
       await tester.pumpWidget(MaterialApp(
         home: ConnectionPage(controller: controller),
       ));
 
-      // 默认有线:右上角 = 当前方式图标;居中「连接相机」直接发起 USB 连接
-      expect(find.text('连接相机'), findsOneWidget);
-      expect(find.text('当前方式:有线'), findsOneWidget);
-      expect(find.byIcon(Icons.usb), findsOneWidget);
+      // 默认有线:AppBar 三分(六~七轮)——「相机」挪左、方式位(图标+
+      // 标题+ⓘ)居中、右上统一连接图标(Icons.link);中央「连接相机」
+      // 钮退役(五轮:点图标连接),说明默认隐藏。usb 图标两处:方式位+hero。
+      expect(find.text('有线'), findsOneWidget, reason: 'AppBar 方式位(六轮)');
+      expect(find.byIcon(Icons.link), findsOneWidget,
+          reason: '右上角统一连接图标(七轮,方法无关)');
+      expect(find.text('连接相机'), findsNothing,
+          reason: '中央连接钮退役(五轮:点图标连接)');
+      expect(find.text('当前方式:有线'), findsNothing, reason: '「当前方式」字样整删');
+      expect(find.byIcon(Icons.usb), findsNWidgets(2),
+          reason: '方式位 + hero(六轮:右上钮换统一「连接」文字)');
+      expect(find.textContaining('C-to-C 数据线直连'), findsNothing,
+          reason: '说明默认隐藏(点方式行 ⓘ 弹说明弹窗)');
       expect(find.textContaining('app 将自动接管相机'), findsNothing);
-      await tester.tap(find.text('连接相机'));
+      await tester.tap(find.byKey(const ValueKey('conn_method_info')));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('C-to-C 数据线直连'), findsOneWidget,
+          reason: '点方式行 ⓘ 弹说明弹窗(五轮:入口自 hero 迁此)');
+      await tester.tapAt(const Offset(400, 20)); // 点弹层外收起
+      await tester.pumpAndSettle();
+      expect(find.textContaining('C-to-C 数据线直连'), findsNothing);
+
+      // 点 hero = 发起 USB 连接(无 IP;五轮图标即连接钮)
+      await tester.tap(find.byKey(const ValueKey('conn_method_hero')));
       await tester.pump();
       expect(conn.connectIp, isNull, reason: 'USB 连接无 IP');
 
-      // 切 AP 方式(经控制器;弹层路径由下测覆盖):接管预告在场,
-      // 点「连接相机」走候选序(无发现无网关 → 默认)
+      // 切 AP 方式(经控制器;弹层路径由下测覆盖):接管预告收进 ⓘ 弹窗
+      //(默认隐藏),点 hero 走候选序(无发现无网关 → 默认)
       controller.selectMethod(ConnectionMethod.ap);
       await tester.pump();
-      expect(find.byIcon(Icons.wifi_tethering), findsOneWidget);
-      expect(find.textContaining('点「连接相机」后 app 将自动接管相机'), findsOneWidget);
-      await tester.tap(find.text('连接相机'));
+      expect(find.text('AP 模式'), findsOneWidget, reason: '方式位随方式切换');
+      expect(find.byIcon(Icons.wifi_tethering), findsNWidgets(2),
+          reason: '方式位 + hero');
+      expect(find.textContaining('app 将自动接管相机'), findsNothing,
+          reason: '接管预告藏 ⓘ 弹窗后才出');
+      await tester.tap(find.byKey(const ValueKey('conn_method_info')));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('app 将自动接管相机'), findsOneWidget);
+      await tester.tapAt(const Offset(400, 20));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('conn_method_hero')));
       await tester.pump();
       expect(conn.connectIp, kDefaultCameraIp);
     });
 
-    testWidgets('右上角模式选择弹层:方式条目 + 当前打勾;点选即切换并收层', (tester) async {
+    testWidgets('右上角模式选择弹层:方式条目 + 当前打勾;选中仅切换不连接', (tester) async {
       final conn = _FakeConnection();
       final controller = ConnectionController(connection: conn);
       await tester.pumpWidget(
           MaterialApp(home: ConnectionPage(controller: controller)));
 
-      await tester.tap(find.byIcon(Icons.usb));
+      await tester.tap(find.byTooltip('选择连接方式'));
       await tester.pumpAndSettle();
       expect(find.text('选择连接方式'), findsOneWidget);
-      expect(find.text('有线'), findsOneWidget);
+      expect(find.text('有线'), findsNWidgets(2),
+          reason: 'AppBar 方式位 + 弹层条目(六轮)');
       expect(find.text('AP 模式'), findsOneWidget);
       expect(find.text('STA 模式'), findsOneWidget);
       expect(find.text('蓝牙'), findsNothing, reason: 'BLE 未装配不出蓝牙条目');
@@ -737,12 +766,14 @@ void main() {
       await tester.pumpAndSettle();
       expect(controller.method, ConnectionMethod.ap);
       expect(find.text('选择连接方式'), findsNothing, reason: '点选后收弹层');
-      expect(find.text('当前方式:AP 模式'), findsOneWidget);
+      expect(conn.connectIp, isNull,
+          reason: '选中仅切换视图,不发起连接(2026-10-19 用户定稿)');
+      expect(find.text('AP 模式'), findsOneWidget,
+          reason: '方式位随选中切换(弹层已收,仅页面一处)');
+      expect(find.text('当前方式:AP 模式'), findsNothing, reason: '「当前方式」字样整删');
     });
 
-    testWidgets('STA 扫描面板:打开沿自动扫描,发现列表点选连接并收面板', (tester) async {
-      // 加高视口:底部面板 85% 高,内容(发现列表/手填/已存相机)在
-      // 默认 600 高下折线外,点按落空。
+    testWidgets('STA 视图:进页自动扫描(静默),两段列表点行连接', (tester) async {
       tester.view
         ..physicalSize = const Size(800, 2400)
         ..devicePixelRatio = 1.0;
@@ -754,44 +785,35 @@ void main() {
       controller.selectMethod(ConnectionMethod.sta);
       await tester.pumpWidget(
           MaterialApp(home: ConnectionPage(controller: controller)));
-      // 原地替换(2026-10-18):选 STA 即本视图,无中央按钮;
-      // 起扫挪帧尾,一帧后到位(spinner 永不定,pumpAndSettle 不适用)。
+      // 原地替换(无路由):起扫挪帧尾,一帧后到位。
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 400));
-      expect(find.text('STA 连接(同一 Wi-Fi)'), findsOneWidget);
-      // 打开沿自动扫描(mDNS 发现是慢活,转圈才有进度感)
+      // 进页自动扫描;静默 —— 无扫描钮、无「扫描中」指示。
       expect(scanner.startCalls, 1);
-      expect(find.text('扫描中…(点按停止)'), findsOneWidget);
+      expect(find.text('扫描中…(点按停止)'), findsNothing, reason: '扫描静默');
+      expect(find.text('扫描相机'), findsNothing, reason: '扫描钮退役');
+      expect(find.text('已配对'), findsOneWidget, reason: '两段列表段名');
+      expect(find.text('其它设备'), findsOneWidget);
+      expect(find.text('暂无已配对设备'), findsOneWidget);
+      expect(find.text('未发现设备'), findsOneWidget);
 
       scanner.eventsCtrl.add(const NsdCameraFound(_zfCamera));
+      await tester.pump();
       await tester.pump();
       expect(find.text('Z_f_8014411'), findsOneWidget);
       expect(find.text('192.168.0.104'), findsOneWidget);
 
-      // 点选相机 → 连接沿(页面监听 connecting 自动返回,进度/取消
-      // 在主视图状态卡)
-      final tile = tester.widget<ListTile>(find.ancestor(
-          of: find.text('Z_f_8014411'), matching: find.byType(ListTile)).first);
-      // ignore: avoid_print
-      print('DBG tile onTap=${tile.onTap != null} busy=${controller.state}');
+      // 点行连接(无面板可收,原地连接)
       await tester.tap(find.text('Z_f_8014411'));
       conn.statesCtrl.add(CameraLinkState.connecting);
       await tester.pump();
-      await tester.pump(const Duration(milliseconds: 400)); // 页面退场动画走完
+      await tester.pump(const Duration(milliseconds: 400)); // 过渡走完
       expect(conn.connectIp, '192.168.0.104');
       expect(conn.connectInstanceName, 'Z_f_8014411');
       expect(scanner.stopCalls, 1, reason: 'connectDiscovered 自带停扫');
-      // ignore: avoid_print
-      print('DBG probes: scaffolds=${find.byType(Scaffold).evaluate().length}');
-      final tctx = tester.element(find.text('STA 连接(同一 Wi-Fi)').first);
-      // ignore: avoid_print
-      print('DBG route=${ModalRoute.of(tctx)?.runtimeType} isCurrent=${ModalRoute.of(tctx)?.isCurrent} canPop=${Navigator.of(tctx).canPop()} navigators=${find.byType(Navigator).evaluate().length}');
     });
 
-    
-    
     testWidgets('断开后快速重连列表刷新(connected → disconnected 沿上重拉档案)', (tester) async {
-      // 加高视口:「上次」列表在面板折线下(同上)。
       tester.view
         ..physicalSize = const Size(800, 2400)
         ..devicePixelRatio = 1.0;
@@ -807,9 +829,9 @@ void main() {
           MaterialApp(home: ConnectionPage(controller: controller)));
       await tester.pump();
 
-      // 首帧档案:STA 视图「上次」列表可见(原地替换,无面板),点选直连
-      expect(find.text('上次:Z_f_8014411'), findsOneWidget);
-      await tester.tap(find.text('上次:Z_f_8014411'));
+      // 首帧档案:STA 视图「已配对」组可见(原地替换,无面板),点行直连
+      expect(find.text('Z_f_8014411'), findsOneWidget);
+      await tester.tap(find.text('Z_f_8014411'));
       await tester.pump();
       expect(conn.connectIp, '192.168.1.4');
       expect(conn.connectInstanceName, 'Z_f_8014411');
@@ -823,12 +845,57 @@ void main() {
       await tester.pumpAndSettle();
 
       // 断开沿重拉的档案原地刷新(无面板可收)
-      expect(find.text('上次:Z_8_ABC'), findsOneWidget, reason: '断开沿上重拉连接档案');
-      expect(find.text('上次:Z_f_8014411'), findsOneWidget);
+      expect(find.text('Z_8_ABC'), findsOneWidget, reason: '断开沿上重拉连接档案');
+      expect(find.text('Z_f_8014411'), findsOneWidget);
     });
 
-    
-    testWidgets('connecting 态:中央按钮/方式选择禁用,可取消(逃生口)', (tester) async {
+    testWidgets('STA hero 点按连最近(八轮):首条「最近」徽,在途点按取消', (tester) async {
+      tester.view
+        ..physicalSize = const Size(800, 2400)
+        ..devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      final conn = _FakeConnection();
+      final store = InMemoryPairedCamerasStore();
+      await store.save(CameraInfo(
+          id: '012345678901',
+          name: 'Z_f_8014411',
+          lastIp: '192.168.1.4',
+          lastConnectedAt: DateTime(2026, 10, 1)));
+      await store.save(CameraInfo(
+          id: '99',
+          name: 'Z_8_ABC',
+          lastIp: '192.168.1.9',
+          lastConnectedAt: DateTime(2026, 10, 18)));
+      final controller =
+          ConnectionController(connection: conn, pairedCameras: store);
+      controller.selectMethod(ConnectionMethod.sta);
+      await tester.pumpWidget(
+          MaterialApp(home: ConnectionPage(controller: controller)));
+      await tester.pump();
+
+      // 首条 = 档案最近优先(Z_8_ABC 10-18 > Z_f 10-1):唯一「最近」徽。
+      expect(find.text('Z_8_ABC'), findsOneWidget);
+      expect(find.text('Z_f_8014411'), findsOneWidget);
+      expect(find.text('最近'), findsOneWidget,
+          reason: '最近连接条目名后绿底「最近」徽(八轮,仅首条)');
+
+      // hero 点按 = 连最近(与列表行同路 connectSaved:首条 IP/实例名)。
+      await tester.tap(find.byKey(const ValueKey('conn_method_hero')));
+      await tester.pump();
+      expect(conn.connectIp, '192.168.1.9', reason: 'hero 连最近 = 档案首条');
+      expect(conn.connectInstanceName, 'Z_8_ABC');
+
+      // 在途再点 hero = 取消(与 USB/AP hero 同语义)。
+      conn.statesCtrl.add(CameraLinkState.connecting);
+      await tester.pump();
+      expect(find.text('取消连接'), findsNothing,
+          reason: '九轮:STA 连接中底部取消按钮退役(取消 = 再点 hero)');
+      await tester.tap(find.byKey(const ValueKey('conn_method_hero')));
+      await tester.pump();
+      expect(conn.disconnectCalls, 1, reason: '在途点按 = 取消连接');
+    });
+
+    testWidgets('connecting 态:点图标取消连接;方式选择禁用', (tester) async {
       final conn = _FakeConnection();
       final controller = ConnectionController(connection: conn);
       await tester.pumpWidget(
@@ -837,31 +904,26 @@ void main() {
       conn.statesCtrl.add(CameraLinkState.connecting);
       await tester.pump();
 
-      expect(find.text('取消连接'), findsOneWidget);
-      // 中央连接按钮禁用(busy 锁发起新连接)
+      // 中央按钮退役(五轮):取消 = 再点图标,页面不再出按钮
+      expect(find.text('取消连接'), findsNothing, reason: '中央按钮退役(五轮)');
+      expect(find.text('连接相机'), findsNothing);
+      // 右上角连接图标钮禁用(连接进行中不可换方式;七轮统一图标)
       expect(
         tester
-            .widget<FilledButton>(find.widgetWithText(FilledButton, '连接相机'))
-            .onPressed,
-        isNull,
-      );
-      // 右上角方式选择禁用(连接进行中不可换方式)
-      expect(
-        tester
-            .widget<IconButton>(find.ancestor(
-                of: find.byIcon(Icons.usb), matching: find.byType(IconButton)))
+            .widget<IconButton>(find.byKey(const ValueKey('conn_mode_picker')))
             .onPressed,
         isNull,
       );
 
-      await tester.tap(find.text('取消连接'));
+      // 在途点 hero = 取消连接(五轮:图标即连接钮)
+      await tester.tap(find.byKey(const ValueKey('conn_method_hero')));
       await tester.pump();
-      expect(conn.disconnectCalls, 1);
+      expect(conn.disconnectCalls, 1, reason: '在途点图标 = 取消连接');
     });
 
     testWidgets(
-        'reconnecting 态:状态卡「正在重连…」+ hint 动态文案 + '
-        '取消重连逃生口 + 主操作禁用(2026-10-10)', (tester) async {
+        'reconnecting 态:状态行「正在重连…」+ 错误位动态文案 + '
+        '点图标取消', (tester) async {
       final conn = _FakeConnection()
         ..err = '相机被占用(可能被 SnapBridge/尼享连接),每 5 秒慢速重试,可点「取消」';
       final controller = ConnectionController(connection: conn);
@@ -869,36 +931,32 @@ void main() {
           MaterialApp(home: ConnectionPage(controller: controller)));
 
       conn.statesCtrl.add(CameraLinkState.reconnecting);
-      // 状态卡尾槽 spinner(不定进度)永不 settle —— pump 走帧即可。
+      // 状态行尾槽 spinner(不定进度)永不 settle —— pump 走帧即可。
       await tester.pump();
 
-      expect(find.text('正在重连…'), findsOneWidget, reason: '状态卡 label');
+      expect(find.text('正在重连…'), findsOneWidget, reason: '状态行 label');
       expect(find.byType(CircularProgressIndicator), findsOneWidget,
           reason: 'busy 尾槽 spinner(重连进行中)');
       expect(find.text('相机被占用(可能被 SnapBridge/尼享连接),每 5 秒慢速重试,可点「取消」'),
           findsOneWidget,
-          reason: 'hint 读连接层动态文案(busy 慢拍分类)');
-      expect(find.text('取消重连'), findsOneWidget, reason: '重连中逃生口');
-      expect(find.text('取消连接'), findsNothing, reason: '文案按态区分');
+          reason: '固定错误位读连接层动态文案(busy 慢拍分类)');
+      // 中央按钮退役(五轮):取消 = 点图标
+      expect(find.text('取消重连'), findsNothing, reason: '中央按钮退役(五轮)');
+      expect(find.text('取消连接'), findsNothing);
 
-      // busy:中央按钮与方式选择禁用(恢复期不可换方式/发起连接)
+      // 右上角连接图标钮禁用(恢复期不可换方式;七轮统一图标)
       expect(
         tester
-            .widget<FilledButton>(find.widgetWithText(FilledButton, '连接相机'))
-            .onPressed,
-        isNull,
-      );
-      expect(
-        tester
-            .widget<IconButton>(find.ancestor(
-                of: find.byIcon(Icons.usb), matching: find.byType(IconButton)))
+            .widget<IconButton>(find.byKey(const ValueKey('conn_mode_picker')))
             .onPressed,
         isNull,
       );
 
-      await tester.tap(find.text('取消重连'));
+      // 在途点 hero = 取消重连(五轮:图标即连接钮)
+      await tester.tap(find.byKey(const ValueKey('conn_method_hero')));
       await tester.pump();
-      expect(conn.disconnectCalls, 1, reason: '取消重连 = disconnect(恢复循环即止)');
+      expect(conn.disconnectCalls, 1,
+          reason: '在途点图标 = 取消重连(disconnect,恢复循环即止)');
     });
 
     testWidgets('无感配对:进 pairing 态自动确认,全程不弹窗', (tester) async {
@@ -952,7 +1010,12 @@ void main() {
       expect(find.text('等待相机上确认配对…'), findsOneWidget);
       expect(find.text('连接中…'), findsNothing);
       expect(controller.hint, contains('conn.pairingSent'));
-      expect(find.text('取消连接'), findsOneWidget, reason: '等待窗保留取消逃生口');
+      expect(find.textContaining('配对信息已发送'), findsOneWidget,
+          reason: '等待指引落在固定错误位');
+      // 等待窗取消 = 点图标(五轮中央按钮退役)
+      await tester.tap(find.byKey(const ValueKey('conn_method_hero')));
+      await tester.pump();
+      expect(conn.disconnectCalls, 1, reason: '等待窗点图标 = 取消');
 
       // 窗口耗尽转 failed:等待文案撤下,回到真实错误
       conn.statesCtrl.add(CameraLinkState.failed);
@@ -984,7 +1047,7 @@ void main() {
           MaterialApp(home: ConnectionPage(controller: controller)));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 400));
-      expect(find.text('上次:Z_f_8014411'), findsOneWidget);
+      expect(find.text('Z_f_8014411'), findsOneWidget);
 
       await tester.tap(find.byTooltip('忘记这台相机'));
       await tester.pumpAndSettle();
@@ -993,7 +1056,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(await store.list(), isEmpty);
-      expect(find.text('上次:Z_f_8014411'), findsNothing);
+      expect(find.text('Z_f_8014411'), findsNothing);
     });
 
     testWidgets(
@@ -1199,11 +1262,16 @@ void main() {
       );
     }
 
-    /// 进蓝牙工具面板:右上角方式弹层选蓝牙 → 点「连接相机」。
+    /// 进蓝牙视图:右上角方式弹层选蓝牙(选中仅切换,body 原地替换)。
+    /// 顺带加高视口:hero 正中改版后(弹性区上下分栏),默认 600 高
+    /// 视口把唤醒钮/红卡按钮压到折线下,tap 打不中 —— 与 STA 用例同款。
     Future<void> openBleTools(WidgetTester tester) async {
-      await tester.tap(find.byIcon(Icons.usb));
+      tester.view
+        ..physicalSize = const Size(800, 2400)
+        ..devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      await tester.tap(find.byTooltip('选择连接方式'));
       await tester.pumpAndSettle();
-      // 选中即进流程:蓝牙条目点下直接弹工具面板(不再回落点连接)。
       await tester.tap(find.text('蓝牙'));
       await tester.pumpAndSettle();
     }
@@ -1214,16 +1282,18 @@ void main() {
           home: ConnectionPage(
               controller: ConnectionController(connection: conn))));
       await tester.pump();
-      expect(find.text('连接相机'), findsOneWidget);
-      await tester.tap(find.byIcon(Icons.usb));
+      // 五轮:中央连接钮退役(点图标连接);方式行在场。
+      expect(find.text('有线'), findsOneWidget, reason: '方式行在场');
+      expect(find.text('连接相机'), findsNothing);
+      await tester.tap(find.byTooltip('选择连接方式'));
       await tester.pumpAndSettle();
       expect(find.text('选择连接方式'), findsOneWidget);
       expect(find.text('蓝牙'), findsNothing);
     });
 
     testWidgets(
-        '已配对未连(idle):重连钮在场可点,远程连接钮退场(未连接不挂 WiFi 动作);'
-        'PTP 状态卡不出(工具通道不混链路态)', (tester) async {
+        '已配对未连(idle):打开不回链(页内全手动),连接钮在场待点;'
+        '两段列表 + PTP 状态行不出(工具通道不混链路态)', (tester) async {
       // 夹具有真文件 IO(临时目录/身份存档),testWidgets 的
       // fake-async zone 吃不到 —— 必须 runAsync 放行。此态只建夹具不
       // 驱动握手(会话停在 idle)。
@@ -1253,29 +1323,34 @@ void main() {
           MaterialApp(home: ConnectionPage(controller: f.controller)));
       await tester.pumpAndSettle();
       await openBleTools(tester);
-      expect(find.text('蓝牙连接'), findsOneWidget);
-      expect(find.text('未连接'), findsNothing, reason: 'PTP 状态卡在蓝牙分段下隐藏');
+      expect(find.text('蓝牙连接'), findsNothing, reason: '标题行删除:方式由图标表达');
+      expect(find.text('未连接'), findsNothing, reason: 'PTP 状态行在蓝牙视图下隐藏');
       expect(find.text('已配对,未连接'), findsOneWidget);
-      // 打开沿受闸自动回链已在跑(面板硬绑 AppServices 单例;本用例页
-      // 面显示夹具自建会话,状态行不动,但面板钮同位转进行态 —— 自动
-      // 化可见面)。相机睡时闸门拦下不碰,自己醒来即回链。
-      final retryBtn = tester.widget<OutlinedButton>(find.ancestor(
-          of: find.text('重连中…'), matching: find.byType(OutlinedButton)));
-      expect(retryBtn.onPressed, isNotNull,
-          reason: '点按即唤醒(2026-10-18):回链进行中可点,打断受闸循环绕闸直连');
+      // 打开沿不自动回链(2026-10-19 定稿:进入页面不主动连接)——
+      // 连接钮在场待点,无连接进行态。
+      expect(find.text('连接中…'), findsNothing);
+      // 右上钮是图标(七轮),页面唯一「连接」TextButton = 面板行。
+      final connectBtn = tester.widget<TextButton>(
+          find.widgetWithText(TextButton, '连接').first);
+      expect(connectBtn.onPressed, isNotNull, reason: '显式点按才发起');
+      // 两段列表段名(有档案:已配对组非空;其它设备组空态)
+      expect(find.text('已配对'), findsOneWidget);
+      expect(find.text('其它设备'), findsOneWidget);
+      expect(find.text('暂无已配对设备'), findsNothing);
+      expect(find.text('最近'), findsOneWidget,
+          reason: '配对档案行 = 最近连接条目,名后绿底「最近」徽(八轮)');
       // WiFi 动作组就绪才挂(2026-10-19 定稿:关闭钮整个退役):未
       // 连接整组退场,远程连接相机/关闭都不出。
       expect(find.text('远程连接相机'), findsNothing);
       expect(find.text('关闭'), findsNothing);
       // GPS 注入开关已迁设置页(2026-10-18),蓝牙页不再有开关。
       expect(find.byType(SwitchListTile), findsNothing);
-      // 收尾:关弹层 → 面板 dispose 废在途自动重连(退避 Timer 随取消
-      // 释放;不关则挂到用例尾判「Timer still pending」)。
-      await tester.tapAt(const Offset(400, 20));
+      // 收尾:无在途重连(打开沿不回链),直接拆树。
+      await tester.pumpWidget(const SizedBox());
       await tester.pumpAndSettle();
     });
 
-    testWidgets('标题点按弹说明层:工具通道长文案收进弹窗,正文不常驻', (tester) async {
+    testWidgets('点方式行 ⓘ 弹说明:工具通道长文案收进弹窗,正文不常驻', (tester) async {
       // 夹具同 idle 用例(真文件 IO 须 runAsync;面板硬绑 AppServices
       // 单例,自动化照常跑,与本用例断言无关)。
       final controller = (await tester.runAsync(() async {
@@ -1302,13 +1377,157 @@ void main() {
       await tester.pumpAndSettle();
       await openBleTools(tester);
 
-      // 正文不再常驻长文案(2026-10-18 定稿:收进标题点按的说明层)。
+      // 正文不再常驻长文案(说明收进方式行 ⓘ 点开的弹窗,五轮入口迁此)。
       expect(find.textContaining('不建立相机连接'), findsNothing);
-      await tester.tap(find.text('蓝牙连接'));
+      await tester.tap(find.byKey(const ValueKey('conn_method_info')));
       await tester.pumpAndSettle();
-      expect(find.textContaining('不建立相机连接'), findsOneWidget);
-      // 收尾:撤说明层(面板在途重连随树拆废)。
+      expect(find.textContaining('不建立相机连接'), findsOneWidget,
+          reason: '点方式行 ⓘ 弹说明弹窗(五轮:入口自 hero 迁此)');
       await tester.tapAt(const Offset(400, 20));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('不建立相机连接'), findsNothing);
+      // hero 点按不再承担说明(五轮让位给连接;八轮 = 连最近:面板
+      // 「连接」同一条手动重连路)—— 说明弹窗不开;重连循环在场
+      //(本夹具会话未注身份,首轮即未命中进退避)。
+      await tester.tap(find.byKey(const ValueKey('conn_method_hero')));
+      await tester.pump();
+      await tester.pump();
+      expect(find.textContaining('不建立相机连接'), findsNothing,
+          reason: 'hero 点按 = 连最近(八轮),不开说明弹窗');
+      expect(find.text('连接中…'), findsWidgets,
+          reason: '八轮:hero 连最近 = 面板「连接」同路,重连循环在跑'
+              '(按钮位同文案;十轮:名下副文退役;十三轮:改文案「连接中…」)');
+      // 收尾:拆树(面板在途扫描/重连循环随树拆废 —— 世代号即刻止步)。
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('蓝牙 hero 连最近/在途取消(八/九轮):面板同路,涟漪跟面板循环',
+        (tester) async {
+      // 十二轮起面板跟页面控制器会话(生产 = AppServices 驱动同一只):
+      // 夹具 FakeBleHost 会话直接可测 —— 重连循环真发 scanForDeviceId
+      // 走 FakeBleHost 计数,不再借道 AppServices 单例 + 通道 mock。
+      final f = (await tester.runAsync(() async {
+        final host = FakeBleHost();
+        final session = BleCameraSession(host: host);
+        final identityStore = await tempIdentityStore();
+        final controller = ConnectionController(
+          bleSession: session,
+          bleIdentityStore: identityStore,
+          settingsController: SettingsController(store: _FakeSettingsStore()),
+        );
+        await identityStore.save(BlePairedIdentity(
+          peripheralUuid: 'P1',
+          deviceId: 0x11223344,
+          nonce: 0x55667788,
+          serial: '1641397',
+          controllerName: 'NikonPill',
+          pairedAt: DateTime(2026, 10, 14),
+        ));
+        await controller.loadBleIdentity();
+        return (host: host, session: session, controller: controller);
+      }))!;
+
+      AppServices.instance.bleManualOff = true;
+      addTearDown(() => AppServices.instance.bleManualOff = false);
+      await tester.pumpWidget(
+          MaterialApp(home: ConnectionPage(controller: f.controller)));
+      await tester.pumpAndSettle();
+      await openBleTools(tester);
+      // 会话注身份(重连轮真走到 scanForDeviceId;FakeBleHost 无命中
+      // 配置 → 无命中轮,会话态停在 idle —— 涟漪只能跟面板循环)。
+      f.session.identity = BleIdentity(
+        peripheralUuid: 'P1',
+        deviceId: 0x11223344,
+        nonce: 0x55667788,
+        serial: '1641397',
+        name: 'NikonPill',
+      );
+
+      // 涟漪环 = 圆形容器且有描边无填充(hero 外圈有填充、状态行圆点
+      // 无描边,均不计数)。闲态无环(会话 idle,涟漪未起)。
+      final rings = find.byWidgetPredicate((w) =>
+          w is Container &&
+          w.decoration is BoxDecoration &&
+          (w.decoration as BoxDecoration).shape == BoxShape.circle &&
+          (w.decoration as BoxDecoration).border != null &&
+          (w.decoration as BoxDecoration).color == null);
+      expect(rings, findsNothing, reason: '闲态无涟漪');
+
+      await tester.tap(find.byKey(const ValueKey('conn_method_hero')));
+      await tester.pump();
+      await tester.pump();
+      expect(AppServices.instance.bleManualOff, isFalse,
+          reason: 'hero 连最近 = 显式连接意图,解除手动断开压制');
+      expect(f.host.scanIdCalls, greaterThanOrEqualTo(1),
+          reason: '走面板「连接」同一条重连路(scanForDeviceId 已发)');
+      expect(rings, findsNWidgets(3),
+          reason: '九轮:蓝牙连接中出涟漪 —— 无命中轮会话态停在 idle,'
+              '涟漪跟面板重连循环走(onRetryingChanged 上抛)');
+      expect(find.text('连接中…'), findsOneWidget,
+          reason: '重连反馈只在按钮位(十轮名下副文退役;十三轮'
+              'ble.reconnecting 改名「连接中…」)');
+
+      // 九轮:在途再点 hero = 取消 —— 与面板「断开」钮同语义(manualOff
+      // 复压 + 废循环 + 断链),行副文/按钮回「连接」,涟漪即停。
+      await tester.tap(find.byKey(const ValueKey('conn_method_hero')));
+      await tester.pump();
+      await tester.pump();
+      expect(AppServices.instance.bleManualOff, isTrue,
+          reason: '取消 = 显式断开意图(压离页后驱动自动回链)');
+      expect(find.text('连接中…'), findsNothing, reason: '重连循环已废');
+      expect(find.text('连接'), findsOneWidget, reason: '面板行回到「连接」');
+      expect(rings, findsNothing, reason: '取消后涟漪即停');
+
+      // 收尾:拆树(面板循环随世代号废;夹具会话非单例,无驱动 Timer
+      // 须清)。
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump(const Duration(seconds: 3));
+    });
+
+    testWidgets('等待系统配对红卡:黄点状态词 + 引导卡 + 手动按钮(不点不跳)',
+        (tester) async {
+      final f = (await tester.runAsync(() async {
+        final host = FakeBleHost();
+        final session = BleCameraSession(host: host);
+        final identityStore = await tempIdentityStore();
+        final controller = ConnectionController(
+          bleSession: session,
+          bleIdentityStore: identityStore,
+          settingsController: SettingsController(store: _FakeSettingsStore()),
+        );
+        await identityStore.save(BlePairedIdentity(
+          peripheralUuid: 'P1',
+          deviceId: 0x11223344,
+          nonce: 0x55667788,
+          serial: '1641397',
+          controllerName: 'NikonPill',
+          pairedAt: DateTime(2026, 10, 14),
+        ));
+        await controller.loadBleIdentity();
+        return (host: host, controller: controller);
+      }))!;
+      // iOS 首配握手落档沿(面板 onSystemBondNeeded → 控制器;测试直调
+      // 同一入口 —— iOS 分支被 Platform 门挡在测试宿主外)。
+      f.controller.markAwaitSystemBond();
+      await tester.pumpWidget(
+          MaterialApp(home: ConnectionPage(controller: f.controller)));
+      await tester.pumpAndSettle();
+      await openBleTools(tester);
+
+      expect(find.text('等待系统配对'), findsOneWidget, reason: '状态词(黄点)');
+      expect(find.text('蓝牙验证完成,请到系统蓝牙完成配对'), findsOneWidget,
+          reason: '红色引导卡(自动跳系统蓝牙已删,2026-10-19 裁定)');
+      expect(find.textContaining('断开手机蓝牙'), findsOneWidget);
+      expect(find.text('打开系统蓝牙设置'), findsOneWidget,
+          reason: '手动按钮保留(裁定②):点了才跳,不点不跳');
+
+      // 手动钮:先断本机 BLE 再深链(测试环境深链 MissingPlugin 静默,
+      // 只验不炸)。
+      await tester.tap(find.text('打开系统蓝牙设置'));
+      await tester.pump();
+      // 收尾:拆树。
+      await tester.pumpWidget(const SizedBox());
       await tester.pumpAndSettle();
     });
 
@@ -1322,16 +1541,184 @@ void main() {
           MaterialApp(home: ConnectionPage(controller: f.controller)));
       await tester.pumpAndSettle();
       await openBleTools(tester);
-      expect(find.text('已连接'), findsOneWidget);
+      expect(find.text('已连接'), findsNWidgets(2),
+          reason: '状态行 + 十二轮就绪段名(配对面板组头不再「已配对」)');
+      expect(find.text('已配对'), findsNothing,
+          reason: '十二轮:就绪沿段名让位「已连接」');
+      expect(find.text('最近'), findsNothing,
+          reason: '十二轮:就绪行不带「最近」徽(已连接时无意义)');
+      // (hero 就绪配色断言在十一轮专项用例:实底统一黄 + 点按断开。)
 
       await tester.tap(find.text('远程连接相机'));
       await tester.pumpAndSettle();
       expect(f.host.lastWrite(kNikonCharWifi), Uint8List.fromList([0x01]));
       expect(f.session.state, BleSessionState.idle,
           reason: '写成功即断链:相机等 BLE 释放才真正开热点');
-      expect(find.byType(SnackBar), findsOneWidget);
-      // 收尾:关弹层废在途自动重连(退避 Timer 随取消释放)。
-      await tester.tapAt(const Offset(400, 20));
+      // 十七轮:凭据未解出不弹 SnackBar(下方文字提醒撤),置
+      // wifiAwakePending → 错误位出红字「去系统连 Wi-Fi」固定提醒。
+      expect(find.byType(SnackBar), findsNothing,
+          reason: '十七轮:凭据未解出撤 SnackBar');
+      expect(f.controller.wifiAwakePending, isTrue);
+      expect(find.text('相机 Wi-Fi 已开启,请在系统 Wi-Fi 中连接相机热点(密码看相机屏幕);传图完点「重连」恢复蓝牙'),
+          findsOneWidget,
+          reason: '十七轮:错误位红字固定提醒(打开 Wi-Fi 且未直连)');
+      expect(find.textContaining('0x2004 空'), findsNothing,
+          reason: '十七轮:会话杂错让位红字提醒(错误位不显「AP 凭据」失败细节)');
+      // 收尾:拆树(无 joiner:红卡不出,凭据未解出走红字提醒路)。
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('蓝牙就绪 hero 实底统一黄,点按 = 断开(十一轮)', (tester) async {
+      // 夹具(真文件 IO)驱动页面控制器会话到 ready —— ready 定 hero
+      // 实底。十二轮起面板跟控制器会话,hero 断开(cancelResume)落在
+      // 夹具会话上 → 断言 manualOff 旗标 + 夹具会话态直接可读。
+      final f = (await tester.runAsync(readyFixture))!;
+      addTearDown(() => AppServices.instance.bleManualOff = false);
+
+      await tester.pumpWidget(
+          MaterialApp(home: ConnectionPage(controller: f.controller)));
+      await tester.pumpAndSettle();
+      await openBleTools(tester);
+
+      // 十一轮:就绪 hero = 实底统一黄(与按钮实底同深,十轮淡绿被否)
+      // + onBrandYellow 深字图标 + 黄描边。
+      final heroKey = find.byKey(const ValueKey('conn_method_hero'));
+      final heroBox = tester
+          .widget<AnimatedContainer>(find.descendant(
+              of: heroKey, matching: find.byType(AnimatedContainer)))
+          .decoration as BoxDecoration;
+      expect(heroBox.color, AppColors.accentYellow,
+          reason: '十一轮:就绪实底统一黄(闲态为 45% 次级黄)');
+      expect(heroBox.border?.top.color, AppColors.accentYellow,
+          reason: '就绪黄描边(在途同款)');
+      final heroIcon = tester.widget<Icon>(
+          find.descendant(of: heroKey, matching: find.byIcon(Icons.bluetooth)));
+      expect(heroIcon.color, AppColors.onBrandYellow,
+          reason: '十一轮:黄底深字(App 按钮实底同款配对)');
+
+      // 就绪点按 = 断开(面板「断开」同路:manualOff 压驱动回链 + 断链)。
+      await tester.tap(heroKey);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(AppServices.instance.bleManualOff, isTrue,
+          reason: '十一轮:就绪 hero 点按 = 显式断开意图');
+      expect(f.session.state, BleSessionState.idle,
+          reason: '断链沿收口回 idle(夹具会话即面板会话,十二轮)');
+      // 收尾:拆树(夹具会话非单例,无驱动 Timer 须清)。
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('蓝牙连接中:状态词可点取消 + hero 停止重连(十三/十四轮)', (tester) async {
+      // 场景:断链后驱动自动重连 —— 会话停在 reconnecting(状态行
+      // 「连接中…」,hero 涟漪)。驱动路径用 reconnectDirect 模拟:
+      // 60s 直连握手窗内恒 pairing,超时沿置 reconnecting(FakeBleHost
+      // 无事件喂,握手永不完成)。
+      final f = (await tester.runAsync(() async {
+        final host = FakeBleHost();
+        final session = BleCameraSession(host: host);
+        final identityStore = await tempIdentityStore();
+        final controller = ConnectionController(
+          bleSession: session,
+          bleIdentityStore: identityStore,
+          settingsController: SettingsController(store: _FakeSettingsStore()),
+        );
+        await identityStore.save(BlePairedIdentity(
+          peripheralUuid: 'P1',
+          deviceId: 0x11223344,
+          nonce: 0x55667788,
+          serial: '1641397',
+          controllerName: 'NikonPill',
+          pairedAt: DateTime(2026, 10, 14),
+        ));
+        await controller.loadBleIdentity();
+        return (host: host, session: session, controller: controller);
+      }))!;
+      AppServices.instance.bleManualOff = false;
+      addTearDown(() => AppServices.instance.bleManualOff = false);
+      await tester.pumpWidget(
+          MaterialApp(home: ConnectionPage(controller: f.controller)));
+      await tester.pumpAndSettle();
+      await openBleTools(tester);
+      f.session.identity = BleIdentity(
+        peripheralUuid: 'P1',
+        deviceId: 0x11223344,
+        nonce: 0x55667788,
+        serial: '1641397',
+        name: 'NikonPill',
+      );
+      unawaited(f.session.reconnectDirect());
+      await tester.pump();
+      await tester.pump();
+
+      // 握手窗(pairing):状态行 + 行尾同词「握手中…」(十四轮:行内
+      // 只出状态词,「断开」钮被否);解除配对隐。
+      expect(find.text('握手中…'), findsNWidgets(2),
+          reason: '握手期:状态行 + 档案行尾(十轮)');
+      expect(find.text('断开'), findsNothing,
+          reason: '十四轮:握手期行内「断开」钮被否(取消走 hero 再点)');
+      expect(find.byIcon(Icons.link_off), findsNothing,
+          reason: '解除配对在握手期隐(十轮)');
+
+      // 超时 → reconnecting(连接中):状态行 + 行尾同词,**常驻自动
+      // 重试即刻起**(十五轮:面板就是页面开着时的重连执行者 —— 状态
+      // 沿入 reconnecting 自动起循环,相机就绪即连上),解除配对隐。
+      await tester.pump(const Duration(seconds: 61));
+      expect(f.controller.bleState, BleSessionState.reconnecting,
+          reason: '直连窗 60s 超时 → 停在 reconnecting(驱动重连档)');
+      expect(find.text('连接中…'), findsNWidgets(2),
+          reason: '十三轮:连接中如实报态(状态行 + 行尾)');
+      expect(find.text('连接'), findsNothing,
+          reason: '十五轮:连接中不与「连接」钮并存 —— 重连由常驻自动'
+              '循环承担,行内只报态与给取消(点状态词)');
+      expect(find.byIcon(Icons.link_off), findsNothing,
+          reason: '十三轮:连接中解除配对隐');
+      final rings = find.byWidgetPredicate((w) =>
+          w is Container &&
+          w.decoration is BoxDecoration &&
+          (w.decoration as BoxDecoration).shape == BoxShape.circle &&
+          (w.decoration as BoxDecoration).border != null &&
+          (w.decoration as BoxDecoration).color == null);
+      expect(rings, findsNWidgets(3),
+          reason: '连接中(busy)涟漪在跑');
+      expect(f.host.scanIdCalls, greaterThanOrEqualTo(1),
+          reason: '十五轮:常驻自动循环真在重试(scanForDeviceId 已发)');
+
+      // 十四轮:点行尾「连接中…」状态词 = 取消(manualOff + 断链回
+      // idle,与 hero 再点同语义);自动循环随取消废。
+      await tester.tap(find.text('连接中…').last);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(AppServices.instance.bleManualOff, isTrue,
+          reason: '十四轮:点状态词 = 显式断开意图(压驱动自动回链)');
+      expect(f.session.state, BleSessionState.idle,
+          reason: '断链沿收口回 idle');
+      expect(find.text('连接中…'), findsNothing, reason: '重连已停');
+      expect(find.text('连接'), findsOneWidget, reason: '面板行回到「连接」');
+      expect(find.byIcon(Icons.link_off), findsOneWidget,
+          reason: '解除配对回归(闲态)');
+      expect(rings, findsNothing, reason: '停止后涟漪即停');
+
+      // 闲态显式连接 = 面板循环(单发,manualResume 绕闸):按钮位报
+      // 「连接中…」,再点 hero = 取消(九轮)。
+      AppServices.instance.bleManualOff = false;
+      await tester.tap(find.text('连接'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(find.text('连接中…'), findsOneWidget,
+          reason: '面板循环在跑:按钮位报「连接中…」');
+      expect(rings, findsNWidgets(3), reason: '面板循环涟漪在跑');
+      await tester.tap(find.byKey(const ValueKey('conn_method_hero')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(AppServices.instance.bleManualOff, isTrue,
+          reason: '九轮:在途(hero)再点 = 取消');
+      expect(find.text('连接中…'), findsNothing, reason: '面板循环已废');
+      expect(rings, findsNothing, reason: '取消后涟漪即停');
+
+      // 收尾:拆树(reconnectDirect 已收口,无在途 Timer)。
+      await tester.pumpWidget(const SizedBox());
       await tester.pumpAndSettle();
     });
 
@@ -1373,7 +1760,8 @@ void main() {
       expect(session.lastError, contains('BLE 未连接'));
     });
 
-    testWidgets('唤醒沿自动读凭据:0x2004 解出 → AP 卡凭据块照实显示', (tester) async {
+    testWidgets('唤醒沿自动读凭据:0x2004 解出 → 无 joiner 弹手动入网红卡,主钮切 AP 发射连接',
+        (tester) async {
       final f = (await tester.runAsync(readyFixture))!;
       f.host.reads[kNikonCharConfig] =
           craftBlob('Zf_80114411', 'wpa2pass99', 0x02, cbc: false);
@@ -1389,19 +1777,29 @@ void main() {
       expect(f.controller.cameraApCredentials!.ssid, 'Zf_80114411');
       expect(f.session.state, BleSessionState.idle,
           reason: '唤醒沿断链(相机等 BLE 释放才开热点),凭据已先落控制器');
+      // 手动入网红卡留在本页(测试宿主无 joiner,= iOS/ohos 情形;
+      // 2026-10-19 裁定③④:App 不主动跳 Wi-Fi,不弹 SnackBar 指引)。
+      expect(find.byType(SnackBar), findsNothing);
+      expect(find.text('相机 Wi-Fi 已开启,请手动入网'), findsOneWidget);
+      expect(find.textContaining('加入热点「Zf_80114411」'), findsOneWidget);
+      expect(find.text('wpa2pass99'), findsOneWidget);
+      expect(find.text('已加入热点,开始连接'), findsOneWidget);
 
-      // 原地替换(无页可退):直接经方式弹层切 AP 模式,凭据卡在本视图
-      await tester.tap(find.byTooltip('选择连接方式'));
+      // 主钮 = 显式用户意图:切 AP 方式并发射连接,红卡即撤。
+      await tester.tap(find.text('已加入热点,开始连接'));
+      await tester.pump();
+      expect(f.controller.method, ConnectionMethod.ap);
+      expect(f.controller.wifiAwakePending, isFalse, reason: '显式连接沿撤卡');
       await tester.pumpAndSettle();
-      await tester.tap(find.text('AP 模式'));
-      await tester.pumpAndSettle();
+      // AP 视图凭据卡照旧(SSID/密码/安全 + 复制)
       expect(find.text('相机热点凭据(蓝牙通道解出)'), findsOneWidget);
       expect(find.text('wpa2pass99'), findsOneWidget);
       expect(find.text('SSID'), findsOneWidget);
       expect(find.textContaining('WPA2'), findsOneWidget);
     });
 
-    testWidgets('唤醒但凭据未解出:AP 方式不出凭据卡,提示如实', (tester) async {
+    testWidgets('唤醒但凭据未解出:错误位红字提醒去系统连 Wi-Fi,提示条撤(十七轮)',
+        (tester) async {
       final f = (await tester.runAsync(readyFixture))!;
       await tester.pumpWidget(
           MaterialApp(home: ConnectionPage(controller: f.controller)));
@@ -1413,8 +1811,13 @@ void main() {
       expect(f.controller.cameraApCredentials, isNull);
       expect(f.session.state, BleSessionState.idle,
           reason: '凭据未解出也断链:相机开热点不依赖凭据解出');
-      expect(find.byType(SnackBar), findsOneWidget);
-      expect(find.textContaining('凭据未解出'), findsOneWidget);
+      expect(find.byType(SnackBar), findsNothing,
+          reason: '十七轮:下方 SnackBar 提醒撤');
+      expect(find.text('相机 Wi-Fi 已开启,请在系统 Wi-Fi 中连接相机热点(密码看相机屏幕);传图完点「重连」恢复蓝牙'),
+          findsOneWidget,
+          reason: '十七轮:错误位红字固定提醒(打开 Wi-Fi 且未直连)');
+      expect(find.textContaining('0x2004 空'), findsNothing,
+          reason: '十七轮:会话杂错让位红字提醒');
 
       // 切 AP 模式方式:主视图不出凭据卡
       await tester.tap(find.byTooltip('选择连接方式'));
@@ -1468,8 +1871,8 @@ void main() {
       expect(conn.connectIp, isNull, reason: 'join 失败不发射连接');
       expect(find.textContaining('自动加入热点失败'), findsOneWidget);
       expect(find.textContaining('unavailable'), findsOneWidget);
-      // 收尾:关弹层废在途自动重连(joiner 失败不触发自动收层)。
-      await tester.tapAt(const Offset(400, 20));
+      // 收尾:拆树。
+      await tester.pumpWidget(const SizedBox());
       await tester.pumpAndSettle();
     });
 

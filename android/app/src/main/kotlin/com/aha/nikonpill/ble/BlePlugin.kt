@@ -447,6 +447,7 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
                 )
             }
             "openBluetoothSettings" -> result.success(openBluetoothSettings())
+            "openWifiSettings" -> result.success(openWifiSettings())
             else -> result.notImplemented()
         }
     }
@@ -946,6 +947,20 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
             true
         } catch (e: Exception) {
             android.util.Log.w(TAG, "openBluetoothSettings: $e")
+            false
+        }
+    }
+
+    /** 直达系统 Wi-Fi 设置页;蓝牙页 Wi-Fi 红卡手动按钮用(点了才跳)。 */
+    private fun openWifiSettings(): Boolean {
+        val ctx = activity ?: context ?: return false
+        return try {
+            ctx.startActivity(
+                Intent(Settings.ACTION_WIFI_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+            true
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "openWifiSettings: $e")
             false
         }
     }
