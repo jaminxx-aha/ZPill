@@ -20,11 +20,13 @@ void main() {
     await boot(tester);
 
     expect(find.text('相机'), findsWidgets); // AppBar 标题 + 底部 tab
-    // 未连接组件退场(2026-10-17):disconnected 静置态只剩主操作。
-    expect(find.text('未连接'), findsNothing);
-    expect(find.text('连接相机'), findsOneWidget); // 默认方式 = 有线,居中直连
-    expect(find.text('当前方式:有线'), findsOneWidget);
-    expect(find.text('扫描相机'), findsNothing); // 方式入口收进右上角弹层
+    // 状态行常驻(2026-10-19 改版):圆点+状态词;「当前方式」字样
+    // 整删,说明藏方式行 ⓘ 后;方式入口收进右上角弹层。
+    expect(find.text('未连接'), findsOneWidget);
+    expect(find.text('有线'), findsOneWidget); // 方式行(五轮;默认方式 = 有线)
+    expect(find.text('连接相机'), findsNothing); // 中央连接钮退役(五轮:点图标连接)
+    expect(find.text('当前方式:有线'), findsNothing);
+    expect(find.text('扫描相机'), findsNothing); // 扫描钮退役(STA 自动扫)
   });
 
   // 拍摄页冒烟不在此列:2026-10-08 起拍摄页由相机页已连接视图
