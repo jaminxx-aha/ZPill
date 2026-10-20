@@ -64,6 +64,7 @@ import '../common/widgets/confirm_dialog.dart';
 import '../remote/remote_controller.dart';
 import '../remote/remote_page.dart';
 import 'ble_pair_panel.dart';
+import 'sta_antenna_icon.dart';
 import '../settings/settings_page.dart';
 import 'camera_overview_controller.dart';
 import 'connected_overview.dart';
@@ -1008,9 +1009,19 @@ class _ConnectionPageState extends State<ConnectionPage>
   static IconData _methodIcon(ConnectionMethod m) => switch (m) {
         ConnectionMethod.usb => Icons.usb,
         ConnectionMethod.ap => Icons.wifi_tethering,
+        // STA 不走这里(见 [_methodIconWidget]),留 wifi 仅作穷尽占位。
         ConnectionMethod.sta => Icons.wifi,
         ConnectionMethod.ble => Icons.bluetooth,
       };
+
+  /// 方式图标(组件形态):STA 用自绘天线 [StaAntennaIcon] 复刻相机
+  /// Wi-Fi 菜单原图(2026-10-20 用户定稿「和相机一样」,Material 内置
+  /// 无一同型),其余走 Material 字形;size/color 语义同 [Icon]。
+  static Widget _methodIconWidget(ConnectionMethod m,
+          {double? size, Color? color}) =>
+      m == ConnectionMethod.sta
+          ? StaAntennaIcon(size: size, color: color)
+          : Icon(_methodIcon(m), size: size, color: color);
 
   /// 方式短名(弹层条目用;键即中文原文)。
   static String _methodLabel(ConnectionMethod m) => switch (m) {
@@ -1126,7 +1137,7 @@ class _ConnectionPageState extends State<ConnectionPage>
                 const SizedBox(height: AppSpacing.md),
                 Row(
                   children: [
-                    Icon(_methodIcon(m), size: 20, color: scheme.primary),
+                    _methodIconWidget(m, size: 20, color: scheme.primary),
                     const SizedBox(width: AppSpacing.sm),
                     Text(context.t(_methodLabel(m)),
                         style: theme.textTheme.titleMedium
@@ -1168,7 +1179,7 @@ class _ConnectionPageState extends State<ConnectionPage>
       mainAxisSize: MainAxisSize.min,
       children: [
         const SizedBox(width: AppSpacing.sm),
-        Icon(_methodIcon(m), size: 20, color: theme.colorScheme.primary),
+        _methodIconWidget(m, size: 20, color: theme.colorScheme.primary),
         const SizedBox(width: AppSpacing.sm),
         Text(
           context.t(_methodLabel(m)),
@@ -1542,7 +1553,7 @@ class _ConnectionPageState extends State<ConnectionPage>
             for (final m in ConnectionMethod.values)
               if (m != ConnectionMethod.ble || controller.bleEnabled)
                 ListTile(
-                  leading: Icon(_methodIcon(m)),
+                  leading: _methodIconWidget(m),
                   title: Text(context.t(_methodLabel(m))),
                   subtitle: Text(context.t(_methodDesc(m))),
                   trailing:
@@ -2080,7 +2091,7 @@ class _MethodHeroState extends State<_MethodHero>
                         : theme.colorScheme.outlineVariant),
               ),
               child: Center(
-                child: Icon(_ConnectionPageState._methodIcon(widget.method),
+                child: _ConnectionPageState._methodIconWidget(widget.method,
                     size: 44,
                     color: widget.ready && !widget.busy
                         ? AppColors.onBrandYellow
