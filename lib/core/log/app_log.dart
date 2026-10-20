@@ -65,6 +65,7 @@ final class AppLog {
   static const transfer = 'transfer'; // 下载/速传队列
   static const native = 'native'; // 三端原生日志合流
   static const live = 'live'; // 取景/监看链(帧尺寸/画质档/变换取证)
+  static const system = 'system'; // 系统级事件(内存警告等)
 
   static const int defaultCapacity = 5000;
 
