@@ -30,6 +30,7 @@ import '../../design/app_dimens.dart';
 import '../../l10n/l10n.dart';
 import '../../platform/ble_scanner.dart';
 import '../../platform/services.dart';
+import '../common/widgets/confirm_dialog.dart';
 import 'connection_widgets.dart';
 
 String hexOf(List<int> bytes) =>
@@ -504,6 +505,22 @@ class BlePairPanelState extends State<BlePairPanel>
     }
   }
 
+  /// 解除配对确认(2026-10-20:对齐 STA「忘记这台相机」):清配对
+  /// 身份 + 断开 + 注入停止,重连须重新走相机菜单 —— 一步到位的
+  /// 不可逆操作,弹窗把关。
+  Future<void> _confirmUnpair(BuildContext context) async {
+    final confirmed = await showConfirmDialog(
+      context,
+      title: context.t('ble.unpairConfirm'),
+      content: context.t('ble.unpairBody', {'name': _saved!.displayName}),
+      confirmLabel: context.t('ble.unpair'),
+      destructive: true,
+    );
+    if (confirmed) {
+      await _unpair();
+    }
+  }
+
   Future<void> _unpair() async {
     final app = AppServices.instance;
     _cancelRetry();
@@ -649,7 +666,8 @@ class BlePairPanelState extends State<BlePairPanel>
                         icon: const Icon(Icons.link_off, size: 20),
                         tooltip: context.t('ble.unpair'),
                         color: theme.colorScheme.onSurfaceVariant,
-                        onPressed: _unpair,
+                        onPressed: () =>
+                            unawaited(_confirmUnpair(context)),
                       ),
                     if (_sessionState == BleSessionState.pairing ||
                         _sessionState == BleSessionState.reconnecting)
