@@ -5,8 +5,22 @@ import 'package:flutter/services.dart';
 
 import 'app.dart';
 import 'app_services.dart';
+import 'core/log/app_log.dart';
 import 'platform/log_bridge.dart';
 import 'platform/services.dart';
+
+/// 系统内存警告取证(2026-10-20 图库「看大图返回后缩略图经常重新刷
+/// 新」排查):框架收到 didHaveMemoryPressure 即 imageCache.clear()
+/// 整锅端,已滚出视口的格滑回来全 miss 逐格重解。此处只记一条 ——
+/// 看大图时多大位图驻留会触发警告,是后续分级解码(大图限宽解)的
+/// 定价依据;网格缩略已改小档管线(见 [_cellBody] 所在的图库页),
+/// 重解毫秒级,症状土壤已除,此日志只作机制观测。
+class _MemoryPressureObserver extends WidgetsBindingObserver {
+  @override
+  void didHaveMemoryPressure() {
+    AppLog.w(AppLog.system, '系统内存警告:解码缓存已被框架整体清空');
+  }
+}
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -20,6 +34,10 @@ Future<void> main() async {
   // 原生日志合流(USB bulk 失败/BLE 状态沿等经 nikonpill/log 反向通道
   // 汇入 AppLog native 域;尽早 install,免 native 早期上报落空)。
   NativeLogBridge.install();
+
+  // 内存警告取证(全生命周期,常驻):只记日志不动缓存 —— 清空是框
+  // 架在 super.handleMemoryPressure 里已做的,不重不漏。
+  WidgetsBinding.instance.addObserver(_MemoryPressureObserver());
 
   // 应用级单例:USB 主线对象图(通道 → 传输 → 会话 → 仓库 → 控制器)。
   AppServices.bootstrap();
