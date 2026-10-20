@@ -8,6 +8,7 @@ import 'dart:async';
 import 'dart:io';
 
 import '../../data/paired_cameras_store.dart';
+import '../../l10n/message.dart';
 import '../../platform/usb/usb_host.dart';
 import '../ptp/operation_codes.dart';
 import '../ptp/ptp_link_router.dart';
@@ -39,14 +40,18 @@ enum CameraLinkState {
   /// 取景页保留冻结帧不弹回根页;disconnect 即止,预算耗尽转 failed。
   reconnecting,
 
-  /// 失败(超时 / 无设备 / 会话拒绝),错误信息见 [CameraConnection.error]。
+  /// 失败(超时 / 无设备 / 会话拒绝),消息见 [CameraConnection.error]。
   failed,
 }
 
 abstract interface class CameraConnection {
   CameraLinkState get state;
   Stream<CameraLinkState> get states;
-  String? get error;
+
+  /// 最近一次失败/恢复的提示消息:抽象键 + 占位参数([L10nMessage];
+  /// 技术取证串经直通通道原样透出)。消费端统一 t(key, args) 渲染,
+  /// 键集见 zh_catalog 的 conn.err*/conn.recover*/conn.pair* 段。
+  L10nMessage? get error;
 
   /// 已连接设备的展示名(答「哪一台」):无线 = mDNS 实例名(型号_序列
   /// 号,如 Z_f_8014411),手动 IP/USB 无实例名退 GetDeviceInfo 型号;
@@ -224,7 +229,7 @@ final class CameraConnectionImpl implements CameraConnection {
       StreamController<CameraLinkState>.broadcast();
 
   CameraLinkState _state = CameraLinkState.disconnected;
-  String? _error;
+  L10nMessage? _error;
   String? _deviceName;
   String? _deviceModel;
 
@@ -242,7 +247,7 @@ final class CameraConnectionImpl implements CameraConnection {
   Stream<CameraLinkState> get states => _statesCtrl.stream;
 
   @override
-  String? get error => _error;
+  L10nMessage? get error => _error;
 
   @override
   String? get deviceName => _deviceName;
@@ -284,7 +289,7 @@ final class CameraConnectionImpl implements CameraConnection {
       final cameras = await _usb.listCameras();
       if (cameras.isEmpty) {
         if (silent) throw const CameraNotPresentException();
-        await _failConnect('conn.errNoUsbCamera');
+        await _failConnect((key: 'conn.errNoUsbCamera', args: null));
         return;
       }
       await _usb.open(cameras.first);
@@ -296,7 +301,7 @@ final class CameraConnectionImpl implements CameraConnection {
         await _teardown();
         rethrow;
       }
-      await _failConnect('USB 连接失败:$e');
+      await _failConnect((key: 'conn.errUsb', args: {'e': e}));
     } on Error catch (e) {
       // TypeError/StateError 等 Error 不受 on Exception 约束 —— 真机吃过
       // 大亏:通道返回类型不符的 TypeError 逃逸后 connect 静默死亡,状态
@@ -305,7 +310,7 @@ final class CameraConnectionImpl implements CameraConnection {
         await _teardown();
         rethrow;
       }
-      await _failConnect('USB 连接失败:$e');
+      await _failConnect((key: 'conn.errUsb', args: {'e': e}));
     }
   }
 
@@ -350,9 +355,10 @@ final class CameraConnectionImpl implements CameraConnection {
                 return; // connected(或外部收口后的任意态)
               } on Exception catch (e) {
                 if (attempt >= _postPairingRetryDelays.length) {
-                  await _failConnect('配对信息已发送,但相机迟迟未接受重连:'
-                      '请在相机屏幕上按「OK」完成配对后再点连接'
-                      '(最后错误:$e)');
+                  await _failConnect((
+                    key: 'conn.pairGiveUp',
+                    args: {'e': e},
+                  ));
                   return;
                 }
                 await Future<void>.delayed(_postPairingRetryDelays[attempt]);
@@ -408,7 +414,7 @@ final class CameraConnectionImpl implements CameraConnection {
         await _teardown();
         rethrow; // 上抛给外层 _connectWireless 的 on Error 收口
       }
-      await _failConnect('无线连接失败:$e');
+      await _failConnect((key: 'conn.errWireless', args: {'e': e}));
     }
   }
 
@@ -558,7 +564,7 @@ final class CameraConnectionImpl implements CameraConnection {
         throw ConnectRefusedException(
             '相机处于受限连接状态(数据操作被禁用)');
       }
-      await _failConnect('conn.errRestricted');
+      await _failConnect((key: 'conn.errRestricted', args: null));
       return;
     }
     await _session.open();
@@ -587,7 +593,7 @@ final class CameraConnectionImpl implements CameraConnection {
   /// catch 不得把 disconnected 覆盖成 failed;pairing 入围是因为配对
   /// 子流程抛出时状态还在 pairing,再无人收口就会卡死)+ failed +
   /// teardown。
-  Future<void> _failConnect(String message) async {
+  Future<void> _failConnect(L10nMessage message) async {
     if (_state != CameraLinkState.connecting &&
         _state != CameraLinkState.pairing) {
       return;
@@ -597,29 +603,28 @@ final class CameraConnectionImpl implements CameraConnection {
     await _teardown();
   }
 
-  /// 无线连接失败的用户指引(与纯异常串区分开)。
-  String _wirelessErrorMessage(String ip, Object e) {
+  /// 无线连接失败的用户指引(与纯异常串区分开):模板入两词表
+  /// (conn.errInitRejected/errUnreachable/errTimeout/errWireless),
+  /// 异常细节作 {e}/{ip}/{r} 占位参数随行。
+  L10nMessage _wirelessErrorMessage(String ip, Object e) {
     if (e is PtpInitRejectException) {
       // 2026-10-04 真机:STA 模式下 reason=0x1 完全可复现的场景是
       // 单连接槽位被 SnapBridge 抢占;释放后同样的 Init 秒过。
-      return '相机拒绝了连接(InitFail reason=0x${e.reason.toRadixString(16)}):'
-          '相机同一时间只允许一个客户端,'
-          '可能被 SnapBridge(尼享)等已配对应用占用;'
-          '请在其设备上断开或彻底关闭 SnapBridge 后重试';
+      return (
+        key: 'conn.errInitRejected',
+        args: {'r': e.reason.toRadixString(16)}
+      );
     }
     if (e is SocketException) {
       // 双模式通用(2026-10-06:手动 IP 连不上时旧文案只给 AP 热点
       // 指引,STA 场景误导 —— 该地址上根本没有相机,Mac 侧 ARP 探测
       // 实证手动 .5 从未入网)。
-      return '连不上 $ip:这个地址上没有相机响应。同一 Wi-Fi 模式请点'
-          '「扫描相机」确认相机当前地址(手填 IP 须与相机实际 IP 完全'
-          '一致);AP 热点模式请先在系统 Wi-Fi 设置里加入相机热点;'
-          '首次连接失败请在系统弹窗中允许访问本地网络后重试';
+      return (key: 'conn.errUnreachable', args: {'ip': ip});
     }
     if (e is TimeoutException) {
-      return '连接 $ip 超时:相机不在线或 IP 不对,建议用「扫描相机」确认';
+      return (key: 'conn.errTimeout', args: {'ip': ip});
     }
-    return '无线连接失败:$e';
+    return (key: 'conn.errWireless', args: {'e': e});
   }
 
   @override
@@ -703,7 +708,7 @@ final class CameraConnectionImpl implements CameraConnection {
     if (_state == CameraLinkState.pairing && !_pairingCompleting) {
       // 先转 failed 再放行配对门:_runPairing 醒来见状态非 pairing,
       // 走 aborted 退出,不再收口。
-      _error = '等待配对确认期间连接断开:$reason';
+      _error = (key: 'conn.pairWaitBroken', args: {'e': reason});
       _transition(CameraLinkState.failed);
       final gate = _pairingGate;
       _pairingCode = null;
@@ -731,14 +736,16 @@ final class CameraConnectionImpl implements CameraConnection {
     if (profile == null || _reconnectPolicy.stormPaused) {
       // 无档案(本次运行从未成功连上)或风暴保护触发:不自动重连。
       _error = _reconnectPolicy.stormPaused
-          ? 'conn.errReconnectPaused'
-          : reason;
+          ? (key: 'conn.errReconnectPaused', args: null)
+          : (key: reason, args: null); // 取证串直通(transport 层口径)
       _transition(CameraLinkState.failed);
       // 链路已毒化,teardown 各步快速失败,由其内部兜底吞掉。
       unawaited(_teardown());
       return;
     }
-    _error = reason;
+    // 断链原因作 {e} 参数进「正在自动重连」模板(与恢复循环退避期
+    // 同一口径):headline 恒为抽象键,取证串不过直通。
+    _error = (key: 'conn.recoverStatus', args: {'e': reason});
     _transition(CameraLinkState.reconnecting);
     unawaited(_recoverFromBreakage());
   }
@@ -795,35 +802,35 @@ final class CameraConnectionImpl implements CameraConnection {
   }
 
   /// 恢复终态文案(busy 不耗预算恒有下一拍,理论到不了终态;防御分支)。
-  String _recoveryGiveUpMessage(ReconnectFailureKind kind, Object e) {
+  L10nMessage _recoveryGiveUpMessage(ReconnectFailureKind kind, Object e) {
     switch (kind) {
       case ReconnectFailureKind.cameraAbsent:
-        return '相机未重新接入:请重新插好 USB 数据线(并解锁相机)'
-            '后点「重试」(最后错误:$e)';
+        return (key: 'conn.recoverGiveUpUsb', args: {'e': e});
       case ReconnectFailureKind.busy:
-        return '相机持续被占用,自动重连未成功(最后错误:$e):'
-            '请在占用它的应用(如 SnapBridge/尼享)里断开后点「重试」';
+        return (key: 'conn.recoverGiveUpBusy', args: {'e': e});
       case ReconnectFailureKind.normal:
-        return '自动重连未成功(已试 ${_reconnectPolicy.maxAttempts + 1} 次,'
-            '最后错误:$e):请确认相机已开机/在线后点「重试」';
+        return (
+          key: 'conn.recoverGiveUpNormal',
+          args: {'n': _reconnectPolicy.maxAttempts + 1, 'e': e}
+        );
     }
   }
 
   /// 退避等待期的状态文案(ConnectionPage hint build 期读)。
-  String _recoveryStatusMessage(ReconnectFailureKind kind, Object e) {
+  L10nMessage _recoveryStatusMessage(ReconnectFailureKind kind, Object e) {
     if (kind == ReconnectFailureKind.busy &&
         _reconnectPolicy.busyStreak >= 2) {
-      return 'conn.errBusy';
+      return (key: 'conn.errBusy', args: null);
     }
     if (kind == ReconnectFailureKind.cameraAbsent) {
-      return 'conn.waitingUsb';
+      return (key: 'conn.waitingUsb', args: null);
     }
-    return '正在自动重连($e)';
+    return (key: 'conn.recoverStatus', args: {'e': e});
   }
 
   /// 恢复循环终态收口:reconnecting 守卫(disconnect 竞态下的迟到收口
   /// 不得覆盖 disconnected)+ failed + teardown(teardown 幂等)。
-  Future<void> _failRecovery(String message) async {
+  Future<void> _failRecovery(L10nMessage message) async {
     if (_state != CameraLinkState.reconnecting) return;
     _error = message;
     _transition(CameraLinkState.failed);

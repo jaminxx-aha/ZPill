@@ -22,6 +22,7 @@ library;
 import 'package:flutter/widgets.dart';
 
 import 'en_catalog.dart';
+import 'message.dart';
 import 'zh_catalog.dart';
 
 /// 语言作用域:[t] 的唯一语言来源,app 根装配(app.dart)。
@@ -56,6 +57,24 @@ extension Tr on BuildContext {
     text ??= zhCatalog[key];
     return _fill(text ?? key, args);
   }
+
+  /// 消息记录直达:键+参一次落地。参数 String 值过 t()(重连原因/
+  /// 厂商码提示等本身是键),嵌套 [L10nMessage] 递归一层,其余原样。
+  String tm(L10nMessage m) => tMsg(this, m);
+}
+
+/// [L10nMessage] 解析(供 [Tr.tm] 与非 BuildContext 扩展场景共用)。
+String tMsg(BuildContext context, L10nMessage m) {
+  final args = m.args;
+  if (args == null || args.isEmpty) return context.t(m.key);
+  return context.t(m.key, {
+    for (final e in args.entries)
+      e.key: switch (e.value) {
+        final L10nMessage nested => tMsg(context, nested),
+        final String s => context.t(s),
+        _ => e.value,
+      },
+  });
 }
 
 /// `{名}` 占位替换:只替换已知参数名,避免误伤字面花括号。

@@ -9,6 +9,7 @@ import 'package:nikon_pill/core/ptp/ptp_session.dart';
 import 'package:nikon_pill/core/ptp/ptp_transport.dart';
 import 'package:nikon_pill/core/utils/byte_writer.dart';
 import 'package:nikon_pill/features/browser/storage_overview_controller.dart';
+import 'package:nikon_pill/l10n/message.dart';
 
 import '../../core/ptp/ptp_session_test.dart' show FakePtpTransport;
 
@@ -23,7 +24,7 @@ final class _FakeConnection implements CameraConnection {
   Stream<CameraLinkState> get states => statesCtrl.stream;
 
   @override
-  String? get error => null;
+  L10nMessage? get error => null;
 
   @override
   String? get deviceName => null;

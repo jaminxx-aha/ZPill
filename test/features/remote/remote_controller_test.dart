@@ -18,6 +18,7 @@ import 'package:nikon_pill/core/transfer/transfer_task.dart';
 import 'package:nikon_pill/core/utils/byte_writer.dart';
 import 'package:nikon_pill/features/remote/remote_controller.dart';
 import 'package:nikon_pill/features/remote/shooting_param_catalog.dart';
+import 'package:nikon_pill/l10n/message.dart';
 
 final class _ScriptTransport implements PtpTransport {
   final requests = <PtpRequest>[];
@@ -66,7 +67,7 @@ final class _FakeConnection implements CameraConnection {
   CameraLinkState get state => CameraLinkState.disconnected;
 
   @override
-  String? get error => null;
+  L10nMessage? get error => null;
 
   @override
   String? get deviceName => null;
@@ -625,7 +626,7 @@ void main() {
       ..reply(PtpResponseCode.deviceBusy) // 首选码忙(0x9207)
       ..ok(data: _u32Bytes(0x0)); // 0xD102 复核:无警告位
     await controller.capture();
-    expect(controller.error, contains('快门释放失败'));
+    expect(controller.error?.key, 'remote.errShutterFail');
     expect(controller.capturing, isFalse);
     expect(transport.count(NikonOperationCode.deviceReady), 0);
     expect(transport.count(PtpOperationCode.initiateCapture), 0,
@@ -638,7 +639,7 @@ void main() {
       ..reply(PtpResponseCode.accessDenied) // 0x9207(波轮视频档,相机锁定)
       ..reply(PtpResponseCode.accessDenied); // 0x100E 换码重试同拒
     await controller.capture();
-    expect(controller.error, 'remote.errLeverPhoto');
+    expect(controller.error?.key, 'remote.errLeverPhoto');
     expect(controller.capturing, isFalse);
     expect(transport.count(NikonOperationCode.deviceReady), 0,
         reason: '被拒不进入落地等待');
@@ -650,7 +651,7 @@ void main() {
       ..reply(PtpResponseCode.storeNotAvailable) // 0x9207(视频档另证/无卡)
       ..reply(PtpResponseCode.storeNotAvailable); // 0x100E 换码重试同拒
     await controller.capture();
-    expect(controller.error, 'remote.errShutterStorage',
+    expect(controller.error?.key, 'remote.errShutterStorage',
         reason: '标准义在先:无卡/卡错误指卡槽;卡在位别名也指(2026-10-11 真机)');
     expect(controller.capturing, isFalse);
     expect(transport.count(NikonOperationCode.deviceReady), 0);
@@ -690,8 +691,9 @@ void main() {
       ..reply(PtpResponseCode.operationNotSupported) // 0x100E 也拒
       ..ok(data: _u32Bytes(0x0)); // 0xD102 复核:无警告位
     await controller.capture();
-    expect(controller.error, contains('快门释放失败'));
-    expect(controller.error, contains('0x100E'), reason: '回退码失败更可诊断');
+    expect(controller.error?.key, 'remote.errShutterFail');
+    expect(controller.error?.args?['e'], contains('0x100E'),
+        reason: '回退码失败更可诊断(异常文本带操作码)');
     expect(controller.capturing, isFalse);
     expect(transport.count(NikonOperationCode.deviceReady), 0);
   });
@@ -736,7 +738,7 @@ void main() {
       ..reply(PtpResponseCode.invalidParameter) // 0x00000000
       ..reply(PtpResponseCode.invalidParameter); // 0xFFFFFFFE
     await controller.capture();
-    expect(controller.error, 'remote.errShutterParam');
+    expect(controller.error?.key, 'remote.errShutterParam');
     expect(controller.capturing, isFalse);
     expect(transport.count(NikonOperationCode.initiateCaptureRecInMedia), 3);
     expect(transport.count(PtpOperationCode.initiateCapture), 0,
@@ -822,7 +824,8 @@ void main() {
       transport.reply(NikonResponseCode.changeCameraModeFailed);
       expect(await controller.enableTakeover(), isFalse);
       expect(controller.takeoverActive, isFalse);
-      expect(controller.error, contains('相机模式切换失败'));
+      expect(controller.error?.key, 'remote.takeoverFail');
+      expect(controller.error?.args?['e'], 'remote.hintModeSwitchFailed');
     });
 
     test('未连接启用 → 提示不发', () async {
@@ -949,7 +952,9 @@ void main() {
       await pumpEventQueue();
       expect(apController.takeoverActive, isFalse,
           reason: '开闩被拒:接管 OFF,取景失败落引导占位');
-      expect(apController.error, contains('启用 APP 接管失败'));
+      expect(apController.error?.key, 'remote.takeoverFail');
+      expect(apController.error?.args?['e'], 'remote.hintModeSwitchFailed',
+          reason: 'e 参 = 拨杆引导键(0xA003 changeCameraModeFailed)');
       expect(apController.liveViewActive, isTrue,
           reason: '被拒不拦链:起景照发(真机形态 = 0x9201 假成、帧取失败)');
       expect(apController.exposure?.fNumber, 280, reason: '照常刷参');
@@ -1030,7 +1035,8 @@ void main() {
       await pumpEventQueue();
       transport.reply(PtpResponseCode.accessDenied); // 0x1016 0xD100 被拒
       await controller.setParam(PtpDevicePropCode.exposureTime, 1 << 16 | 100);
-      expect(controller.error, contains('APP 接管'));
+      expect(controller.error?.key, 'remote.errPropWriteDial');
+      expect(controller.error?.args?['tail'], 'remote.errPropWriteDialLatch');
     });
   });
 
@@ -1189,14 +1195,14 @@ void main() {
       expect(await controller.switchMode(CaptureMode.photo), isFalse);
       await pumpEventQueue();
       expect(controller.modeWriteRejected, isTrue);
-      expect(controller.error, contains('切换拍摄模式失败'));
+      expect(controller.error?.key, 'remote.errModeSwitchFail');
       expect(controller.cameraMode, CaptureMode.video, reason: '写被拒模式不变');
       expect(controller.liveViewActive, isTrue, reason: '停景已发生,回滚起回');
 
       // 缓存生效:本会话内两方向都不再撞写(早退 + 拨杆提示)
       final baseline = transport.requests.length;
       expect(await controller.switchMode(CaptureMode.photo), isFalse);
-      expect(controller.error, 'remote.errModeSwitchRefused');
+      expect(controller.error?.key, 'remote.errModeSwitchRefused');
       expect(transport.requests.length, baseline);
     });
 
@@ -1423,8 +1429,9 @@ void main() {
 
       await controller.setParam(PtpDevicePropCode.exposureTime, 1 << 16 | 100);
       // 模式名经 _zh 取渲染形态(键名不再上屏,2026-10-16)
-      expect(controller.error, contains('光圈优先 A'));
-      expect(controller.error, contains('由相机自动控制'));
+      expect(controller.error?.key, 'remote.errAutoShutter',
+          reason: 'A 档快门由相机自动控制(EV 补偿才是用户出口)');
+      expect(controller.error?.args?['m'], 'param.modeA');
       expect(
           transport.requests
               .where((r) => r.opcode == PtpOperationCode.setDevicePropValue),
@@ -1439,8 +1446,8 @@ void main() {
       expect(controller.apertureAdjustable, isFalse);
       expect(controller.shutterAdjustable, isTrue);
       await controller.setParam(PtpDevicePropCode.fNumber, 320);
-      expect(controller.error, contains('快门优先 S'));
-      expect(controller.error, contains('光圈由相机自动控制'));
+      expect(controller.error?.key, 'remote.errAutoAperture');
+      expect(controller.error?.args?['m'], 'param.modeS');
     });
 
     test('场景档:快门/光圈/ISO 全由相机拥有', () async {
@@ -1849,7 +1856,7 @@ void main() {
       await press;
       expect(transport.count(NikonOperationCode.terminateCapture), 4,
           reason: '首发 + 3 次指数退避重试后停手');
-      expect(controller.error, 'remote.errBulbCloseBusy');
+      expect(controller.error?.key, 'remote.errBulbCloseBusy');
       expect(controller.capturing, isFalse);
 
       // 再点一次快门:不另开曝光,直接再试收门链(恢复路径)
@@ -1932,7 +1939,7 @@ void main() {
       controller.paramProps[PtpDevicePropCode.exposureTime] =
           const PropState(value: 0xFFFFFFFF);
       await controller.capture();
-      expect(controller.notice, 'remote.errBulbShutter');
+      expect(controller.notice?.key, 'remote.errBulbShutter');
       expect(controller.error, isNull);
       expect(
           transport.requests.where((r) =>
@@ -1983,7 +1990,7 @@ void main() {
 
     test('未开取景点录制 → 提示不发', () async {
       await controller.toggleRecord();
-      expect(controller.error, 'remote.errRecordNeedsViewfinder');
+      expect(controller.error?.key, 'remote.errRecordNeedsViewfinder');
       expect(
           transport.requests
               .where((r) => r.opcode == NikonOperationCode.startMovieRecInCard),
@@ -2028,7 +2035,8 @@ void main() {
 
       transport.reply(PtpResponseCode.accessDenied); // 0x1016 白平衡被拒
       await controller.setParam(PtpDevicePropCode.whiteBalance, 4);
-      expect(controller.error, contains('请先启用「APP 接管」'));
+      expect(controller.error?.key, 'remote.errPropWrite');
+      expect(controller.error?.args?['tail'], 'remote.errPropWriteLatch');
       expect(controller.lockedProps,
           contains(PtpDevicePropCode.whiteBalance));
     });
@@ -2094,19 +2102,23 @@ void main() {
         [201, 202, 301],
         reason: '按 FORM 枚举序逐槽位读,params=[槽位,0]');
     expect(
-        controller.displayParamValue(PtpDevicePropCode.activePicCtrlItem, 201),
+        controller.displayParamValue(PtpDevicePropCode.activePicCtrlItem, 201)
+            .key,
         'My Landscape',
         reason: '自定义组真名(机身用户起名)替掉「自定义 1」占位');
+    final custom2 = controller
+        .displayParamValue(PtpDevicePropCode.activePicCtrlItem, 202);
+    expect(custom2.key, 'param.picCtrlCustom',
+        reason: '空名(null)回落静态段位格式化(键化分支在控制器)');
+    expect(custom2.args?['n'], 2);
     expect(
-        controller.displayParamValue(PtpDevicePropCode.activePicCtrlItem, 202),
-        '自定义 2',
-        reason: '空名(null)回落静态段位格式化');
-    expect(
-        controller.displayParamValue(PtpDevicePropCode.activePicCtrlItem, 301),
+        controller.displayParamValue(PtpDevicePropCode.activePicCtrlItem, 301)
+            .key,
         'Cloud 9',
         reason: '云组真名替掉「云 1」占位');
     expect(
-        controller.displayParamValue(PtpDevicePropCode.activePicCtrlItem, 1),
+        controller.displayParamValue(PtpDevicePropCode.activePicCtrlItem, 1)
+            .key,
         'param.standard',
         reason: '静态表标签照常');
   });
@@ -2120,8 +2132,12 @@ void main() {
     expect(transport.count(NikonOperationCode.getPictCtrlData), 1,
         reason: '首异常即停:202 不再试');
     expect(controller.picCtrlNames, isEmpty);
-    expect(controller.displayParamValue(PtpDevicePropCode.activePicCtrlItem, 202),
-        '自定义 2');
+    expect(controller.displayParamValue(PtpDevicePropCode.activePicCtrlItem, 202)
+        .key, 'param.picCtrlCustom');
+    expect(
+        controller.displayParamValue(PtpDevicePropCode.activePicCtrlItem, 202)
+            .args?['n'],
+        2);
   });
 
   test('优化校准:断连清缓存;重连重取(每连接一次,重复 connected 不重拉)',
@@ -2130,22 +2146,26 @@ void main() {
     transport.ok(data: _picCtrlData('My Fav'));
     _emitConnected(transport, conn);
     await pumpEventQueue();
-    expect(controller.displayParamValue(PtpDevicePropCode.activePicCtrlItem, 201),
-        'My Fav');
+    expect(controller.displayParamValue(PtpDevicePropCode.activePicCtrlItem, 201)
+        .key, 'My Fav');
 
     conn.statesCtrl.add(CameraLinkState.disconnected);
     await pumpEventQueue();
     expect(controller.picCtrlNames, isEmpty, reason: '断连清缓存');
-    expect(controller.displayParamValue(PtpDevicePropCode.activePicCtrlItem, 201),
-        '自定义 1', reason: '回落静态占位');
+    expect(controller.displayParamValue(PtpDevicePropCode.activePicCtrlItem, 201)
+        .key, 'param.picCtrlCustom', reason: '回落静态占位');
+    expect(
+        controller.displayParamValue(PtpDevicePropCode.activePicCtrlItem, 201)
+            .args?['n'],
+        1);
 
     // 重连:再次拉取(新连接档案重建)。
     _scriptParams(transport, picCtrlEnums: [201], picCtrlValue: 201);
     transport.ok(data: _picCtrlData('My Fav'));
     _emitConnected(transport, conn);
     await pumpEventQueue();
-    expect(controller.displayParamValue(PtpDevicePropCode.activePicCtrlItem, 201),
-        'My Fav');
+    expect(controller.displayParamValue(PtpDevicePropCode.activePicCtrlItem, 201)
+        .key, 'My Fav');
     expect(transport.count(NikonOperationCode.getPictCtrlData), 2,
         reason: '两次连接各拉一次');
 
@@ -2169,7 +2189,7 @@ void main() {
     transport.eventCtrl
         .add(const PtpEvent(code: PtpEventCode.objectAdded, transactionId: 0xFFFFFFFF, params: [0x1234]));
     await pumpEventQueue();
-    expect(controller.notice, 'remote.captured');
+    expect(controller.notice?.key, 'remote.captured');
 
     // 断连:_invalidate 清态
     conn.statesCtrl.add(CameraLinkState.failed);
@@ -2189,7 +2209,7 @@ void main() {
     conn.statesCtrl.add(CameraLinkState.disconnected);
     await pumpEventQueue();
     await controller.capture();
-    expect(controller.error, 'remote.notConnected');
+    expect(controller.error?.key, 'remote.notConnected');
     expect(transport.requests, isEmpty);
   });
 
@@ -2324,7 +2344,7 @@ void main() {
     PtpSession.kSetPropEnabled = false; // 生产已开,显式关断走分支
     addTearDown(() => PtpSession.kSetPropEnabled = true);
     await controller.setParam(PtpDevicePropCode.fNumber, 320);
-    expect(controller.error, 'remote.errWriteKilled');
+    expect(controller.error?.key, 'remote.errWriteKilled');
     expect(transport.requests, isEmpty);
     expect(controller.writing, isFalse);
   });
@@ -2388,7 +2408,7 @@ void main() {
     await pumpEventQueue();
 
     await controller.setParam(PtpDevicePropCode.whiteBalance, 4);
-    expect(controller.error, 'remote.errReadOnly');
+    expect(controller.error?.key, 'remote.errReadOnly');
     expect(
         transport.requests
             .where((r) => r.opcode == PtpOperationCode.setDevicePropValue),
@@ -2417,7 +2437,8 @@ void main() {
 
     transport.reply(PtpResponseCode.deviceBusy); // 0x1016 忙
     await controller.setParam(PtpDevicePropCode.fNumber, 320);
-    expect(controller.error, contains('参数写入失败'));
+    expect(controller.error?.key, 'remote.errPropWriteDial',
+        reason: '光圈是指令拨盘参数,接管失败文案走拨盘支');
     expect(controller.exposure?.fNumber, 280, reason: '失败后原值不动');
     expect(controller.writing, isFalse);
   });
@@ -2628,7 +2649,7 @@ void main() {
       await startLiveView();
       transport.reply(NikonResponseCode.invalidStatus); // 0x920A 被拒
       await controller.toggleRecord();
-      expect(controller.error, 'remote.errLeverVideo');
+      expect(controller.error?.key, 'remote.errLeverVideo');
       expect(controller.recording, isFalse, reason: '被拒不翻转录制态');
     });
 
@@ -2744,7 +2765,7 @@ void main() {
       await pumpEventQueue();
       expect(controller.frameSize.value, isNull);
       await controller.touchFocus(0.5, 0.5);
-      expect(controller.error, 'remote.errNoFrameFocus');
+      expect(controller.error?.key, 'remote.errNoFrameFocus');
       expect(transport.count(NikonOperationCode.changeAfArea), 0);
     });
 
@@ -2759,7 +2780,8 @@ void main() {
 
       transport.reply(NikonResponseCode.outOfFocus);
       await controller.afDriveNow();
-      expect(controller.error, contains('未合焦'));
+      expect(controller.error?.key, 'remote.errAfFail');
+      expect(controller.error?.args?['e'], 'remote.hintOutOfFocus');
       expect(controller.focusing, isFalse);
 
       // 框色随判:挪框后框回未定红;同点再点对焦,0xA002 → false(红),
@@ -2781,7 +2803,7 @@ void main() {
     test('对焦按钮:未开取景 → 提示不发(0xA00B notLiveView 应答形态)',
         () async {
       await controller.afDriveNow();
-      expect(controller.error, 'remote.errViewfinderOff');
+      expect(controller.error?.key, 'remote.errViewfinderOff');
       expect(
           transport.requests
               .where((r) => r.opcode == NikonOperationCode.afDrive),
@@ -2814,7 +2836,7 @@ void main() {
             reason: 'MF=$mf AF 钮拦');
         expect(transport.count(NikonOperationCode.mfDrive), 0,
             reason: 'MF=$mf 步进拦');
-        expect(controller.notice, 'remote.errMfMode', reason: 'MF=$mf 提示');
+        expect(controller.notice?.key, 'remote.errMfMode', reason: 'MF=$mf 提示');
         expect(controller.error, isNull, reason: '门闩是状态说明不是错误');
         expect(controller.afBox, isNull, reason: '对焦框不上屏');
       }
@@ -2847,13 +2869,13 @@ void main() {
       await controller.mfDriveStep(towardNear: true);
       expect(controller.mfNearEnd, isTrue, reason: '向近步进撞尽头 → 近端已到');
       expect(controller.mfFarEnd, isFalse);
-      expect(controller.notice, 'remote.focusNearEnd');
+      expect(controller.notice?.key, 'remote.focusNearEnd');
 
       transport.reply(NikonResponseCode.mfDriveStepEnd); // 向远 → 0xA00C
       await controller.mfDriveStep(towardNear: false);
       expect(controller.mfFarEnd, isTrue, reason: '向远步进撞尽头 → 远端已到');
       expect(controller.mfNearEnd, isFalse, reason: '镜头不可能同时顶两端');
-      expect(controller.notice, 'remote.focusFarEnd');
+      expect(controller.notice?.key, 'remote.focusFarEnd');
     });
 
     test('MF 端点:0xA00E 步进过小不动旗(提示保留);反向请求即解锁',
@@ -2866,7 +2888,7 @@ void main() {
       // 同向再步进撞 0xA00E(步进过小,镜头未动):提示保留、旗不动。
       transport.reply(NikonResponseCode.mfDriveStepInsufficiency);
       await controller.mfDriveStep(towardNear: true);
-      expect(controller.notice, 'remote.stepTooSmall');
+      expect(controller.notice?.key, 'remote.stepTooSmall');
       expect(controller.mfNearEnd, isTrue, reason: '镜头未动,近端旗保留');
 
       // 反向(向远)请求:近端旗在请求沿作废;0xA00E 不置远端旗。
@@ -3271,8 +3293,7 @@ void main() {
             getSet: true, enums: [200, 280])); // 复读回弹值
       await controller.setParam(PtpDevicePropCode.movieFnumber, 280);
       expect(controller.error, isNull);
-      expect(controller.notice, contains('回弹'));
-      expect(controller.notice, contains('机身拨盘拥有'));
+      expect(controller.notice?.key, 'remote.errPropBounce');
 
       // 写 200(= 拨盘值)→ 复读一致 → 无守卫提示
       transport
@@ -3330,13 +3351,13 @@ void main() {
       expect(transport.requests, isEmpty,
           reason: 'Zf 对 0x90C1 扣应答至 AF 结束,AF 期间线路被占死,'
               '0x9206 只能排队到 AF 后空放 —— 假动作撤,零流量');
-      expect(controller.notice, 'remote.focusInProgress');
+      expect(controller.notice?.key, 'remote.focusInProgress');
       expect(controller.error, isNull);
     });
 
     test('主体追踪:未开取景 → 拦下不发票', () async {
       await controller.startTracking();
-      expect(controller.error, 'remote.errViewfinderOff');
+      expect(controller.error?.key, 'remote.errViewfinderOff');
       expect(transport.requests, isEmpty);
     });
 
@@ -3346,7 +3367,7 @@ void main() {
       controller.paramProps[PtpDevicePropCode.stillFocusMeteringMode] =
           const PropState(value: 0x8010);
       await controller.startTracking();
-      expect(controller.notice, 'remote.errTrackingNeedsAuto');
+      expect(controller.notice?.key, 'remote.errTrackingNeedsAuto');
       expect(
           transport.requests
               .where((r) => r.opcode == NikonOperationCode.startTracking),
@@ -3406,7 +3427,7 @@ void main() {
         () async {
       transport.reply(PtpResponseCode.accessDenied);
       await controller.toggleAELock();
-      expect(controller.error, contains('AE 锁切换失败'));
+      expect(controller.error?.key, 'remote.errAeLockFail');
       expect(controller.aeLocked, isFalse);
     });
 
@@ -3436,7 +3457,7 @@ void main() {
     test('内屏强关:拒答 → error,旗标不动', () async {
       transport.reply(PtpResponseCode.accessDenied); // 电池耗尽等拒 0x200F
       await controller.toggleMonitorOff();
-      expect(controller.error, contains('内屏开关失败'));
+      expect(controller.error?.key, 'remote.errMonitorOffFail');
       expect(controller.monitorOff, isFalse);
     });
 
@@ -3446,8 +3467,9 @@ void main() {
         ..reply(NikonResponseCode.hardwareError) // 0x9207 → hint
         ..ok(data: _u32Bytes(0x1)); // 0xD102 Bit0=1
       await controller.capture();
-      expect(controller.error, contains('相机硬件错误'));
-      expect(controller.error, contains('再按一次快门'));
+      expect(controller.error?.key, 'remote.errShutterFailCode');
+      expect(controller.error?.args?['h'], 'remote.hintHardwareError');
+      expect(controller.error?.args?['seq'], 'remote.warnSeqRecover');
     });
 
     test('capture 通用错误 + 0xD102 无位 → 原错误不动', () async {
@@ -3455,8 +3477,9 @@ void main() {
         ..reply(NikonResponseCode.hardwareError)
         ..ok(data: _u32Bytes(0x0));
       await controller.capture();
-      expect(controller.error, contains('相机硬件错误'));
-      expect(controller.error, isNot(contains('序列错误')));
+      expect(controller.error?.key, 'remote.errShutterFailCode');
+      expect(controller.error?.args?['h'], 'remote.hintHardwareError');
+      expect(controller.error?.args?['seq'], '', reason: '无序列错误位:不带自愈指引');
     });
 
     test('SDRAM 直拍全链:0x90CB → 手拉事件 0xC101 句柄 → ObjectInfo → '
@@ -3475,7 +3498,7 @@ void main() {
       expect(gallery.enqueued, hasLength(1));
       expect(gallery.enqueued.single.handle, 0x1234);
       expect(gallery.lastDestination, TransferDestination.gallery);
-      expect(controller.notice, 'remote.sdramSaved');
+      expect(controller.notice?.key, 'remote.sdramSaved');
       expect(controller.error, isNull);
       expect(controller.capturing, isFalse);
     });
@@ -3491,7 +3514,7 @@ void main() {
       await pumpEventQueue();
       delay.release();
       await capture;
-      expect(controller.notice, 'remote.errNoSdramObject');
+      expect(controller.notice?.key, 'remote.errNoSdramObject');
       expect(controller.error, isNull);
       expect(gallery.enqueued, isEmpty);
     });
@@ -3512,9 +3535,9 @@ void main() {
       expect(transport.count(NikonOperationCode.afAndCaptureRecInSdram), 1);
       expect(transport.count(NikonOperationCode.initiateCaptureRecInMedia), 1,
           reason: '回退必须实发 0x9207 —— 照片入卡不丢');
-      expect(controller.notice, contains('已改常规拍摄入卡'),
+      expect(controller.notice?.key, 'remote.sdramRejected',
           reason: '照片去了卡而非 SDRAM,机制变更必须如实带出');
-      expect(controller.notice, contains('本连接不再重试'));
+      expect(controller.notice?.args?['tail'], 'remote.sdramNoRetry');
       expect(controller.error, isNull);
       expect(gallery.enqueued, isEmpty);
       final c2 = controller.capture();
@@ -3549,7 +3572,7 @@ void main() {
           reason: '状态类拒绝(拨杆位)不是模型个性,逐拍回试');
       expect(transport.count(NikonOperationCode.initiateCaptureRecInMedia), 2,
           reason: '每次回退都要实发 0x9207 —— 照片必须入卡不丢');
-      expect(controller.notice, contains('已改常规拍摄入卡'));
+      expect(controller.notice?.key, 'remote.sdramRejected');
       expect(controller.error, isNull);
     });
 
@@ -3559,7 +3582,7 @@ void main() {
         ..reply(PtpResponseCode.deviceBusy) // 0x90CB 忙
         ..ok(data: _u32Bytes(0x0)); // 0xD102 序列错误位读(无位 → 原错误)
       await controller.capture();
-      expect(controller.error, contains('快门释放失败'),
+      expect(controller.error?.key, 'remote.errShutterFail',
           reason: '忙 = 相机没收下命令,回落重拍反而添乱');
       expect(transport.count(NikonOperationCode.initiateCaptureRecInMedia), 0);
       expect(gallery.enqueued, isEmpty);
@@ -3578,7 +3601,7 @@ void main() {
       expect(transport.count(NikonOperationCode.afAndCaptureRecInSdram), 0,
           reason: 'B 门/Time 是直拍族规格死门(0xA008/0xA204,官方 §6.2.4.2/'
               '.3,2026-10-17 真机实证),本地跳过不发冤枉流量');
-      expect(controller.notice, contains('已改常规拍摄入卡'),
+      expect(controller.notice?.key, 'remote.sdramBulbFallback',
           reason: '改道机制必须如实带出(横幅在曝光开始前显示)');
       await controller.captureReleased();
       delay.release(); // 按住等待环收口
@@ -3623,7 +3646,7 @@ void main() {
       expect(controller.intervalStatus, IntervalometerStatus.stopped);
       expect(controller.intervalTaken, 1);
       expect(controller.capturing, isFalse);
-      expect(controller.notice, '间隔拍摄完成:1 张全部成功');
+      expect(controller.notice?.key, 'remote.ivDoneAll');
       expect(transport.count(NikonOperationCode.deviceReady), 2,
           reason: '调度探测 + 落地轮询各一次');
       expect(
@@ -3653,7 +3676,7 @@ void main() {
       await controller.intervalDone;
       expect(controller.intervalTaken, 1);
       expect(controller.intervalFailed, 1);
-      expect(controller.notice, '间隔拍摄完成:1 张成功,1 张失败');
+      expect(controller.notice?.key, 'remote.ivDone');
       expect(transport.count(NikonOperationCode.initiateCaptureRecInMedia), 1);
     });
 
@@ -3673,7 +3696,7 @@ void main() {
       expect(controller.intervalStatus, IntervalometerStatus.stopped);
       expect(controller.intervalAttempted, 3);
       expect(controller.intervalTaken, 0);
-      expect(controller.notice, contains('间隔拍摄自动停止'));
+      expect(controller.notice?.key, 'remote.ivAutoStop');
     });
 
     test('启动互锁:B 门 / 录像中 / SDRAM 直拍 / 未连接 全拒(零流量)',
@@ -3683,26 +3706,26 @@ void main() {
           const PropState(value: 0xFFFFFFFF);
       controller.startInterval(intervalSeconds: 5, shotCount: 1);
       expect(controller.intervalStatus, IntervalometerStatus.idle);
-      expect(controller.notice, contains('B 门'));
+      expect(controller.notice?.key, 'remote.ivBulbOpen');
       controller.paramProps.clear();
 
       controller.recording = true;
       controller.startInterval(intervalSeconds: 5, shotCount: 1);
       expect(controller.intervalStatus, IntervalometerStatus.idle);
-      expect(controller.notice, contains('录像中'));
+      expect(controller.notice?.key, 'remote.ivRecordingBusy');
       controller.recording = false;
 
       controller.sdramCapture = true;
       controller.startInterval(intervalSeconds: 5, shotCount: 1);
       expect(controller.intervalStatus, IntervalometerStatus.idle);
-      expect(controller.notice, contains('SDRAM'));
+      expect(controller.notice?.key, 'remote.ivSdramBusy');
       controller.sdramCapture = false;
 
       conn.statesCtrl.add(CameraLinkState.disconnected);
       await pumpEventQueue();
       controller.startInterval(intervalSeconds: 5, shotCount: 1);
       expect(controller.intervalStatus, IntervalometerStatus.idle);
-      expect(controller.notice, contains('未连接相机'));
+      expect(controller.notice?.key, 'remote.ivNotConnected');
       expect(transport.requests, isEmpty, reason: '全部本地拒绝零流量');
     });
 
@@ -3740,12 +3763,12 @@ void main() {
 
       final requestsBefore = transport.requests.length;
       await controller.capture();
-      expect(controller.notice, contains('间隔拍摄进行中'));
+      expect(controller.notice?.key, 'remote.ivShutterYield');
       expect(transport.requests.length, requestsBefore, reason: '零流量');
 
       controller.stopInterval();
       await controller.intervalDone;
-      expect(controller.notice, contains('间隔拍摄已停止'));
+      expect(controller.notice?.key, 'remote.ivStoppedAll');
       expect(transport.count(NikonOperationCode.initiateCaptureRecInMedia), 1,
           reason: '停轮后未补拍');
     });

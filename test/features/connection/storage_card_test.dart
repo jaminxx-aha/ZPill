@@ -9,6 +9,7 @@ import 'package:nikon_pill/core/ptp/ptp_session.dart';
 import 'package:nikon_pill/features/browser/storage_overview_controller.dart';
 import 'package:nikon_pill/features/connection/connected_overview.dart';
 import 'package:nikon_pill/features/remote/remote_controller.dart';
+import 'package:nikon_pill/l10n/message.dart';
 
 import '../../core/ptp/ptp_session_test.dart' show FakePtpTransport;
 
@@ -22,7 +23,7 @@ final class _StubConnection implements CameraConnection {
   CameraLinkState state = CameraLinkState.disconnected;
 
   @override
-  String? get error => null;
+  L10nMessage? get error => null;
 
   @override
   String? get deviceName => null;
