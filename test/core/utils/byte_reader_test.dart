@@ -5,7 +5,7 @@ import 'package:nikon_pill/core/utils/byte_reader.dart';
 import 'package:nikon_pill/core/utils/byte_writer.dart';
 
 void main() {
-  group('ByteWriter/ByteReader 小端序(TODO 注意事项 1:字节序错误的包会被相机静默丢弃)', () {
+  group('ByteWriter/ByteReader 小端序(字节序错误的包会被相机静默丢弃)', () {
     test('u16 小端字节序', () {
       final w = ByteWriter()..u16(0x1234);
       expect(w.takeBytes(), [0x34, 0x12]);

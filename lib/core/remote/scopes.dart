@@ -1,4 +1,4 @@
-/// 示波器族纯计算(TODO §二 监看差集,2026-10-15):RGB Parade /
+/// 示波器族纯计算(监看差集,2026-10-15):RGB Parade /
 /// 矢量 CbCr / 红绿灯三横带 + N-Log ExposureScale 刻度数学。
 ///
 /// 语义参考 OpenZCine(Apache-2.0;Sources/OpenZCineCore 的

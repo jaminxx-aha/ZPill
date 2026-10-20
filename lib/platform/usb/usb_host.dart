@@ -1,4 +1,4 @@
-/// USB 主机侧通道(TODO.md USB 主线,2026-09-27 定为优先连接方式)。
+/// USB 主机侧通道(2026-09-27 定为优先连接方式)。
 ///
 /// 把 native 的 USB 主机原语收口为 MethodChannel 契约;本文件实现
 /// core/ptpusb/usb_transport.dart 的 [UsbBytePipe](**字节管道**,v2 契约):
@@ -14,7 +14,7 @@
 /// dext 内实现 PTP 传输所必需的:接口 claim、bulk 双向、interrupt IN、
 /// STALL 后的 CLEAR_HALT。
 ///
-/// 铁律(TODO.md 实现注意事项):
+/// 铁律:
 /// - **native 不做容器重组**(v2 契约):bulkRead 是单次读、短读合法,
 ///   容器头解析/按长度补齐在 Dart 的 UsbPtpTransport;
 ///   为什么:GetObject 的 25.6MB NEF 是**单个数据容器**,native 整容器

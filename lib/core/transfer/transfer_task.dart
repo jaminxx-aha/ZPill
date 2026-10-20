@@ -1,4 +1,4 @@
-/// 传输任务模型(TODO.md §四)。
+/// 传输任务模型。
 library;
 
 enum TransferState { queued, running, completed, failed, cancelled }
@@ -30,7 +30,7 @@ final class TransferTask {
   final int receivedBytes;
   final String? error;
 
-  /// 已重试次数;指数退避,上限 3 次(TODO.md §四 P1)。
+  /// 已重试次数;指数退避,上限 3 次。
   final int attempts;
 
   /// 相册导入结果(gallery 目的地);null = 未导入(用户取消对话框/

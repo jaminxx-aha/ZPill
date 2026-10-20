@@ -1,4 +1,4 @@
-# core/ptpusb — PTP/USB 协议层(P0,USB 主线)
+# core/ptpusb — PTP/USB 协议层
 
 与 `core/ptpip`(PTP-IP over TCP)平行的另一条链路:USB Still Image 设备类
 (ISO 15740 附录 D)。**纯 Dart、零 Flutter 依赖**;操作码/响应码/事件码
@@ -8,8 +8,8 @@
 
 | 文件 | 职责 |
 |---|---|
-| `containers.dart` | bulk/中断容器编解码(命令 1/数据 2/响应 3/事件 4),**已实现** |
-| (规划) `usb_transport.dart` | 实现 `core/ptp/ptp_transport.dart`:基于 `platform/usb` 的字节收发 —— TODO(P0-usb,真机探针之后) |
+| `containers.dart` | bulk/中断容器编解码(命令 1/数据 2/响应 3/事件 4) |
+| `usb_transport.dart` | 实现 `core/ptp/ptp_transport.dart`:基于 `platform/usb` 通道的字节收发 |
 
 字节收发本身(claim 接口、bulk 双向、interrupt IN、CLEAR_HALT)是平台能力,
 收口在 `lib/platform/usb/usb_host.dart` 的 MethodChannel 契约里,不进 core。
@@ -22,8 +22,8 @@
 4. 流控不同:相机以 USB STALL 表达"忙",native 须 CLEAR_HALT 后重试
    (PTP-IP 用 Probe/Cancel 包)
 
-## 实现顺序
+## 现状
 
-`tools/usb_probe`(Mac,pyusb)对真机跑通握手 → 核对容器布局与事件 u16 长度
-语义 → `usb_transport.dart` 实现 PtpTransport → native 三端
-(iOS DriverKit dext / Android UsbManager / ohos @ohos.usb)。
+容器与传输均已落(字节级单测见 `test/core/ptpusb/`);native 三端:
+iOS ImageCaptureCore / Android UsbManager / ohos @ohos.usb。
+字节布局定案前身是 `tools/usb_probe`(Mac,pyusb)真机探针。

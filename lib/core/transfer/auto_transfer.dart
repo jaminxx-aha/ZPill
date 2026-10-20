@@ -1,4 +1,4 @@
-/// 速传服务(TODO.md §二 P1):ObjectAdded 事件驱动自动下载。
+/// 速传服务:ObjectAdded 事件驱动自动下载。
 ///
 /// 相机侧新对象落地 → ObjectAdded(0x4002,SDRAM 拍摄走尼康 0xC101)
 /// 事件携带最终 handle(2026-09-27 Zf 真机实证,可直接 GetObjectInfo/

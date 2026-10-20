@@ -1,8 +1,7 @@
 /// PTP-IP 包类型常量、包头与包数据模型。
 ///
-/// 依据 TODO.md §一 与 USB-IF《Picture Transfer Protocol over TCP/IP
-/// Networks》:
-/// - 所有多字节字段一律**小端序**;大端包会被相机静默丢弃(TODO 注意事项 1)
+/// 依据 USB-IF《Picture Transfer Protocol over TCP/IP Networks》:
+/// - 所有多字节字段一律**小端序**;大端包会被相机静默丢弃
 /// - 包头 = **包长度(uint32 LE)在前 + 包类型(uint32 LE)在后**,长度含
 ///   包头自身 8 字节(libgphoto2 ptpipheader 同构;Camera_Bridge 在 Zf
 ///   真机实证 —— 早期骨架曾写反成类型在前,2026-10-04 订正)
@@ -11,7 +10,7 @@ library;
 
 import 'dart:typed_data';
 
-/// 包类型常量(TODO.md §一)。
+/// 包类型常量。
 abstract final class PtpIpPacketType {
   static const int initCommandRequest = 1;
   static const int initCommandResponse = 2;
@@ -73,7 +72,7 @@ final class InitCommandResponsePacket extends PtpIpPacket {
 }
 
 /// 3: Init Event Request:连接号(uint32)。
-/// 必须发在独立的 event socket 上(TODO.md §一)。
+/// 必须发在独立的 event socket 上。
 final class InitEventRequestPacket extends PtpIpPacket {
   const InitEventRequestPacket({required this.connectionNumber})
       : super(type: PtpIpPacketType.initEventRequest);

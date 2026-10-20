@@ -1,4 +1,4 @@
-/// 应用级单例定位器(TODO.md §三:连接是全局单例状态,引入 DI 前的收口点)。
+/// 应用级单例定位器:连接是全局单例状态,引入 DI 前的收口点。
 ///
 /// 组装唯一对象图:USB / PTP-IP 无线双链路在 PtpLinkRouter 汇合后喂给
 /// 单例 PtpSession,下游对象图不感知链路切换:
@@ -145,7 +145,7 @@ final class AppServices {
     transferEngine = TransferEngineImpl(
       downloader: downloader,
       gallery: PlatformServices.gallery,
-      // 水印合成(TODO §五 T4):设置选模板;off / 异常 → 不处理。
+      // 水印合成:设置选模板;off / 异常 → 不处理。
       watermarkFor: (entry) async {
         try {
           final settings = await settingsStore.current();
@@ -156,7 +156,7 @@ final class AppServices {
           return null;
         }
       },
-      // XMP 元数据注入(TODO §四):设置开关 + 本地评分 + 定位快照。
+      // XMP 元数据注入:设置开关 + 本地评分 + 定位快照。
       // 全部降级路径:设置读不到 → 只跳字段;仓库未加载(速传先于
       // 浏览)→ 跳评分;定位通道未实现/未授权 → 跳 GPS。任一异常
       // 返回 null,传输照常。

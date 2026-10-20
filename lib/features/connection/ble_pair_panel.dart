@@ -305,7 +305,7 @@ class BlePairPanelState extends State<BlePairPanel>
     _log('配对成功 ✓ device=${id.deviceId.toRadixString(16)} '
         'serial=${id.serial} 身份已落盘');
     // iOS 首配注册走系统蓝牙(iOS 无程序化绑定 API,LE SMP 触发器五轮
-    // 实验未获,v1-v5 详见 TODO「二」):App 侧只自动断链 —— 相机等
+    // 实验未获):App 侧只自动断链 —— 相机等
     // BLE 释放才暴露经典蓝牙(技术必需,不变);**自动跳系统蓝牙删除**
     //(2026-10-19 用户裁定),经宿主弹红色引导卡 + 手动按钮(不点不
     // 跳),用户在系统页点相机完成配对后回本页点「连接」。ohos 有程序

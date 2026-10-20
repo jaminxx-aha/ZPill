@@ -1,7 +1,7 @@
 /// PTP-IP 传输通道:command 与 event 各一条 TCP 连接,均连 15740。
 ///
 /// core 只依赖 [PtpIpChannel] 接口 —— 状态机/会话逻辑的单测注入 Fake 即可
-/// 覆盖,不需要真 socket(TODO.md §一「双 TCP 通道」)。
+/// 覆盖,不需要真 socket。
 library;
 
 import 'dart:async';
@@ -25,7 +25,7 @@ abstract interface class PtpIpChannel {
 
   Future<void> sendFrame(PtpIpFrame frame);
 
-  /// 断开清理:关 socket、复位状态;幂等(TODO.md §二)。
+  /// 断开清理:关 socket、复位状态;幂等。
   Future<void> close();
 }
 

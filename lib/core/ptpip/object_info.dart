@@ -1,6 +1,6 @@
 /// GetObjectInfo(0x1008)返回的 ObjectInfo 数据集(ISO 15740)。
 ///
-/// 浏览列表的文件名 / 大小 / 拍摄日期全部来自这里(TODO.md §一),
+/// 浏览列表的文件名 / 大小 / 拍摄日期全部来自这里,
 /// 禁止从文件路径推导任何字段。
 library;
 
@@ -22,7 +22,7 @@ final class PtpObjectInfo {
     this.parentHandle,
   });
 
-  /// 必须来自 GetObjectHandles 响应(TODO 注意事项 2)。
+  /// 必须来自 GetObjectHandles 响应。
   final int handle;
   final int storageId;
   final int objectFormat;

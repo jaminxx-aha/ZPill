@@ -8,7 +8,7 @@
 ///   退避 1/2/4/8/16/30/60s 封顶,驱动按 [nextRetryDelay] 定时重试;
 ///   pairing 期断连回 idle(握手作废)。
 /// - 重连复用身份:createStage1 带已存 device/nonce,相机据以识别
-///   旧会话(TODO「二」既定)。
+///   旧会话(既定方案)。
 /// - 首写门:Ready(首配/重连同套)后 [writeGate] 内不写 GEO/TIME
 ///   (相机 GPS 会话未醒拒收 0x2007,HarmoNiLink 实证;ohos 2900099
 ///   「醒着但会话未就绪」瞬态同类减灾,非替代重试);过闸首笔 TIME

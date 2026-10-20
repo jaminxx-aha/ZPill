@@ -1,4 +1,4 @@
-/// 相机 WiFi 检测启发式(TODO.md §二 P1)。
+/// 相机 WiFi 检测启发式。
 ///
 /// 纯函数,便于单测;真机校准后只改这里的常量。
 library;
@@ -18,6 +18,6 @@ bool isLikelyCameraSsid(String? ssid) {
   return kCameraSsidHints.any(upper.contains);
 }
 
-/// 默认直连地址(尼康相机 WiFi 网关,TODO.md §二)。
+/// 默认直连地址(尼康相机 WiFi 网关)。
 const String kDefaultCameraIp = '192.168.1.1';
 const int kPtpIpPort = 15740;
