@@ -8,10 +8,13 @@
 /// 设备」两段列表,打开沿**自动扫描**(静默 —— 无扫描钮、无「扫描
 /// 中」指示);②打开沿**不自动回链**(进入页面不主动连接,后台守候
 /// 由注入驱动承担,面板打开期间驱动挂起,页面内全手动);③iOS 首配
-/// **自动跳系统蓝牙删除** —— App 侧只断链让相机暴露经典蓝牙,经
-/// [onSystemBondNeeded] 通知宿主弹红色引导卡,「打开系统蓝牙设置」为
-/// 手动按钮(不点不跳);ohos 程序化经典绑定直达不出卡;④回前台重扫
-/// 一轮(挂起期系统可能停掉 BLE 扫描),重连循环在跑则不打扰。
+/// **系统配件选择器经典 bond**(2026-10-20 真机判别实验转正):握手
+/// 落档后断链让相机暴露经典蓝牙,程序化拉起系统选择器,用户点相机
+/// 完成经典配对(CTKD 派生 BLE 密钥)后回本页重连注册;取消/失败落
+/// [onSystemBondNeeded] 红色引导卡深链兜底(宿主 Info.plist 须无
+/// UIApplicationSceneManifest,见 _pair 内注释);ohos 程序化经典绑定
+/// 直达;④回前台重扫一轮(挂起期系统可能停掉 BLE 扫描),重连循环在
+/// 跑则不打扰。
 library;
 
 import 'dart:async';
@@ -305,20 +308,34 @@ class BlePairPanelState extends State<BlePairPanel>
     _log('配对成功 ✓ device=${id.deviceId.toRadixString(16)} '
         'serial=${id.serial} 身份已落盘');
     await _loadSaved();
-    // iOS 首配注册走系统蓝牙(2026-10-20 手机 unified log 取证终版):
-    // 弹码机制 = SnapBridge 程序化拉起系统配件选择器(ExternalAccessory
-    // EAAccessoryPicker,公开 API)完成经典 BR/EDR SSP bond(CTKD 派生
-    // BLE 密钥)后重连注册 —— 相机对谁都发 SMP 安全请求,与弹码无关。
-    // 我方同款实现四轮真机实证:选择器的托管 sheet 在 Flutter 宿主 +
-    // iOS 27.2 上静默不呈现(BLE 链上/断链后、谓词/nil 谓词、原生桥直
-    // 调全试),SnapBridge 原生同机正常 —— Flutter 宿主兼容性问题,代
-    // 码留档待 Apple 修。回退深链路:App 侧只自动断链 —— 相机等 BLE 释
-    // 放才暴露经典蓝牙(技术必需);红色引导卡 + 手动按钮(2026-10-19
-    // 裁定,不自动跳页),用户在系统页点相机完成配对后回本页自动重连
-    // 注册。ohos 有程序化绑定(_bondClassic)不走此路。
+    // iOS 首配注册 = 系统配件选择器经典 bond(机制:SnapBridge 程序化
+    // 拉起 CoreBluetoothUI.BTDevicePickerUI 完成经典 BR/EDR SSP bond,
+    // CTKD 派生 BLE 密钥;公开 API 无特权门 —— 2026-10-20 REA 逆向 +
+    // 真机 unified log 对照定案)。断链先行:相机等 BLE 释放才暴露经典
+    // 蓝牙。宿主要求:Info.plist 不得带 UIApplicationSceneManifest ——
+    // 选择器建窗走 legacy 生命周期查法,scene manifest 宿主查不到 scene,
+    // 建出无 scene 窗永不可见、回调悬挂(Flutter 3.47 模板自带 manifest,
+    // 已摘;2026-10-20 真机判别实验实锤)。Info.plist 同时声明
+    // UISupportedExternalAccessoryProtocols + external-accessory 后台
+    // 模式(对齐 SnapBridge)。谓词不可用(键名黑盒,评估崩
+    // valueForUndefinedKey),恒 nil = 显示全部。
     if (Platform.operatingSystem == 'ios') {
       await _session.disconnect();
-      widget.onSystemBondNeeded?.call();
+      String? outcome;
+      try {
+        outcome = await _bleChannel.invokeMethod<String>(
+            'showAccessoryPicker');
+      } on Exception catch (e) {
+        _log('配件选择器调用失败:$e');
+      }
+      _log('配件选择器返回:$outcome');
+      if (outcome == 'success' || outcome == 'alreadyConnected') {
+        // 经典 bond 已成:重扫让重连钮出位,注册走既有显式重连路。
+        _autoStartScan();
+      } else {
+        // cancelled/failed/通道异常:落红卡深链兜底,用户不被卡死。
+        widget.onSystemBondNeeded?.call();
+      }
       return;
     }
   }
