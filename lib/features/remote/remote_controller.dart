@@ -55,6 +55,7 @@ import 'package:flutter/foundation.dart';
 import '../../core/browser/object_entry.dart';
 import '../../core/browser/object_repository.dart';
 import '../../core/camera/camera_connection.dart';
+import '../../core/log/app_log.dart';
 import '../../core/ptp/device_prop.dart';
 import '../../core/ptp/operation_codes.dart';
 import '../../core/ptp/ptp_session.dart';
@@ -1544,12 +1545,16 @@ final class RemoteController extends ChangeNotifier {
   void _onEngineHealth() => notifyListeners();
 
   /// 取景帧到达:SOF 嗅探帧尺寸(只走标记结构不解码,开销可忽略;
-  /// 失败保留旧值)。
+  /// 失败保留旧值)。尺寸变化沿落一行 AppLog(live 域,二十轮:比例
+  /// 不一致取证 —— 流档位 3:2/16:9/旋转都从这里对账)。
   void _onFrame() {
     final f = engine.frame.value;
     if (f == null) return;
     final s = jpegSofSize(f);
-    if (s != null && s != frameSize.value) frameSize.value = s;
+    if (s != null && s != frameSize.value) {
+      frameSize.value = s;
+      AppLog.d(AppLog.live, '取景帧 ${s.width}×${s.height}(SOF)');
+    }
   }
 
   /// 帧头到达:对齐录制态(头部 @828 是机身权威 —— app/机身侧启动的

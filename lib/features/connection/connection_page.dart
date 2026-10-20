@@ -929,7 +929,11 @@ class _ConnectionPageState extends State<ConnectionPage>
         leadingWidth: 72,
         leading: Padding(
           padding: const EdgeInsets.only(left: AppSpacing.lg),
-          child: Center(
+          // 二十轮:Align centerLeft(勿用 Center)—— AppBar 把 leading
+          // 钉成 leadingWidth(72)宽,Center 会把文字在余宽里水平也
+          // 居中(左缘 ~22px),与图库/设置标题(左 16px)错位。
+          child: Align(
+            alignment: Alignment.centerLeft,
             child: Text(context.t('shell.camera'),
                 style: Theme.of(context).textTheme.titleLarge),
           ),
