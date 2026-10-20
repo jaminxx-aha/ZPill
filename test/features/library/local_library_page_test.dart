@@ -271,6 +271,21 @@ Future<void> pickFilter(WidgetTester tester, String label) async {
   await tester.pumpAndSettle();
 }
 
+/// 开弹层点排序行(单行「时间+方向箭头」,点按翻向并收层)。
+/// 排序行没有方向文案,翻向断言看行尾箭头图标(见箭头约定:↓ = 新→旧)。
+Future<void> toggleSort(WidgetTester tester) async {
+  await openFilterMenu(tester);
+  await tester.tap(find.text('时间'));
+  await tester.pumpAndSettle();
+}
+
+/// 排序行行尾方向箭头(默认 ↓ = 新→旧,翻向 ↑ = 旧→新)。
+IconData? sortArrow(WidgetTester tester) =>
+    tester.widget<Icon>(find.descendant(
+        of: find.ancestor(
+            of: find.text('时间'), matching: find.byType(MenuItemButton)),
+        matching: find.byType(Icon))).icon;
+
 void main() {
   late Directory dir;
 
@@ -565,27 +580,34 @@ void main() {
     await tester.pumpAndSettle();
 
     await openFilterMenu(tester);
+    // 排序分区头在场;排序 = 单行「时间+方向箭头」(默认 ↓ 新→旧)
     expect(find.text('排序'), findsOneWidget);
+    expect(find.text('时间'), findsOneWidget);
+    expect(sortArrow(tester), Icons.arrow_downward);
     expect(find.text('筛选:'), findsOneWidget);
     expect(find.text('视图选项'), findsOneWidget);
     expect(find.text('连拍聚合'), findsOneWidget);
-    // 当前档(新→旧 / 全部)行尾打勾
+    // 当前档(全部)行尾打勾;排序行以箭头示向,无勾
     Finder checkBeside(String label) => find.descendant(
         of: find.ancestor(
             of: find.text(label), matching: find.byType(MenuItemButton)),
         matching: find.byIcon(Icons.check));
-    expect(checkBeside('新→旧'), findsOneWidget);
     expect(checkBeside('全部'), findsOneWidget);
-    expect(checkBeside('旧→新'), findsNothing);
+    expect(checkBeside('时间'), findsNothing);
 
-    await tester.tap(find.text('旧→新'));
+    await tester.tap(find.text('时间')); // 点排序行:翻向 + 收层
     await tester.pumpAndSettle();
     expect(find.byType(MenuItemButton), findsNothing); // 点行即收
 
     await openFilterMenu(tester);
-    expect(checkBeside('旧→新'), findsOneWidget);
-    expect(checkBeside('新→旧'), findsNothing);
-    await tester.tap(find.text('旧→新')); // 再点选中行收弹层(同值无害)
+    expect(sortArrow(tester), Icons.arrow_upward); // 已翻旧→新
+    await tester.tap(find.text('时间'));
+    await tester.pumpAndSettle();
+    expect(find.byType(MenuItemButton), findsNothing);
+
+    await openFilterMenu(tester);
+    expect(sortArrow(tester), Icons.arrow_downward); // 再翻回新→旧
+    await tester.tap(find.text('全部'));
     await tester.pumpAndSettle();
     expect(find.byType(MenuItemButton), findsNothing);
   });
@@ -1146,8 +1168,8 @@ void main() {
     await tester.pageBack();
     await tester.pumpAndSettle();
 
-    // 旧→新:首格 a,翻页序随排序(a → b)
-    await pickFilter(tester, '旧→新');
+    // 旧→新(点排序行翻向):首格 a,翻页序随排序(a → b)
+    await toggleSort(tester);
     await tester.pumpAndSettle();
     await tester.tap(find.byType(Image).first);
     await tester.pumpAndSettle();
@@ -1155,10 +1177,10 @@ void main() {
     await dragLikeFinger(tester, find.byType(PageView), const Offset(-600, 0));
     expect(find.text('b.jpg'), findsWidgets);
 
-    // 回新→旧:首格回到 c
+    // 回新→旧(再翻向):首格回到 c
     await tester.pageBack();
     await tester.pumpAndSettle();
-    await pickFilter(tester, '新→旧');
+    await toggleSort(tester);
     await tester.pumpAndSettle();
     await tester.tap(find.byType(Image).first);
     await tester.pumpAndSettle();
