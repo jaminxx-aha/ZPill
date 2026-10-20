@@ -61,6 +61,8 @@ const Map<String, String> zhCatalog = {
   'ble.scanning': '扫描中…',
   'ble.scanButton': '扫描',
   'ble.unpair': '解除配对',
+  'ble.unpairConfirm': '解除配对?',
+  'ble.unpairBody': '清除「{name}」的配对身份并断开连接。之后重连须在相机菜单重新配对。',
   'ble.reconnecting': '连接中…',
   'ble.connect': '连接',
   'ble.binding': '绑定中…',
