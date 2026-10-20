@@ -304,19 +304,23 @@ class BlePairPanelState extends State<BlePairPanel>
     widget.onIdentityChanged?.call();
     _log('配对成功 ✓ device=${id.deviceId.toRadixString(16)} '
         'serial=${id.serial} 身份已落盘');
-    // iOS 首配注册走系统蓝牙(iOS 无程序化绑定 API,LE SMP 触发器五轮
-    // 实验未获):App 侧只自动断链 —— 相机等
-    // BLE 释放才暴露经典蓝牙(技术必需,不变);**自动跳系统蓝牙删除**
-    //(2026-10-19 用户裁定),经宿主弹红色引导卡 + 手动按钮(不点不
-    // 跳),用户在系统页点相机完成配对后回本页点「连接」。ohos 有程序
-    // 化绑定(_bondClassic)不走此路。
+    await _loadSaved();
+    // iOS 首配注册走系统蓝牙(2026-10-20 手机 unified log 取证终版):
+    // 弹码机制 = SnapBridge 程序化拉起系统配件选择器(ExternalAccessory
+    // EAAccessoryPicker,公开 API)完成经典 BR/EDR SSP bond(CTKD 派生
+    // BLE 密钥)后重连注册 —— 相机对谁都发 SMP 安全请求,与弹码无关。
+    // 我方同款实现四轮真机实证:选择器的托管 sheet 在 Flutter 宿主 +
+    // iOS 27.2 上静默不呈现(BLE 链上/断链后、谓词/nil 谓词、原生桥直
+    // 调全试),SnapBridge 原生同机正常 —— Flutter 宿主兼容性问题,代
+    // 码留档待 Apple 修。回退深链路:App 侧只自动断链 —— 相机等 BLE 释
+    // 放才暴露经典蓝牙(技术必需);红色引导卡 + 手动按钮(2026-10-19
+    // 裁定,不自动跳页),用户在系统页点相机完成配对后回本页自动重连
+    // 注册。ohos 有程序化绑定(_bondClassic)不走此路。
     if (Platform.operatingSystem == 'ios') {
-      await _loadSaved();
       await _session.disconnect();
       widget.onSystemBondNeeded?.call();
       return;
     }
-    await _loadSaved();
   }
 
   /// 已注册相机的重连:按已存 deviceId 扫 0x0399 重连广播,命中即以
@@ -380,6 +384,16 @@ class BlePairPanelState extends State<BlePairPanel>
     var hintedForeign = false;
     for (var attempt = 1; attempt <= 6; attempt++) {
       if (gen != _retryGen || !mounted) break;
+      // 配对码探针进行中(含断链二段):让路等收尾 —— 探针自己的
+      // 重连在跑,这里再扫会原生单槽互掐(2026-10-19 真机实证)。
+      // 成功 = ready(下轮止步);失败 = idle/reconnecting(下轮接力)。
+      if (_session.bondProbeActive) {
+        _log('配对码探针进行中,自动重连让路…');
+        while (_session.bondProbeActive && gen == _retryGen && mounted) {
+          await Future<void>.delayed(const Duration(milliseconds: 300));
+        }
+        continue;
+      }
       if (_session.state == BleSessionState.ready) {
         _log('已就绪 ✓');
         break;
