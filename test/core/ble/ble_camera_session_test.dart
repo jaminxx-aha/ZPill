@@ -20,11 +20,15 @@ final class FakeBleHost implements BleHost {
   final writes = <(String, Uint8List)>[];
   final notifies = <String>[];
   final reads = <String, Uint8List?>{};
+  final readCalls = <String>[];
   Object? writeError;
   Object? readError;
+  int connectFailures = 0; // 前 N 次 connectPaired 抛错(二段直连失败注错)
+  final deviceIdScans = <int>[]; // scanForDeviceId 调用记录(让路断言)
   int? reconnectDeviceId;
   Uint8List? reconnectMfg;
   final connects = <String>[];
+  List<BleDevice> scanResult = const [];
 
   /// scanForDeviceId 调用数(连接页 hero 测试断言「重连循环真发了扫」)。
   int scanIdCalls = 0;
@@ -49,7 +53,7 @@ final class FakeBleHost implements BleHost {
   @override
   Future<List<BleDevice>> scan(
           {Duration timeout = const Duration(seconds: 10)}) async =>
-      const [];
+      scanResult;
 
   @override
   Future<void> stopScan() async {}
@@ -62,6 +66,7 @@ final class FakeBleHost implements BleHost {
     if (gate != null) {
       await gate.future;
     }
+    deviceIdScans.add(deviceId);
     if (reconnectDeviceId == deviceId) {
       return [
         BleDevice(
@@ -74,6 +79,10 @@ final class FakeBleHost implements BleHost {
   @override
   Future<void> connectPaired(String peripheralUuid) async {
     connects.add(peripheralUuid);
+    if (connectFailures > 0) {
+      connectFailures--;
+      throw Exception('连接失败');
+    }
   }
 
   @override
@@ -83,6 +92,7 @@ final class FakeBleHost implements BleHost {
 
   @override
   Future<Uint8List?> read(String characteristicUuid) async {
+    readCalls.add(characteristicUuid);
     final error = readError;
     if (error != null) {
       throw error;
@@ -174,10 +184,13 @@ void main() {
       );
 
   /// 驱动完整握手:连接 → stage1 → stage2 → stage4 → NOT1。
+  /// [not1] 传 false 抑制尾部 NOT1(探针用例:注册信号由探针路自收,
+  /// 粘性位不能提前置上)。
   Future<void> runHandshake(
       {bool resume = false,
       BleCameraSession? target,
-      bool? gateStandby}) async {
+      bool? gateStandby,
+      bool not1 = true}) async {
     final s = target ?? session;
     Object? ok;
     final done = resume
@@ -194,8 +207,10 @@ void main() {
     host.emit(BleNotified(
         uuid: kNikonCharPairing, data: buildStage4().encode()));
     await pump();
-    host.emit(BleNotified(
-        uuid: kNikonCharNot1, data: Uint8List.fromList([0x01, 0x00])));
+    if (not1) {
+      host.emit(BleNotified(
+          uuid: kNikonCharNot1, data: Uint8List.fromList([0x01, 0x00])));
+    }
     await pump();
     if (resume) {
       expect(ok, isTrue);
@@ -677,5 +692,357 @@ void main() {
       expect(await session.readWifiCredentials(), isNull);
       expect(session.lastError?.key, 'ble.readCredFail');
     });
+  });
+
+  group('iOS 首配 bond 探针(v8b/v9:leg-1 收口 → 全访问面扫 → 断链二段直连)', () {
+    test('收口校时即刻发(绕写闸);读 0x2008 清位应答 00 01→00 00;0x2005=0x02',
+        () async {
+      await runHandshake(not1: false);
+      host.reads[kNikonCharNot1] = Uint8List.fromList([0x00, 0x01]); // Conn ON
+      host.connectFailures = 1; // 二段直连失败 → 重扫无果,快速收尾
+      final fut = session.runIosBondProbe(
+          settle: Duration.zero, leg2Grace: Duration.zero);
+      await pump();
+      expect(host.countWrite(kNikonCharTime), 1); // 收口校时(闸内即刻)
+      expect(host.readCalls, contains(kNikonCharNot1));
+      expect(host.lastWrite(kNikonCharNot1), [0x00, 0x00]); // 清位应答
+      expect(host.countWrite(kNikonCharWifi), 1); // v6:btEstablishment
+      expect(host.lastWrite(kNikonCharWifi), [0x02]);
+      expect(await fut, isFalse); // 直连未成 + 扫描无果(scanResult 空)
+      expect(host.connects, ['P1', 'P1']); // 配对 + 二段直连尝试(同 uuid)
+      expect(session.state, BleSessionState.reconnecting);
+    });
+
+    test('读 null 照发清位应答 00 00', () async {
+      await runHandshake(not1: false);
+      host.connectFailures = 1;
+      final fut = session.runIosBondProbe(
+          settle: Duration.zero, leg2Grace: Duration.zero);
+      await pump();
+      expect(host.lastWrite(kNikonCharNot1), [0x00, 0x00]);
+      expect(await fut, isFalse);
+    });
+
+    test('二段全通:断链 → 直连(同 uuid)→ 复用握手(device/nonce)→ NOT1 → true、ready、补答校时',
+        () async {
+      await runHandshake(not1: false);
+      final id = session.identity!;
+      final fut = session.runIosBondProbe(
+          settle: Duration.zero, leg2Grace: Duration.zero);
+      await pump();
+      expect(host.connects, ['P1', 'P1']); // 断一连二(直连同 uuid)
+      expect(session.state, BleSessionState.pairing);
+      host.emit(const BleConnected(
+          uuid: 'P1', characteristics: {}, writeWithoutResponseMtu: 20));
+      await pump();
+      final stage1b = PairingMessage.decode(host.lastWrite(kNikonCharPairing));
+      expect(stage1b.device, id.deviceId); // 复用握手
+      expect(stage1b.nonce, id.nonce);
+      host.emit(BleNotified(
+          uuid: kNikonCharPairing, data: buildStage2(stage1b).encode()));
+      await pump();
+      host.emit(BleNotified(
+          uuid: kNikonCharPairing, data: buildStage4().encode()));
+      await pump();
+      expect(session.state, BleSessionState.ready);
+      host.emit(BleNotified(
+          uuid: kNikonCharNot1, data: Uint8List.fromList([0x01, 0x00])));
+      expect(await fut, isTrue);
+      expect(session.state, BleSessionState.ready); // 链路保持
+      await pump();
+      expect(host.countWrite(kNikonCharTime), 2); // 收口校时 + 成功沿补答
+    });
+
+    test('二段直连未成(旧 uuid 失效)→ 重扫兜底命中新广播 → NOT1 → true', () async {
+      await runHandshake(not1: false);
+      final id = session.identity!;
+      host.connectFailures = 1; // 直连打给已旋转地址:连接失败
+      host.scanResult = [
+        const BleDevice(name: 'Z f_2', uuid: 'P2', rssi: -50)
+      ];
+      final fut = session.runIosBondProbe(
+          settle: Duration.zero, leg2Grace: Duration.zero);
+      await pump();
+      expect(host.connects, ['P1', 'P1', 'P2']); // 配对 + 直连尝试(败) + 重扫命中
+      expect(session.state, BleSessionState.pairing);
+      host.emit(const BleConnected(
+          uuid: 'P2', characteristics: {}, writeWithoutResponseMtu: 20));
+      await pump();
+      final stage1b = PairingMessage.decode(host.lastWrite(kNikonCharPairing));
+      expect(stage1b.device, id.deviceId); // 复用握手(device/nonce 与地址无关)
+      host.emit(BleNotified(
+          uuid: kNikonCharPairing, data: buildStage2(stage1b).encode()));
+      await pump();
+      host.emit(BleNotified(
+          uuid: kNikonCharPairing, data: buildStage4().encode()));
+      await pump();
+      expect(session.state, BleSessionState.ready);
+      host.emit(BleNotified(
+          uuid: kNikonCharNot1, data: Uint8List.fromList([0x01, 0x00])));
+      expect(await fut, isTrue);
+    });
+
+    test('安顿窗内 NOT1 到 → 免二段原链收口', () async {
+      await runHandshake(not1: false);
+      final fut = session.runIosBondProbe(
+          settle: const Duration(milliseconds: 30),
+          window: const Duration(seconds: 5));
+      await pump();
+      host.emit(BleNotified(
+          uuid: kNikonCharNot1, data: Uint8List.fromList([0x01, 0x00])));
+      expect(await fut, isTrue);
+      expect(host.connects, ['P1']); // 未二连
+      expect(session.state, BleSessionState.ready);
+      await pump();
+      expect(host.countWrite(kNikonCharTime), 2); // 收口 + 补答
+    });
+
+    test('窗内静默(onFix/tick 零写),窗满 false 且会话主动断链(fail+ready)',
+        () async {
+      await runHandshake(not1: false);
+      session.onFix(fixAt(35.5)); // 首写门内:缓存
+      await pump();
+      expect(host.countWrite(kNikonCharGeo), 0);
+      final fut = session.runIosBondProbe(
+          settle: Duration.zero,
+          leg2Grace: Duration.zero,
+          window: const Duration(milliseconds: 60));
+      await pump();
+      // 驱动二段直连握手到 ready(不发 NOT1 → 进等注册窗)
+      host.emit(const BleConnected(
+          uuid: 'P1', characteristics: {}, writeWithoutResponseMtu: 20));
+      await pump();
+      final stage1b = PairingMessage.decode(host.lastWrite(kNikonCharPairing));
+      host.emit(BleNotified(
+          uuid: kNikonCharPairing, data: buildStage2(stage1b).encode()));
+      await pump();
+      host.emit(BleNotified(
+          uuid: kNikonCharPairing, data: buildStage4().encode()));
+      await pump();
+      session.onFix(fixAt(35.6)); // 等注册窗:旗标缓存
+      now = now.add(const Duration(seconds: 3));
+      await session.tick();
+      expect(host.countWrite(kNikonCharGeo), 0); // 静默整闸
+      expect(host.countWrite(kNikonCharTime), 1); // TIME 不重复
+      expect(await fut, isFalse); // 窗满
+      // fail+ready:未注册链路保持无意义,会话主动断链(「去系统蓝牙」
+      // 按钮只在非 ready 可见)。
+      expect(session.state, BleSessionState.idle);
+      now = now.add(const Duration(seconds: 3));
+      await session.tick();
+      expect(host.countWrite(kNikonCharGeo), 0); // 断链后零写(缓存待下链)
+      expect(host.countWrite(kNikonCharTime), 1);
+    });
+
+    test('二段直连握手中断链 → 转重扫兜底(无广播)→ false、落 reconnecting',
+        () async {
+      await runHandshake(not1: false);
+      final fut = session.runIosBondProbe(
+          settle: Duration.zero, leg2Grace: Duration.zero);
+      await pump();
+      expect(host.connects, ['P1', 'P1']); // 直连尝试(同 uuid)
+      host.emit(const BleConnected(
+          uuid: 'P1', characteristics: {}, writeWithoutResponseMtu: 20));
+      await pump();
+      host.emit(const BleDisconnected('P1')); // 二段握手期断
+      await pump();
+      expect(await fut, isFalse); // 直连败 + 重扫无果
+      expect(session.state, BleSessionState.reconnecting);
+    });
+
+    test('探针期 Conn 请求位自动清位应答;探针外只跟踪不应答', () async {
+      await runHandshake(not1: false);
+      final fut = session.runIosBondProbe(
+          settle: Duration.zero,
+          leg2Grace: Duration.zero,
+          window: const Duration(seconds: 5));
+      await pump();
+      host.emit(const BleConnected(
+          uuid: 'P1', characteristics: {}, writeWithoutResponseMtu: 20));
+      await pump();
+      final stage1b = PairingMessage.decode(host.lastWrite(kNikonCharPairing));
+      host.emit(BleNotified(
+          uuid: kNikonCharPairing, data: buildStage2(stage1b).encode()));
+      await pump();
+      host.emit(BleNotified(
+          uuid: kNikonCharPairing, data: buildStage4().encode()));
+      await pump();
+      final before = host.countWrite(kNikonCharNot1); // leg-1 清位应答
+      host.emit(BleNotified(
+          uuid: kNikonCharNot1, data: Uint8List.fromList([0x00, 0x01])));
+      await pump();
+      expect(host.countWrite(kNikonCharNot1), before + 1); // 探针期自动应答
+      expect(host.lastWrite(kNikonCharNot1), [0x00, 0x00]);
+      host.emit(BleNotified(
+          uuid: kNikonCharNot1, data: Uint8List.fromList([0x01, 0x00])));
+      expect(await fut, isTrue);
+      final after = host.countWrite(kNikonCharNot1);
+      host.emit(BleNotified(
+          uuid: kNikonCharNot1, data: Uint8List.fromList([0x00, 0x01])));
+      await pump();
+      expect(host.countWrite(kNikonCharNot1), after); // 探针外:只跟踪不应答
+    });
+
+    test('探针期三方让路:retryReconnect/reconnectDirect/reconnectScan 零扫描零连接',
+        () async {
+      await runHandshake(not1: false);
+      // 有可命中广播也该让路(真机实证:面板重挂自动重连的扫描会掐死
+      // 探针二段 —— iOS 原生扫描单槽,新扫描起即收旧扫描)。
+      host.reconnectDeviceId = session.identity!.deviceId;
+      final fut = session.runIosBondProbe(
+          settle: const Duration(milliseconds: 60),
+          window: const Duration(seconds: 5));
+      await pump();
+      expect(session.bondProbeActive, isTrue);
+      expect(await session.retryReconnect(), isFalse); // 注入驱动路
+      expect(await session.reconnectDirect(), isFalse); // 面板重连路
+      expect(await session.reconnectScan(), isFalse);
+      expect(host.deviceIdScans, isEmpty); // retryReconnect 未起扫
+      expect(host.connects, ['P1']); // 零二连尝试
+      host.emit(BleNotified(
+          uuid: kNikonCharNot1, data: Uint8List.fromList([0x01, 0x00])));
+      expect(await fut, isTrue);
+    });
+
+    test('非 ready 门禁与重入闸立即 false', () async {
+      expect(await session.runIosBondProbe(), isFalse); // idle 门禁
+      await runHandshake(not1: false);
+      final fut = session.runIosBondProbe(
+          settle: Duration.zero,
+          leg2Grace: Duration.zero,
+          window: const Duration(seconds: 5));
+      await pump();
+      expect(await session.runIosBondProbe(), isFalse); // 重入闸(旗标挂窗)
+      // 二段直连走完收尾
+      host.emit(const BleConnected(
+          uuid: 'P1', characteristics: {}, writeWithoutResponseMtu: 20));
+      await pump();
+      final stage1b = PairingMessage.decode(host.lastWrite(kNikonCharPairing));
+      host.emit(BleNotified(
+          uuid: kNikonCharPairing, data: buildStage2(stage1b).encode()));
+      await pump();
+      host.emit(BleNotified(
+          uuid: kNikonCharPairing, data: buildStage4().encode()));
+      await pump();
+      host.emit(BleNotified(
+          uuid: kNikonCharNot1, data: Uint8List.fromList([0x01, 0x00])));
+      expect(await fut, isTrue);
+    });
+
+    test('探针期 wakeCameraWifi/readWifiCredentials 带因拒绝', () async {
+      await runHandshake(not1: false);
+      final fut = session.runIosBondProbe(
+          settle: const Duration(milliseconds: 30),
+          window: const Duration(seconds: 5));
+      await pump();
+      expect(await session.wakeCameraWifi(), isFalse);
+      expect(session.lastError?.key, 'ble.probeGateOp');
+      expect(await session.readWifiCredentials(), isNull);
+      expect(session.lastError?.key, 'ble.probeGateReadCred');
+      expect(host.countWrite(kNikonCharWifi), 1); // 仅探针自写 0x02,wake 被拒未加写
+      host.emit(BleNotified(
+          uuid: kNikonCharNot1, data: Uint8List.fromList([0x01, 0x00])));
+      expect(await fut, isTrue);
+    });
+
+    test('waitRegistration:NOT1 先到未挂 → 粘性记忆,后挂即刻 true', () async {
+      await runHandshake(not1: false);
+      host.emit(BleNotified(
+          uuid: kNikonCharNot1, data: Uint8List.fromList([0x01, 0x00])));
+      await pump();
+      expect(
+          await session.waitRegistration(
+              window: const Duration(milliseconds: 50)),
+          isTrue);
+    });
+
+    test('v9 面扫:非协议特征逐个 读→写(零长)→订阅;协议特征不碰', () async {
+      const c2083 = '00002083-3dd4-4255-8d62-6dc7b9bd5561';
+      const c2084 = '00002084-3dd4-4255-8d62-6dc7b9bd5561';
+      const c2087 = '00002087-3dd4-4255-8d62-6dc7b9bd5561';
+      final done = expectLater(session.pair(device), completes);
+      host.emit(const BleConnected(
+          uuid: 'P1',
+          characteristics: {
+            kNikonCharPairing: 'read|write|indicate',
+            kNikonCharWifi: 'read|write',
+            kNikonCharNot1: 'read|write|notify',
+            c2083: 'write',
+            c2084: 'read|indicate',
+            c2087: 'read|write|indicate',
+            kNikonCharServerName: 'read',
+          },
+          writeWithoutResponseMtu: 20));
+      await pump();
+      final stage1 = PairingMessage.decode(host.lastWrite(kNikonCharPairing));
+      host.emit(BleNotified(
+          uuid: kNikonCharPairing, data: buildStage2(stage1).encode()));
+      await pump();
+      host.emit(BleNotified(
+          uuid: kNikonCharPairing, data: buildStage4().encode()));
+      await pump();
+      await done;
+      host.connectFailures = 1; // 二段直连失败 → 重扫无果,快速收尾
+      final fut = session.runIosBondProbe(
+          settle: Duration.zero, leg2Grace: Duration.zero);
+      await pump();
+      await pump();
+      expect(
+          host.writes.any((w) => w.$1 == c2083 && w.$2.isEmpty), isTrue);
+      expect(
+          host.writes.any((w) => w.$1 == c2087 && w.$2.isEmpty), isTrue);
+      expect(host.notifies, containsAll([c2084, c2087]));
+      // 协议特征不被面扫碰:0x2005 仅探针自写 1 次(0x02),0x2000 仅握手。
+      expect(host.countWrite(kNikonCharWifi), 1);
+      expect(host.lastWrite(kNikonCharWifi), [0x02]);
+      expect(await fut, isFalse); // 扫描无果收尾
+    });
+
+    test('面扫访问失败不炸探针(写错误照落,流程走完)', () async {
+      await runHandshake(not1: false);
+      host.writeError = Exception('Insufficient Authentication');
+      host.connectFailures = 1; // 二段直连失败 → 重扫无果,快速收尾
+      final fut = session.runIosBondProbe(
+          settle: Duration.zero, leg2Grace: Duration.zero);
+      await pump();
+      expect(await fut, isFalse);
+      expect(session.state, BleSessionState.reconnecting);
+      expect(session.lastError, isNotNull);
+    });
+  });
+
+  test('v7 全表扫描读:权限含 read 的特征全读,0x2000/0x2008/write-only 除外',
+      () async {
+    final done = expectLater(session.pair(device), completes);
+    host.emit(const BleConnected(
+        uuid: 'P1',
+        characteristics: {
+          kNikonCharPairing: 'read|write|indicate',
+          kNikonCharConfig: 'read|write',
+          kNikonCharNot1: 'read|write|notify',
+          kNikonCharWifi: 'read|write',
+          kNikonCharServerName: 'read',
+          // iOS SIG 采纳 UUID 是 4 字符短串(CBUUID.uuidString):
+          // 短串不能截 4-8(2026-10-19 真机 RangeError 实证)。
+          '2a00': 'read|write',
+        },
+        writeWithoutResponseMtu: 20));
+    await pump();
+    await pump(); // intro 读在途,再排一轮
+    final stage1 = PairingMessage.decode(host.lastWrite(kNikonCharPairing));
+    host.emit(BleNotified(
+        uuid: kNikonCharPairing, data: buildStage2(stage1).encode()));
+    await pump();
+    host.emit(BleNotified(
+        uuid: kNikonCharPairing, data: buildStage4().encode()));
+    await pump();
+    await done;
+    await pump();
+    expect(
+        host.readCalls,
+        containsAll(
+            [kNikonCharConfig, kNikonCharWifi, kNikonCharServerName, '2a00']));
+    expect(host.readCalls, isNot(contains(kNikonCharPairing)));
+    expect(host.readCalls, isNot(contains(kNikonCharNot1)));
   });
 }
