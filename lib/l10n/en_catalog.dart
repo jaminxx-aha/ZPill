@@ -617,6 +617,7 @@ const Map<String, String> enCatalog = {
   'libpage.filter': 'Filter',
   'libpage.filterColon': 'Filter:',
   'libpage.sort': 'Sort',
+  'libpage.sortTime': 'Time',
   'libpage.viewOptions': 'View Options',
   'libpage.groupBursts': 'Group Bursts',
   'libpage.exportedAlbum':
@@ -624,8 +625,6 @@ const Map<String, String> enCatalog = {
   'libpage.deleteSelected': 'Delete Selected',
   'libpage.deleteBody':
       'This will delete {n} files.\nThis cannot be undone (the originals on the camera are unaffected).',
-  'libpage.newestFirst': 'Newest First',
-  'libpage.oldestFirst': 'Oldest First',
   'libpage.empty':
       'No files in the app yet\n(choose "Download to App" in the camera album)',
   'libpage.noFormatFiles': 'No {label} files',
