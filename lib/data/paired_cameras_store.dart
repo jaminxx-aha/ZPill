@@ -1,4 +1,4 @@
-/// 已配对相机持久化(TODO.md §五 P2)。
+/// 已配对相机持久化。
 ///
 /// TODO(P2): 换成 drift(Room 等价,sqlite);字段见 CameraInfo:
 /// 名称/型号/BLE 地址/WiFi 凭据/最后连接时间。

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""NikonPill PTP-IP 协议验证 CLI(TODO.md §一 P0)。
+"""NikonPill PTP-IP 协议验证 CLI。
 
 在 App 实现之前对真机跑通握手、核对字节布局,再移植进
 lib/core/ptpip/codec.dart。参考:libgphoto2 ptpip 后端。
@@ -104,7 +104,7 @@ import time
 PORT = 15740
 READ_TIMEOUT = 10.0
 
-# 包类型(TODO.md §一)
+# 包类型
 INIT_CMD_REQ, INIT_CMD_RESP, INIT_EVENT_REQ, INIT_EVENT_RESP, INIT_FAIL = 1, 2, 3, 4, 5
 OP_REQ, OP_RESP, EVENT = 6, 7, 8
 START_DATA, DATA, CANCEL, END_DATA = 9, 10, 11, 12

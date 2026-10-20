@@ -1,4 +1,4 @@
-/// 胶片预设(TODO §五):4x5 仿射色彩矩阵预设库,87 款直出风格。
+/// 胶片预设:4x5 仿射色彩矩阵预设库,87 款直出风格。
 ///
 /// 数值出处:**矩阵与配方参数取自 Nikon-SnapLink(MIT License,
 /// github.com/lyb82ndkf-lab/Nikon-SnapLink 的 tool/generate_filters.dart

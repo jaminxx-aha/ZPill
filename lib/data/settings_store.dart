@@ -1,4 +1,4 @@
-/// 设置仓库(TODO.md §五 P2/P3):[AppSettings] 模型 + 文件/内存实现。
+/// 设置仓库:[AppSettings] 模型 + 文件/内存实现。
 ///
 /// 持久化走 JSON 文件(`<dataDir>/settings.json`,全量写回 + 内存缓存),
 /// 与配对档案同款;T4 的水印/LUT 等字段后续在 [AppSettings] 上扩。
@@ -12,7 +12,7 @@ import '../core/browser/photo_group.dart';
 
 enum TransferQuality { original, compressed }
 
-/// 水印模板(TODO §五 T4):off 关闭;corner 角标;card 摄影卡片。
+/// 水印模板:off 关闭;corner 角标;card 摄影卡片。
 enum WatermarkStyle { off, corner, card }
 
 /// 深浅模式(system = 跟随系统;light/dark = 锁定)。独立于 Material
@@ -134,7 +134,7 @@ final class AppSettings {
   /// MaterialApp locale 映射,见 app.dart)。
   final AppLanguage language;
 
-  /// XMP 元数据注入(TODO §四):作者(dc:creator),空 = 不写该字段。
+  /// XMP 元数据注入:作者(dc:creator),空 = 不写该字段。
   final String? xmpCreator;
 
   /// 版权声明(dc:rights),空 = 不写该字段。
@@ -146,7 +146,7 @@ final class AppSettings {
   /// 下载 JPG 时把当前位置写入 EXIF GPS(经 nikonpill/location 通道)。
   final bool xmpInjectGps;
 
-  /// 下载 JPG 合成水印(TODO §五 T4):模板选择,off = 不合成。
+  /// 下载 JPG 合成水印:模板选择,off = 不合成。
   final WatermarkStyle watermarkStyle;
 
   /// 水印文本:角标 = 水印字样(空 = 相机型号);卡片 = 追加落款。

@@ -1,4 +1,4 @@
-/// WiFi 网络监测(TODO.md §二 P1)。
+/// WiFi 网络监测。
 library;
 
 import 'package:flutter/services.dart';
@@ -12,7 +12,7 @@ final class WifiLinkInfo {
   final String? ssid;
   final String? gateway;
 
-  /// 命中相机热点启发式(TODO.md §二:SSID 含 NIKON/CCCC)。
+  /// 命中相机热点启发式(SSID 含 NIKON/CCCC)。
   bool get isLikelyCamera => isLikelyCameraSsid(ssid);
 }
 

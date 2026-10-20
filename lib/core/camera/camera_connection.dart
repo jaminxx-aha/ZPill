@@ -1,6 +1,6 @@
-/// 相机连接状态机(TODO.md §二 P1):驱动 UI 的单一事实来源。
+/// 相机连接状态机:驱动 UI 的单一事实来源。
 ///
-/// 等价于 TODO.md 中的「连接状态机 + StateFlow」:状态经 Stream 广播,
+/// 状态经 Stream 广播,
 /// UI 订阅渲染,按钮操作走方法调用。
 library;
 
@@ -83,7 +83,7 @@ abstract interface class CameraConnection {
   /// 跳过配对:当前会话照常转正(相机不记录,下次连接再问)。
   Future<void> cancelPairing();
 
-  /// 断开清理:关会话、释放 USB 接口、复位状态(TODO.md §二 P1)。
+  /// 断开清理:关会话、释放 USB 接口、复位状态。
   Future<void> disconnect();
 }
 

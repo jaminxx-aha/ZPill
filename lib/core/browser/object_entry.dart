@@ -15,7 +15,7 @@ final class ObjectEntry {
     this.protectionStatus = 0,
   });
 
-  /// 只能来自 GetObjectHandles 响应(TODO 注意事项 2)。
+  /// 只能来自 GetObjectHandles 响应。
   final int handle;
   final String name;
   final int sizeInBytes;

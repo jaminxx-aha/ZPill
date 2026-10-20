@@ -24,7 +24,7 @@
 /// 接在弹层)。图标扛语义(固件/序列号/焦距/光圈沿用原 info 行图标)。
 ///
 /// Controller = ViewModel(ChangeNotifier);**所有按钮必须绑定到
-/// Controller 方法**,禁止 UI 层直连协议层(TODO.md §三 注意事项)。
+/// Controller 方法**,禁止 UI 层直连协议层。
 /// 无线流程(2026-10-04):扫描(mDNS `_ptp._tcp`)→ 点选相机 → 连接;
 /// 未配对相机在连接中自动配对(验证码不回传相机),相机侧弹「配对
 /// 完成」等按 OK,应用保持重连等它(见 awaitingCameraConfirm);已

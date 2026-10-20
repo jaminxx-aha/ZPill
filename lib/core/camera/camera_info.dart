@@ -1,4 +1,4 @@
-/// 已配对相机的领域模型(TODO.md §五 P2 持久化字段)。
+/// 已配对相机的领域模型(持久化字段)。
 library;
 
 final class CameraInfo {

@@ -1,4 +1,4 @@
-/// 本地评分仓库(TODO §三 文件操作:评级):`<dataDir>/ratings.json`,
+/// 本地评分仓库:`<dataDir>/ratings.json`,
 /// 「照片身份键 → 1-5 星」。相机侧评级(MTP Rating 属性)是 Zf 死路
 /// (MTP 专有,Zf 拒答),评分只存本地、不回写相机。
 ///

@@ -1,7 +1,7 @@
 /// PTP ObjectFormatCode(ISO 15740)节选 + 浏览层文件分类。
 ///
 /// 分类决定「类型过滤(JPEG/NEF/TIFF/MP4/MOV)」与「保存到相册时的
-/// MIME / 目录映射」(TODO.md §三/§四)。
+/// MIME / 目录映射」。
 library;
 
 /// 浏览/传输层的文件分类(UI 与相册保存共用)。
@@ -93,7 +93,7 @@ ObjectKind kindForFilename(String filename) {
   }
 }
 
-/// 保存到系统相册时的 MIME 映射(TODO.md §四 P1)。
+/// 保存到系统相册时的 MIME 映射。
 /// NEF 无标准 MIME,用通用二进制流,相册目录按图片处理。
 String? mimeForFormatCode(int formatCode) {
   switch (formatCode) {

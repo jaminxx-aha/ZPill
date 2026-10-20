@@ -424,7 +424,7 @@ final kShootingParams = <ShootingParam>[
     },
   ),
   // 图像尺寸 0x5003:**STR 型**(OpenZCine stringFromPTPStringData),
-  // int 面板体系外 —— 移出目录(STR 支持留抓包项,TODO §二)。
+  // int 面板体系外 —— 移出目录(STR 支持留抓包项)。
   // 图像区域 0xD030(u8):同 RAW 压缩,pickValues + 显式 u8。
   ShootingParam(
     code: PtpDevicePropCode.captureAreaCrop,

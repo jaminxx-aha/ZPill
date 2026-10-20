@@ -1,4 +1,4 @@
-/// 对象仓库:GetObjectHandles → GetObjectInfo 组合(TODO.md §三 P1)。
+/// 对象仓库:GetObjectHandles → GetObjectInfo 组合。
 library;
 
 import 'dart:async';
@@ -81,8 +81,8 @@ abstract interface class ObjectRepository {
   /// 定集与 [toEntry] 一致(文件名/大小/格式码/父夹/时刻)。**文件名
   /// (0xDC07)或格式码(0xDC02)缺失 → null**:该对象交逐对象
   /// GetObjectInfo 路径补(批量快路宁缺毋滥,防无名/无类脏 entry 进相册)。
-  /// 不在 GetObjectHandles 结果里的句柄由调用方过滤(TODO 注意事项 2:
-  /// 句柄只能来自 GetObjectHandles 响应)。
+  /// 不在 GetObjectHandles 结果里的句柄由调用方过滤(句柄只能来自
+  /// GetObjectHandles 响应)。
   static ObjectEntry? toEntryFromProps(
       int handle, Iterable<PtpObjectProp> props) {
     String? name;
@@ -410,7 +410,7 @@ final class ObjectRepositoryImpl implements ObjectRepository {
   static const Duration pageGap = Duration(milliseconds: 150);
 
   /// 0x9805 批量属性合并入缓存:仅收 [handleSet] 内句柄(句柄只能来自
-  /// GetObjectHandles,TODO 注意事项 2)、无名/无格式条目弃单、已在册
+  /// GetObjectHandles)、无名/无格式条目弃单、已在册
   /// 跳过(断点续传),返回本次新增的 entry(页发现与进度计数用)。
   List<ObjectEntry> _absorbProps(
       List<PtpObjectProp> props, Set<int> handleSet) {

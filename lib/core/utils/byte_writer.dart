@@ -1,4 +1,4 @@
-/// 小端序字节写入器;约定同 [ByteReader](全部小端,见 TODO.md 注意事项 1)。
+/// 小端序字节写入器;约定同 [ByteReader](全部小端)。
 library;
 
 import 'dart:typed_data';
