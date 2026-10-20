@@ -657,9 +657,13 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
   /// 各文件夹,仅多相册时出现)+ 图片下载格式区(全部/仅 JPG/仅 RAW)。
   /// 相册切换沿用旧 chips 规矩清空选择(跨相册选择无意义);格式切换
   /// 不动选择 —— 网格显示不变,选中项的下载格式跟着走。
+  /// 行宽/行距与图库页同规(2026-10-20 三轮真机收口):行高 36 须
+  /// shrinkWrap(tapTargetSize=padded 会把 minimumSize 架空回 48),行
+  /// 横 padding 8 + reservedPadding 去横向预留,分区头左右随行对齐。
   Widget _filterMenuAnchor(BuildContext context, List<CameraAlbum> albums) {
     final scheme = Theme.of(context).colorScheme;
     return MenuAnchor(
+      reservedPadding: const EdgeInsets.symmetric(vertical: 8),
       style: MenuStyle(
         backgroundColor: WidgetStatePropertyAll(scheme.surfaceContainerLow),
         shape: WidgetStatePropertyAll(
@@ -672,6 +676,7 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
           _menuHeader(context, 'grid.albums'),
           for (final album in albums)
             MenuItemButton(
+              style: _menuRowStyle,
               trailingIcon: _filterHandle == album.folderHandle
                   ? Icon(Icons.check, size: 18, color: scheme.primary)
                   : null,
@@ -684,6 +689,7 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
         _menuHeader(context, 'grid.downloadFormat'),
         for (final f in _FormatFilter.values)
           MenuItemButton(
+            style: _menuRowStyle,
             leadingIcon: Icon(_formatIcon(f)),
             trailingIcon: _formatFilter == f
                 ? Icon(Icons.check, size: 18, color: scheme.primary)
@@ -701,9 +707,19 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
     );
   }
 
+  /// 弹层行统一收紧行高(48 → 36,shrinkWrap 必要性见
+  /// [_filterMenuAnchor] 注;与图库页 _menuRowStyle 同款同参)。
+  static const _menuRowStyle = ButtonStyle(
+    minimumSize: WidgetStatePropertyAll(Size(64, 36)),
+    padding: WidgetStatePropertyAll(
+      EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+    ),
+    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+  );
+
   Widget _menuHeader(BuildContext context, String key) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+      padding: const EdgeInsets.fromLTRB(8, 8, 8, 2),
       child: Text(
         context.t(key),
         style: TextStyle(
