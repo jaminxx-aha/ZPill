@@ -148,7 +148,7 @@ abstract final class NikonOperationCode {
   // 已给全名目,补录以它为准)。
 }
 
-/// GetObjectHandles 参数约定(TODO.md §一)。
+/// GetObjectHandles 参数约定。
 abstract final class GetObjectHandlesParams {
   /// storage 参数:0xFFFFFFFF 表示全部存储。
   static const int storageAll = 0xFFFFFFFF;
@@ -163,7 +163,7 @@ abstract final class GetObjectHandlesParams {
   static const int parentAll = 0xFFFFFFFF;
 }
 
-/// PTP 标准响应码(节选;非 OK 需上报 UI,见 TODO.md §一)。
+/// PTP 标准响应码(节选;非 OK 需上报 UI)。
 abstract final class PtpResponseCode {
   static const int ok = 0x2001;
   static const int generalError = 0x2002;

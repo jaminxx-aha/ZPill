@@ -1,4 +1,4 @@
-/// 传输引擎:入队去重、顺序下载、指数退避重试、相册导入编排(TODO.md §四)。
+/// 传输引擎:入队去重、顺序下载、指数退避重试、相册导入编排。
 ///
 /// 队列模型:并发 = 1(相机 PTP 会话本就一次一个事务,PtpSession 锁
 /// 兜底;这里再按 FIFO 泵任务,进度/速度/取消的编排都在本层)。
@@ -83,12 +83,12 @@ final class TransferEngineImpl implements TransferEngine {
   final ObjectDownloader downloader;
   final GallerySaver gallery;
 
-  /// 元数据提供器(TODO §四):JPG 下载落盘后按此注入 XMP
+  /// 元数据提供器:JPG 下载落盘后按此注入 XMP
   ///(版权/作者/评分/GPS);null 或返回 null = 不注入。注入失败
   /// 不影响传输结果(文件在注入前已完整)。
   final Future<XmpMetadata?> Function(ObjectEntry entry)? metadataFor;
 
-  /// 水印提供器(TODO §五 T4):JPG 下载落盘后、XMP 注入前合成水印
+  /// 水印提供器:JPG 下载落盘后、XMP 注入前合成水印
   ///(重编码会丢段,顺序不能反);null 或返回 null = 不合成。
   final Future<WatermarkOptions?> Function(ObjectEntry entry)? watermarkFor;
 
@@ -240,7 +240,7 @@ final class TransferEngineImpl implements TransferEngine {
     await _finishBatchIfDone(job.batch);
   }
 
-  /// 运动照片拆分(TODO §五 LivePhoto 导出):尼康运动照片是 JPG 尾部
+  /// 运动照片拆分(实况照片导出):尼康运动照片是 JPG 尾部
   /// 内嵌 MP4 的单文件(Google Motion Photo 字节格式,标记语义待真机
   /// 核对)。gallery 目的地才拆 —— 静帧照常走水印/XMP,视频段记到批次
   /// 收尾配对导出;app 目的地保留相机原始单文件不动。拆不出(普通

@@ -12,7 +12,7 @@ core/ptpusb     PTP/USB 链路:STI 容器编解码(P0;字节收发在 platform/u
 core/camera     连接:WiFi 启发式/连接状态机/Probe 心跳(P1–P3)
 core/browser    浏览:对象仓库/目录导航(P1–P2)
 core/transfer   传输:队列引擎/任务模型/速度估算(P1–P2)
-core/utils      小端字节读写器(TODO 注意事项 1 的防线)
+core/utils      小端字节读写器(字节序防线)
 core/log        统一日志门面 AppLog:分级分域 + 环形缓冲 + 脱敏(纯 Dart 零 IO,控制台镜像/落盘经 configure 注入)
 ```
 

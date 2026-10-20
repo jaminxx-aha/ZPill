@@ -1,4 +1,4 @@
-/// 命名快照仓库(TODO §三 菜单预设):`<dataDir>/config_snapshots.json`,
+/// 命名快照仓库:`<dataDir>/config_snapshots.json`,
 /// 单文件存「名字 → 快照」全量表,内存缓存 + 全量写回,与设置仓库同款;
 /// 损坏文件按空表重建(快照可重拍,无损恢复)。
 library;

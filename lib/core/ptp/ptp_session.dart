@@ -448,7 +448,7 @@ final class PtpSession {
   ///
   /// 响应字节先做 JPEG SOI 嗅探:非 FFD8 开头时在前 512B 内剥头找
   /// SOI(防御「头 + JPEG」形态);整段无 SOI = 非 JPEG 载荷(如 Zf
-  /// 对 NEF 回 320×212 压缩条带,TODO §同日续五定案)→ 视为不支持抛
+  /// 对 NEF 回 320×212 压缩条带,实测定案)→ 视为不支持抛
   /// [UnsupportedError],垃圾字节不进 .jpg 缓存。
   ///
   /// 会话级降级([largeThumbDegraded]):真发一次失败(错误应答/非

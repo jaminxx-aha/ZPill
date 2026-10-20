@@ -2,7 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:nikon_pill/core/camera/camera_discovery.dart';
 
 void main() {
-  group('相机 WiFi 启发式(TODO.md §二 P1)', () {
+  group('相机 WiFi 启发式', () {
     test('SSID 含 NIKON/CCCC 命中(大小写不敏感)', () {
       expect(isLikelyCameraSsid('NIKON-Z6_123456'), isTrue);
       expect(isLikelyCameraSsid('cccc901234'), isTrue);

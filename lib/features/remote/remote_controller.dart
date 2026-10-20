@@ -23,10 +23,10 @@
 ///
 /// 事件驱动:CaptureComplete(0x400D / 尼康 0xC102)提前收口拍照等待;
 /// ObjectAdded(0x4002 / 0xC101)→「已拍摄」提示 + 参数刷新(**不下载**,
-/// 纯遥控 —— 速传联动是 TODO T1 的独立功能);DevicePropChanged
+/// 纯遥控 —— 速传联动是独立的后续功能);DevicePropChanged
 /// (0x4006,机身拨盘/菜单改动)→ 定向刷新该参数(合并去抖)。真机
 /// 核对:若事件在链路上不达,尼康走 GetEventEx 0x941C 轮询(OpenZCine/
-/// libgphoto2 口径,另见 TODO)。
+/// libgphoto2 口径)。
 /// 0xC10C LiveViewStateChanged 不参与取景启停(语义未实证)。
 ///
 /// 拍摄参数目录驱动([kShootingParams]):PropDesc(0x1014)自描述

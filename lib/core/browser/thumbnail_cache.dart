@@ -323,8 +323,8 @@ class ThumbnailCache {
       }
     }
     // JPG(非 RAW 照片):0x90C4 高清档优先,双键分流见 [_fetchJpg];
-    // NEF/视频不试 0x90C4 —— 对 NEF 回 320×212 压缩条带非 JPEG(TODO
-    // §同日续五定案),单个失败还会置会话降级旗标连累 JPG 的高清。
+    // NEF/视频不试 0x90C4 —— 对 NEF 回 320×212 压缩条带非 JPEG(实测
+    // 定案),单个失败还会置会话降级旗标连累 JPG 的高清。
     if (_isJpgObject(entry)) {
       try {
         return await _fetchJpg(entry, source, key, dir);

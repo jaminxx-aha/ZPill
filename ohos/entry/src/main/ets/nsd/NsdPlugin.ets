@@ -17,7 +17,7 @@
  *   相机侧 guid/vid/pid/ver/apps 全 ASCII,逐字节透传解码;
  * - serviceType 按本 d.ts 惯例**不带尾点**('_ptp._tcp');iOS
  *   NetServiceBrowser 与 Android NsdManager 均带尾点,三端各按平台
- *   文档,待真机核对(记录见 TODO.md 实现注意事项)。
+ *   文档,待真机核对。
  *
  * 契约要点(与 iOS NsdPlugin.swift 同构):
  * - 纯 DNS-SD 解析,绝不向相机发 TCP 连接(单连接服务器,探测性

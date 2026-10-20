@@ -1,7 +1,7 @@
 /// PTP/USB 容器编解码(USB Still Image 设备类 / ISO 15740 附录 D)。
 ///
 /// 与 PTP-IP(TCP 封装)平行:命令/数据/响应容器走 bulk 端点,
-/// 事件容器走 interrupt IN 端点。全字段小端(TODO.md 实现注意事项 1)。
+/// 事件容器走 interrupt IN 端点。全字段小端。
 ///
 /// 布局(bulk 容器,共 12 字节头):
 /// ```

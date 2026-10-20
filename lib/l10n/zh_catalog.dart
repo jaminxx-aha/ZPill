@@ -548,7 +548,7 @@ const Map<String, String> zhCatalog = {
   'remote.errPropWriteLatch': '—— 请先启用「APP 接管」',
   'remote.errPropBounce':
       '{label}已发送,但相机回弹为机身值({v})—— 该参数由机身拨盘拥有,'
-      '视频曝光写路径待解(详见 TODO 二·b)',
+      '视频曝光写路径待解',
   'remote.hintHardwareError': '相机硬件错误',
   'remote.hintOutOfFocus': '未合焦',
   'remote.hintModeSwitchFailed': '相机模式切换失败(释放/对焦/清洁中会被拒,稍后再试)',

@@ -1,4 +1,4 @@
-/// 3D LUT(.cube 格式)解析与应用(TODO §五 T4:图库编辑 + 预览风格)。
+/// 3D LUT(.cube 格式)解析与应用(图库编辑 + 预览风格)。
 ///
 /// Adobe SpeedGrade .cube 公开规范:
 /// - `TITLE "..."` 可选标题

@@ -1,4 +1,4 @@
-/// 位置采样接口(TODO §四 GPS 元数据):`nikonpill/location` 通道契约。
+/// 位置采样接口(GPS 元数据):`nikonpill/location` 通道契约。
 ///
 /// MethodChannel `nikonpill/location` 的 `current` 方法做一次定位,返回
 /// `[latitude, longitude]`(double,十进制度,WGS84;正 = 北纬/东经),
