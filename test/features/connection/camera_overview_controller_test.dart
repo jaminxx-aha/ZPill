@@ -10,6 +10,7 @@ import 'package:nikon_pill/core/ptp/ptp_session.dart';
 import 'package:nikon_pill/core/ptp/ptp_transport.dart';
 import 'package:nikon_pill/core/utils/byte_writer.dart';
 import 'package:nikon_pill/features/connection/camera_overview_controller.dart';
+import 'package:nikon_pill/l10n/message.dart';
 
 /// 按序回放的假传输层(session 方法测试模板,见 ptp_session_test)。
 final class FakePtpTransport implements PtpTransport {
@@ -88,7 +89,7 @@ final class _FakeConnection implements CameraConnection {
   CameraLinkState state = CameraLinkState.disconnected;
 
   @override
-  String? get error => null;
+  L10nMessage? get error => null;
 
   @override
   String? get deviceName => null;

@@ -84,6 +84,28 @@ const Map<String, String> enCatalog = {
   'ble.binding': 'Binding…',
   'ble.bindClassic': 'Bind Classic Bluetooth',
   'ble.wakeWifi': 'Wake Wi-Fi',
+  'ble.closeWifi': 'Close Wi-Fi',
+  'ble.stage2HandshakeTimeout': 'Stage-2 handshake timed out (pairing window elapsed)',
+  'ble.stage2DirectTimeout': 'Stage-2 direct connect timed out (camera not responding)',
+  'ble.stage2ConnectTimeout': 'Stage-2 connect timed out (camera not responding)',
+  'ble.stage2ConnectFail': 'Stage-2 connect failed: {e}',
+  'ble.stage2ScanNoBroadcast': 'Stage-2 scan found no camera broadcast',
+  'ble.notConnectedReadCred': 'BLE not connected — cannot read AP credentials',
+  'ble.noCredBroadcast': 'Camera sent no AP credentials (0x2004 empty)',
+  'ble.credLengthAbnormal': 'AP credentials length abnormal ({n}B, expected 97B)',
+  'ble.readCredFail': 'Failed to read AP credentials: {e}',
+  'ble.notConnectedOp': 'BLE not connected — cannot {label}',
+  'ble.opFail': '{label} failed: {e}',
+  'ble.firstWriteFail': 'First write failed: {e}',
+  'ble.geoWriteFail': 'GEO write failed: {e}',
+  'ble.timeWriteFail': 'TIME write failed: {e}',
+  'ble.handshakeStartFail': 'Handshake start failed: {e}',
+  'ble.handshakeDisconnected': 'Disconnected during handshake',
+  'ble.pairFrameLength': 'PAIR frame length abnormal ({n})',
+  'ble.stage2NoSalt': 'No salt match in stage2 — handshake failed',
+  'ble.stage3WriteFail': 'Stage-3 write failed: {e}',
+  'ble.nameWriteFail': 'Controller name write failed: {e}',
+  'ble.locationStreamFail': 'Location stream failed: {e}',
   'ble.disconnect': 'Disconnect',
   'ble.unnamed': '(unnamed)',
   'ble.waitingOtherPhone':
@@ -354,6 +376,13 @@ const Map<String, String> enCatalog = {
   'live.autoStop': 'Recording will stop automatically',
   'live.waitingFirstFrame': 'Viewfinder On… (waiting for first frame)',
   'live.failed': 'Viewfinder failed ({e})',
+  'live.startFail': 'Failed to start viewfinder: {e}',
+  'live.startFailLadder': 'Failed to start viewfinder: {e} [ladder: {l}]',
+  'live.interrupted': 'Viewfinder interrupted: {e}',
+  'live.interruptedLadder': 'Viewfinder interrupted: {e} [ladder: {l}]',
+  'live.freezeRestartFail': 'Viewfinder frozen, restart failed: {e}',
+  'live.freezeRestartFailLadder':
+      'Viewfinder frozen, restart failed: {e} [ladder: {l}]',
   'live.offHint': 'Viewfinder off\nTap the image to set the focus point',
   'common.unknownError': 'Unknown error',
   'live.retry': 'Retry Viewfinder',
@@ -480,6 +509,12 @@ const Map<String, String> enCatalog = {
       'Wide C1 is a horizontal-strip area: touch-dragging the frame moves only vertically',
   'param.wideC2Hint':
       'Wide C2 is a vertical-strip area: touch-dragging the frame moves only horizontally',
+  'param.currentMode': 'the current mode',
+  'param.picCtrlCreative': 'Creative {n}',
+  'param.picCtrlCustom': 'Custom {n}',
+  'param.picCtrlCloud': 'Cloud preset {n}',
+  'param.recRun': 'Rec Run',
+  'param.freeRun': 'Free Run',
   'remote.errRecordNeedsViewfinder': 'Start the viewfinder before recording',
   'remote.errViewfinderOff': 'Start the viewfinder first',
   'remote.errLeverVideo':
@@ -545,8 +580,97 @@ const Map<String, String> enCatalog = {
   'remote.errReadOnly': 'The camera reports this property as read-only',
   'remote.errNotEncodable':
       'This value cannot be converted to the camera write code (0x100); not sent',
+  // i18n 收口:原内联中文键化(键+{参},渲染端 arg-t 落地),zh 对应块见词表。
+  'remote.ivNotConnected':
+      'Camera not connected; cannot start interval shooting',
+  'remote.ivBulbOpen':
+      'Shutter is open in Bulb/Time exposure; close it before starting interval shooting',
+  'remote.ivRecordingBusy':
+      'Cannot start interval shooting while recording; stop recording first',
+  'remote.ivSdramBusy':
+      'Cannot start interval shooting while SDRAM direct capture is on; turn it off in Assist first',
+  'remote.ivSelfTimerBusy':
+      'Self-timer countdown in progress; try starting interval shooting later',
+  'remote.ivCapturingBusy':
+      'A shot is in progress; try starting interval shooting later',
+  'remote.ivSkipBulb': 'Shutter is in Bulb/Time; this shot is skipped',
+  'remote.ivDoneAll': 'Interval shooting complete: all {n} shots succeeded',
+  'remote.ivDone':
+      'Interval shooting complete: {n} succeeded, {f} failed',
+  'remote.ivAutoStop':
+      'Interval shooting stopped automatically: {f} consecutive failures ({n} taken) — check the camera '
+      '(storage card / dial position / on-camera message)',
+  'remote.ivStoppedAll': 'Interval shooting stopped: {n} shots in total',
+  'remote.ivStopped': 'Interval shooting stopped: {n} succeeded, {f} failed',
+  'remote.ivShutterYield':
+      'Interval shooting is running and the shutter is disabled; stop interval shooting to shoot manually',
+  'remote.ivRecYield':
+      'Cannot start recording while interval shooting is running; stop interval shooting first',
+  'remote.autoIsoFailDial':
+      'Auto ISO setting failed: this switch is body-controlled; enable APP Takeover first and retry ({e})',
+  'remote.autoIsoFail': 'Auto ISO setting failed: {e}',
+  'remote.takeoverFail': 'Failed to enable APP Takeover: {e}',
+  'remote.sdramBulbFallback':
+      'SDRAM direct capture does not support Bulb long exposure; switched to regular capture to card',
+  'remote.sdramRejected':
+      'SDRAM direct capture rejected [{c}]; switched to regular capture to card{tail}',
+  'remote.sdramNoRetry': '; will not retry this connection',
+  'remote.errShutterFail': 'Shutter release failed: {e}{seq}',
+  'remote.errShutterFailCode': 'Shutter release failed: {h} [0x{c}]{seq}',
+  'remote.warnSeqRecover':
+      ' — camera reported a sequence error; pressing the shutter again usually recovers',
+  'remote.errRecFail': 'Recording control failed: {e}',
+  'remote.errAfAreaFail': 'Failed to move the focus area: {e}',
+  'remote.errAfFail': 'Autofocus failed: {e}',
+  'remote.errTrackingFail': 'Failed to start subject tracking: {e}',
+  'remote.errAeLockFail': 'Failed to toggle AE lock: {e}',
+  'remote.errMonitorOffFail': 'Failed to toggle monitor-off: {e}',
+  'remote.errModeSwitchFail': 'Failed to switch shooting mode: {e}',
+  'remote.errSaveFail':
+      'Shot completed, but saving the returned object failed: {e}',
+  'remote.errAutoShutter':
+      'In {m}, shutter speed is auto-controlled by the camera and cannot be set manually — adjust EV or switch to S/M',
+  'remote.errAutoAperture':
+      'In {m}, aperture is auto-controlled by the camera and cannot be set manually — adjust EV or switch to A/M',
+  'remote.errAutoIso':
+      'In {m}, ISO is auto-controlled by the camera and cannot be set manually',
+  'remote.errPropWrite': 'Parameter write failed: {e}{tail}',
+  'remote.errPropWriteDial': 'Parameter write failed: {e} ({tail})',
+  'remote.errPropWriteDialTakeover':
+      'Rejected even with APP Takeover active — this parameter is auto-controlled by the camera in this mode; check the mode dial',
+  'remote.errPropWriteDialLatch':
+      'This parameter is owned by a physical body dial; enable APP Takeover first',
+  'remote.errPropWriteLatch': ' — enable APP Takeover first',
+  'remote.errPropBounce':
+      '{label} was sent, but the camera bounced back to its own value ({v}) — this parameter is owned by '
+      'a body dial; the video-exposure write path remains unsolved',
+  'remote.hintHardwareError': 'Camera hardware error',
+  'remote.hintOutOfFocus': 'Out of focus',
+  'remote.hintModeSwitchFailed':
+      'Camera mode switch failed (refused while releasing/focusing/cleaning; try again shortly)',
+  'remote.hintApertureLocked':
+      'Aperture cannot be adjusted remotely in the current camera mode (controlled by the aperture ring/dial)',
+  'remote.hintInvalidStatus':
+      'The camera is not in a state that allows this operation',
+  'remote.hintNotLiveView': 'Live view is not on',
+  'remote.hintRecStillBusy':
+      'Still capture during recording is still in progress; wait a moment (official 0xA202)',
   'grid.sectionHeader': '{label} · {n} Photos',
   'grid.undated': 'Undated',
+  'date.today': 'Today',
+  'date.yesterday': 'Yesterday',
+  'date.day': '{m}/{d} ({w})',
+  'date.dayYear': '{y}/{m}/{d} ({w})',
+  'date.weekday1': 'Mon',
+  'date.weekday2': 'Tue',
+  'date.weekday3': 'Wed',
+  'date.weekday4': 'Thu',
+  'date.weekday5': 'Fri',
+  'date.weekday6': 'Sat',
+  'date.weekday7': 'Sun',
+  'browser.loadFail': 'Load failed: {e}',
+  'browser.syncPartial':
+      'Partial sync interrupted: {e} (content already shown stays browsable)',
   'grid.allPhotos': 'All Photos',
   'grid.selectedCount': 'Selected {n} Items',
   'grid.selectAll': 'Select All',
@@ -701,6 +825,25 @@ const Map<String, String> enCatalog = {
       'Waiting for the camera to come back over USB (plug the cable in again to resume automatically)',
   'conn.errStreamRestart':
       'The viewfinder stream failed to recover after repeated restarts',
+  'conn.errUsb': 'USB connection failed: {e}',
+  'conn.errInitRejected':
+      'The camera rejected the connection (InitFail reason=0x{r}): the camera allows one client at a time and may be held by a paired app such as SnapBridge; disconnect or quit SnapBridge on that device, then retry',
+  'conn.errUnreachable':
+      'Cannot reach {ip}: no camera responded at this address. In Same Wi-Fi mode, tap "Scan Cameras" to confirm the camera address (a manual IP must match it exactly); in AP Hotspot mode, join the camera hotspot in system Wi-Fi settings first; on the first connect, allow Local Network access in the system prompt, then retry',
+  'conn.errTimeout':
+      'Timed out connecting to {ip}: the camera is offline or the IP is wrong — use "Scan Cameras" to confirm',
+  'conn.errWireless': 'Wireless connection failed: {e}',
+  'conn.pairWaitBroken':
+      'Connection dropped while waiting for pairing confirmation: {e}',
+  'conn.pairGiveUp':
+      'Pairing info was sent, but the camera has not accepted the reconnect: press "OK" on the camera screen to finish pairing, then connect again (last error: {e})',
+  'conn.recoverStatus': 'Reconnecting ({e})',
+  'conn.recoverGiveUpUsb':
+      'The camera did not come back: replug the USB cable (and unlock the camera), then tap "Retry" (last error: {e})',
+  'conn.recoverGiveUpBusy':
+      'The camera stayed busy and auto-reconnect failed (last error: {e}): disconnect it in the app that holds it (such as SnapBridge), then tap "Retry"',
+  'conn.recoverGiveUpNormal':
+      'Auto-reconnect failed ({n} attempts, last error: {e}): make sure the camera is on and reachable, then tap "Retry"',
   'interval.title': 'Interval Shooting',
   'interval.setupTitle': 'Interval Shooting Setup',
   'interval.progress': 'Interval {a}/{b}',

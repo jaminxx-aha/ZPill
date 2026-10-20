@@ -9,6 +9,7 @@ import 'package:nikon_pill/core/browser/object_repository.dart';
 import 'package:nikon_pill/core/camera/camera_connection.dart';
 import 'package:nikon_pill/core/ptpip/object_format.dart';
 import 'package:nikon_pill/features/browser/browser_controller.dart';
+import 'package:nikon_pill/l10n/message.dart';
 
 /// 手动驱动的伪仓库:块事件由测试逐个发,loadAlbums 挂在 Completer 上
 /// 由测试择机完成(模拟渐进枚举的时序)。updates 用 sync 广播(与真实现
@@ -61,7 +62,7 @@ final class _FakeConnection implements CameraConnection {
   CameraLinkState get state => CameraLinkState.disconnected;
 
   @override
-  String? get error => null;
+  L10nMessage? get error => null;
 
   @override
   String? get deviceName => null;
@@ -154,7 +155,7 @@ void main() {
     await loading;
 
     expect(controller.albums, isEmpty);
-    expect(controller.error, contains('加载失败'));
+    expect(controller.error?.key, 'browser.loadFail');
     expect(controller.syncing, isFalse);
   });
 
@@ -171,7 +172,7 @@ void main() {
     await loading;
 
     expect(controller.albums, hasLength(1)); // 内容保留
-    expect(controller.error, contains('部分对象同步中断'));
+    expect(controller.error?.key, 'browser.syncPartial');
   });
 
   test('断连竞态:迟到的块被丢弃,断连引发的在途异常不上屏', () async {

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../../design/app_dimens.dart';
 import '../../../l10n/l10n.dart';
+import '../../../l10n/message.dart';
 
 /// 居中加载态:spinner + 说明文案。
 class LoadingState extends StatelessWidget {
@@ -82,7 +83,8 @@ class ErrorRetryPanel extends StatelessWidget {
     required this.onRetry,
   });
 
-  final String message;
+  /// 键+参记录,tm() 一次落地(含 {e} 运行期插值参)。
+  final L10nMessage message;
   final VoidCallback onRetry;
 
   @override
@@ -93,7 +95,7 @@ class ErrorRetryPanel extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(context.t(message), textAlign: TextAlign.center),
+            Text(context.tm(message), textAlign: TextAlign.center),
             const SizedBox(height: AppSpacing.lg),
             FilledButton(onPressed: onRetry, child: Text(context.t('common.retry'))),
           ],
@@ -113,7 +115,8 @@ class InlineHint extends StatelessWidget {
     this.onAction,
   });
 
-  final String message;
+  /// 键+参记录,tm() 一次落地(含 {e} 运行期插值参)。
+  final L10nMessage message;
   final IconData? icon;
 
   final String? actionLabel;
@@ -138,7 +141,7 @@ class InlineHint extends StatelessWidget {
             const SizedBox(width: AppSpacing.sm),
           ],
           Expanded(
-            child: Text(context.t(message),
+            child: Text(context.tm(message),
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(color: scheme.onErrorContainer)),
