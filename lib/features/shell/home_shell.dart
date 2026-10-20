@@ -5,7 +5,14 @@
 /// 相机 = 连接 + 相机信息总览(相册入口);图库 = 「下载到应用」的
 /// 文件(传输徽标入口);设置 = 全局配置。拍摄页不再是 tab(2026-10-08
 /// 用户明示):由相机页已连接视图「进入拍摄」全屏 push,返回即回相机
-/// 页 —— 底栏/侧栏全程不占监看画面。IndexedStack 常驻保三 tab 状态。
+/// 页 —— 底栏/侧栏全程不占监看画面。
+///
+/// 内容槽 PageView(2026-10-20 用户明示):跟手横滑切台,相机→图库→
+/// 设置线性往复、尽头不回绕;底栏/侧栏点选仍即时 jump(保留即切手感,
+/// 不播跨页滑行动画)。每页包 [_KeepAlivePage] 常驻 —— 滑出 cacheExtent
+/// 外 State 也不丢,等价旧 IndexedStack 常驻语义。三页主体均为竖向
+/// ListView,横向 PageView 都在全屏 push 的查看器路由里,不与滑台
+/// 抢手势;滑台只挂起帧轮询,取景生命周期跟连接走(见下)。
 ///
 /// 连接转正沿(有线/无线同一状态机)的「连接即取景」由 RemoteController
 /// 在自己的 states 订阅串链驱动([RemoteController._onConnectedChain],
@@ -50,6 +57,8 @@ class HomeShell extends StatefulWidget {
 class _HomeShellState extends State<HomeShell> {
   int _index = 0;
 
+  final PageController _pages = PageController();
+
   RemoteController? _remote;
 
   @override
@@ -66,11 +75,25 @@ class _HomeShellState extends State<HomeShell> {
   }
 
   @override
+  void dispose() {
+    _pages.dispose();
+    super.dispose();
+  }
+
+  /// 底栏/侧栏点选:高亮即时,内容 jump 即切(IndexedStack 时代手感;
+  /// 跟手滑行动画只属于真横滑)。jump 触发的 onPageChanged 再 setState
+  /// 同值,幂等。
+  void _select(int i) {
+    setState(() => _index = i);
+    _pages.jumpToPage(i);
+  }
+
+  @override
   Widget build(BuildContext context) {
     final wide = MediaQuery.orientationOf(context) == Orientation.landscape;
     return Scaffold(
       // 内容槽挂 key:横竖切换时 Row 头部增删 rail,无 key 会按
-      // 位置+类型失配从断点起整树重建 —— IndexedStack 里的页面 State
+      // 位置+类型失配从断点起整树重建 —— PageView 里的页面 State
       // (拍摄页网格开关/面板状态等)全丢;挂 key 走 key 配对保状态。
       body: Row(
         children: [
@@ -78,7 +101,7 @@ class _HomeShellState extends State<HomeShell> {
             SafeArea(
               child: NavigationRail(
                 selectedIndex: _index,
-                onDestinationSelected: (i) => setState(() => _index = i),
+                onDestinationSelected: _select,
                 labelType: NavigationRailLabelType.all,
                 destinations: [
                   for (final t in _tabs)
@@ -92,18 +115,24 @@ class _HomeShellState extends State<HomeShell> {
             ),
           Expanded(
             key: const ValueKey('shell-content'),
-            child: IndexedStack(
-              index: _index,
+            child: PageView(
+              controller: _pages,
+              onPageChanged: (i) => setState(() => _index = i),
+              // 相邻页预建(图库随相机页常建,等价旧 IndexedStack 全常
+              // 驻的起步状态);设置页首访惰性建,建成后 keepalive 钉住。
+              allowImplicitScrolling: true,
               children: [
                 // 注入转发:测试经 HomeShell 注入的控制器要一路传到
                 // 相机页(「进入拍摄」push 的拍摄页用它),生产为 null
                 // 走 AppServices 单例。
-                ConnectionPage(
-                  controller: widget.connectionController,
-                  remoteController: widget.remoteController,
+                _KeepAlivePage(
+                  child: ConnectionPage(
+                    controller: widget.connectionController,
+                    remoteController: widget.remoteController,
+                  ),
                 ),
-                const LocalLibraryPage(),
-                const SettingsPage(),
+                const _KeepAlivePage(child: LocalLibraryPage()),
+                const _KeepAlivePage(child: SettingsPage()),
               ],
             ),
           ),
@@ -113,7 +142,7 @@ class _HomeShellState extends State<HomeShell> {
           ? null
           : NavigationBar(
               selectedIndex: _index,
-              onDestinationSelected: (i) => setState(() => _index = i),
+              onDestinationSelected: _select,
               destinations: [
                 for (final t in _tabs)
                   NavigationDestination(
@@ -124,5 +153,30 @@ class _HomeShellState extends State<HomeShell> {
               ],
             ),
     );
+  }
+}
+
+/// tab 页常驻包装:keepalive 把页钉住,滑出 PageView cacheExtent(相邻
+/// 一页)外也不卸载 —— 页面 State(设置开关滚动位、相机页连接向导状态
+/// 等)跨横滑往返保留,等价旧 IndexedStack 常驻。旧外壳横竖切换的整树
+/// 重建防护仍在内容槽 key(shell-content)上,与本包装各管一头。
+class _KeepAlivePage extends StatefulWidget {
+  const _KeepAlivePage({required this.child});
+
+  final Widget child;
+
+  @override
+  State<_KeepAlivePage> createState() => _KeepAlivePageState();
+}
+
+class _KeepAlivePageState extends State<_KeepAlivePage>
+    with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true;
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context); // keepalive 声明沿(AutomaticKeepAlive 必经)
+    return widget.child;
   }
 }
