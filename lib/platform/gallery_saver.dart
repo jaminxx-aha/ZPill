@@ -1,4 +1,4 @@
-/// 系统相册保存 + 应用文件目录(TODO.md §四)。
+/// 系统相册保存 + 应用文件目录。
 ///
 /// 目录分工:
 /// - tempDir/thumbsDir/previewsDir 在 cacheDir(系统可随时回收,不承诺持久)
@@ -49,7 +49,7 @@ final class GalleryImportRequest {
   final ObjectKind kind;
   final String filename;
 
-  /// 实况照片配对(TODO §五 LivePhoto 导出):非 null 时本请求按
+  /// 实况照片配对(实况照片导出用):非 null 时本请求按
   /// 「静帧 + 视频段」导入为一张实况(iOS 配对资源 / ohos 动态照片 /
   /// Android 原生拼接回运动照片单文件)。native 不识别该字段时按普通
   /// 图片落库。视频来源二选一:相机同基名 MOV 成员,或运动照片 JPG

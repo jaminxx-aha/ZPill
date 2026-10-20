@@ -1,4 +1,4 @@
-/// XMP 元数据注入(TODO §四 GPS/IPTC/版权元数据附加):把 dc:creator /
+/// XMP 元数据注入(GPS/IPTC/版权元数据附加):把 dc:creator /
 /// dc:rights / xmp:Rating / exif GPS 写进 JPEG 的 APP1 XMP 段
 ///(字节拼接,不重编码 —— 画质零损耗)。
 ///

@@ -1,4 +1,4 @@
-/// 运动照片(Motion Photo)拆分(TODO §五 LivePhoto 导出)。
+/// 运动照片(Motion Photo)拆分(实况照片导出用)。
 ///
 /// 尼康「运动照片」是单个 .JPG:静帧 JPEG 之后直接拼接 MP4 视频段,
 /// XMP 标记偏移 —— 与 Google Motion Photo 字节格式同源。iOS/ohos 的

@@ -48,7 +48,7 @@ void main() {
       expect(BulbClosePolicy.isBusyCode(NikonResponseCode.silentReleaseBusy),
           isTrue);
       // 0xA202 MovieFrame_Release_Busy:录像中静照族,收门链不对录像态
-      // 重试(TODO「二·b」:与拨杆拒不同族)。
+      // 重试(官方 MTP 规格书定名:与拨杆拒不同族)。
       expect(
           BulbClosePolicy.isBusyCode(NikonResponseCode.movieFrameReleaseBusy),
           isFalse);

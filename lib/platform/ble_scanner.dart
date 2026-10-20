@@ -112,7 +112,7 @@ abstract interface class BleHost {
   /// 蓝牙已开(poweredOn)。首次调用会触发系统蓝牙权限弹窗。
   Future<bool> isAvailable();
 
-  /// 配对扫描(相机进配对菜单后调;默认 10s,TODO.md §二)。
+  /// 配对扫描(相机进配对菜单后调;默认 10s)。
   Future<List<BleDevice>> scan({Duration timeout});
 
   /// 停止扫描并返回已收集设备。

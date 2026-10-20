@@ -6,10 +6,10 @@
 /// **不采纳**:① 0x1010 TerminateOpenCapture 降级步 —— 它服务于其
 /// 0x100F OpenCapture 开拍路径,本仓开拍走 0x9207 InitiateCaptureRecInMedia,
 /// 官方 §2.8.4 B 门序列的配套收门即 0x920C,无该路径;② 「改快门值
-/// 即结束曝光」作为收门机制 —— 与 TODO 已证口径(抬起 0x920C 结束)
+/// 即结束曝光」作为收门机制 —— 与真机已证口径(抬起 0x920C 结束)
 /// 冲突,恢复快门值在本仓只作收门链的还原步,不承担终止语义。
 ///
-/// 忙等码集 =「稍等即可恢复」(官方定名见 TODO「二·b」):0x2019
+/// 忙等码集 =「稍等即可恢复」(官方 MTP 规格书定名):0x2019
 /// DeviceBusy(标准)/ 0xA200 Bulb_Release_Busy / 0xA201
 /// Silent_Release_Busy。0xA202 MovieFrame_Release_Busy(录像中静照)
 /// 不列 —— 不同族,收门链不对录像态重试。非忙码不重试:0x920C 对已

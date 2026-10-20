@@ -1,5 +1,4 @@
-/// 相机存储槽信息:GetStorageInfo(0x1005)数据集解析(TODO §三
-/// 存储空间管理:双卡槽余量展示)。
+/// 相机存储槽信息:GetStorageInfo(0x1005)数据集解析(双卡槽余量展示)。
 library;
 
 import 'dart:typed_data';

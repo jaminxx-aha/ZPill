@@ -1070,7 +1070,7 @@ void main() {
     final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
     // 合法树(0x10-0x13)全字段 + 幽灵 0x99 全字段;0x99 不在
     // GetObjectHandles 结果里 —— 即使批量应答带全字段也不入缓存
-    //(句柄只能来自 GetObjectHandles,TODO 注意事项 2)。
+    //(句柄只能来自 GetObjectHandles)。
     final full = PropListDataset()
       ..str(0x13, PtpObjectPropCode.objectFilename, 'DSC_0002.JPG')
       ..u16(0x13, PtpObjectPropCode.objectFormat, 0x3801)

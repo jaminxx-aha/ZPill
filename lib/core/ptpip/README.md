@@ -40,7 +40,7 @@ probe(13 步,2026-10-04 Zf 真机)→ codec / channels / transport 全落,
 握手全流程、tid 方言、dp 私表清单、四条毒化不变量、事件转发。
 数据出相布局(StartData+EndData)与 0x201E 自愈表现待下一轮真机核对。
 
-## 铁律(来自 TODO.md 实现注意事项)
+## 铁律
 
 1. 所有多字节字段小端;读写只经 `core/utils/byte_reader.dart` / `byte_writer.dart`
 2. object handle 只能来自 GetObjectHandles 响应,禁止由文件路径推导
@@ -52,4 +52,4 @@ probe(13 步,2026-10-04 Zf 真机)→ codec / channels / transport 全落,
 
 `tools/ptpip_probe`(Python CLI)对真机跑通握手 → 核对字节布局 →
 `codec.dart` + `channels.dart` + `transport.dart`(均已落,单测见上)→
-装配 `PtpLinkRouter` + 连接层双路径(见计划 vast-rolling-swing)。
+装配 `PtpLinkRouter` + 连接层双路径(均已落)。

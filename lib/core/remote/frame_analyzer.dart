@@ -1,4 +1,4 @@
-/// 帧分析调度(TODO §二 监看辅助):挂在 LiveViewEngine 的帧通知上,
+/// 帧分析调度(监看辅助):挂在 LiveViewEngine 的帧通知上,
 /// 每 N 帧算一次 [FrameAnalysis](直方图/斑马纹),禁用时零开销。
 library;
 

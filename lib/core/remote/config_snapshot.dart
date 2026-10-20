@@ -1,4 +1,4 @@
-/// 拍摄配置快照(TODO §三「菜单预设:机身设置快照/恢复」)。
+/// 拍摄配置快照(机身设置快照/恢复)。
 ///
 /// 快照双轨:①逐属性 —— 遍历 DeviceInfo.devicePropsSupported,逐属性
 /// GetDevicePropDesc(类型/当前值/可写性一次拿全);②设定文件 blob ——
