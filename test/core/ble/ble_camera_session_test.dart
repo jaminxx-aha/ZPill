@@ -8,6 +8,7 @@ import 'package:nikon_pill/core/ble/gatt_uuids.dart';
 import 'package:nikon_pill/core/ble/geo_payload.dart';
 import 'package:nikon_pill/core/ble/pairing_engine.dart';
 import 'package:nikon_pill/core/ble/pairing_message.dart';
+import 'package:nikon_pill/l10n/message.dart';
 import 'package:nikon_pill/core/log/app_log.dart';
 import 'package:nikon_pill/platform/ble_scanner.dart';
 
@@ -225,20 +226,20 @@ void main() {
   });
 
   test('lastError 变化沿 errors 流实时发(同值不发,清空发 null)', () async {
-    final seen = <String?>[];
+    final seen = <L10nMessage?>[];
     final sub = session.errors.listen(seen.add);
-    session.lastError = '旧错';
-    session.lastError = '旧错'; // 同值去重,不重复上屏
-    session.lastError = '新错';
+    session.lastError = (key: '旧错', args: null);
+    session.lastError = (key: '旧错', args: null); // 同值去重,不重复上屏
+    session.lastError = (key: '新错', args: null);
     await pump();
     session.lastError = null;
     await pump();
     await sub.cancel();
-    expect(seen, ['旧错', '新错', null]);
+    expect(seen.map((m) => m?.key), ['旧错', '新错', null]);
   });
 
   test('ready 沿清陈旧错误(重连几轮失败后终成,错误行不残留)', () async {
-    session.lastError = '第 1 轮无命中';
+    session.lastError = (key: '第 1 轮无命中', args: null);
     final done = session.pair(device);
     host.emit(const BleConnected(
         uuid: 'P1', characteristics: {}, writeWithoutResponseMtu: 20));
@@ -618,7 +619,7 @@ void main() {
     host.writeError = Exception('GATT 错误(唤醒窗)');
     await session.tick(); // 首笔 TIME 失败
     expect(session.state, BleSessionState.ready);
-    expect(session.lastError, contains('TIME 写失败'));
+    expect(session.lastError?.key, 'ble.timeWriteFail');
     expect(host.countWrite(kNikonCharTime), 1); // 失败也记账
 
     host.writeError = null;
@@ -644,17 +645,17 @@ void main() {
 
     test('未 ready 拒读;空/短 blob 与解密未中如实带原因', () async {
       expect(await session.readWifiCredentials(), isNull);
-      expect(session.lastError, contains('BLE 未连接'));
+      expect(session.lastError?.key, 'ble.notConnectedReadCred');
 
       await runHandshake();
       host.reads[kNikonCharConfig] = Uint8List(0);
       expect(await session.readWifiCredentials(), isNull);
-      expect(session.lastError, contains('未下发'));
+      expect(session.lastError?.key, 'ble.noCredBroadcast');
 
       host.reads[kNikonCharConfig] =
           Uint8List.fromList(List<int>.generate(96, (i) => (i * 7 + 3) & 0xFF));
       expect(await session.readWifiCredentials(), isNull);
-      expect(session.lastError, contains('长度异常'));
+      expect(session.lastError?.key, 'ble.credLengthAbnormal');
 
       host.reads[kNikonCharConfig] =
           Uint8List.fromList(List<int>.generate(97, (i) => (i * 7 + 3) & 0xFF));
@@ -674,7 +675,7 @@ void main() {
       await runHandshake();
       host.readError = Exception('GATT 读失败');
       expect(await session.readWifiCredentials(), isNull);
-      expect(session.lastError, contains('读 AP 凭据失败'));
+      expect(session.lastError?.key, 'ble.readCredFail');
     });
   });
 }

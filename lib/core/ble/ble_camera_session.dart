@@ -28,6 +28,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/services.dart' show PlatformException;
 
+import '../../l10n/message.dart';
 import '../../platform/ble_scanner.dart';
 
 import '../log/app_log.dart';
@@ -115,20 +116,21 @@ final class BleCameraSession {
   BleSessionState get state => _state;
   final _stateCtrl = StreamController<BleSessionState>.broadcast();
   Stream<BleSessionState> get states => _stateCtrl.stream;
-  final _errorCtrl = StreamController<String?>.broadcast();
+  final _errorCtrl = StreamController<L10nMessage?>.broadcast();
 
   /// 错误沿(实时):lastError 变化(含 ready 沿清空)即发,UI 订阅
   /// 即时上屏,不等无关重建。随 [_stateCtrl] 一并关闭。
-  Stream<String?> get errors => _errorCtrl.stream;
+  Stream<L10nMessage?> get errors => _errorCtrl.stream;
 
   /// 配对/重连成功后填充;重连以其 deviceId 扫描匹配。
   BleIdentity? identity;
 
-  String? _lastError;
+  L10nMessage? _lastError;
 
   /// 最近一次失败原因;ready 沿自动清空(陈旧错误不上屏)。
-  String? get lastError => _lastError;
-  set lastError(String? v) {
+  /// 消息为键+参([L10nMessage]),渲染端统一 t()/tm() 落地。
+  L10nMessage? get lastError => _lastError;
+  set lastError(L10nMessage? v) {
     if (v == _lastError) return;
     _lastError = v;
     if (!_errorCtrl.isClosed) _errorCtrl.add(v);
@@ -318,14 +320,16 @@ final class BleCameraSession {
       await done.future.timeout(const Duration(seconds: 60));
       return true;
     } on TimeoutException {
-      lastError = linked ? '二段握手超时(弹窗确认窗满)' : '二段直连超时(相机不应答)';
+      lastError = linked
+          ? (key: 'ble.stage2HandshakeTimeout', args: null)
+          : (key: 'ble.stage2DirectTimeout', args: null);
       _abandonHandshake(done);
       if (epoch != _cancelEpoch) return false; // 已取消:状态留在 idle。
       _setState(BleSessionState.reconnecting);
       _backoffStep = min(_backoffStep + 1, _backoffSeconds.length - 1);
       return false;
     } on Exception catch (e) {
-      lastError = '第二段连接失败:$e';
+      lastError = (key: 'ble.stage2ConnectFail', args: {'e': e.toString()});
       if (epoch != _cancelEpoch) return false; // 已取消:状态留在 idle。
       _setState(BleSessionState.reconnecting);
       _backoffStep = min(_backoffStep + 1, _backoffSeconds.length - 1);
@@ -349,7 +353,7 @@ final class BleCameraSession {
     final epoch = _cancelEpoch; // 十三轮:取消沿迟到收口不推态。
     final devices = await _host.scan(timeout: scanTimeout);
     if (devices.isEmpty) {
-      lastError = '二段扫描无相机广播';
+      lastError = (key: 'ble.stage2ScanNoBroadcast', args: null);
       _backoffStep = min(_backoffStep + 1, _backoffSeconds.length - 1);
       return false;
     }
@@ -368,14 +372,16 @@ final class BleCameraSession {
       await done.future.timeout(const Duration(seconds: 45));
       return true;
     } on TimeoutException {
-      lastError = linked ? '二段握手超时(弹窗确认窗满)' : '二段连接超时(相机不应答)';
+      lastError = linked
+          ? (key: 'ble.stage2HandshakeTimeout', args: null)
+          : (key: 'ble.stage2ConnectTimeout', args: null);
       _abandonHandshake(done);
       if (epoch != _cancelEpoch) return false; // 已取消:状态留在 idle。
       _setState(BleSessionState.reconnecting);
       _backoffStep = min(_backoffStep + 1, _backoffSeconds.length - 1);
       return false;
     } on Exception catch (e) {
-      lastError = '二段连接失败:$e';
+      lastError = (key: 'ble.stage2ConnectFail', args: {'e': e.toString()});
       if (epoch != _cancelEpoch) return false; // 已取消:状态留在 idle。
       _setState(BleSessionState.reconnecting);
       _backoffStep = min(_backoffStep + 1, _backoffSeconds.length - 1);
@@ -409,14 +415,14 @@ final class BleCameraSession {
   Future<bool> wakeCameraWifi() => _writeEstablishment(0x01, 'ble.wakeWifi');
 
   /// 关闭相机 WiFi(0x2005 写 0x80,同款反义 op)。
-  Future<bool> closeCameraWifi() => _writeEstablishment(0x80, '关闭 WiFi');
+  Future<bool> closeCameraWifi() => _writeEstablishment(0x80, 'ble.closeWifi');
 
   /// 读 0x2004 相机 AP 凭据并解密(BLE→WiFi 二期)。特征面是会话激活
   /// 的(会话外读恒为零),须 ready 态;失败返回 null 原因落 lastError,
   /// blob 落 trace 供候选密钥增补。
   Future<WifiCredentials?> readWifiCredentials() async {
     if (_state != BleSessionState.ready) {
-      lastError = 'BLE 未连接,无法读 AP 凭据';
+      lastError = (key: 'ble.notConnectedReadCred', args: null);
       return null;
     }
     try {
@@ -430,11 +436,14 @@ final class BleCameraSession {
                 '${AppLog.hex(blob, sensitive: true)}');
       }
       if (blob == null || blob.isEmpty) {
-        lastError = '相机未下发 AP 凭据(0x2004 空)';
+        lastError = (key: 'ble.noCredBroadcast', args: null);
         return null;
       }
       if (blob.length < 97) {
-        lastError = 'AP 凭据长度异常(${blob.length}B,应为 97B)';
+        lastError = (
+          key: 'ble.credLengthAbnormal',
+          args: {'n': blob.length},
+        );
         return null;
       }
       final creds = decodeWifiCredentials(blob);
@@ -446,14 +455,14 @@ final class BleCameraSession {
       }
       return creds;
     } on Exception catch (e) {
-      lastError = '读 AP 凭据失败:$e';
+      lastError = (key: 'ble.readCredFail', args: {'e': e.toString()});
       return null;
     }
   }
 
   Future<bool> _writeEstablishment(int value, String label) async {
     if (_state != BleSessionState.ready) {
-      lastError = 'BLE 未连接,无法$label';
+      lastError = (key: 'ble.notConnectedOp', args: {'label': label});
       return false;
     }
     try {
@@ -463,10 +472,13 @@ final class BleCameraSession {
     } on PlatformException catch (e) {
       // 上屏文案只取 message(裸 PlatformException dump 是四段噪音,
       // 用户要看的是「连接已断开」不是构造参数)。
-      lastError = '$label 失败:${e.message ?? e.code}';
+      lastError = (
+        key: 'ble.opFail',
+        args: {'label': label, 'e': e.message ?? e.code},
+      );
       return false;
     } on Exception catch (e) {
-      lastError = '$label 失败:$e';
+      lastError = (key: 'ble.opFail', args: {'label': label, 'e': e.toString()});
       return false;
     }
   }
@@ -556,7 +568,7 @@ final class BleCameraSession {
     try {
       await _flushDueWrites(t);
     } on Exception catch (e) {
-      lastError = '首写失败:$e';
+      lastError = (key: 'ble.firstWriteFail', args: {'e': e.toString()});
     }
   }
 
@@ -568,7 +580,7 @@ final class BleCameraSession {
     } on Exception catch (e) {
       _pendingFix = fix;
       _gateWritesUntil = t.add(writeGate);
-      lastError = 'GEO 写失败:$e';
+      lastError = (key: 'ble.geoWriteFail', args: {'e': e.toString()});
     }
   }
 
@@ -577,7 +589,7 @@ final class BleCameraSession {
       await _host.write(kNikonCharTime, TimePayload.build(t));
       _lastTimeOkAt = t;
     } on Exception catch (e) {
-      lastError = 'TIME 写失败:$e';
+      lastError = (key: 'ble.timeWriteFail', args: {'e': e.toString()});
     }
   }
 
@@ -647,7 +659,7 @@ final class BleCameraSession {
               'nonce=${stage1.nonce.toRadixString(16)}'
               '${_resuming ? '(复用)' : '(全新)'}');
         } on Exception catch (e) {
-          lastError = '握手起始失败:$e';
+          lastError = (key: 'ble.handshakeStartFail', args: {'e': e.toString()});
           _failHandshake();
         }
       case BleNotified(:final uuid, :final data):
@@ -665,14 +677,15 @@ final class BleCameraSession {
         }
       case BleDisconnected():
         if (_state == BleSessionState.pairing) {
-          lastError = '握手期间断连';
+          lastError = (key: 'ble.handshakeDisconnected', args: null);
           _failHandshake();
         } else if (_state == BleSessionState.ready) {
           _backoffStep = 0;
           _setState(BleSessionState.reconnecting);
         }
       case BleError(:final code, :final message):
-        lastError = '$code:$message';
+        // 裸平台错误码非键,走直通(原样透出)。
+        lastError = (key: '$code:$message', args: null);
       case BleStateChanged() || BleDeviceFound():
         break;
     }
@@ -693,7 +706,7 @@ final class BleCameraSession {
       return;
     }
     if (data.length != PairingMessage.length) {
-      lastError = 'PAIR 帧长度异常(${data.length})';
+      lastError = (key: 'ble.pairFrameLength', args: {'n': data.length});
       _trace('PAIR 帧长度异常(${data.length})');
       return;
     }
@@ -702,7 +715,7 @@ final class BleCameraSession {
         'nonce=${msg.nonce.toRadixString(16)}');
     final stage3 = _engine.verifyStage2AndBuildStage3(stage1, msg);
     if (stage3 == null) {
-      lastError = 'stage2 无 salt 命中,握手失败';
+      lastError = (key: 'ble.stage2NoSalt', args: null);
       _trace('stage2 无 salt 命中(8 组 salt 全试未中)');
       _failHandshake();
       return;
@@ -713,7 +726,7 @@ final class BleCameraSession {
       _trace('stage3 → device=${stage3.device.toRadixString(16)} '
           'nonce=${stage3.nonce.toRadixString(16)}');
     } on Exception catch (e) {
-      lastError = 'stage3 写失败:$e';
+      lastError = (key: 'ble.stage3WriteFail', args: {'e': e.toString()});
       _failHandshake();
     }
   }
@@ -775,7 +788,7 @@ final class BleCameraSession {
       _nameWritten = true;
       _trace('0x2002 控制器名已写($controllerName)');
     } on Exception catch (e) {
-      lastError = '控制器名写失败:$e';
+      lastError = (key: 'ble.nameWriteFail', args: {'e': e.toString()});
       _failHandshake();
       return;
     }
@@ -816,7 +829,7 @@ final class BleCameraSession {
   void _failHandshake() {
     _stage1 = null;
     _stage3Sent = false;
-    _handshake?.completeError(BlePairingException(lastError ?? '握手失败'));
+    _handshake?.completeError(BlePairingException(lastError?.key ?? '握手失败'));
     _handshake = null;
     _setState(BleSessionState.idle);
   }

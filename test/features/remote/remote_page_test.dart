@@ -29,6 +29,7 @@ import 'package:nikon_pill/features/remote/remote_feed_area.dart';
 import 'package:nikon_pill/features/remote/remote_info_pill.dart';
 import 'package:nikon_pill/features/remote/remote_page.dart';
 import 'package:nikon_pill/features/remote/remote_settings_panel.dart';
+import 'package:nikon_pill/l10n/message.dart';
 import 'package:nikon_pill/platform/volume_keys.dart';
 
 /// 按序回放假传输(同 remote_controller_test;脚本耗尽抛 StateError,
@@ -83,7 +84,7 @@ final class _FakeConnection implements CameraConnection {
   CameraLinkState get state => CameraLinkState.disconnected;
 
   @override
-  String? get error => null;
+  L10nMessage? get error => null;
 
   @override
   String? get deviceName => null;
@@ -881,7 +882,8 @@ void main() {
     await tester.tap(find.byType(Image).first, warnIfMissed: false);
     await tester.pumpAndSettle();
     expect(controller.afBox!.focused, isFalse, reason: '0xA002 → 未合焦');
-    expect(controller.error, contains('未合焦'));
+    expect(controller.error?.key, 'remote.errAfFail');
+    expect(controller.error?.args?['e'], 'remote.hintOutOfFocus');
     // 对焦框回投:未合焦红框(画面内容层恒暗面 → LiveDesign.dark.bad)
     expect(
         find.byWidgetPredicate((w) {
@@ -1288,13 +1290,16 @@ void main() {
     await tester.tap(find.text('矢量'));
     await tester.pumpAndSettle();
     expect(find.byType(TrafficLightsView), findsOneWidget);
-    // 带标签经 t() 注入(画布绘制,find.text 不可见,查 widget 参数)
+    // 带标签 widget 内 t() 落地(画布绘制,find.text 不可见,查画笔)
+    final painter = tester
+        .widget<CustomPaint>(find.byWidgetPredicate((w) =>
+            w is CustomPaint &&
+            w.painter?.runtimeType.toString() == '_TrafficLightsPainter'))
+        .painter!;
     expect(
-        tester
-            .widget<TrafficLightsView>(find.byType(TrafficLightsView))
-            .bandLabels,
+        (painter as dynamic).bandLabels,
         const ['上部', '中部', '下部'],
-        reason: '带标签注入(可译:显示点包 t())');
+        reason: '带标签 t() 落地(画笔拿到译文)');
 
     // 红绿灯 → 关:分析器停(无其他监看开关在开),小盒退场
     await tester.tap(find.text('红绿灯'));
@@ -2462,7 +2467,7 @@ void main() {
             .paramProps[PtpDevicePropCode.stillFocusMeteringMode]?.value,
         0x801E,
         reason: '0x1016 写 + 回读落值');
-    expect(controller.notice, 'param.wideC1Hint',
+    expect(controller.notice?.key, 'param.wideC1Hint',
         reason: '控制器层吐键;渲染层经 t() 落 zh 词表');
     expect(find.text('宽C1 是横向条形区域,触屏移框仅上下生效'),
         findsOneWidget,

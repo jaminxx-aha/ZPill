@@ -169,7 +169,7 @@ void main() {
     delay.release(); // → 第 5 次失败
     await pumpEventQueue();
     expect(engine.status.value, LiveViewStatus.failed);
-    expect(engine.lastError, contains('取景中断'));
+    expect(engine.lastError?.key, startsWith('live.interrupted'));
     // 退避序列:200 → 400 → 800 → 1600(第 5 次失败不再等待)
     expect(delay.durations,
         [const Duration(milliseconds: 200), const Duration(milliseconds: 400),
@@ -249,7 +249,7 @@ void main() {
 
     await engine.start();
     expect(engine.status.value, LiveViewStatus.failed);
-    expect(engine.lastError, contains('取景开启失败'));
+    expect(engine.lastError?.key, startsWith('live.startFail'));
     expect(transport.requests.map((r) => r.opcode),
         [NikonOperationCode.startLiveView]);
   });
@@ -358,10 +358,11 @@ void main() {
 
     await engine.start();
     expect(engine.status.value, LiveViewStatus.failed);
-    expect(engine.lastError, contains('A004'),
+    expect(engine.lastError?.key, 'live.startFailLadder');
+    expect(engine.lastError?.args?['e'], contains('A004'),
         reason: '自愈段全败上抛原始 0xA004,不遮原语义');
-    // 连接梯随失败浮出(真机定案仪器:哪一级被拒一眼可读)。
-    expect(engine.lastError, contains('〔梯:'));
+    // 连接梯随失败浮出(真机定案仪器:哪一级被拒一眼可读,l 参承载)。
+    expect(engine.lastError?.args?['l'], isNotEmpty);
     expect(engine.session.connectLadder, [
       '9201:0xA004',
       '9202:拒',
@@ -440,7 +441,9 @@ void main() {
 
     await engine.start();
     expect(engine.status.value, LiveViewStatus.failed);
-    expect(engine.lastError, contains('取景开启失败'));
+    expect(engine.lastError?.key, 'live.startFailLadder');
+    expect(engine.lastError?.args?['e'], contains('A004'));
+    expect(engine.lastError?.args?['l'], isNotEmpty);
     expect(
         transport.requests
             .where((r) => r.opcode == NikonOperationCode.startLiveView)
@@ -521,8 +524,9 @@ void main() {
       delay.release();
       await starting;
       expect(engine.status.value, LiveViewStatus.failed);
-      expect(engine.lastError, contains('取景开启失败'));
-      expect(engine.lastError, contains('0xA004'), reason: '上抛原始语义');
+      expect(engine.lastError?.key, startsWith('live.startFail'));
+      expect(engine.lastError?.args?['e'], contains('A004'),
+          reason: '上抛原始语义');
       expect(
           transport.requests
               .where((r) => r.opcode == NikonOperationCode.startLiveView)
@@ -847,8 +851,8 @@ void main() {
       await pumpEventQueue();
 
       expect(engine.status.value, LiveViewStatus.failed);
-      expect(engine.lastError, contains('取景流冻结'));
-      expect(engine.lastError, contains('〔梯:'),
+      expect(engine.lastError?.key, 'live.freezeRestartFailLadder');
+      expect(engine.lastError?.args?['l'], isNotEmpty,
           reason: '连接梯浮出:真机定案仪器');
     });
 

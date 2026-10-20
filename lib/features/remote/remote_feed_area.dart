@@ -378,10 +378,13 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea> {
                       status.value == LiveViewStatus.running
                           ? context.t('live.waitingFirstFrame')
                           : status.value == LiveViewStatus.failed
-                              ? context.t('live.failed', {
+                              ? context.tm((key: 'live.failed', args: {
                                   'e': controller.engine.lastError ??
-                                      context.t('common.unknownError')
-                                })
+                                      const (
+                                        key: 'common.unknownError',
+                                        args: null
+                                      ),
+                                }))
                               : context.t('live.offHint'),
                       textAlign: TextAlign.center,
                       style: TextStyle(color: live.faint),
@@ -489,15 +492,12 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea> {
                           (widget.toggles.histogram ? 76 : 0)),
                   child: ValueListenableBuilder(
                     valueListenable: controller.analyzer.analysis,
-                    builder: (context, FrameAnalysis? analysis, _) => ScopeView(
+                    // 红绿灯带标签由 TrafficLightsView 自行 t() 落地。
+                    builder: (context, FrameAnalysis? analysis, _) =>
+                        ScopeView(
                       kind: widget.toggles.scope,
                       analysis: analysis,
                       nLogScale: widget.toggles.scopeNLog,
-                      bandLabels: [
-                        context.t('remote.top'),
-                        context.t('remote.mid'),
-                        context.t('remote.bot'),
-                      ],
                     ),
                   ),
                 ),

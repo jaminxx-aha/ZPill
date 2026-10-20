@@ -59,17 +59,19 @@ class ConnStatusHeader extends StatelessWidget {
 /// 固定错误位(2026-10-19 用户定稿):恒占 [height] 高的透明占位,
 /// [hint] 非空才落字 —— 错误出现/消失不推挤下方组件(图标/按钮/列表
 /// 位置纹丝不动)。[error] = 失败红字;否则次级色(重连动态文案/
-/// 配对等待指引)。hint 即 t() 键或运行期动态串([ConnHintText] 统一
-/// 包 t(),动态串两表未命中直通)。
+/// 配对等待指引)。hint 即 t() 键或运行期动态串,[args] 为键的占位
+/// 参数([ConnHintText] 统一包 t(key, args),动态串两表未命中直通)。
 class ConnErrorSlot extends StatelessWidget {
   const ConnErrorSlot({
     super.key,
     this.hint,
+    this.args,
     this.error = false,
     this.height = 44,
   });
 
   final String? hint;
+  final Map<String, Object>? args;
   final bool error;
   final double height;
 
@@ -80,10 +82,16 @@ class ConnErrorSlot extends StatelessWidget {
       height: height,
       child: hint == null
           ? null
-          : Align(
+          : OverflowBox(
+              // 44 恒占位(用户定稿:错误出现不推挤布局),但长文案(EN
+              // 模板/长 zh 指引)天然超槽:放行自然高度向下延展绘制,不
+              // 吃 RenderFlex overflow 异常(绘制超出与既有 zh 长文一致)。
               alignment: Alignment.topLeft,
+              minHeight: 0,
+              maxHeight: double.infinity,
               child: ConnHintText(
                 text: hint!,
+                args: args,
                 color: error
                     ? theme.colorScheme.error
                     : theme.colorScheme.onSurfaceVariant,
@@ -97,17 +105,25 @@ class ConnErrorSlot extends StatelessWidget {
 /// 「相机拒绝了连接(InitFail…):…」)。无冒号整行直出。text 即
 /// t() 键或运行期动态串。
 class ConnHintText extends StatelessWidget {
-  const ConnHintText({super.key, required this.text, required this.color});
+  const ConnHintText({
+    super.key,
+    required this.text,
+    this.args,
+    required this.color,
+  });
 
   final String text;
+  final Map<String, Object>? args;
   final Color color;
 
   @override
   Widget build(BuildContext context) {
     final style = TextStyle(color: color, fontSize: 13, height: 1.45);
-    // 消费点统一包 t():静态文案在控制器/连接层吐抽象键,带 $e 插值的
-    // 运行期串不是键,两表未命中经直通原样回落中文。
-    final localized = context.t(text);
+    // 消费点统一 tm():静态文案在控制器/连接层吐抽象键+占位参数,
+    // 带 $e 插值的运行期串不是键,两表未命中经直通原样回落。参数值
+    // 同样过 t():断链原因等本身可能是键(conn.errStreamRestart 经
+    // requestRecovery 流入),翻译命中则落地,动态串直通不误伤。
+    final localized = context.tm((key: text, args: args));
     final idx = localized.indexOf(':');
     if (idx < 0) {
       return Text(localized, style: style);
