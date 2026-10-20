@@ -8,10 +8,9 @@
 /// 同先例)。「连拍聚合」
 /// 开时相邻拍摄时刻的同段文件合为一格(×N 角标,与相机相册连拍簇同参,
 /// 见 [groupLocalBurstRuns];mtime = 拍摄时刻由下载引擎落盘回写)。
-/// Flutter 可解码的图片直接铺格(cacheWidth 限内存);NEF 走原生解码、
-/// MOV 走原生抽帧出网格缩略(iOS ImageIO / AVAssetImageGenerator,
-/// ≤512px 同一管线落盘缓存,MOV 格内叠摄像机角标;无解码器/无抽帧/
-/// 失败回落图标格)。点任意可看件进黑底查看器:PageView 左右滑翻页
+/// 可解码图与 NEF/MOV 同走缩略小档管线(≤512px 落盘,格双源 gapless
+/// 切换 —— cache 被系统内存警告清空后重解的也是毫秒级小档,2026-10-20
+/// 「看大图返回缩略重刷新」根治);点任意可看件进黑底查看器:PageView 左右滑翻页
 /// (网格过滤序同源),图片双指缩放、NEF 原生解码长边 ≤2560(会话
 /// 缓存,翻回不重解)。视频在页面内直接播放(2026-10-09:点开即播,
 /// 不再「海报帧 + 播放钮 + 弹全屏新页」三步走;iOS 平台视图嵌
@@ -212,8 +211,9 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
 
   bool _isViewable(File file) => _isViewableName(_nameOf(file));
 
-  /// NEF/MOV 缩略路径(磁盘缓存命中即回;否则排队解码/抽帧)。
-  /// 网格格与查看器海报帧共用此缓存,不重复抽帧。
+  /// 缩略小档路径(磁盘缓存命中即回;否则排队解码/抽帧)。可解码图
+  /// (JPG/PNG)与 NEF/MOV 同管线:格双源之一与查看器海报帧共用,
+  /// 不重复解码。
   Future<String?> _thumbFor(File file) {
     final key = _contentKey(file);
     return _mediaThumbs.putIfAbsent(key, () {
@@ -229,15 +229,21 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
       if (cache.existsSync()) return cache.path;
       final name = _nameOf(file);
       final Uint8List jpeg;
-      if (isRawFilename(name)) {
-        jpeg = await _rawDecoder.decodeJpeg(file.path, maxPixelSize: 512);
-      } else {
+      if (isVideoFilename(name)) {
         jpeg = await _videoPlayer.thumbnail(file.path, maxPixelSize: 512);
+      } else {
+        // NEF 与可解码图(JPG/PNG)同走原生小图通道:iOS 实现是
+        // CGImageSource 对格式无门槛(CreateThumbnailFromImageAlways,
+        // 45MP 全图下采样解码 ~50ms,内存友好)。原生通道缺失
+        // (Android/ohos)抛 MissingPluginException —— Error 族,
+        // on Exception 接不住,故 on Object:回落 null → 格走原图
+        // 源(双源 gapless),不毒化串行链。
+        jpeg = await _rawDecoder.decodeJpeg(file.path, maxPixelSize: 512);
       }
       cache.writeAsBytesSync(jpeg, flush: true);
       return cache.path;
-    } on Exception {
-      return null; // 无解码器/抽帧/失败:图标格(吞掉,不毒化串行链)
+    } on Object {
+      return null; // 无解码器/抽帧/失败:原图源(吞掉,不毒化串行链)
     }
   }
 
@@ -619,6 +625,11 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
       ];
 
   /// 格内容(可解码图片铺格 / NEF·MOV 原生缩略 / 图标格)。
+  ///
+  /// 可解码图双源:小档未生成读原图(cacheWidth 300,首显速度不变),
+  /// 小档生成完静默换小档源(gaplessPlayback 保帧无感切换)。cache 被
+  /// 系统内存警告整体清空后(2026-10-20 复报「看大图返回缩略图经常重
+  /// 新刷新」),滚回的格重解的是几十 KB 小档 —— 毫秒级,无感。
   Widget _cellBody(BuildContext context, File file) {
     final viewable = _isViewable(file);
     final name = _nameOf(file);
@@ -628,14 +639,21 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
       fit: StackFit.expand,
       children: [
         if (viewable)
-          Image.file(
-            file,
-            fit: BoxFit.cover,
-            cacheWidth: 300,
-            errorBuilder: (context, error, stackTrace) => ColoredBox(
-              color: Theme.of(context).colorScheme.surfaceContainerHighest,
-              child: const Center(child: Icon(Icons.broken_image_outlined)),
-            ),
+          FutureBuilder<String?>(
+            future: _thumbFor(file),
+            builder: (context, snap) {
+              final thumb = snap.data;
+              return Image.file(
+                thumb != null ? File(thumb) : file,
+                fit: BoxFit.cover,
+                cacheWidth: 300,
+                gaplessPlayback: true, // 换源(原图 → 小档)保旧帧不闪
+                errorBuilder: (context, error, stackTrace) => ColoredBox(
+                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                  child: const Center(child: Icon(Icons.broken_image_outlined)),
+                ),
+              );
+            },
           )
         else if (raw || video)
           // NEF/MOV:原生解码/抽帧缩略(缓存命中/解码完成后铺图);
@@ -651,6 +669,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
                         File(snap.data!),
                         fit: BoxFit.cover,
                         cacheWidth: 300,
+                        gaplessPlayback: true,
                         errorBuilder: (context, error, stackTrace) =>
                             _iconCell(context, name),
                       ),
@@ -708,6 +727,8 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   }
 
   /// 打开查看器:在网格过滤序(倒序)上翻页,初始页 = 被点的格。
+  /// 返回后的缩略显示不靠这里善后 —— 格走小档双源(见 [_cellBody]),
+  /// cache 被系统清空后重解的也是毫秒级小档,天然无感。
   void _openViewer(File file, List<File> peers) {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
@@ -859,6 +880,12 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
 /// 点开不自动播)。视频页可全屏(原地旋转:锁横屏 + 隐顶栏,同一播
 /// 放器,无新视图无跳变)。顶栏动作(导入系统相册/删除)作用于当前
 /// 页;删除后列表收缩、尾页翻回前一页。
+///
+/// 翻页黑闪根修(2026-10-20):邻页预解码([_LibraryViewerState
+/// ._warmNeighbors],settle 即拉 i±1)+ 查看器存续期抬高解码缓存预算
+/// —— 全幅 Zf JPG 解码后 ≈180MB,Flutter 默认预算(100MiB)留不住
+/// 任何一张:旧版邻页上屏才开始解(解码窗里只有黑底在屏 = 黑闪),
+/// 已看的页滑走即被逐出(翻回必重解,每次翻都闪)。
 class _LibraryViewer extends StatefulWidget {
   const _LibraryViewer({
     required this.files,
@@ -907,11 +934,26 @@ class _LibraryViewerState extends State<_LibraryViewer> {
       widget.videoLutExport ?? MethodChannelVideoLutExport();
   bool? _lutSupported;
 
+  /// 打开时的解码缓存预算(dispose 还原):查看器语境的临时抬升,
+  /// 不动全局默认。
+  late final int _cacheBudgetRestore;
+
   @override
   void initState() {
     super.initState();
+    final cache = PaintingBinding.instance.imageCache;
+    _cacheBudgetRestore = cache.maximumSizeBytes;
+    // 全幅 Zf JPG 解码后 ≈180MB/张,Flutter 默认预算(100MiB)装不下
+    // 任何一张:页滑走即逐出,翻回必重解(翻页黑闪的另一半)。抬到
+    // 512MiB 容下当前页 ± 两侧邻居,收查看器还原。
+    cache.maximumSizeBytes = 512 << 20;
     _videoLut.isSupported().then((v) {
       if (mounted) setState(() => _lutSupported = v);
+    });
+    // 预热经 context 取 MediaQuery(precacheImage),initState 里碰不了
+    // inherited:过一帧再暖。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _warmNeighbors();
     });
   }
 
@@ -933,6 +975,7 @@ class _LibraryViewerState extends State<_LibraryViewer> {
 
   @override
   void dispose() {
+    PaintingBinding.instance.imageCache.maximumSizeBytes = _cacheBudgetRestore;
     _pageController.dispose();
     if (_fullscreen) {
       // 全屏中收查看器(返回手势/删除尾页):还原方向与系统栏再走
@@ -965,6 +1008,39 @@ class _LibraryViewerState extends State<_LibraryViewer> {
         file.path,
         () => widget.rawDecoder.decodeJpeg(file.path, maxPixelSize: 2560),
       );
+
+  /// 邻页预解码(i±1,视频跳过):滑到前把邻居解好,上屏即缓存命中
+  /// —— 旧版邻页上屏才开始解码全幅 JPG,解码窗里只有黑底在屏(翻页
+  /// 黑闪的根)。JPG 走 precacheImage(与页内 DeSqueezedImage 同一
+  /// FileImage 缓存键);NEF 走会话解码缓存([_decodes] 天然去重)。
+  /// 视频跳过:平台视图只在真滑到时装载,预建等于白装(不引
+  /// allowImplicitScrolling 同因)。解码在引擎线程不占 UI;失败静默
+  /// (真滑到走原路兜底)。
+  void _warmNeighbors() {
+    final i = _index;
+    for (final j in <int>[i - 1, i + 1]) {
+      if (j < 0 || j >= _files.length) continue;
+      final file = _files[j];
+      final name = _nameOf(file);
+      if (isVideoFilename(name)) continue;
+      if (isRawFilename(name)) {
+        unawaited(_warmNefDecode(file));
+      } else if (_isViewableName(name)) {
+        unawaited(precacheImage(FileImage(file), context)
+            .catchError((Object _) {}));
+      }
+    }
+  }
+
+  /// NEF 邻页预热(吞错:catchError 对带值 Future 须回值,包装一层;
+  /// 失败不拦 —— 真滑到时 FutureBuilder 原路报错)。
+  Future<void> _warmNefDecode(File file) async {
+    try {
+      await _decodeFor(file);
+    } on Object {
+      // 静默:预热尽力而为
+    }
+  }
 
   File get _current => _files[_index];
 
@@ -1009,6 +1085,7 @@ class _LibraryViewerState extends State<_LibraryViewer> {
         itemCount: _files.length,
         onPageChanged: (i) {
           setState(() => _index = i);
+          _warmNeighbors(); // 新当前页的两侧邻居提前解码(翻页不黑闪)
           // 全屏是视频语境:滑到非视频页自动退出(还原方向与顶栏)
           if (_fullscreen && !isVideoFilename(_nameOf(_files[i]))) {
             _setFullscreen(false);
