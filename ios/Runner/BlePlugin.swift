@@ -111,9 +111,13 @@ public final class BlePlugin: NSObject, FlutterPlugin, CBCentralManagerDelegate,
 
   /// 系统蓝牙配件选择器(ExternalAccessory 公开 API,SnapBridge iOS 同款
   /// —— 2026-10-20 手机 unified log 取证:其弹码窗即此 picker,经它完成
-  /// 经典 BR/EDR SSP bond,CTKD 顺带派生 BLE 密钥)。`name` 过滤设备名
-  /// (nil = 显示全部);完成码字符串回传:success / alreadyConnected /
-  /// cancelled / failed。completion 回调线程不定,须折回主线程回 Flutter。
+  /// 经典 BR/EDR SSP bond,CTKD 顺带派生 BLE 密钥)。宿主 Info.plist
+  /// **不得带 UIApplicationSceneManifest**(选择器建窗走 legacy 生命周期
+  /// 查法,scene manifest 宿主建出无 scene 窗永不可见、回调悬挂 ——
+  /// 2026-10-20 真机判别实验实锤)。`name` 过滤设备名:NSPredicate 键名
+  /// 黑盒,评估崩 valueForUndefinedKey,调用方须传 nil;完成码字符串
+  /// 回传:success / alreadyConnected / cancelled / failed。completion
+  /// 回调线程不定,须折回主线程回 Flutter。
   private func showAccessoryPicker(name: String?, result: @escaping FlutterResult) {
     let predicate: NSPredicate? =
       name.map { NSPredicate(format: "name CONTAINS[c] %@", $0) }
