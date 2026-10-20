@@ -79,6 +79,9 @@ const Map<String, String> enCatalog = {
   'ble.scanning': 'Scanning…',
   'ble.scanButton': 'Scan',
   'ble.unpair': 'Unpair',
+  'ble.unpairConfirm': 'Unpair?',
+  'ble.unpairBody':
+      'Clear the pairing identity for "{name}" and disconnect. To reconnect, pair again via the camera menu.',
   'ble.reconnecting': 'Connecting…',
   'ble.connect': 'Connect',
   'ble.binding': 'Binding…',

@@ -218,6 +218,69 @@ void main() {
     await disposePage(tester);
   });
 
+  testWidgets('解除配对点按先弹确认窗(对齐 STA 忘记这台相机):取消不动,确认才清',
+      (tester) async {
+    // clear() 沿 dataDir 走 nikonpill/gallery 通道:mock 计数当「清档
+    // 是否触达」的探针(路径不存在 → exists() 一发真 IO 收口)。
+    var dataDirCalls = 0;
+    const gallery = MethodChannel('nikonpill/gallery');
+    final messenger = tester.binding.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(gallery, (call) async {
+      dataDirCalls++;
+      return '/tmp/nikonpill_ble_unpair_test';
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(gallery, null));
+
+    await boot(tester,
+        scanResult: [], saved: identityOf(0x11223301, cameraName: 'Z f_8014411'));
+    AppServices.instance.bleManualOff = true; // 断链意图在:取消沿必须原封
+    addTearDown(() => AppServices.instance.bleManualOff = false);
+    AppServices.instance.bleSession.identity = BleIdentity(
+        peripheralUuid: 'P1',
+        deviceId: 0x11223301,
+        nonce: 0x70,
+        serial: 'S',
+        name: 'NikonPill');
+
+    // 点解除配对图标 → 确认弹窗(标题 + 正文点名相机 + 取消/确认)。
+    await tester.tap(find.byIcon(Icons.link_off));
+    await tester.pumpAndSettle();
+    expect(find.text('解除配对?'), findsOneWidget);
+    expect(find.textContaining('Z f_8014411'), findsNWidgets(2),
+        reason: '档案行 + 弹窗正文各一(正文点名相机)');
+    expect(find.text('取消'), findsOneWidget);
+    expect(find.text('解除配对'), findsOneWidget, reason: '确认钮(destructive)');
+
+    // 取消:档案原封 —— 断链意图/会话身份/清档全不动。
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+    expect(find.text('解除配对?'), findsNothing);
+    expect(AppServices.instance.bleManualOff, isTrue,
+        reason: '取消沿断链意图原封(解除沿才会清)');
+    expect(AppServices.instance.bleSession.identity, isNotNull,
+        reason: '取消沿会话身份原封');
+    expect(dataDirCalls, 0, reason: '取消沿不触清档');
+
+    // 再点 → 确认:走解除沿(清档/撤会话身份/意图复位)。
+    await tester.tap(find.byIcon(Icons.link_off));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('解除配对'));
+    await tester.pumpAndSettle();
+    // clear() 内 file.exists() 是 dart:io 真 IO:完成回调只在 runAsync
+    // 出窗上浮一个,逐窗排水(memory flutter-test runAsync IO 排水)。
+    for (var i = 0; i < 6; i++) {
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 10)));
+      await tester.pump(const Duration(milliseconds: 10));
+    }
+    expect(dataDirCalls, 1, reason: '确认沿走到清档');
+    expect(AppServices.instance.bleSession.identity, isNull,
+        reason: '确认沿撤会话身份');
+    expect(AppServices.instance.bleManualOff, isFalse,
+        reason: '解除沿清手动断开意图(下次配对干净起步)');
+    await disposePage(tester);
+  });
+
   testWidgets('重连反馈只在按钮位;握手中行尾只出状态词(十/十一/十三/十四轮)',
       (tester) async {
     await boot(tester, scanResult: [], saved: identityOf(0x11223301));
