@@ -14,11 +14,7 @@ import '../../core/remote/config_snapshot.dart';
 import '../../data/config_snapshot_store.dart';
 import '../../design/app_colors.dart';
 import '../../l10n/l10n.dart';
-
-/// 可本地化消息:控制器无 BuildContext,存「l10n 键 + {名} 参数」,
-/// 由消费端 buildSnapshotSection 里 context.t(key, args) 落地;
-/// 动态串(如 $report)非键,t() 直通原文回落。
-typedef L10nMessage = ({String key, Map<String, Object>? args});
+import '../../l10n/message.dart';
 
 final class SnapshotController extends ChangeNotifier {
   SnapshotController({

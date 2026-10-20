@@ -768,16 +768,19 @@ class TrafficLightsView extends StatelessWidget {
   const TrafficLightsView({
     super.key,
     required this.analysis,
-    this.bandLabels = const ['上部', '中部', '下部'],
+    this.bandLabels,
   });
 
   final FrameAnalysis? analysis;
 
-  /// 三带标签(显示点传 t() 译文;缺省中文键)。
-  final List<String> bandLabels;
+  /// 三带标签:null = build 内 t('remote.top/mid/bot') 落地(不再留
+  /// 中文默认串,防未来调用点漏传泄漏);测试注入用。
+  final List<String>? bandLabels;
 
   @override
   Widget build(BuildContext context) {
+    final labels = bandLabels ??
+        [context.t('remote.top'), context.t('remote.mid'), context.t('remote.bot')];
     return IgnorePointer(
       child: SizedBox(
         width: 160,
@@ -787,7 +790,7 @@ class TrafficLightsView extends StatelessWidget {
           child: Container(
             color: Colors.black.withValues(alpha: 0.55),
             child: CustomPaint(
-              painter: _TrafficLightsPainter(analysis, bandLabels),
+              painter: _TrafficLightsPainter(analysis, labels),
               size: Size.infinite,
             ),
           ),
@@ -882,13 +885,16 @@ class ScopeView extends StatelessWidget {
     required this.kind,
     required this.analysis,
     this.nLogScale = false,
-    this.bandLabels = const ['上', '中', '下'],
+    this.bandLabels,
   });
 
   final ScopeKind kind;
   final FrameAnalysis? analysis;
   final bool nLogScale;
-  final List<String> bandLabels;
+
+  /// 仅红绿灯消费(上/中/下带标签);null = 透传,TrafficLightsView
+  /// 自行 t() 落地。
+  final List<String>? bandLabels;
 
   @override
   Widget build(BuildContext context) {

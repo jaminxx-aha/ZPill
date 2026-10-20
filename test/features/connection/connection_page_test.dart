@@ -30,6 +30,8 @@ import 'package:nikon_pill/features/connection/connection_page.dart';
 import 'package:nikon_pill/features/remote/remote_controller.dart';
 import 'package:nikon_pill/features/remote/remote_page.dart';
 import 'package:nikon_pill/features/settings/settings_page.dart';
+import 'package:nikon_pill/l10n/l10n.dart';
+import 'package:nikon_pill/l10n/message.dart';
 import 'package:nikon_pill/platform/ble_scanner.dart';
 import 'package:nikon_pill/platform/network_monitor.dart';
 import 'package:nikon_pill/platform/nsd_scanner.dart';
@@ -100,8 +102,11 @@ final class _FakeConnection implements CameraConnection {
   int confirmCalls = 0;
   int cancelCalls = 0;
 
-  /// 连接层动态文案(reconnecting 期恢复循环逐拍更新;failed 的终态)。
+  /// 连接层动态文案(reconnecting 期恢复循环逐拍更新;failed 的终态):
+  /// 直通串(非键)原样透出,与连接层取证串口径一致。errArgs = 键的
+  /// 占位参数(测 EN 渲染用)。
   String? err;
+  Map<String, Object>? errArgs;
 
   @override
   String? deviceName;
@@ -116,7 +121,7 @@ final class _FakeConnection implements CameraConnection {
   Stream<CameraLinkState> get states => statesCtrl.stream;
 
   @override
-  String? get error => err;
+  L10nMessage? get error => err == null ? null : (key: err!, args: errArgs);
 
   @override
   bool get isWireless => wireless;
@@ -403,11 +408,11 @@ void main() {
 
       conn.statesCtrl.add(CameraLinkState.pairing);
       await pumpEventQueue();
-      expect(controller.hint, 'conn.pairingAuto');
+      expect(controller.hint?.key, 'conn.pairingAuto');
 
       conn.statesCtrl.add(CameraLinkState.failed);
       await pumpEventQueue();
-      expect(controller.hint, 'conn.failed'); // error null → 兜底键,渲染层落 zh
+      expect(controller.hint?.key, 'conn.failed'); // error null → 兜底键,渲染层落 zh
     });
 
     test(
@@ -419,12 +424,36 @@ void main() {
       conn.statesCtrl.add(CameraLinkState.reconnecting);
       await pumpEventQueue();
       expect(controller.state, CameraLinkState.reconnecting);
-      expect(controller.hint, '正在等待相机重新接入 USB(重新插好数据线后自动续连)');
+      expect(controller.hint?.key, '正在等待相机重新接入 USB(重新插好数据线后自动续连)');
 
       conn.err = null;
       conn.statesCtrl.add(CameraLinkState.reconnecting); // 重复 notify 重读
       await pumpEventQueue();
-      expect(controller.hint, 'conn.reconnectAuto');
+      expect(controller.hint?.key, 'conn.reconnectAuto');
+    });
+
+    testWidgets('EN 环境:连接层失败消息(key+args)按英文词表渲染,'
+        '异常细节原样随行(2026-10-20 用户报告:英文界面提示仍是中文)',
+        (tester) async {
+      final conn = _FakeConnection()
+        ..err = 'conn.recoverGiveUpNormal'
+        ..errArgs = {'n': 9, 'e': 'SocketException: Connection timed out'};
+      final controller = ConnectionController(connection: conn);
+      await tester.pumpWidget(L10nScope(
+        code: 'en',
+        child: MaterialApp(home: ConnectionPage(controller: controller)),
+      ));
+
+      conn.statesCtrl.add(CameraLinkState.failed);
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Auto-reconnect failed (9 attempts'),
+          findsOneWidget,
+          reason: '模板走 en 词表,{n} 占位落地');
+      expect(find.textContaining('SocketException: Connection timed out'),
+          findsOneWidget,
+          reason: '技术细节经 {e} 原样随行');
+      expect(find.textContaining('自动重连未成功'), findsNothing,
+          reason: '不再漏中文模板');
     });
 
     test('activeIp:各连接方式落账(USB null / 发现 / 档案 / 手动)', () async {
@@ -1009,7 +1038,7 @@ void main() {
       expect(controller.awaitingCameraConfirm, isTrue);
       expect(find.text('等待相机上确认配对…'), findsOneWidget);
       expect(find.text('连接中…'), findsNothing);
-      expect(controller.hint, contains('conn.pairingSent'));
+      expect(controller.hint?.key, contains('conn.pairingSent'));
       expect(find.textContaining('配对信息已发送'), findsOneWidget,
           reason: '等待指引落在固定错误位');
       // 等待窗取消 = 点图标(五轮中央按钮退役)
@@ -1022,7 +1051,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(controller.awaitingCameraConfirm, isFalse);
       expect(find.text('等待相机上确认配对…'), findsNothing);
-      expect(controller.hint, 'conn.failed');
+      expect(controller.hint?.key, 'conn.failed');
     });
 
     testWidgets('删除已保存相机:确认 → 清档案,列表即消(无感重配语义)', (tester) async {
@@ -1757,7 +1786,8 @@ void main() {
       final session = BleCameraSession(host: host);
       expect(await session.wakeCameraWifi(), isFalse);
       expect(host.writes, isEmpty);
-      expect(session.lastError, contains('BLE 未连接'));
+      expect(session.lastError?.key, 'ble.notConnectedOp');
+      expect(session.lastError?.args?['label'], 'ble.wakeWifi');
     });
 
     testWidgets('唤醒沿自动读凭据:0x2004 解出 → 无 joiner 弹手动入网红卡,主钮切 AP 发射连接',
@@ -1880,14 +1910,14 @@ void main() {
       final f = (await tester.runAsync(readyFixture))!;
       var notifications = 0;
       f.controller.addListener(() => notifications++);
-      f.session.lastError = '注入失败:x';
+      f.session.lastError = const (key: '注入失败:x', args: null);
       await tester.pump();
       final afterErr = notifications;
       expect(afterErr, greaterThan(0), reason: '错误沿即时刷新,不等状态跃迁');
-      f.session.lastError = '注入失败:x'; // 同值去重
+      f.session.lastError = const (key: '注入失败:x', args: null); // 同值去重
       await tester.pump();
       expect(notifications, afterErr);
-      f.session.lastError = '注入失败:y';
+      f.session.lastError = const (key: '注入失败:y', args: null);
       await tester.pump();
       expect(notifications, greaterThan(afterErr));
     });

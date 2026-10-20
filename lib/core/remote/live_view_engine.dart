@@ -32,6 +32,7 @@ import 'package:flutter/foundation.dart';
 
 import '../ptp/operation_codes.dart';
 import '../ptp/ptp_session.dart';
+import '../../l10n/message.dart';
 import 'live_view_header.dart';
 import 'live_view_watchdog.dart';
 
@@ -90,8 +91,8 @@ final class LiveViewEngine {
   /// 取景流健康度(帧签名看门狗驱动;UI 横幅「相机忙/画面保持」等)。
   final health = ValueNotifier<LiveViewHealth>(LiveViewHealth.ok);
 
-  /// 转 failed 时的最后错误(展示用)。
-  String? lastError;
+  /// 转 failed 时的最后错误(展示用;键+参,渲染端落地)。
+  L10nMessage? lastError;
 
   static const int _maxFailures = 5;
   static const Duration _maxBackoff = Duration(seconds: 2);
@@ -133,8 +134,11 @@ final class LiveViewEngine {
       // 连接梯一并浮出(真机定案仪器:哪一级被拒一眼可读)。
       final ladder = session.connectLadder.join(' ');
       lastError = ladder.isEmpty
-          ? '取景开启失败:$e'
-          : '取景开启失败:$e〔梯:$ladder〕';
+          ? (key: 'live.startFail', args: {'e': e.toString()})
+          : (
+              key: 'live.startFailLadder',
+              args: {'e': e.toString(), 'l': ladder},
+            );
       status.value = LiveViewStatus.failed;
       return;
     }
@@ -321,8 +325,11 @@ final class LiveViewEngine {
         if (_failures >= _maxFailures) {
           final ladder = session.connectLadder.join(' ');
           lastError = ladder.isEmpty
-              ? '取景中断:$e'
-              : '取景中断:$e〔梯:$ladder〕';
+              ? (key: 'live.interrupted', args: {'e': e.toString()})
+              : (
+                  key: 'live.interruptedLadder',
+                  args: {'e': e.toString(), 'l': ladder},
+                );
           status.value = LiveViewStatus.failed;
           _runId++; // 废掉本循环
           return;
@@ -403,8 +410,11 @@ final class LiveViewEngine {
       if (run != _runId) return;
       final ladder = session.connectLadder.join(' ');
       lastError = ladder.isEmpty
-          ? '取景流冻结,重启失败:$e'
-          : '取景流冻结,重启失败:$e〔梯:$ladder〕';
+          ? (key: 'live.freezeRestartFail', args: {'e': e.toString()})
+          : (
+              key: 'live.freezeRestartFailLadder',
+              args: {'e': e.toString(), 'l': ladder},
+            );
       status.value = LiveViewStatus.failed;
       _runId++;
       return;

@@ -95,8 +95,11 @@ void main() {
     expect(p.display(1), 'param.standard');
     expect(p.display(4), 'param.monochrome');
     expect(p.display(103), 'Pop');
-    expect(p.display(202), '自定义 2');
-    expect(p.display(305), '云 5');
+    // 自定义/云组段位带参:display() 无 args 通道,2xx/3xx 数值直通;
+    // 键化分支(param.picCtrlCustom/Cloud {n})在控制器
+    // displayParamValue 内联,渲染端 tm() 落地。
+    expect(p.display(202), '202');
+    expect(p.display(305), '305');
   });
 
   test('display:数值格式化(光圈/快门打包分数/ISO/EV)', () {
@@ -188,8 +191,8 @@ void main() {
   });
 
   test('AF 区域宽C1/C2 触屏定位提示:饱和轴单轴生效,其余值无提示', () {
-    expect(afAreaAxisHint(0x801E), 'param.wideC1Hint');
-    expect(afAreaAxisHint(0x801F), 'param.wideC2Hint');
+    expect(afAreaAxisHint(0x801E)?.key, 'param.wideC1Hint');
+    expect(afAreaAxisHint(0x801F)?.key, 'param.wideC2Hint');
     expect(afAreaAxisHint(0x8010), isNull, reason: '单点/自动/精确/宽S/L 双轴可移');
     expect(afAreaAxisHint(null), isNull);
   });
@@ -246,8 +249,8 @@ void main() {
       expect(tc.display(2), 'param.onHdmi');
 
       final countUp = shootingParamByCode[PtpDevicePropCode.timeCodeCountUpMethod]!;
-      expect(countUp.display(0), 'Rec Run');
-      expect(countUp.display(1), 'Free Run');
+      expect(countUp.display(0), 'param.recRun');
+      expect(countUp.display(1), 'param.freeRun');
 
       final vr = shootingParamByCode[PtpDevicePropCode.movieVibrationReduction]!;
       expect(vr.display(100), 'param.sameAsPhotos');

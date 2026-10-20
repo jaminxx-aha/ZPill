@@ -670,7 +670,10 @@ final class AppServices {
               satellites: 8,
               utcTime: DateTime.now().toUtc(),
             )),
-            onError: (Object e) => bleSession.lastError = '定位流失败:$e',
+            onError: (Object e) => bleSession.lastError = (
+              key: 'ble.locationStreamFail',
+              args: {'e': e.toString()},
+            ),
           );
       if (bleSession.state == BleSessionState.ready) {
         unawaited(_startLocationStream());

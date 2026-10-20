@@ -258,11 +258,11 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
   /// 段头:日期 + 张数;多选模式下点按整日选择/取消,右侧显示该日
   /// 是否已全选。
   Widget _sectionHeader(_DateSection section, List<PhotoGroup> items) {
-    // 日期段(sectionDateLabel)是日期格式产物不抽,英文环境如实回落;
-    // 「未知日期」与「· N 张」尾段走 t()。
-    final label = section.day == null
-        ? context.t('grid.undated')
-        : sectionDateLabel(section.day!);
+    // 日期段(sectionDateLabel)为键+参记录,与「未知日期」一并经 tm()
+    // 落地;'· N 张' 尾段在 grid.sectionHeader 模板里。
+    final label = context.tm(section.day == null
+        ? (key: 'grid.undated', args: null)
+        : sectionDateLabel(section.day!));
     final daySelected =
         _selecting && section.items.every((g) => _selected.contains(g.key));
     return InkWell(
@@ -647,8 +647,6 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
   /// 同步中断横幅:内容已显示,重试只补缺失对象(断点续传)。
   Widget _syncErrorBanner(BrowserController controller) {
     return InlineHint(
-      // message 是控制器产出的运行期 $e 插值串,无静态键 —— 显示端
-      // (InlineHint)已包 t,英文环境如实回落中文
       message: controller.error!,
       actionLabel: context.t('common.retry'),
       onAction: controller.load,

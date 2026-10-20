@@ -172,9 +172,10 @@ Widget _valueSection({
           ListTile(
             // 槽位真名(0x90CC)优先:优化校准自定义/云组
             // 静态表只有「自定义 N」「云 N」占位。
-            // 值文案(displayParamValue,目录/控制器产出)原文即 t() 键,
-            // 显示点包 t()。
-            title: Text(sheetContext.t(controller.displayParamValue(p.code, v)),
+            // 值文案(displayParamValue,目录/控制器产出)为键+参
+            // 记录,显示点 tm() 一次落地。
+            title: Text(
+                sheetContext.tm(controller.displayParamValue(p.code, v)),
                 style: TextStyle(color: live.text)),
             trailing:
                 v == current ? Icon(Icons.check, color: live.accent) : null,
@@ -211,7 +212,7 @@ Widget _valueSection({
       padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
       child: Column(
         children: [
-          Text(sheetContext.t(controller.displayParamValue(p.code, current)),
+          Text(sheetContext.tm(controller.displayParamValue(p.code, current)),
               style: TextStyle(
                   fontSize: 30, fontWeight: FontWeight.w500, color: live.text)),
           Slider(
@@ -220,7 +221,7 @@ Widget _valueSection({
             max: rangeMax.toDouble(),
             divisions: ((rangeMax - rangeMin) ~/ rangeStep).clamp(1, 1 << 20),
             label:
-                sheetContext.t(controller.displayParamValue(p.code, current)),
+                sheetContext.tm(controller.displayParamValue(p.code, current)),
             activeColor: live.accent,
             onChanged: writing ? null : (_) {},
             onChangeEnd: (v) => controller.setParam(p.code, v.round()),
