@@ -3,8 +3,9 @@
 /// 文件 —— 那些归系统相册 App 管,这里只看应用自留的份。
 ///
 /// 网格默认按修改时间倒序(新下载在前,弹层可翻「旧→新」);筛选收进
-/// AppBar 右上弹层(排序 新→旧/旧→新 × 格式 全部/RAW/JPG/视频 × 视图
-/// 选项 连拍聚合开关,内存态不落库,与旧 chips 同先例)。「连拍聚合」
+/// AppBar 右上弹层(排序单行「时间+方向箭头」点按翻向 × 格式
+/// 全部/RAW/JPG/视频 × 视图选项 连拍聚合开关,内存态不落库,与旧 chips
+/// 同先例)。「连拍聚合」
 /// 开时相邻拍摄时刻的同段文件合为一格(×N 角标,与相机相册连拍簇同参,
 /// 见 [groupLocalBurstRuns];mtime = 拍摄时刻由下载引擎落盘回写)。
 /// Flutter 可解码的图片直接铺格(cacheWidth 限内存);NEF 走原生解码、
@@ -77,15 +78,11 @@ enum _LibFilter {
 
 /// 图库排序:时间两向(新→旧 = 既有默认,下载的新货在前)。评分档
 /// 不做 —— 本地评分键挂相机侧照片组(基名+组总字节),应用内文件
-/// 没有现成评分数据源,不发明。
-/// label = t() 键,显示点包 t()。
+/// 没有现成评分数据源,不发明。方向不落词表:弹层只有单行「时间」,
+/// 方向由行尾箭头表达(↓ = 大→小 = 新→旧,↑ = 小→大 = 旧→新)。
 enum _LibSort {
-  newestFirst('libpage.newestFirst'),
-  oldestFirst('libpage.oldestFirst');
-
-  const _LibSort(this.label);
-
-  final String label;
+  newestFirst,
+  oldestFirst,
 }
 
 /// Flutter 可解码的图片扩展名(NEF 等原生格式走解码管线)。
@@ -411,13 +408,23 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   String get _emptyMessage =>
       context.t('libpage.noFormatFiles', {'label': context.t(_filter.label)});
 
-  /// 筛选弹层(AppBar 右上,iPhone 图库式分区卡片):排序两向 / 格式
-  /// 四档 / 视图选项(连拍聚合)。MenuAnchor 锚按钮弹出,点任意行即收;
-  /// 当前档 trailing 打勾。多选中弹层不可达(actions 换了),setter 仍
+  /// 筛选弹层(AppBar 右上,iPhone 图库式分区卡片):排序单行「时间」
+  /// (行尾方向箭头,点按翻向并收层)/ 格式四档 / 视图选项(连拍聚合)。
+  /// MenuAnchor 锚按钮弹出,点任意行即收;当前档 trailing 打勾(排序行
+  /// 以箭头示向,无勾)。多选中弹层不可达(actions 换了),setter 仍
   /// 防御性清选中(与相机相册页换筛选清选中同规矩)。
+  ///
+  /// 行宽/行距(2026-10-20 三轮真机收口):M3 菜单行默认最小高 48;
+  /// 只改 minimumSize 会被移动端 tapTargetSize=padded 架空(仍 48,二轮
+  /// 真机「行距还是太大」根因)—— 须 shrinkWrap 才真生效,36(竖
+  /// padding 2)。宽度:行横 padding 8 + reservedPadding 只留竖 8(默认
+  /// EdgeInsets.all(8) 的横向预留也是变宽一刀)。分区头保留(用户
+  /// 实证「排序」头有导航价值,三轮回归)。
   Widget _filterMenuAnchor(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final newestFirst = _sort == _LibSort.newestFirst;
     return MenuAnchor(
+      reservedPadding: const EdgeInsets.symmetric(vertical: 8),
       style: MenuStyle(
         backgroundColor: WidgetStatePropertyAll(scheme.surfaceContainerLow),
         shape: WidgetStatePropertyAll(
@@ -427,17 +434,24 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
       alignmentOffset: const Offset(0, 6),
       menuChildren: [
         _menuHeader(context, 'libpage.sort'),
-        for (final s in _LibSort.values)
-          MenuItemButton(
-            trailingIcon: _sort == s
-                ? Icon(Icons.check, size: 18, color: scheme.primary)
-                : null,
-            onPressed: () => _setSort(s),
-            child: Text(context.t(s.label)),
+        // 排序单行:时间 + 方向箭头(↓ = 大→小 = 新→旧,↑ = 小→大 =
+        // 旧→新),点按翻向。两行文案并一行,行尾箭头示向。
+        MenuItemButton(
+          style: _menuRowStyle,
+          trailingIcon: Icon(
+            newestFirst ? Icons.arrow_downward : Icons.arrow_upward,
+            size: 20,
+            color: scheme.primary,
           ),
+          onPressed: () => _setSort(newestFirst
+              ? _LibSort.oldestFirst
+              : _LibSort.newestFirst),
+          child: Text(context.t('libpage.sortTime')),
+        ),
         _menuHeader(context, 'libpage.filterColon'),
         for (final f in _LibFilter.values)
           MenuItemButton(
+            style: _menuRowStyle,
             leadingIcon: Icon(_filterIcon(f)),
             trailingIcon: _filter == f
                 ? Icon(Icons.check, size: 18, color: scheme.primary)
@@ -447,6 +461,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
           ),
         _menuHeader(context, 'libpage.viewOptions'),
         MenuItemButton(
+          style: _menuRowStyle,
           leadingIcon: const Icon(Icons.burst_mode_outlined),
           trailingIcon: _burstGrouped
               ? Icon(Icons.check, size: 18, color: scheme.primary)
@@ -464,9 +479,19 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     );
   }
 
+  /// 弹层行统一收紧行高(48 → 36,shrinkWrap 必要性见
+  /// [_filterMenuAnchor] 注)。
+  static const _menuRowStyle = ButtonStyle(
+    minimumSize: WidgetStatePropertyAll(Size(64, 36)),
+    padding: WidgetStatePropertyAll(
+      EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+    ),
+    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+  );
+
   Widget _menuHeader(BuildContext context, String key) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+      padding: const EdgeInsets.fromLTRB(8, 8, 8, 2),
       child: Text(
         context.t(key),
         style: TextStyle(
