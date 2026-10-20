@@ -393,7 +393,7 @@ class BlePairPanelState extends State<BlePairPanel>
       if (_session.lastRetryGated) {
         _log('第 $attempt 轮:相机待机(深睡闸门拦下),等唤醒…');
       } else {
-        _log('第 $attempt 轮无命中${err == null ? '' : '($err)'},'
+        _log('第 $attempt 轮无命中${err == null ? '' : '(${err.key})'},'
             '${_session.nextRetryDelay.inSeconds}s 后再试(相机须停在'
             '「连接至智能设备」页或可重连待机)');
       }

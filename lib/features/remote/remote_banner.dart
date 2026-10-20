@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../l10n/l10n.dart';
+import '../../l10n/message.dart';
 import 'live_design.dart';
 
 /// 取景区底边横幅(OpenZCine「坐在画面下沿」口径):玻璃底 + 语义色
@@ -47,14 +48,20 @@ class LiveBanner extends StatelessWidget {
 /// - 消息文本变更(新错误/新提示)= 重展开重计时;
 /// - 长按复制原文进剪贴板(错误码要能贴回开发侧,2026-10-17 用户
 ///   需求),已收圆丸长按同效;展开态复制后原文短暂换显「已复制」。
+///   复制的是**落地后文本**(键+参已解析,非键名)。
+///
+/// message 为 [L10nMessage](键+占位参):RemoteController 的
+/// error/notice 在无 BuildContext 处产键,渲染端统一解析 —— 参数值
+/// 为键的(重连原因/厂商码提示/段尾指引)一并落地,动态串直通。
 ///
 /// 取景区每帧重建(AnimatedBuilder merge 监听),横幅树位不变、State
-/// 存续,计时不受重建打断;消息对账在 didUpdateWidget。
+/// 存续,计时不受重建打断;消息对账在 didUpdateWidget(record 相等
+/// 对账;带参消息每次写都是新 Map 实例,重复写重展重计时,行为可接)。
 class LiveBannerHost extends StatefulWidget {
   const LiveBannerHost(this.message, this.color,
       {super.key, this.bottomInset = 0, this.autoDismiss = false});
 
-  final String message;
+  final L10nMessage message;
   final Color color;
   final double bottomInset;
 
@@ -97,10 +104,10 @@ class _LiveBannerHostState extends State<LiveBannerHost> {
     super.dispose();
   }
 
-  /// 长按复制原文(未翻译键经 t() 同屏显文本,动态串直通)。复制成功
-  /// 震一下,展开/提示态原文暂换「已复制」1.2s。
+  /// 长按复制原文(键+参已落地文本)。复制成功震一下,展开/提示态
+  /// 原文暂换「已复制」1.2s。
   void _copy() {
-    Clipboard.setData(ClipboardData(text: context.t(widget.message)));
+    Clipboard.setData(ClipboardData(text: context.tm(widget.message)));
     HapticFeedback.mediumImpact();
     if (_collapsed) return; // 圆丸无文本位,震动即确认
     setState(() => _copied = true);
@@ -111,7 +118,7 @@ class _LiveBannerHostState extends State<LiveBannerHost> {
   }
 
   String get _shownText =>
-      _copied ? context.t('common.copied') : context.t(widget.message);
+      _copied ? context.t('common.copied') : context.tm(widget.message);
 
   void _arm() {
     _timer?.cancel();
@@ -126,9 +133,6 @@ class _LiveBannerHostState extends State<LiveBannerHost> {
 
   @override
   Widget build(BuildContext context) {
-    // message 原文即 t() 键(RemoteController 的 error/notice 在无
-    // BuildContext 处产中文,插值类运行期串无静态键,如实回落中文),
-    // 消费点包 t()。
     if (widget.autoDismiss) {
       return AnimatedOpacity(
         opacity: _hidden ? 0 : 1,

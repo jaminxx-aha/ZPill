@@ -18,6 +18,7 @@ import 'package:nikon_pill/core/transfer/transfer_task.dart';
 import 'package:nikon_pill/features/browser/browser_controller.dart';
 import 'package:nikon_pill/features/browser/photo_grid_page.dart';
 import 'package:nikon_pill/features/transfers/transfers_page.dart';
+import 'package:nikon_pill/l10n/message.dart';
 
 /// 手动驱动的伪仓库(同 browser_controller_test:块事件逐个发,
 /// loadAlbums 挂在 Completer 上由测试择机完成)。
@@ -64,7 +65,7 @@ final class _FakeConnection implements CameraConnection {
   CameraLinkState get state => CameraLinkState.disconnected;
 
   @override
-  String? get error => null;
+  L10nMessage? get error => null;
 
   @override
   String? get deviceName => null;

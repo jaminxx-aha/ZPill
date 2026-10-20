@@ -55,6 +55,7 @@ import '../../data/paired_cameras_store.dart';
 import '../../design/app_colors.dart';
 import '../../design/app_dimens.dart';
 import '../../l10n/l10n.dart';
+import '../../l10n/message.dart';
 import '../../platform/interface_addresses.dart';
 import '../../platform/network_monitor.dart';
 import '../../platform/nsd_scanner.dart';
@@ -156,7 +157,7 @@ class ConnectionController extends ChangeNotifier {
   final NsdScanner? scanner;
 
   /// BLE 错误沿订阅(lastError 实时刷新用),dispose 收。
-  StreamSubscription<String?>? _bleErrorSub;
+  StreamSubscription<L10nMessage?>? _bleErrorSub;
   final PairedCamerasStore? pairedCameras;
 
   /// /24 网段扫描器(测试注入;null = 生产默认:真 socket 端口检查 +
@@ -404,7 +405,7 @@ class ConnectionController extends ChangeNotifier {
 
   /// 最近一次会话错误(WiFi 动作失败的 SnackBar 用;面板错误行只在
   /// 重连/断开态回错误,ready 态写失败也能如实带出原因)。
-  String? get bleLastError => bleSession?.lastError;
+  L10nMessage? get bleLastError => bleSession?.lastError;
 
   /// 扫描到的相机(按实例名去重;解析失败无 IP 的不上榜)。
   final Map<String, DiscoveredIpCamera> _cameras = {};
@@ -434,23 +435,23 @@ class ConnectionController extends ChangeNotifier {
 
   /// 状态提示:失败原因(含插线/解锁/热点指引)、配对等待去向。
   /// 已连接不在此列 —— 已连接视图(信息卡组)自带全部信息。
-  /// 文案即 t() 键(测试断言中文原文,故控制器存中文不存消息记录),
-  /// 消费端 ConnErrorSlot→ConnHintText 统一包 t();连接层 error
-  /// 未抽取的如实回落中文。
-  String? get hint {
+  /// 即 t() 键 + 占位参数(消费端 ConnErrorSlot→ConnHintText 统一
+  /// 包 t(key, args);技术取证串两表未命中经直通原样回落)。
+  L10nMessage? get hint {
     final c = connection;
     if (c == null) {
       return null;
     }
     if (awaitingCameraConfirm && state == CameraLinkState.connecting) {
-      return 'conn.pairingSent';
+      return (key: 'conn.pairingSent', args: null);
     }
     return switch (state) {
-      CameraLinkState.pairing => 'conn.pairingAuto',
+      CameraLinkState.pairing => (key: 'conn.pairingAuto', args: null),
       // 恢复循环的动态文案(退避分类/busy 慢拍/初始断链原因):连接层
       // 只改 error 不发状态沿,本页 build 期读到的是最近一次。
-      CameraLinkState.reconnecting => c.error ?? 'conn.reconnectAuto',
-      CameraLinkState.failed => c.error ?? 'conn.failed',
+      CameraLinkState.reconnecting =>
+        c.error ?? (key: 'conn.reconnectAuto', args: null),
+      CameraLinkState.failed => c.error ?? (key: 'conn.failed', args: null),
       _ => null,
     };
   }
@@ -926,11 +927,15 @@ class _ConnectionPageState extends State<ConnectionPage>
       // 居中接管原标题位;右上角统一连接图标(Icons.link,七轮自「连接」
       // 文字改,方法无关)仍开方式弹层。已连接后方式位与钮都退场。
       appBar: AppBar(
-        leadingWidth: 72,
+        // 二十一轮:72 → 104 —— leading 槽要装下 EN「Camera」(titleLarge
+        // 22px 约 77px + 左缘 16 padding;56px 槽 EN 必换行,真机截图实证)。
+        // Align centerLeft 左缘 16 不动,与图库/设置同槽;居中方式 chip
+        // 在常见屏宽不受推挤(NavigationToolbar 仅重叠时才让位)。
+        leadingWidth: 104,
         leading: Padding(
           padding: const EdgeInsets.only(left: AppSpacing.lg),
           // 二十轮:Align centerLeft(勿用 Center)—— AppBar 把 leading
-          // 钉成 leadingWidth(72)宽,Center 会把文字在余宽里水平也
+          // 钉成 leadingWidth 宽,Center 会把文字在余宽里水平也
           // 居中(左缘 ~22px),与图库/设置标题(左 16px)错位。
           child: Align(
             alignment: Alignment.centerLeft,
@@ -1306,7 +1311,8 @@ class _ConnectionPageState extends State<ConnectionPage>
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
           child: ConnErrorSlot(
-            hint: controller.hint,
+            hint: controller.hint?.key,
+            args: controller.hint?.args,
             error: controller.state == CameraLinkState.failed,
           ),
         ),
@@ -1355,6 +1361,13 @@ class _ConnectionPageState extends State<ConnectionPage>
     final ready = controller.bleReady;
     final creds = controller.cameraApCredentials;
     final (label, dot, busy) = _bleStatusPresentation(controller, context);
+    // 错误位消息(键+参记录):唤醒未直连 → 固定红字提醒压过会话杂错
+    //(解密未中已改写 AppLog 不上屏);否则沿会话 lastError 如实。
+    final L10nMessage? hintMsg = !ready
+        ? (controller.wifiAwakePending
+            ? const (key: 'conn.wifiManualConnectHint', args: null)
+            : session.lastError)
+        : null;
     // 图标坐标恒定(见 _heroTopGap,四方式同位);四轮裁定「配对信息
     // 往上移」:红卡/按钮/配对面板紧随图标之下,剩余空间全在底部
     //(内容短则留白,长则区内滚动)。
@@ -1369,14 +1382,9 @@ class _ConnectionPageState extends State<ConnectionPage>
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
           child: ConnErrorSlot(
-            // 十七轮:Wi-Fi 已唤醒且未直连(wifiAwakePending)→ 错误位
-            // 固定红字「去系统连 Wi-Fi」提醒(压过会话杂错 —— 解密未中
-            // 已改写 AppLog 不上屏);其余沿会话 lastError 如实。
-            hint: !ready
-                ? (controller.wifiAwakePending
-                    ? context.t('conn.wifiManualConnectHint')
-                    : session.lastError)
-                : null,
+            // 错误位数据源见上方 hintMsg(键+参记录,ConnHintText 统一落地)。
+            hint: !ready ? hintMsg?.key : null,
+            args: hintMsg?.args,
             error: true,
           ),
         ),
@@ -1569,8 +1577,10 @@ class _ConnectionPageState extends State<ConnectionPage>
       _showHintStatic(
           context,
           controller,
-          context.t('conn.wakeFailed',
-              {'e': controller.bleLastError ?? context.t('common.unknown')}));
+          context.tm((key: 'conn.wakeFailed', args: {
+            'e': controller.bleLastError ??
+                (key: 'common.unknown', args: null),
+          })));
       return;
     }
     final creds = controller.cameraApCredentials;
@@ -2151,7 +2161,8 @@ class _StaScanBodyState extends State<_StaScanBody> {
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
               child: ConnErrorSlot(
-                hint: controller.hint,
+                hint: controller.hint?.key,
+                args: controller.hint?.args,
                 error: controller.state == CameraLinkState.failed,
               ),
             ),

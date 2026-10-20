@@ -388,7 +388,7 @@ void main() {
     await conn.connect();
 
     expect(conn.state, CameraLinkState.failed);
-    expect(conn.error, 'conn.errNoUsbCamera');
+    expect(conn.error?.key, 'conn.errNoUsbCamera');
     expect(usb.openedIdentifiers, isEmpty);
     expect(fake.requests, isEmpty);
   });
@@ -486,7 +486,7 @@ void main() {
     await conn.connect();
 
     expect(conn.state, CameraLinkState.failed);
-    expect(conn.error, 'conn.errRestricted');
+    expect(conn.error?.key, 'conn.errRestricted');
     // 拦在 OpenSession 之前(会话都开不了,浏览无意义)
     expect(fake.requests.map((r) => r.opcode),
         [PtpOperationCode.getDeviceInfo]);
@@ -527,7 +527,9 @@ void main() {
     // 2026-10-10 自动重连:connected 断链按 _lastGood 档案转恢复期
     //(不再直接 failed;预算耗尽/未归位超限才终态,见恢复循环 group)
     expect(conn.state, CameraLinkState.reconnecting);
-    expect(conn.error, '相机已断开(USB 连接消失)');
+    expect(conn.error?.key, 'conn.recoverStatus');
+    expect(conn.error?.args?['e'], '相机已断开(USB 连接消失)',
+        reason: '断链原因作 {e} 参数,headline 恒为键');
     expect(session.isSessionOpen, isFalse);
     expect(usb.closeCalls, 1);
     // 断链清理:连接括号已退 remote(无 remote 可退)→ 不下 CloseSession
@@ -657,7 +659,9 @@ void main() {
 
       // 2026-10-10 自动重连:断链转恢复期,链路全量收口语义不变
       expect(conn.state, CameraLinkState.reconnecting);
-      expect(conn.error, contains('command 通道'));
+      expect(conn.error?.key, 'conn.recoverStatus');
+      expect(conn.error?.args?['e'], contains('command 通道'),
+          reason: '断链取证串作 {e} 参数');
       expect(session.isSessionOpen, isFalse);
       expect(command.closed, isTrue);
       expect(event.closed, isTrue);
@@ -684,9 +688,8 @@ void main() {
       expect(conn.state, CameraLinkState.failed);
       // 2026-10-04 真机:InitFail(0x1)= 单连接槽位被 SnapBridge 占用,
       // 文案给出占用指引而非裸异常串。
-      expect(conn.error, contains('相机拒绝了连接'));
-      expect(conn.error, contains('InitFail'));
-      expect(conn.error, contains('SnapBridge'));
+      expect(conn.error?.key, 'conn.errInitRejected');
+      expect(conn.error?.args?['r'], '1234', reason: 'reason 十六进制随行');
       expect(session.isSessionOpen, isFalse);
       expect(command.closed, isTrue); // 握手失败即关通道
       expect(event.closed, isTrue);
@@ -715,9 +718,8 @@ void main() {
       await conn.connect(ip: '192.168.1.1');
 
       expect(conn.state, CameraLinkState.failed);
-      expect(conn.error, contains('连不上 192.168.1.1'));
-      expect(conn.error, contains('相机热点'));
-      expect(conn.error, contains('允许访问本地网络'));
+      expect(conn.error?.key, 'conn.errUnreachable');
+      expect(conn.error?.args?['ip'], '192.168.1.1', reason: '地址随行');
       expect(usb.closeCalls, 1);
       await expectLater(
           link.execute(const PtpRequest(opcode: PtpOperationCode.getDeviceInfo)),
@@ -750,8 +752,8 @@ void main() {
       await conn.connect(ip: '192.168.1.1');
 
       expect(conn.state, CameraLinkState.failed);
-      expect(conn.error, contains('连接 192.168.1.1 超时'));
-      expect(conn.error, contains('扫描相机'));
+      expect(conn.error?.key, 'conn.errTimeout');
+      expect(conn.error?.args?['ip'], '192.168.1.1');
       expect(conn.isWireless, isFalse); // 预算收口时链路未立成
       expect(usb.closeCalls, 1);
 
@@ -776,7 +778,7 @@ void main() {
       await connecting;
 
       expect(conn.state, CameraLinkState.failed);
-      expect(conn.error, contains('连接 192.168.1.1 超时'));
+      expect(conn.error?.key, 'conn.errTimeout');
       // 确实走到了切应用模式这一步(不是握手期就死了)
       final ladderOp = _codec.decode(command.sent.last);
       expect(ladderOp, isA<OperationRequestPacket>()
@@ -924,7 +926,7 @@ void main() {
       await connecting;
 
       expect(conn.state, CameraLinkState.failed);
-      expect(conn.error, contains('按「OK」完成配对'));
+      expect(conn.error?.key, 'conn.pairGiveUp', reason: '配对后重连窗耗尽');
       // 配对已成功落账(wirelessPaired=true):用户按完 OK 手动重点连接
       // 即免配对直连,不再重走配对相
       final saved = await paired.list();
@@ -1092,7 +1094,7 @@ void main() {
       await pumpEventQueue();
 
       expect(conn.state, CameraLinkState.failed);
-      expect(conn.error, contains('等待配对确认期间连接断开'));
+      expect(conn.error?.key, 'conn.pairWaitBroken');
       expect(conn.pairingCode, isNull);
       expect(session.isSessionOpen, isFalse);
       expect(await paired.list(), isEmpty);
@@ -1139,7 +1141,7 @@ void main() {
       await connecting;
 
       expect(conn.state, CameraLinkState.failed);
-      expect(conn.error, contains('无线连接失败'));
+      expect(conn.error?.key, 'conn.errWireless');
       expect(conn.pairingCode, isNull);
     });
   });
@@ -1164,7 +1166,8 @@ void main() {
       await pumpEventQueue();
 
       expect(conn.state, CameraLinkState.reconnecting);
-      expect(conn.error, contains('command 通道'));
+      expect(conn.error?.key, 'conn.recoverStatus');
+      expect(conn.error?.args?['e'], contains('command 通道'));
       expect(session.isSessionOpen, isFalse);
 
       // settle 静置已过(注入零时延):恢复拨号即刻发出(新传输实例新通道)
@@ -1229,7 +1232,7 @@ void main() {
 
       expect(conn.state, CameraLinkState.reconnecting,
           reason: 'busy 恒 5s 慢拍,永不终态(理论;停摆防真跑 5s)');
-      expect(conn.error, 'conn.errBusy');
+      expect(conn.error?.key, 'conn.errBusy');
         expect(delays, [
         const Duration(milliseconds: 1200), // settle
         const Duration(seconds: 5), // busy 拍 1
@@ -1256,9 +1259,9 @@ void main() {
 
       // maxAttempts=2 → 拨 3 次(第 0 拍零延迟立即重试)后预算耗尽
       expect(conn.state, CameraLinkState.failed);
-      expect(conn.error, contains('自动重连未成功'));
-      expect(conn.error, contains('已试 3 次'));
-      expect(conn.error, contains('重试'));
+      expect(conn.error?.key, 'conn.recoverGiveUpNormal');
+      expect(conn.error?.args?['n'], 3, reason: '已试 maxAttempts+1 次');
+      expect(conn.error?.args?['e'], isNotNull, reason: '异常细节随行');
       expect(session.isSessionOpen, isFalse);
     });
 
@@ -1289,7 +1292,7 @@ void main() {
       usb.breakageCtrl.add('相机已断开(USB 连接消失)');
       await pumpEventQueue();
       expect(conn.state, CameraLinkState.reconnecting);
-      expect(conn.error, 'conn.waitingUsb');
+      expect(conn.error?.key, 'conn.waitingUsb');
       expect(usb.openedIdentifiers, ['1-2'], reason: '未归位拍不重复 open');
 
       // 插回 + 预置完整拨号脚本,放行停摆拍 → 下一拨即成
@@ -1334,8 +1337,8 @@ void main() {
       }
 
       expect(conn.state, CameraLinkState.failed);
-      expect(conn.error, contains('相机未重新接入'));
-      expect(conn.error, contains('USB 数据线'));
+      expect(conn.error?.key, 'conn.recoverGiveUpUsb');
+      expect(conn.error?.args?['e'], isNotNull, reason: '异常细节随行');
     });
 
     test('退避中 disconnect 即止(世代护栏);reconnecting 态 connect() 不抢拨号',
@@ -1358,14 +1361,14 @@ void main() {
       command[0].emitClosed();
       await pumpEventQueue();
       expect(conn.state, CameraLinkState.reconnecting);
-      expect(conn.error, contains('正在自动重连'),
+      expect(conn.error?.key, 'conn.recoverStatus',
           reason: '首拍退避期(ScriptException→normal)的动态文案');
 
       // 护栏:reconnecting 态 connect() 立即返回,不抢拨号
       //(用户路径 = 页面「取消重连」→ disconnect → 手动连)
       await conn.connect(ip: '192.168.1.1');
       expect(conn.state, CameraLinkState.reconnecting, reason: '不抢拨号');
-      expect(conn.error, contains('正在自动重连'), reason: '未被 connect() 覆盖');
+      expect(conn.error?.key, 'conn.recoverStatus', reason: '未被 connect() 覆盖');
 
       // 退避停摆期用户主动断开 → 即止
       await conn.disconnect();
@@ -1400,11 +1403,13 @@ void main() {
       await conn.connect();
       expect(conn.state, CameraLinkState.connected);
 
-      // connected:升级进恢复路(与断链同一条)
-      conn.requestRecovery('取景流多次重启未恢复');
+      // connected:升级进恢复路(与断链同一条);生产传入的是键
+      //(app_services:conn.errStreamRestart),随 {e} 参数走
+      conn.requestRecovery('conn.errStreamRestart');
       await pumpEventQueue();
       expect(conn.state, CameraLinkState.reconnecting);
-      expect(conn.error, '取景流多次重启未恢复');
+      expect(conn.error?.key, 'conn.recoverStatus');
+      expect(conn.error?.args?['e'], 'conn.errStreamRestart');
       expect(session.isSessionOpen, isFalse);
       expect(usb.closeCalls, 1);
     });
@@ -1442,7 +1447,7 @@ void main() {
       await pumpEventQueue();
 
       expect(conn.state, CameraLinkState.failed);
-      expect(conn.error, 'conn.errReconnectPaused');
+      expect(conn.error?.key, 'conn.errReconnectPaused');
         expect(states.where((s) => s == CameraLinkState.reconnecting),
           hasLength(3), reason: '首断 + DROP 1/2 进恢复期;DROP 3 直接 failed(风暴)');
     });

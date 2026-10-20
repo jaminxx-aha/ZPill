@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/ptp/operation_codes.dart';
 import '../../l10n/l10n.dart';
+import '../../l10n/message.dart';
 import 'live_design.dart';
 import 'remote_controller.dart';
 import 'shooting_param_catalog.dart';
@@ -44,9 +45,10 @@ List<ShootingParam> orderedCaptureParams({bool videoMode = false}) => [
     ];
 
 /// 设置面板 tile 共用的取值状态打包(值经
-/// 控制器路由:优化校准槽位真名 0x90CC 优先)。
+/// 控制器路由:优化校准槽位真名 0x90CC 优先;值为键+参记录,渲染点
+/// tm() 落地)。
 typedef CaptureParamState = ({
-  String value,
+  L10nMessage value,
   bool auto,
   bool writable,
   bool locked,
@@ -102,8 +104,9 @@ class CaptureParamTile extends StatelessWidget {
 
   final ShootingParam param;
 
-  /// 值文本(经控制器路由:优化校准槽位真名 0x90CC 优先)。
-  final String displayValue;
+  /// 值文本(经控制器路由:优化校准槽位真名 0x90CC 优先;键+参记录,
+  /// 渲染点 tm() 落地)。
+  final L10nMessage displayValue;
   final bool auto;
   final bool writable;
   final bool active;
@@ -114,7 +117,6 @@ class CaptureParamTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final live = LiveDesign.of(context);
-    final value = displayValue;
     return InkWell(
       onTap: writable && !writing ? onTap : null,
       borderRadius: BorderRadius.circular(10),
@@ -163,13 +165,13 @@ class CaptureParamTile extends StatelessWidget {
               ),
               const SizedBox(height: 2),
               // 值文本(displayValue 经控制器路由 displayParamValue 产出)
-              // 原文即 t() 键,显示点包 t();「(自动)」后缀同查目录。
-              // FittedBox 只缩不放:常规值(800/f/2.0/AF-C)原字号,
+              // 为键+参记录,显示点 tm() 一次落地;「(自动)」后缀同查
+              // 目录。FittedBox 只缩不放:常规值(800/f/2.0/AF-C)原字号,
               // 长值(槽位真名/1/160s(自动))整串缩到格宽内。
               FittedBox(
                 fit: BoxFit.scaleDown,
                 child: Text(
-                  '${context.t(value)}${auto ? context.t('common.autoSuffix') : ''}',
+                  '${context.tm(displayValue)}${auto ? context.t('common.autoSuffix') : ''}',
                   maxLines: 1,
                   style: TextStyle(
                     fontSize: 14,
