@@ -1,6 +1,8 @@
 /// 展示格式化(文件大小 / 日期),浏览/预览/下载各页共用。
 library;
 
+import '../../l10n/message.dart';
+
 String formatBytes(int bytes) {
   if (bytes < 1024) {
     return '${bytes}B';
@@ -40,18 +42,29 @@ String? formatDateRange(DateTime? newest, DateTime? oldest) {
   return '$one – ${_two(b.month)}-${_two(b.day)}';
 }
 
-const List<String> _weekdays = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
-
-/// 本地日期分段头(相册网格按日分段):'今天' / '昨天' /
-/// '10月2日 周五' / 跨年补年份 '2025年12月30日 周二'。
-String sectionDateLabel(DateTime d) {
+/// 本地日期分段头(相册网格按日分段,键+参记录,显示点 tm() 落地):
+/// 'date.today' / 'date.yesterday' / 同年 'date.day'{m,d,w} /
+/// 跨年 'date.dayYear'{y,m,d,w}(w = 'date.weekdayN' 嵌套记录,tMsg
+/// 递归解析)。
+L10nMessage sectionDateLabel(DateTime d) {
   final local = d.toLocal();
   final now = DateTime.now();
   final today = DateTime(now.year, now.month, now.day);
   final day = DateTime(local.year, local.month, local.day);
   final diffDays = today.difference(day).inDays;
-  if (diffDays == 0 && today.day == local.day) return '今天';
-  if (diffDays == 1) return '昨天';
-  final year = local.year == now.year ? '' : '${local.year}年';
-  return '$year${local.month}月${local.day}日 ${_weekdays[local.weekday - 1]}';
+  if (diffDays == 0 && today.day == local.day) {
+    return (key: 'date.today', args: null);
+  }
+  if (diffDays == 1) return (key: 'date.yesterday', args: null);
+  final L10nMessage w = (key: 'date.weekday${local.weekday}', args: null);
+  if (local.year == now.year) {
+    return (
+      key: 'date.day',
+      args: {'m': local.month, 'd': local.day, 'w': w},
+    );
+  }
+  return (
+    key: 'date.dayYear',
+    args: {'y': local.year, 'm': local.month, 'd': local.day, 'w': w},
+  );
 }

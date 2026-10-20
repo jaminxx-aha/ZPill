@@ -19,6 +19,7 @@ import 'package:nikon_pill/features/remote/remote_controller.dart';
 import 'package:nikon_pill/features/remote/remote_page.dart';
 import 'package:nikon_pill/features/remote/shooting_param_catalog.dart';
 import 'package:nikon_pill/features/shell/home_shell.dart';
+import 'package:nikon_pill/l10n/message.dart';
 
 /// 假传输:双道应答回放。连接沿有两条独立链并发入队 —— 控制器链
 /// (参数读,走 FIFO 兜底道)与引擎链(0x9201/0x9428/0x9202,按 op
@@ -70,7 +71,7 @@ final class _FakeConnection implements CameraConnection {
   CameraLinkState get state => CameraLinkState.disconnected;
 
   @override
-  String? get error => null;
+  L10nMessage? get error => null;
 
   @override
   String? get deviceName => null;

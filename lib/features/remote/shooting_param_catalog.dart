@@ -29,6 +29,7 @@ library;
 
 import '../../core/ptp/device_prop.dart';
 import '../../core/ptp/operation_codes.dart';
+import '../../l10n/message.dart';
 
 /// 0xD061 对焦模式的 MF 值集(尼康方言全表:0=AF-S/1=AF-C/2=AF-F/
 /// 3=MF(固定)/4=MF(选择)/5=AF-A;libgphoto2 config.c,nico Z fc 实证
@@ -200,14 +201,9 @@ final _kEvPickValues = <int>[
 /// 白平衡色温 0xD01E:开尔文裸值。
 String _formatColorTemp(int v) => '${v}K';
 
-/// 优化校准 0xD200 段位:101-120 创意组 / 201-209 自定义 / 301-309 云下载
-/// (内置 1-11 与创意组成员走枚举表)。
-String _formatPicCtrl(int v) {
-  if (v >= 101 && v <= 120) return '创意 ${v - 100}';
-  if (v >= 201 && v <= 209) return '自定义 ${v - 200}';
-  if (v >= 301 && v <= 309) return '云 ${v - 300}';
-  return '$v';
-}
+/// 优化校准 0xD200 段位(101-120 创意组 / 201-209 自定义 / 301-309 云
+/// 下载):键化走 displayParamValue(键+{n} 参,目录 display 无参通道;
+/// 内置 1-11 与创意组成员走枚举表)。
 
 /// 白平衡值空间标签(静照 0x5005 与视频 0xD23A 共用 —— 官方 §6.5.3.9:
 /// 视频表复用静照表并加 0x8015「同照片设置」;尼康方言,verify-on-HW)。
@@ -535,7 +531,6 @@ final kShootingParams = <ShootingParam>[
       119: 'Binary',
       120: 'Carbon',
     },
-    format: _formatPicCtrl,
   ),
 ];
 
@@ -623,7 +618,7 @@ final kVideoShootingParams = <ShootingParam>[
     label: 'param.countUp',
     writeType: PtpDataType.uint8,
     pickValues: [0, 1],
-    enumLabels: {0: 'Rec Run', 1: 'Free Run'},
+    enumLabels: {0: 'param.recRun', 1: 'param.freeRun'},
     videoOnly: true,
   ),
   ShootingParam(
@@ -660,8 +655,8 @@ final kVideoShootingParams = <ShootingParam>[
 /// whole-size 空间)框已顶满一条轴:触屏移框(0x9205)在饱和轴被机身
 /// 钳位,「点了框不动」属相机行为非缺陷 —— AF 编辑面板常驻提示行与
 /// 切换沿 notice(RemoteController.setParam)共用此文案。
-String? afAreaAxisHint(int? value) {
-  if (value == 0x801E) return 'param.wideC1Hint';
-  if (value == 0x801F) return 'param.wideC2Hint';
+L10nMessage? afAreaAxisHint(int? value) {
+  if (value == 0x801E) return const (key: 'param.wideC1Hint', args: null);
+  if (value == 0x801F) return const (key: 'param.wideC2Hint', args: null);
   return null;
 }

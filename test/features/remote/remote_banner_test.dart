@@ -25,8 +25,9 @@ void main() {
 
   testWidgets('错误横幅:长按复制原文 + 「已复制」短反馈后回落', (tester) async {
     spyClipboard(tester);
-    await tester.pumpWidget(
-        MaterialApp(home: LiveBannerHost('remote.errBulbShutter', Colors.red)));
+    await tester.pumpWidget(MaterialApp(
+        home: LiveBannerHost(
+            (key: 'remote.errBulbShutter', args: null), Colors.red)));
     expect(find.text(bulbErr), findsOneWidget);
 
     await tester.longPress(find.text(bulbErr));
@@ -44,7 +45,8 @@ void main() {
     spyClipboard(tester);
     const saved = '已拍摄并保存到图库(SDRAM,不入卡)';
     await tester.pumpWidget(MaterialApp(
-        home: LiveBannerHost('remote.sdramSaved', Colors.green,
+        home: LiveBannerHost((key: 'remote.sdramSaved', args: null),
+            Colors.green,
             autoDismiss: true)));
     expect(find.text(saved), findsOneWidget);
 
@@ -55,8 +57,9 @@ void main() {
 
   testWidgets('错误收圆丸后:点按 = 展开 / 长按 = 复制完整原文', (tester) async {
     spyClipboard(tester);
-    await tester.pumpWidget(
-        MaterialApp(home: LiveBannerHost('remote.errBulbShutter', Colors.red)));
+    await tester.pumpWidget(MaterialApp(
+        home: LiveBannerHost(
+            (key: 'remote.errBulbShutter', args: null), Colors.red)));
     await tester.pump(const Duration(seconds: 8)); // 错误节律 8s 收圆丸
     expect(find.byIcon(Icons.priority_high), findsOneWidget);
 
