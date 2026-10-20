@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image/image.dart' as img;
 
 import 'package:nikon_pill/core/browser/object_entry.dart';
 import 'package:nikon_pill/core/browser/photo_group.dart' show baseNameOf;
@@ -291,9 +292,20 @@ void main() {
 
   setUp(() {
     dir = Directory.systemTemp.createTempSync('nikonpill_library');
+    // AppServices 惰性装配(查看器 DeSqueezedImage 首触)会起 BLE 身份
+    // 装载、传输页真单例会列下载目录,都走本通道:三个目录方法给个
+    // 无害默认(临时目录),通道错误不落进任何用例的 runAsync 排水窗。
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(MethodChannelGallerySaver.channel,
+            (call) async => switch (call.method) {
+                  'dataDir' || 'previewsDir' || 'downloadsDir' => dir.path,
+                  _ => null,
+                });
   });
 
   tearDown(() {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(MethodChannelGallerySaver.channel, null);
     if (dir.existsSync()) {
       dir.deleteSync(recursive: true);
     }
@@ -1083,6 +1095,74 @@ void main() {
     await dragLikeFinger(tester, find.byType(PageView), const Offset(600, 0));
     expect(find.text('c.jpg'), findsWidgets);
     expect(find.text('b.jpg'), findsNothing);
+  });
+
+  testWidgets('查看器预热:邻页预解码进缓存 + 缓存预算随查看器开收'
+      '(2026-10-20 翻页黑闪根修)', (tester) async {
+    // 真字节(可解码):预热命中才能从 imageCache 断言;假字节走
+    // precache 静默失败,测不出命中。
+    File writeReal(String name, DateTime modified) {
+      final f = File('${dir.path}/$name');
+      f.writeAsBytesSync(img.encodePng(img.Image(width: 8, height: 6)));
+      f.setLastModifiedSync(modified);
+      return f;
+    }
+
+    final a = writeReal('a.jpg', DateTime(2026, 10, 1));
+    writeReal('b.jpg', DateTime(2026, 10, 2));
+    final c = writeReal('c.jpg', DateTime(2026, 10, 3));
+    final cache = PaintingBinding.instance.imageCache;
+    final budgetBefore = cache.maximumSizeBytes;
+    final gallery = _FakeGallery(dir);
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    await tester.pumpWidget(host(gallery, controller));
+    await tester.pumpAndSettle();
+
+    // 倒序 c,b,a;开在中间张(b):两侧邻居都在预热射程
+    await tester.tap(find.byKey(const ValueKey('b.jpg')));
+    await tester.pumpAndSettle();
+    expect(find.text('b.jpg'), findsWidgets);
+    expect(cache.maximumSizeBytes, 512 << 20); // 查看器语境临时预算
+
+    // 预热解码(dart:io 读档 + 引擎解码):runAsync 逐窗排水到命中。
+    // 当前页 b 自己解是常驻行为,不算预热;只认两侧邻居 a/c。
+    bool bothWarmed() =>
+        cache.containsKey(FileImage(a)) && cache.containsKey(FileImage(c));
+    for (var i = 0; i < 10 && !bothWarmed(); i++) {
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)));
+      await tester.pump();
+    }
+    expect(bothWarmed(), isTrue);
+
+    // 收查看器:预算还原(高预算只随查看器存续,不动全局默认)
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    expect(cache.maximumSizeBytes, budgetBefore);
+  });
+
+  testWidgets('JPG 网格格走小档管线:落盘 + 换小档源 + gapless'
+      '(2026-10-20 缩略重刷根治)', (tester) async {
+    writeFile('a.jpg', modified: DateTime(2026, 10, 1));
+    final decoder = _FakeRawDecoder(); // 成功人设
+    final gallery = _FakeGallery(dir);
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    await tester.pumpWidget(host(gallery, controller, rawDecoder: decoder));
+    await tester.pumpAndSettle();
+
+    // 小档解码一次、落盘 thumbsDir(与 NEF/MOV 同管线同键式)
+    expect(decoder.calls, [('${dir.path}/a.jpg', 512)]);
+    expect(
+        File('${gallery.thumbs.path}/lib_a.jpg_3.jpg').existsSync(), isTrue);
+
+    // 格已换小档源:provider 指向小档文件,gapless 换源保帧不闪
+    final image = tester.widget<Image>(find.byType(Image).first);
+    expect(image.gaplessPlayback, isTrue);
+    final inner =
+        (image.image as ResizeImage).imageProvider as FileImage;
+    expect(inner.file.path, '${gallery.thumbs.path}/lib_a.jpg_3.jpg');
   });
 
   testWidgets('查看器:图片滑到视频不自动播放(装载即暂停)', (tester) async {
