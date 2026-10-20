@@ -272,6 +272,11 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
         final filtered = _filtered(files);
         return Scaffold(
           appBar: AppBar(
+            // 二十轮:标题左对齐(iOS 默认居中)——与相机页左上「相机」
+            // 标签同槽(左 16px),三 tab 顶部左位一致。centerTitle false
+            // 无 leading 时标题从默认 titleSpacing(24)起,须显式收窄。
+            centerTitle: false,
+            titleSpacing: AppSpacing.lg,
             title: Text(_selectMode
                 ? context.t('grid.selectedCount', {'n': _selected.length})
                 : context.t('shell.gallery')),
