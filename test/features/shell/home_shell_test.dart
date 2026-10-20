@@ -18,6 +18,7 @@ import 'package:nikon_pill/features/remote/live_view_overlays.dart';
 import 'package:nikon_pill/features/remote/remote_controller.dart';
 import 'package:nikon_pill/features/remote/remote_page.dart';
 import 'package:nikon_pill/features/remote/shooting_param_catalog.dart';
+import 'package:nikon_pill/features/settings/settings_page.dart';
 import 'package:nikon_pill/features/shell/home_shell.dart';
 import 'package:nikon_pill/l10n/message.dart';
 
@@ -706,5 +707,141 @@ void main() {
     tester.view.physicalSize = const Size(2400, 800);
     await tester.pumpAndSettle();
     expect(orientationCalls(), hasLength(3), reason: '旋转零方向消息');
+  });
+
+  testWidgets('横滑切台:相机→图库→设置线性往复,底栏选中跟随,尽头不回绕',
+      (tester) async {
+    tester.view
+      ..physicalSize = const Size(800, 2400)
+      ..devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    final f = _fakes();
+    addTearDown(f.connCtrl.dispose);
+    addTearDown(f.remote.dispose);
+
+    await tester.pumpWidget(MaterialApp(
+        home: HomeShell(
+            connectionController: f.connCtrl, remoteController: f.remote)));
+    await tester.pumpAndSettle();
+    expect(_selectedIndex(tester), 0, reason: '初始在相机 tab');
+
+    // 左滑向深:相机→图库→设置(一次拖拽恰好跨一页:PageScrollPhysics
+    // 落点按半页阈值取整)。
+    await tester.drag(find.byType(PageView), const Offset(-500, 0));
+    await tester.pumpAndSettle();
+    expect(_selectedIndex(tester), 1, reason: '左滑进图库,底栏跟随');
+    await tester.drag(find.byType(PageView), const Offset(-500, 0));
+    await tester.pumpAndSettle();
+    expect(_selectedIndex(tester), 2, reason: '再左滑进设置');
+
+    // 右滑向浅:设置→图库→相机。
+    await tester.drag(find.byType(PageView), const Offset(500, 0));
+    await tester.pumpAndSettle();
+    expect(_selectedIndex(tester), 1);
+    await tester.drag(find.byType(PageView), const Offset(500, 0));
+    await tester.pumpAndSettle();
+    expect(_selectedIndex(tester), 0, reason: '滑回相机');
+
+    // 尽头不回绕:设置页上再左滑,停在设置(线性往复,不绕回相机)。
+    await tester.drag(find.byType(PageView), const Offset(-500, 0));
+    await tester.pumpAndSettle();
+    await tester.drag(find.byType(PageView), const Offset(-500, 0));
+    await tester.pumpAndSettle();
+    expect(_selectedIndex(tester), 2);
+    await tester.drag(find.byType(PageView), const Offset(-500, 0));
+    await tester.pumpAndSettle();
+    expect(_selectedIndex(tester), 2, reason: '设置上左滑尽头不回绕');
+  });
+
+  testWidgets('连接中横滑切台:取景照开不停(0x9201 不重发、0x9202 不发、'
+      '首帧后轮询挂起)', (tester) async {
+    tester.view
+      ..physicalSize = const Size(800, 2400)
+      ..devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    final f = _fakes();
+    addTearDown(f.connCtrl.dispose);
+    addTearDown(f.remote.dispose);
+
+    _scriptParams(f.transport); // connected → 控制器沿参数刷新(FIFO 道)
+    f.transport
+      ..okFor(NikonOperationCode.startLiveView) // 0x9201 连接即取景(引擎道)
+      ..okFor(NikonOperationCode.getLiveViewImageEx,
+          data: _realJpeg()); // 首帧(引擎道,此后 delay 挂起)
+    await tester.pumpWidget(MaterialApp(
+        home: HomeShell(
+            connectionController: f.connCtrl, remoteController: f.remote)));
+    await tester.pumpAndSettle();
+    f.conn.statesCtrl.add(CameraLinkState.connected);
+    await tester.pumpAndSettle();
+    expect(f.remote.liveViewActive, isTrue);
+
+    // 横滑到图库:与底栏切台同一契约 —— 滑台只挂帧轮询,取景生命周期
+    // 跟连接走。
+    await tester.drag(find.byType(PageView), const Offset(-500, 0));
+    await tester.pumpAndSettle();
+    expect(_selectedIndex(tester), 1);
+    expect(f.remote.liveViewActive, isTrue);
+    expect(
+        f.transport.requests
+            .where((r) => r.opcode == NikonOperationCode.endLiveView),
+        isEmpty,
+        reason: '横滑切台不发 0x9202');
+    expect(
+        f.transport.requests
+            .where((r) => r.opcode == NikonOperationCode.startLiveView),
+        hasLength(1),
+        reason: '横滑切台不重启取景');
+    expect(
+        f.transport.requests
+            .where((r) => r.opcode == NikonOperationCode.getLiveViewImageEx),
+        hasLength(1),
+        reason: '拍摄页未挂载:首帧后轮询挂起');
+
+    // 滑回相机:同样不重启取景。
+    await tester.drag(find.byType(PageView), const Offset(500, 0));
+    await tester.pumpAndSettle();
+    expect(_selectedIndex(tester), 0);
+    expect(f.remote.liveViewActive, isTrue);
+    expect(
+        f.transport.requests
+            .where((r) => r.opcode == NikonOperationCode.startLiveView),
+        hasLength(1));
+  });
+
+  testWidgets('横滑往返页 State 常驻:设置页滑出 cacheExtent(相邻一页)'
+      '不卸载重建(keepalive 等价旧 IndexedStack)', (tester) async {
+    tester.view
+      ..physicalSize = const Size(800, 2400)
+      ..devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    final f = _fakes();
+    addTearDown(f.connCtrl.dispose);
+    addTearDown(f.remote.dispose);
+
+    await tester.pumpWidget(MaterialApp(
+        home: HomeShell(
+            connectionController: f.connCtrl, remoteController: f.remote)));
+    await tester.pumpAndSettle();
+
+    // 相机→图库→设置:首次建设置页,记下 element。
+    await tester.drag(find.byType(PageView), const Offset(-500, 0));
+    await tester.pumpAndSettle();
+    await tester.drag(find.byType(PageView), const Offset(-500, 0));
+    await tester.pumpAndSettle();
+    final before = tester.element(find.byType(SettingsPage));
+
+    // 设置→图库→相机:相机页上设置页落在 cacheExtent(1 页)之外 ——
+    // keepalive 必须钉住;若卸载重建,树里找不到旧 element。
+    await tester.drag(find.byType(PageView), const Offset(500, 0));
+    await tester.pumpAndSettle();
+    await tester.drag(find.byType(PageView), const Offset(500, 0));
+    await tester.pumpAndSettle();
+    expect(_selectedIndex(tester), 0);
+    final survivor = find.byType(SettingsPage, skipOffstage: false);
+    expect(survivor, findsOneWidget,
+        reason: 'keepalive:设置页滑出 cache 仍挂在树上(未卸载)');
+    expect(identical(before, tester.element(survivor)), isTrue,
+        reason: 'element 不换新(未重建,State 原地保留)');
   });
 }
