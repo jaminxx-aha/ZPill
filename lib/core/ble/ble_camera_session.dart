@@ -551,6 +551,10 @@ final class BleCameraSession {
   /// ready 沿一次定位更新待办(每次 ready 重置;首个过闸拍消费)。
   bool _readyOneShotPending = false;
 
+  /// 握手起始连续被踢计数(成功 ready 清零;瞬时踢 2s 快试,持续踢换
+  /// 引导文案,见 handshakeStartFail 处)。
+  int _kickStreak = 0;
+
   /// 定位到达(定位流回调,事件驱动)。ready、注入开(geoEnabled)、
   /// 过写闸且过去重门(距上次成功注入 <3s 且位移 <1.1m 跳过,见
   /// [BleKeepalive])即写 GEO;写闸期缓存待回补(不弃点)。
@@ -653,7 +657,12 @@ final class BleCameraSession {
     } on Exception catch (e) {
       _pendingFix = fix;
       _gateWritesUntil = t.add(writeGate);
-      lastError = (key: 'ble.geoWriteFail', args: {'e': e.toString()});
+      // 断链类写失败不上红字(2026-10-21 用户反馈):链路死亡沿自己会
+      // 接手(断连 → 2s 快试重连 → ready 沿缓存回补),红字只留真实拒
+      // 收(GPS 会话未醒等)。判定 = 平台错误码 disconnected。
+      if (e is! PlatformException || e.code != 'disconnected') {
+        lastError = (key: 'ble.geoWriteFail', args: {'e': e.toString()});
+      }
     }
   }
 
@@ -662,7 +671,10 @@ final class BleCameraSession {
       await _host.write(kNikonCharTime, TimePayload.build(t));
       _lastTimeOkAt = t;
     } on Exception catch (e) {
-      lastError = (key: 'ble.timeWriteFail', args: {'e': e.toString()});
+      // 断链静默同 _sendGeo:重连 ready 沿 TIME 锚清零,首拍即补校时。
+      if (e is! PlatformException || e.code != 'disconnected') {
+        lastError = (key: 'ble.timeWriteFail', args: {'e': e.toString()});
+      }
     }
   }
 
@@ -738,7 +750,18 @@ final class BleCameraSession {
           // 失败落盘(AppLog.e → errorTail/tail.log):握手起始失败的
           // 原生异常串上盘,真机排障唯一持久面(2026-10-21 夜教训)。
           AppLog.e(AppLog.ble, 'handshake start FAIL $e');
-          lastError = (key: 'ble.handshakeStartFail', args: {'e': e.toString()});
+          // 连续拒绝计数:kick = 相机接受链路后立刻掐 —— 瞬时态(唤醒
+          // 窗/状态切换)2s 快试即可过;持续态(≥6 次)= 相机侧接受通
+          // 道楔死(2026-10-21 实证:GEO 写到一半链路死,16-60s 慢试也
+          // 不恢复,相机重启才解)→ 换引导文案,别无限刷原始错误。
+          _kickStreak++;
+          if (_kickStreak >= 6) {
+            lastError = (key: 'ble.reconnectRejected', args: null);
+          } else {
+            lastError =
+                (key: 'ble.handshakeStartFail', args: {'e': e.toString()});
+            if (_kickStreak < 4) _backoffStep = 0; // 瞬时踢:2s 快试
+          }
           _failHandshake();
         }
       case BleNotified(:final uuid, :final data):
@@ -1126,6 +1149,7 @@ final class BleCameraSession {
     // 过闸拍,缓存点带当前时刻立刻补发一笔,不等流首帧/30s 保鲜窗。
     _readyOneShotPending = true;
     _setState(BleSessionState.ready);
+    _kickStreak = 0; // 连上即清连续拒绝计数
     _handshake?.complete();
     _handshake = null;
     _trace('配对成功 ✓ device=${stage1.device.toRadixString(16)}');
@@ -1140,6 +1164,8 @@ final class BleCameraSession {
     _stage3Sent = false;
     _handshake?.completeError(BlePairingException(lastError?.key ?? '握手失败'));
     _handshake = null;
+    // 退避不在此复位:kick 类瞬时失败由 handshakeStartFail 处按连续计
+    // 数做 2s 快试;持续踢(相机楔死)让步进照常爬升停止锤击。
     _setState(BleSessionState.idle);
   }
 

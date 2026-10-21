@@ -88,6 +88,8 @@ const Map<String, String> zhCatalog = {
   'ble.geoWriteFail': 'GEO 写失败:{e}',
   'ble.timeWriteFail': 'TIME 写失败:{e}',
   'ble.handshakeStartFail': '握手起始失败:{e}',
+  'ble.reconnectRejected':
+      '相机多次拒绝连接 —— 请重启相机后重试;仍不行请重新配对',
   'ble.handshakeDisconnected': '握手期间断连',
   'ble.pairFrameLength': 'PAIR 帧长度异常({n})',
   'ble.stage2NoSalt': 'stage2 无 salt 命中,握手失败',

@@ -56,37 +56,56 @@ String _scanMergeKey(BleDevice d) => d.name.isEmpty
     ? 'uuid:${d.uuid}'
     : 'n:${d.name.replaceAll(RegExp(r'[\s_]+'), '').toLowerCase()}';
 
-/// 行合并(纯函数,原地改行返回同表):①归一化键命中 → 整条换新;
-/// ②**缩短名前缀命中**(一方名是另一方前缀,双方非空)→ 同机身:名取
-/// **更长**一方(信息多者),地址/信号/mfg 取最新事件,行身份随之生长
-/// (`Z_f_` 行遇 `Z_f_8014411` 即长成后者);③miss 追加。前缀判定在两台
-/// 同型号机身同播且其一被截断时理论可能张冠李戴(截断名无序列号可
-/// 辨),实测单机身场景,接受。
+/// 行合并(纯函数,原地改行返回同表),四级键从严到宽:
+/// ①归一化名键命中 → 整条换新;②**同配对关系(deviceId 相等)即同
+/// 机身** —— 相机的次要广播(睡眠/省电载荷)可不带名(2026-10-21 截
+/// 图实证:Z_f_8014411 与「(无名)」两行并存),名系规则够不着它,而
+/// 0x0399 mfg 里的 deviceId 标识配对关系、重新配对才更换,跨载荷稳
+/// 定;③缩短名前缀命中(一方名是另一方前缀,双方非空)→ 同机身:名取
+/// **更长**一方(信息多者),行身份随之生长(`Z_f_` 行遇 `Z_f_8014411`
+/// 即长成后者);④miss 追加。合并行地址/信号/mfg 恒取最新事件,名取
+/// 非空/更长一方。前缀判定在两台同型号机身同播且其一被截断时理论可能
+/// 张冠李戴(截断名无序列号可辨),实测单机身场景,接受。
 List<ScanRow> mergeScanRow(
     List<ScanRow> current, BleDevice device, DateTime now) {
+  ScanRow mergedRow(ScanRow row) => ScanRow(
+        BleDevice(
+          name: device.name.isEmpty
+              ? row.device.name
+              : (row.device.name.isEmpty ||
+                      device.name.length >= row.device.name.length
+                  ? device.name
+                  : row.device.name),
+          uuid: device.uuid,
+          rssi: device.rssi,
+          mfgData: device.mfgData,
+        ),
+        now,
+      );
   final key = _scanMergeKey(device);
   final i = current.indexWhere((r) => _scanMergeKey(r.device) == key);
   if (i >= 0) {
     current[i]
-      ..device = device
+      ..device = mergedRow(current[i]).device
       ..seenAt = now;
     return current;
+  }
+  final devId = expectedControllerDeviceId(device.mfgData);
+  if (devId != null) {
+    final j = current
+        .indexWhere((r) => expectedControllerDeviceId(r.device.mfgData) == devId);
+    if (j >= 0) {
+      current[j] = mergedRow(current[j]);
+      return current;
+    }
   }
   if (device.name.isNotEmpty) {
     for (final r in current) {
       if (r.device.name.isEmpty) continue;
       if (r.device.name.startsWith(device.name) ||
           device.name.startsWith(r.device.name)) {
-        final name = r.device.name.length >= device.name.length
-            ? r.device.name
-            : device.name;
-        r
-          ..device = BleDevice(
-              name: name,
-              uuid: device.uuid,
-              rssi: device.rssi,
-              mfgData: device.mfgData)
-          ..seenAt = now;
+        final k = current.indexOf(r);
+        current[k] = mergedRow(current[k]);
         return current;
       }
     }
@@ -174,6 +193,14 @@ class BlePairPanelState extends State<BlePairPanel>
     _sessionState = _session.state;
     _stateSub = _session.states.listen((s) {
       if (mounted) setState(() => _sessionState = s);
+      // ready 沿驱动接管(2026-10-21 实证:面板在非 ready 态打开 = 挂
+      // 起,会话其后连上时挂起无人解除 → 注入层冻死、GPS 零写入;
+      // StateTracker updatingLocation=false 实锤)。resume 幂等:驱动已
+      // 在跑则仅清挂起旗标,重连循环照旧由驱动承担(bleDriverRunning
+      // 让位护栏在)。
+      if (s == BleSessionState.ready) {
+        AppServices.instance.resumeBleDriver();
+      }
       // 十五轮:页面开着的重连常驻 —— 掉线自动入 reconnecting 后,面板
       // 就是重连执行者(驱动已挂起),自动循环跑起来(深睡闸门开着,
       // 与驱动同参);相机就绪即连上。就绪/闲态沿不自动起(2026-10-19
@@ -305,6 +332,14 @@ class BlePairPanelState extends State<BlePairPanel>
         AppLog.w(AppLog.ble,
             '错误 $code${uuid == null ? '' : ' @$uuid'}:$message');
     }
+  }
+
+  /// 「其它设备」列示源:扫描行滤掉已配对相机(它在上面有自己的行 +
+  /// 状态点;2026-10-21 用户定稿「其它设备中不再出现已配对的设备」)。
+  List<ScanRow> _othersDevices() {
+    final paired = _pairedScanRow();
+    if (paired == null) return _scanRows;
+    return _scanRows.where((r) => !identical(r, paired)).toList();
   }
 
   /// 过期修剪:行 5s 未再见到即摘除 —— 相机退菜单/睡眠 = 停广播 = 行
@@ -675,6 +710,53 @@ class BlePairPanelState extends State<BlePairPanel>
     return null;
   }
 
+  /// 已配对相机在扫描行里的投影(null = 不在播/离线):关系 id 优先
+  /// (0x0399 deviceId == 我方),回落归一化广播名 == 档案相机名。
+  ScanRow? _pairedScanRow() {
+    final own = _ownDeviceId;
+    for (final r in _scanRows) {
+      if (own != null &&
+          expectedControllerDeviceId(r.device.mfgData) == own) {
+        return r;
+      }
+    }
+    final name = _saved?.cameraName;
+    if (name == null || name.isEmpty) return null;
+    final key =
+        'n:${name.replaceAll(RegExp(r'[\s_]+'), '').toLowerCase()}';
+    for (final r in _scanRows) {
+      if (_scanMergeKey(r.device) == key) return r;
+    }
+    return null;
+  }
+
+  /// 已配对行状态点(2026-10-21 用户定稿:状态值进配对行、设备名后):
+  /// 连接中 = 绿;未连接但广播可见 = 电源态色(绿/待机黄,配对菜单态
+  /// 广播无状态字节,能扫到即在播,按绿);完全不在线(扫描行里都没
+  /// 有)= 灰。
+  Widget _pairedStatusDot(BuildContext context) {
+    final theme = Theme.of(context);
+    Color color;
+    if (_sessionState == BleSessionState.ready) {
+      color = AppColors.success(context);
+    } else {
+      final row = _pairedScanRow();
+      if (row == null) {
+        color = theme.disabledColor;
+      } else {
+        color = advertisedPowerState(row.device.mfgData) ==
+                NikonAdvPowerState.standby
+            ? AppColors.accentYellow
+            : AppColors.success(context);
+      }
+    }
+    return Container(
+      width: 8,
+      height: 8,
+      decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+    );
+  }
+
   /// 扫描行电源态点(2026-10-19 用户定稿:文字换色点):待机黄点
   /// (accentYellow)/ 就绪绿点(success);无状态字节(mfg 不足 7B:
   /// 配对菜单态/异厂商)不出点。待机点是「点连接为何唤不醒」的答案
@@ -742,7 +824,15 @@ class BlePairPanelState extends State<BlePairPanel>
                 // 展示名 = 相机广播名(旧档缺字段回落控制器名)——
                 // controllerName 是本机在相机侧的注册名,不是相机。
                 // 十二轮:就绪行不带「最近」徽(已连接时无意义)。
-                title: Text(_saved!.displayName),
+                // 2026-10-21:名后状态点(绿=连接在线)。
+                title: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Flexible(child: Text(_saved!.displayName)),
+                    const SizedBox(width: AppSpacing.sm),
+                    _pairedStatusDot(context),
+                  ],
+                ),
                 // 行尾轻量操作(2026-10-19 二轮:描边钮整排太重)。
                 trailing: TextButton(
                   onPressed: () {
@@ -760,6 +850,9 @@ class BlePairPanelState extends State<BlePairPanel>
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Flexible(child: Text(_saved!.displayName)),
+                    const SizedBox(width: AppSpacing.sm),
+                    // 2026-10-21:名后状态点(绿=广播在线/待机黄/离线灰)。
+                    _pairedStatusDot(context),
                     const SizedBox(width: AppSpacing.sm),
                     const ConnRecentBadge(),
                   ],
@@ -836,7 +929,9 @@ class BlePairPanelState extends State<BlePairPanel>
             clipBehavior: Clip.antiAlias,
             child: Material(
               type: MaterialType.transparency,
-              child: _scanRows.isEmpty
+              // 2026-10-21:已配对相机不再进「其它设备」(它在上面有自己的
+              // 行 + 状态点;用户定稿「其它设备中不再出现已配对的设备」)。
+              child: _othersDevices().isEmpty
                   ? const _GroupEmpty(text: 'conn.noOtherDevices')
                   // ListTile 在最近 Material 祖先上画底/墨效:透明
                   // Material 垫在 DecoratedBox 与子项之间(ConnTileGroup
@@ -847,7 +942,7 @@ class BlePairPanelState extends State<BlePairPanel>
                         shrinkWrap: true,
                         padding: const EdgeInsets.symmetric(vertical: 4),
                         children: [
-                          for (final row in _scanRows)
+                          for (final row in _othersDevices())
                             _scanRow(context, row.device),
                         ],
                       ),

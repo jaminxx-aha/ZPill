@@ -1471,20 +1471,12 @@ class _ConnectionPageState extends State<ConnectionPage>
                   child: Text(context.t('ble.openSystemBluetooth')),
                 ),
               ],
-              // 相机 Wi-Fi 动作(就绪才挂):唤醒 = 读 0x2004 凭据(SnapBridge
-              // 序)再写 0x2005,成功沿断 BLE —— 相机等链路释放才开热点。
-              if (ready) ...[
-                const SizedBox(height: AppSpacing.md),
-                FilledButton.tonalIcon(
-                  icon: const Icon(Icons.wifi_tethering),
-                  label: Text(context.t('conn.wakeCameraWifi')),
-                  onPressed: () =>
-                      unawaited(_wakeWifiWithCredentials(context, controller)),
-                ),
-              ],
               const SizedBox(height: AppSpacing.md),
               // 配对面板(原独立配对页整体迁入):「已配对 / 其它设备」两段
-              // 列表;打开沿自动扫描(静默)并挂起注入驱动,页面内全手动。
+              // 列表;打开沿自动扫描(静默)。2026-10-21 用户定稿:面板在
+              // 唤醒动作**之前** —— 已连接行与已配对行位置重叠,连接前后
+              // 设备行不跳位(唤醒动作让位到面板之后);打开沿不再挂起驱
+              // 动(ready 会话不挂起,见 AppServices.suspendBleDriver)。
               // key = hero 连最近/取消的句柄(八/九轮);重连循环起停上抛
               //(九轮,hero 涟漪跟面板循环,不只跟会话态);session =
               // 控制器会话(十二轮注入:生产与 AppServices 驱动同一只,
@@ -1497,6 +1489,18 @@ class _ConnectionPageState extends State<ConnectionPage>
                 onSystemBondNeeded: controller.markAwaitSystemBond,
                 onRetryingChanged: (active) => _bleRetrying.value = active,
               ),
+              // 相机 Wi-Fi 动作(就绪才挂):唤醒 = 读 0x2004 凭据(SnapBridge
+              // 序)再写 0x2005,成功沿断 BLE —— 相机等链路释放才开热点。
+              // 2026-10-21 移到面板之后(换位定稿,见上)。
+              if (ready) ...[
+                const SizedBox(height: AppSpacing.md),
+                FilledButton.tonalIcon(
+                  icon: const Icon(Icons.wifi_tethering),
+                  label: Text(context.t('conn.wakeCameraWifi')),
+                  onPressed: () =>
+                      unawaited(_wakeWifiWithCredentials(context, controller)),
+                ),
+              ],
             ],
           ),
         ),

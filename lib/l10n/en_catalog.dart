@@ -108,6 +108,8 @@ const Map<String, String> enCatalog = {
   'ble.geoWriteFail': 'GEO write failed: {e}',
   'ble.timeWriteFail': 'TIME write failed: {e}',
   'ble.handshakeStartFail': 'Handshake start failed: {e}',
+  'ble.reconnectRejected':
+      'Camera repeatedly refused the connection — restart the camera and retry; if it persists, re-pair',
   'ble.handshakeDisconnected': 'Disconnected during handshake',
   'ble.pairFrameLength': 'PAIR frame length abnormal ({n})',
   'ble.stage2NoSalt': 'No salt match in stage2 — handshake failed',

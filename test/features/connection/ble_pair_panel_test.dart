@@ -149,12 +149,15 @@ void main() {
     await disposePage(tester);
   });
 
-  testWidgets('有身份 + 扫描结果同 ID:相机在等我们自己,无指引', (tester) async {
+  testWidgets('有身份 + 扫描结果同 ID:相机在等我们自己,无指引;且不进其它设备',
+      (tester) async {
     await boot(tester,
         scanResult: [deviceMap(mfgOf(0x56781234))],
         saved: identityOf(0x56781234));
 
-    expect(find.text('Z f_8014411'), findsOneWidget);
+    // 2026-10-21:已配对相机不再进「其它设备」(它有自己的行 + 状态点;
+    // 本用例档案无 cameraName,配对行显示回落名,扫描行应被滤除)。
+    expect(find.text('Z f_8014411'), findsNothing);
     expect(find.textContaining('此相机在等别的手机'), findsNothing);
     await disposePage(tester);
   });
@@ -457,6 +460,26 @@ void main() {
       expect(rows.length, 3);
       expect(rows.map((r) => r.device.uuid),
           ['RPA-A', 'RPA-D', 'RPA-E']);
+    });
+
+    test('同配对关系(deviceId 相等):无名次要载荷并入有名行,名保留', () {
+      Uint8List mfg(int id) => Uint8List.fromList([
+            0x99, 0x03, id & 0xFF, (id >> 8) & 0xFF, //
+            (id >> 16) & 0xFF, (id >> 24) & 0xFF, 0x1E,
+          ]);
+      final named = BleDevice(
+          name: 'Z_f_8014411', uuid: 'RPA-A', rssi: -50, mfgData: mfg(0x11223344));
+      final nameless = BleDevice(
+          name: '', uuid: 'RPA-G', rssi: -58, mfgData: mfg(0x11223344));
+      final rows = mergeScanRow(mergeScanRow([], named, t0), nameless, t1);
+      expect(rows.length, 1);
+      expect(rows.single.device.name, 'Z_f_8014411'); // 名保留
+      expect(rows.single.device.uuid, 'RPA-G'); // 地址取最新
+      // 不同配对关系(别家相机/别的关系)不误并
+      final rows2 = mergeScanRow(mergeScanRow([], named, t0),
+          BleDevice(name: '', uuid: 'RPA-H', rssi: -58, mfgData: mfg(0x55667788)),
+          t1);
+      expect(rows2.length, 2);
     });
 
     test('同键命中优先,行 seenAt 刷新(过期修剪依据)', () {

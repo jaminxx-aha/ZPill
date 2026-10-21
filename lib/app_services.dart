@@ -547,6 +547,16 @@ final class AppServices {
   /// 不应拆链(真机 2026-10-14:挂起沿 disconnect 把 ready 链路也拆了,
   /// 连接页「配对管理」一点蓝牙就断)。
   void suspendBleDriver() {
+    // ready 会话不挂起(2026-10-21 实证:面板是弹层/KeepAlive 常驻,长
+    // 开不关 = 挂起沿把整套注入 machinery 冻死 —— 开关开着、会话
+    // ready、相机空缓存零进账,StateTracker updatingLocation=false 实
+    // 锤)。ready 与面板手动流程无冲突:扫描/配对已收口,重连由驱动
+    // 承担(面板循环 bleDriverRunning 让位),解除配对沿身份清空驱动
+    // 自停。仅非 ready 态(扫描/配对/idle)才挂,防手动流程撞车。
+    if (bleSession.state == BleSessionState.ready) {
+      _bleSuspended = false;
+      return;
+    }
     _bleSuspended = true;
     if (_bleRunning) {
       _bleRunning = false;

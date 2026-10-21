@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:flutter/services.dart' show PlatformException;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nikon_pill/core/ble/ble_camera_session.dart';
 import 'package:nikon_pill/core/ble/blowfish_hasher.dart';
@@ -511,6 +512,46 @@ void main() {
     // 重连重置 TIME 锚(ready 沿 _lastTimeOkAt=null)→ 首拍即校时
     // (SnapBridge 每连必校时同款)。
     expect(host.countWrite(kNikonCharTime), 2);
+  });
+
+  test('握手失败退避归零:相机踢链=它醒着,下一拍 2s 快试(不背爬高旧账)', () async {
+    await runHandshake();
+    final saved = session.identity!;
+    host.emit(const BleDisconnected('P1'));
+    await pump();
+    host.reconnectDeviceId = null; // 爬高:三轮无命中
+    for (var i = 0; i < 3; i++) {
+      await session.retryReconnect();
+    }
+    expect(session.nextRetryDelay, const Duration(seconds: 8));
+    // 踢链:扫到并连上,stage1 写入即被掐(连上即踢)
+    host.reconnectDeviceId = saved.deviceId;
+    host.writeError = Exception('连接已断开');
+    final fut = session.retryReconnect();
+    await pump();
+    expect(session.state, BleSessionState.pairing);
+    host.emit(const BleConnected(
+        uuid: 'P1', characteristics: {}, writeWithoutResponseMtu: 20));
+    await pump(); // stage1 写 → 抛 → handshakeStartFail → 归零 + idle
+    expect(await fut, isFalse);
+    expect(session.state, BleSessionState.reconnecting); // 重连循环不塌回
+    expect(session.nextRetryDelay, const Duration(seconds: 2)); // 0+1 档快试
+    host.writeError = null;
+  });
+
+  test('断链类写失败不上红字:静默缓存;非断链失败照常上报', () async {
+    await runHandshake();
+    now = now.add(const Duration(seconds: 3)); // 过首写门
+    host.writeError = PlatformException(
+        code: 'disconnected', message: '连接已断开');    session.onFix(fixAt(35.5)); // 直发 → 断链失败:静默
+    expect(session.lastError, isNull);
+    // 非断链失败(GPS 会话拒收类):红字照报
+    host.writeError = Exception('GPS 会话未醒');
+    now = now.add(const Duration(seconds: 3)); // 过失败闸(2.5s)
+    session.onFix(fixAt(35.50001));
+    await pump(); // 直发是 unawaited 异步:让写失败落地再断言
+    expect(session.lastError?.key, 'ble.geoWriteFail');
+    host.writeError = null;
   });
 
   test('ready 断连 → reconnecting;重连复用身份(deviceId/nonce 不变)', () async {
