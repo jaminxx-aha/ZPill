@@ -802,6 +802,50 @@ void main() {
       expect(find.text('当前方式:AP 模式'), findsNothing, reason: '「当前方式」字样整删');
     });
 
+    testWidgets('AP 凭据卡(EN):标签列自适应,Password 不折行不省略;'
+        '整卡两行共用一宽列对齐', (tester) async {
+      // EN + 测试字体(Ahem 宽度夸张)下 AP 视图在默认 600 高视口本就
+      // 垂直溢出(与标签列无关的既有形态,真机字体紧凑不触)—— 加高
+      // 视口让页面放得下,聚焦标签列本身。
+      tester.view
+        ..physicalSize = const Size(800, 2400)
+        ..devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      final controller = ConnectionController(connection: _FakeConnection());
+      await tester.pumpWidget(L10nScope(
+        code: 'en',
+        child: MaterialApp(home: ConnectionPage(controller: controller)),
+      ));
+      await tester.pumpAndSettle();
+      controller.selectMethod(ConnectionMethod.ap);
+      controller.cameraApCredentials = const WifiCredentials(
+          ssid: 'Zf_80114411',
+          password: 'wpa2pass99',
+          security: 0x02,
+          keySource: kWifiKeyFixed);
+      await tester.pumpAndSettle();
+
+      // EN 长词根治(旧 44 钉宽下 Password 折行):标签列按最长标签
+      // 实测放行 —— 渲染宽 ≥ 自然宽即单行全显(不折行也不省略)。
+      expect(tester.takeException(), isNull);
+      final element = tester.element(find.text('Password'));
+      final natural = TextPainter(
+        text: TextSpan(
+            text: 'Password', style: DefaultTextStyle.of(element).style),
+        textScaler: MediaQuery.textScalerOf(element),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      final naturalWidth = natural.width;
+      natural.dispose();
+      expect(tester.getSize(find.text('Password')).width,
+          greaterThanOrEqualTo(naturalWidth),
+          reason: '标签列 ≥ 标签自然宽 → 单行全显');
+      expect(tester.getSize(find.text('SSID')).width,
+          tester.getSize(find.text('Password')).width,
+          reason: '卡内 SSID/密码两行标签列同宽(整卡列对齐)');
+      expect(find.text('wpa2pass99'), findsOneWidget);
+    });
+
     testWidgets('STA 视图:进页自动扫描(静默),两段列表点行连接', (tester) async {
       tester.view
         ..physicalSize = const Size(800, 2400)

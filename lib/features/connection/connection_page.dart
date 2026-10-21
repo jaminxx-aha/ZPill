@@ -61,6 +61,7 @@ import '../../platform/network_monitor.dart';
 import '../../platform/nsd_scanner.dart';
 import '../browser/photo_grid_page.dart';
 import '../common/widgets/confirm_dialog.dart';
+import '../common/widgets/kv_row.dart';
 import '../remote/remote_controller.dart';
 import '../remote/remote_page.dart';
 import 'ble_pair_panel.dart';
@@ -1682,47 +1683,65 @@ class _ConnectionPageState extends State<ConnectionPage>
     if (creds == null) {
       return const [];
     }
+    // 标签列宽:卡内各行(SSID/密码)按整组标签实测共用一宽 —— 列对齐
+    // 不因行而异;zh 短标签落 44 下限观感不变(原钉宽),EN「Password」
+    // 放行不折行(原 44 钉宽 EN 长词折行/微溢出的根治)。
+    final labelWidth = kvLabelWidth(
+      context,
+      labels: [
+        context.t('SSID'),
+        if (creds.password.isNotEmpty) context.t('conn.password'),
+      ],
+      style: Theme.of(context).textTheme.bodyMedium!,
+      minWidth: 44,
+    );
     return [
       Text(context.t('conn.hotspotCred'),
           style: Theme.of(context).textTheme.labelMedium),
-      _credentialRow(context, 'SSID', creds.ssid),
+      _credentialRow(context, 'SSID', creds.ssid, labelWidth: labelWidth),
       if (creds.password.isNotEmpty)
-        _credentialRow(context, 'conn.password', creds.password),
+        _credentialRow(context, 'conn.password', creds.password,
+            labelWidth: labelWidth),
       Text(context.t('conn.security', {'s': creds.securityLabel}),
           style: Theme.of(context).textTheme.bodySmall),
     ];
   }
 
+  /// 凭据行(KvRow 收编):[labelWidth] 缺省按本行标签实测(红卡单行
+  /// 用);同卡多行由调用方传共用宽保持列对齐。44 下限 = zh 短标签的
+  /// 现行观感(原钉宽)。标签随行结构单行省略,正常文案实测宽放行。
   Widget _credentialRow(
     BuildContext context,
     String label,
-    String value,
-  ) {
+    String value, {
+    double? labelWidth,
+  }) {
     // label 原文即键(SSID 非中文,未命中原文直返);tooltip/SnackBar
     // 以 {label} 参数复用同一模板。
     final localizedLabel = context.t(label);
-    return Row(
-      children: [
-        SizedBox(width: 44, child: Text(localizedLabel)),
-        Expanded(
-          child: Text(value.isEmpty ? context.t('common.empty') : value,
-              style: const TextStyle(fontFamily: 'monospace')),
-        ),
-        IconButton(
-          icon: const Icon(Icons.copy, size: 18),
-          tooltip: context.t('conn.copyLabel', {'label': localizedLabel}),
-          onPressed: () async {
-            await Clipboard.setData(ClipboardData(text: value));
-            if (context.mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                content: Text(
-                    context.t('conn.copiedLabel', {'label': localizedLabel})),
-                duration: const Duration(seconds: 2),
-              ));
-            }
-          },
-        ),
-      ],
+    return KvRow(
+      labelWidth: labelWidth ??
+          kvLabelWidth(context,
+              labels: [localizedLabel],
+              style: Theme.of(context).textTheme.bodyMedium!,
+              minWidth: 44),
+      label: localizedLabel,
+      value: Text(value.isEmpty ? context.t('common.empty') : value,
+          style: const TextStyle(fontFamily: 'monospace')),
+      trailing: IconButton(
+        icon: const Icon(Icons.copy, size: 18),
+        tooltip: context.t('conn.copyLabel', {'label': localizedLabel}),
+        onPressed: () async {
+          await Clipboard.setData(ClipboardData(text: value));
+          if (context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+              content: Text(
+                  context.t('conn.copiedLabel', {'label': localizedLabel})),
+              duration: const Duration(seconds: 2),
+            ));
+          }
+        },
+      ),
     );
   }
 

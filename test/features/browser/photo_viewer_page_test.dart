@@ -20,6 +20,8 @@ import 'package:nikon_pill/core/transfer/transfer_task.dart';
 import 'package:nikon_pill/core/utils/byte_writer.dart';
 import 'package:nikon_pill/features/browser/photo_viewer_page.dart';
 import 'package:nikon_pill/features/common/widgets/embedded_video_player.dart';
+import 'package:nikon_pill/features/common/widgets/photo_info_sheet.dart';
+import 'package:nikon_pill/l10n/l10n.dart';
 import 'package:nikon_pill/features/transfers/transfers_page.dart';
 import 'package:nikon_pill/platform/gallery_saver.dart';
 import 'package:nikon_pill/platform/video_player.dart';
@@ -500,6 +502,67 @@ void main() {
     expect(find.text('机身'), findsNothing);
     expect(find.text('参数'), findsNothing);
     expect(find.byType(CircularProgressIndicator), findsNothing);
+  });
+
+  testWidgets('信息底单(EN):标签列自适应,Captured/Exposure 不截断;'
+      '标签色 token 化 onSurfaceVariant', (tester) async {
+    // 直呼底单(不走查看器):聚焦标签列本身。EN 最长标签 Captured/
+    // Exposure 在旧 64 钉宽下贴边/截断,自适应后单行全显。
+    await tester.pumpWidget(L10nScope(
+      code: 'en',
+      child: MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: Center(
+              child: TextButton(
+                onPressed: () => showPhotoInfoSheet(
+                  context,
+                  filename: 'DSC_0001.JPG',
+                  sizeBytes: 12345678,
+                  fallbackTime: '2026-10-01 12:00',
+                  loadExif: () async => ExifCardData(
+                      make: 'NIKON CORPORATION',
+                      model: 'NIKON Z f',
+                      lens: 'NIKKOR Z 40mm f/2',
+                      focalLengthMm: 40,
+                      fNumber: 2,
+                      exposureSec: 1 / 250,
+                      iso: 100,
+                      takenAt: DateTime(2026, 10, 1, 12)),
+                ),
+                child: const Text('open'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ));
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+    for (final label in const ['Captured', 'Exposure']) {
+      final finder = find.text(label);
+      final element = tester.element(finder);
+      final natural = TextPainter(
+        text: TextSpan(text: label, style: tester.widget<Text>(finder).style),
+        textScaler: MediaQuery.textScalerOf(element),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      final naturalWidth = natural.width;
+      natural.dispose();
+      expect(tester.getSize(finder).width, greaterThanOrEqualTo(naturalWidth),
+          reason: '$label 单行全显(标签列按最长标签放行,不折行不省略)');
+    }
+    // 两段行(文件级 + EXIF)共用一宽:列起点对齐。
+    expect(tester.getSize(find.text('File')).width,
+        tester.getSize(find.text('Captured')).width);
+    // 标签色 token 化:onSurfaceVariant(原 Colors.grey 退役)。
+    expect(
+        tester.widget<Text>(find.text('Captured')).style?.color,
+        Theme.of(tester.element(find.text('Captured')))
+            .colorScheme
+            .onSurfaceVariant);
   });
 
   testWidgets('单格式组:「下载」展开目的地后不弹面板直接整组入队',
