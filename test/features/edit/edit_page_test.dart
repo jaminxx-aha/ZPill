@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 
 import 'package:nikon_pill/core/ptpip/object_format.dart' show ObjectKind;
+import 'package:nikon_pill/features/common/widgets/states.dart';
 import 'package:nikon_pill/features/edit/edit_page.dart';
 import 'package:nikon_pill/platform/gallery_saver.dart';
 
@@ -97,6 +98,32 @@ Future<void> _pumpPage(
   await tester.pump();
 }
 
+/// 返回保护用例的落地:根页 + push 编辑页(编辑页实际总是被 push 进
+/// 栈,顶栏返回钮才在场;MaterialApp home 单路由无返回钮)。
+Future<void> _pumpPushed(WidgetTester tester,
+    {required FakeGallerySaver gallery}) async {
+  await tester.pumpWidget(MaterialApp(
+    home: Builder(
+      builder: (context) => Scaffold(
+        body: Center(
+          child: FilledButton(
+            onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+              builder: (_) => EditPage(
+                jpeg: _jpeg(),
+                filename: 'DSC_1234.jpg',
+                gallery: gallery,
+              ),
+            )),
+            child: const Text('打开编辑'),
+          ),
+        ),
+      ),
+    ),
+  ));
+  await tester.tap(find.text('打开编辑'));
+  await tester.pumpAndSettle();
+}
+
 /// compute 隔离 + 真实文件 IO 都挂在真实事件循环上,而 fake zone 的
 /// 微任务只在 pump 时刷 —— 每个真实落点都要「runAsync 窗口 + pump」
 /// 一轮。循环推进到相册导入落地且保存转圈消失;末尾不能用
@@ -121,15 +148,19 @@ void main() {
     await _pumpPage(tester, gallery: gallery, filename: 'DSC_0001.jpg');
     expect(find.text('DSC_0001.jpg'), findsOneWidget);
     expect(find.byType(Image), findsOneWidget);
+    // 预览在构造器里同步烘出:就绪即无空态/加载态闪现。
+    expect(find.byType(EmptyState), findsNothing);
+    expect(find.byType(LoadingState), findsNothing);
     expect(_saveEnabled(tester), isFalse);
     expect(_resetEnabled(tester), isFalse);
   });
 
-  testWidgets('非 JPEG:提示不可编辑,无预览', (tester) async {
+  testWidgets('非 JPEG:统一空态提示不可编辑,无预览', (tester) async {
     final gallery = FakeGallerySaver();
     await _pumpPage(tester,
         gallery: gallery, jpeg: Uint8List.fromList([1, 2, 3, 4, 5]));
-    expect(find.textContaining('无法编辑此文件'), findsOneWidget);
+    expect(find.byType(EmptyState), findsOneWidget);
+    expect(find.text('无法编辑此文件(仅支持 JPEG)'), findsOneWidget);
     expect(find.byType(Image), findsNothing);
     expect(_saveEnabled(tester), isFalse);
   });
@@ -305,6 +336,71 @@ void main() {
 
     expect(gallery.importCalls.length, 1);
     expect(find.text('未保存(已取消)'), findsOneWidget);
+  });
+
+  group('返回保护', () {
+    testWidgets('脏态:返回被拦,弹丢弃确认', (tester) async {
+      final gallery = FakeGallerySaver();
+      await _pumpPushed(tester, gallery: gallery);
+      await tester.tap(find.text('右转 90°'));
+      await tester.pump();
+      expect(_saveEnabled(tester), isTrue); // 脏
+
+      await tester.tap(find.byType(BackButton));
+      await tester.pump();
+      expect(find.byType(EditPage), findsOneWidget); // 被拦未退
+      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(find.text('放弃修改?'), findsOneWidget);
+      expect(find.text('未保存的修改将会丢失'), findsOneWidget);
+    });
+
+    testWidgets('确认丢弃:直接退出回根页', (tester) async {
+      final gallery = FakeGallerySaver();
+      await _pumpPushed(tester, gallery: gallery);
+      await tester.tap(find.text('右转 90°'));
+      await tester.pump();
+      await tester.tap(find.byType(BackButton));
+      await tester.pump();
+
+      await tester.tap(find.text('放弃'));
+      await tester.pumpAndSettle();
+      expect(find.byType(EditPage), findsNothing);
+      expect(find.text('打开编辑'), findsOneWidget); // 回到根页
+    });
+
+    testWidgets('取消:留在编辑页,参数不丢', (tester) async {
+      final gallery = FakeGallerySaver();
+      await _pumpPushed(tester, gallery: gallery);
+      await tester.tap(find.text('右转 90°'));
+      await tester.pump();
+      await tester.tap(find.byType(BackButton));
+      await tester.pump();
+
+      await tester.tap(find.text('取消'));
+      await tester.pumpAndSettle();
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(find.byType(EditPage), findsOneWidget);
+      expect(_saveEnabled(tester), isTrue); // 旋转参数仍在
+    });
+
+    testWidgets('保存成功:复位不脏,退出不再弹确认', (tester) async {
+      final gallery = FakeGallerySaver()
+        ..importResult = [Uri.parse('file:///saved/1.jpg')];
+      await _pumpPushed(tester, gallery: gallery);
+      await tester.tap(find.text('右转 90°'));
+      await tester.pump();
+      await tester.tap(find.byTooltip('保存到相册'));
+      await tester.pump(); // 转圈
+      await _drainSave(tester, gallery);
+      expect(_saveEnabled(tester), isFalse); // 保存成功沿复位
+
+      // await 落点后先泵一帧再交互(工程规律:直接 tap 会静默丢)。
+      await tester.pump();
+      await tester.tap(find.byType(BackButton));
+      await tester.pumpAndSettle();
+      expect(find.byType(AlertDialog), findsNothing); // 不弹确认
+      expect(find.byType(EditPage), findsNothing); // 直接退出
+    });
   });
 
   testWidgets('保存:所选 LUT 烘焙进输出文件(剪贴板导入反色表)', (tester) async {
