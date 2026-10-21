@@ -18,6 +18,7 @@ import '../../design/app_colors.dart';
 import '../../design/app_dimens.dart';
 import '../../l10n/l10n.dart';
 import '../browser/storage_overview_controller.dart';
+import 'connection_widgets.dart';
 import '../remote/remote_controller.dart';
 import '../remote/remote_info_pill.dart';
 
@@ -132,29 +133,34 @@ class ConnectedHeader extends StatelessWidget {
       borderRadius: BorderRadius.circular(AppRadius.sm),
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 2),
-        child: Row(
-          children: [
-            Container(
-              width: 9,
-              height: 9,
-              decoration: BoxDecoration(
-                color: AppColors.success(context),
-                shape: BoxShape.circle,
+        // 行高钉 [kConnStatusRowHeight](pill 26 本就是全行最高件):
+        // 与未连接侧状态行共常量,尾部内容增减不牵动左簇位置。
+        child: SizedBox(
+          height: kConnStatusRowHeight,
+          child: Row(
+            children: [
+              Container(
+                width: 9,
+                height: 9,
+                decoration: BoxDecoration(
+                  color: AppColors.success(context),
+                  shape: BoxShape.circle,
+                ),
               ),
-            ),
-            const SizedBox(width: AppSpacing.sm),
-            Text(
-              context.t('conn.connected'),
-              style: theme.textTheme.titleMedium
-                  ?.copyWith(fontWeight: FontWeight.w700),
-            ),
-            const Spacer(),
-            if (battery != null) ...[
-              _BatteryGauge(level: battery),
-              const SizedBox(width: AppSpacing.md),
+              const SizedBox(width: AppSpacing.sm),
+              Text(
+                context.t('conn.connected'),
+                style: theme.textTheme.titleMedium
+                    ?.copyWith(fontWeight: FontWeight.w700),
+              ),
+              const Spacer(),
+              if (battery != null) ...[
+                _BatteryGauge(level: battery),
+                const SizedBox(width: AppSpacing.md),
+              ],
+              _LinkPill(icon: linkIcon),
             ],
-            _LinkPill(icon: linkIcon),
-          ],
+          ),
         ),
       ),
     );
