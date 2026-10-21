@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../design/app_haptics.dart';
 import '../../l10n/l10n.dart';
 import 'live_design.dart';
 import 'remote_controller.dart';
@@ -233,6 +234,7 @@ Widget _shutterButton(BuildContext context, LivePalette live,
             if (controller.linkUp &&
                 !controller.capturing &&
                 !controller.intervalActive) {
+              AppHaptics.shutter(); // 按下即震(本地确认沿,不等相机应答)
               unawaited(controller.capturePressed());
             }
           }
@@ -244,6 +246,7 @@ Widget _shutterButton(BuildContext context, LivePalette live,
             if (controller.linkUp &&
                 controller.liveViewActive &&
                 !controller.capturing) {
+              AppHaptics.recordToggle(); // 起/停录确认沿
               unawaited(controller.toggleRecord());
             }
           },

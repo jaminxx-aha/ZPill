@@ -14,6 +14,7 @@
 /// 拦 maybePop 路径的系统返回/顶栏返回),保存成功沿复位,干净退出不拦。
 library;
 
+import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
@@ -29,6 +30,7 @@ import '../../core/media/xmp_rgb_table.dart' show looksLikeXmp, parseXmpRgbTable
 import '../../core/ptpip/object_format.dart' show ObjectKind;
 import '../../core/transfer/object_downloader.dart' show ObjectDownloader;
 import '../../design/app_colors.dart';
+import '../../design/app_haptics.dart';
 import '../../design/app_theme.dart';
 import '../../l10n/l10n.dart';
 import '../../platform/gallery_saver.dart';
@@ -133,6 +135,7 @@ class _EditPageState extends State<EditPage> {
       if (saved) {
         // 保存成功即收脏:回干净态(预览回原图、保存/重置复禁用、退出
         // 不再弹确认);相册取消导入则保留参数供重试。
+        unawaited(AppHaptics.success()); // 保存成功确认沿
         _reset();
       }
     } on Exception {

@@ -54,6 +54,7 @@ import '../../data/client_identity_store.dart';
 import '../../data/paired_cameras_store.dart';
 import '../../design/app_colors.dart';
 import '../../design/app_dimens.dart';
+import '../../design/app_haptics.dart';
 import '../../l10n/l10n.dart';
 import '../../l10n/message.dart';
 import '../../platform/interface_addresses.dart';
@@ -1733,6 +1734,7 @@ class _ConnectionPageState extends State<ConnectionPage>
         tooltip: context.t('conn.copyLabel', {'label': localizedLabel}),
         onPressed: () async {
           await Clipboard.setData(ClipboardData(text: value));
+          unawaited(AppHaptics.success()); // 复制成功震感(与 remote_banner 复制统一)
           if (context.mounted) {
             ScaffoldMessenger.of(context).showSnackBar(SnackBar(
               content: Text(

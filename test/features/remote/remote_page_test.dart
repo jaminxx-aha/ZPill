@@ -354,6 +354,21 @@ Uint8List _headerObject({int? videoRemainingMs}) {
 final _chipsRow = find.byWidgetPredicate(
     (w) => w is Scrollable && w.axisDirection == AxisDirection.right);
 
+/// 触感通道监听(2026-10-22 统一触感入口接线):拦 SystemChannels.platform
+/// 记录 HapticFeedback.vibrate 的强度档位串;其余消息回 null(同默认
+/// mock,不影响页面其它平台调用)。
+List<String> spyHaptics(WidgetTester tester) {
+  final calls = <String>[];
+  tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform, (call) async {
+    if (call.method == 'HapticFeedback.vibrate') {
+      calls.add(call.arguments as String);
+    }
+    return null;
+  });
+  return calls;
+}
+
 /// 竖屏视口:flutter_test 默认 800×600 = 横屏,断言竖屏布局(横滚读出
 /// 条/辅助条/动作行文字)的用例必须显式竖过来。
 void _portrait(WidgetTester tester) {
@@ -2167,6 +2182,7 @@ void main() {
     final conn = _FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
+    final haptics = spyHaptics(tester);
     transport
       ..ok() // 0x9201(进页自动起景)
       ..ok(data: _realJpeg()) // 首帧
@@ -2202,6 +2218,8 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(BottomSheet), findsNothing, reason: '本地回落不弹面板');
     expect(coreColor(), LiveDesign.light.bad);
+    expect(haptics, ['HapticFeedbackType.selectionClick'],
+        reason: '模式切换 = selectionClick 轻点触感');
 
     // 整段点按起录:0x920A 恰一条,recording 真,芯内白色停止方块
     await tester.tap(shutter);
@@ -2221,12 +2239,16 @@ void main() {
         findsOneWidget,
         reason: '录制中芯内白色停止方块');
     expect(find.textContaining('REC'), findsOneWidget, reason: 'REC 时长入胶囊');
+    expect(haptics,
+        ['HapticFeedbackType.selectionClick', 'HapticFeedbackType.mediumImpact'],
+        reason: '起录 = mediumImpact(重于选择)');
 
     // 录制中模式条锁:点「照片」无效(条已 IgnorePointer,命中被吞即
     // 证锁;停录入口不被模式切换甩开)
     await tester.tap(find.text('照片'), warnIfMissed: false);
     await tester.pumpAndSettle();
     expect(coreColor(), LiveDesign.light.bad, reason: '录制中模式条锁死');
+    expect(haptics, hasLength(2), reason: '锁条盲点不吃触感');
 
     // 再点快门停录:0x920B 恰一条
     await tester.tap(shutter);
@@ -2236,6 +2258,9 @@ void main() {
         transport.requests
             .where((r) => r.opcode == NikonOperationCode.endMovieRec),
         hasLength(1));
+    expect(haptics, hasLength(3), reason: '起/停录各恰一次触感');
+    expect(haptics.last, 'HapticFeedbackType.mediumImpact',
+        reason: '停录 = mediumImpact');
   });
 
   testWidgets('模式条跟相机:连接读到视频档 → 视频段选中(红芯),照片段可切'
@@ -2353,6 +2378,7 @@ void main() {
     final conn = _FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
+    final haptics = spyHaptics(tester);
     transport
       ..ok() // 0x9201(进页自动起景)
       ..ok(data: _realJpeg()) // 首帧
@@ -2379,6 +2405,8 @@ void main() {
             r.opcode == NikonOperationCode.endMovieRec),
         isEmpty,
         reason: '照片模式不发任何录像命令');
+    expect(haptics, ['HapticFeedbackType.lightImpact'],
+        reason: '快门按下(onTapDown)轻震恰一次,抬起不震');
   });
 
   testWidgets('设置浮层参数区:tile 第二入口直达参数编辑底单,底单收后浮层仍在',

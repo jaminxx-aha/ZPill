@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../design/app_haptics.dart';
 import '../../l10n/l10n.dart';
 import '../../l10n/message.dart';
 import 'live_design.dart';
@@ -108,7 +109,7 @@ class _LiveBannerHostState extends State<LiveBannerHost> {
   /// 原文暂换「已复制」1.2s。
   void _copy() {
     Clipboard.setData(ClipboardData(text: context.tm(widget.message)));
-    HapticFeedback.mediumImpact();
+    AppHaptics.success(); // 统一触感入口(原 HapticFeedback.mediumImpact,行为不变)
     if (_collapsed) return; // 圆丸无文本位,震动即确认
     setState(() => _copied = true);
     _copiedTimer?.cancel();
