@@ -357,7 +357,7 @@ final class _FakePtpTransport implements PtpTransport {
 }
 
 void main() {
-  testWidgets('双格式组:「下载」展开目的地后弹格式选择,仅 RAW 只入队 NEF',
+  testWidgets('双格式组:筛选未预定(全部)整组直接入队,不弹面板',
       (tester) async {
     final engine = _FakeEngine();
     final group = PhotoGroup([
@@ -381,16 +381,13 @@ void main() {
     await tester.pump();
     await tester.tap(find.text('下载到相册'));
     await tester.pumpAndSettle();
-    expect(find.text('选择下载格式'), findsOneWidget);
-    expect(find.text('这张照片有 JPG 和 RAW 两份文件'), findsOneWidget);
-
-    await tester.tap(find.text('仅 RAW'));
-    await tester.pumpAndSettle();
+    expect(find.text('选择下载格式'), findsNothing,
+        reason: '全部 = 整组直接下,不弹格式面板');
 
     final (entries, destination) = engine.calls.single;
-    expect(entries.single.name, 'DSC_0001.NEF');
+    expect(entries.map((e) => e.name), ['DSC_0001.JPG', 'DSC_0001.NEF']);
     expect(destination, TransferDestination.gallery);
-    expect(find.textContaining('已开始下载到相册(RAW)'), findsOneWidget);
+    expect(find.textContaining('已开始下载到相册'), findsOneWidget);
 
     // SnackBar「查看进度」动作 → 传输页入口
     await tester.tap(find.text('查看进度'));
