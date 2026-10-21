@@ -2,10 +2,11 @@
 /// (段头点按 = 整日选择/取消);文件夹筛选收进 AppBar 右上弹层(图库
 /// 页同款 MenuAnchor 分区卡片,仅多相册时出相册分区),同文件夹内
 /// RAW+JPG 仍合并。长按进入多选,底部操作栏默认单「下载」钮,点按
-/// 换出「到相册/到应用」双目的地(批次含双格式组时先选格式,缺格式
-/// 的组跳过)、批量删除(相机侧逐文件 0x100B,确认对话框把关)。筛选
-/// 弹层的图片下载格式档(全部/仅 JPG/仅 RAW)只定批量下载的格式
-/// 预选:非「全部」时跳过格式面板直接按该格式收集(网格显示不变)。
+/// 换出「到相册/到应用」双目的地(格式按筛选弹层预定档直接收集,缺
+/// 格式的组跳过)、批量删除(相机侧逐文件 0x100B,确认对话框把关)。
+/// 筛选弹层的图片下载格式档(全部/仅 JPG/仅 RAW)只定批量下载的格式
+/// 预选,全程不弹格式面板:「全部」整组全量直接下(双格式组 JPG+RAW
+/// 全要,视频整段),仅 JPG / 仅 RAW 按该格式收集(网格显示不变)。
 /// 本地评分角标(左上星标)随 [RatingsController] 变化;连拍簇一条目
 /// (typeLabel 带 ×N)。
 ///
@@ -39,15 +40,14 @@ import '../common/widgets/states.dart';
 import '../../design/app_colors.dart';
 import '../../design/app_dimens.dart';
 import 'browser_controller.dart';
-import 'download_format_sheet.dart';
 import '../transfers/transfers_page.dart';
 import 'photo_viewer_page.dart';
 import 'ratings_controller.dart';
 
 /// 图片下载格式筛选(筛选弹层第三区):只定批量下载的格式预选,网格
-/// 显示不受影响。全部 = 现状(双格式组/照片视频混选批次下载前仍弹
-/// 格式面板);仅 JPG / 仅 RAW = 按该格式直接收集下载,不再弹面板
-/// (缺该格式的组跳过计数提示,视频组照常全量 —— 与格式面板同义)。
+/// 显示不受影响。全部 = 整组全量直接下(双格式组 JPG+RAW 全要,视频
+/// 整段),不弹格式面板;仅 JPG / 仅 RAW = 按该格式直接收集下载
+/// (缺该格式的组跳过计数提示,视频组照常全量)。
 /// label = t() 键,显示点包 t()。
 enum _FormatFilter {
   all('libpage.all'),
@@ -58,7 +58,7 @@ enum _FormatFilter {
 
   final String label;
 
-  /// 映射到下载格式收集口径;null = 不预选(全部,下载沿自行弹面板)。
+  /// 映射到下载格式收集口径;null = 全部(整组全量,取 group.members)。
   PhotoDownloadFormat? get asDownloadFormat => switch (this) {
         all => null,
         jpg => PhotoDownloadFormat.jpg,
@@ -133,7 +133,7 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
   }
 
   /// 选中集按组身份键(PhotoGroup.key):RAW+JPG 合并组算一项,
-  /// 下载格式由选择面板决定(见 _downloadSelected)。
+  /// 下载格式由筛选弹层预定档决定(见 _downloadSelected)。
   final Set<int> _selected = {};
 
   /// 当前过滤的相册(初始 = 入口句柄;chips 切换)。选中的文件夹在
@@ -351,12 +351,10 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
         _revealDownload = false;
       });
 
-  /// 批量下载:筛选弹层已定格式(仅 JPG/仅 RAW)直接按该格式收集,
-  /// 不再弹面板;「全部」维持现状 —— 批次内容不单一才弹格式选择(含
-  /// 双格式组(选 JPG/RAW)或照片视频混选(选「仅视频」可整批只要
-  /// 视频));纯单一格式直接下,行为同旧版;按所选格式过滤,缺格式
-  /// 的组跳过并计数提示;取消选择面板则什么都不下,保留选中态(便于
-  /// 改选格式再下)。
+  /// 批量下载:全程不弹格式面板,按筛选弹层预定档直接收集 —— 「全部」
+  /// 整组全量(双格式组 JPG+RAW 全要,照片视频混选全要),仅 JPG /
+  /// 仅 RAW 按该格式收集,缺格式的组跳过并计数提示;全批被格式筛空
+  /// (如纯 RAW 批次选仅 JPG)不下,只提示。
   Future<void> _downloadSelected(
       List<PhotoGroup> items, TransferDestination destination) async {
     final groups =
@@ -364,27 +362,9 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
     if (groups.isEmpty) {
       return;
     }
-    PhotoDownloadFormat? format = _formatFilter.asDownloadFormat;
-    if (format == null) {
-      final pairCount =
-          groups.where((g) => !g.isVideo && g.hasJpg && g.hasRaw).length;
-      final mixedPhotoVideo =
-          groups.any((g) => g.isVideo) && groups.any((g) => !g.isVideo);
-      if (pairCount > 0 || mixedPhotoVideo) {
-        format = await showDownloadFormatSheet(context,
-            subtitle: pairCount > 0
-                ? context.t(
-                    'grid.selectedDual', {'n': groups.length, 'm': pairCount})
-                : context.t('grid.selectedMixed', {'n': groups.length}));
-        if (format == null) {
-          return;
-        }
-        if (!mounted) {
-          return;
-        }
-      }
-    }
-    // 按所选格式收集;「仅视频」可能把整批照片全部筛掉(entries 空)。
+    final format = _formatFilter.asDownloadFormat;
+    // 按预定档收集;null(全部)= 整组全量恒非空,批筛空只在
+    // 仅 JPG/仅 RAW 预选下出现。
     final entries = <ObjectEntry>[];
     var included = 0;
     for (final group in groups) {
@@ -396,7 +376,7 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
       entries.addAll(members);
     }
     if (entries.isEmpty) {
-      // 全批被格式筛空(如纯照片批次选「仅视频」):不下,只提示。
+      // 全批被格式筛空(如纯 RAW 批次选仅 JPG):不下,只提示。
       _clearSelection();
       if (!mounted) {
         return;
@@ -499,7 +479,8 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
           items: items,
           initialIndex: index,
           ratings: widget.ratings,
-          // 筛选弹层预定的下载格式跟随进查看器(查看器下载不再弹面板)
+          // 筛选弹层预定的下载格式跟随进查看器(全部 = 整组直接下,
+          // 两处下载均不弹面板)
           downloadFormat: _formatFilter.asDownloadFormat,
         ),
       ),
