@@ -2,9 +2,9 @@
 /// 到相册/到应用双目的地(翻页/入队完成复位);顶栏打星(本地评分,
 /// 1-5 星/清除)。
 ///
-/// 双格式(RAW+JPG)组下载前弹格式选择(仅 JPG/仅 RAW/两者);单格式
-/// 组与视频直接下载;相册页筛选弹层预定的下载格式([PhotoViewerPage
-/// .downloadFormat] 非 null)跟随进页,跳过面板直接按该格式收集。
+/// 下载全程不弹格式面板:单格式组与视频直接整组;双格式(RAW+JPG)
+/// 组按相册页筛选弹层预定的下载格式([PhotoViewerPage.downloadFormat])
+/// 收集 —— 仅 JPG/仅 RAW 取该格式,null(全部)= 整组 JPG+RAW 全要。
 /// 预览走 ThumbnailCache preview 档的**小图先显 +
 /// 高清换图**(2026-10-09 复报「点进去很小/模糊」):打开即显小图
 /// (JPG = 0x90C4 直发 640×424,NEF = GetThumb;缓存层注入 EXIF 方向,
@@ -46,7 +46,6 @@ import '../common/widgets/embedded_video_player.dart';
 import '../common/widgets/loading_overlay.dart';
 import '../common/widgets/photo_info_sheet.dart';
 import '../edit/edit_page.dart';
-import 'download_format_sheet.dart';
 import 'ratings_controller.dart';
 
 class PhotoViewerPage extends StatefulWidget {
@@ -69,8 +68,8 @@ class PhotoViewerPage extends StatefulWidget {
   final List<PhotoGroup> items;
   final int initialIndex;
 
-  /// 相册页筛选弹层预定的下载格式(仅 JPG/仅 RAW;null = 全部):
-  /// 非 null 时下载跳过格式面板直接按该格式收集,组内缺该格式提示
+  /// 相册页筛选弹层预定的下载格式(仅 JPG/仅 RAW;null = 全部:整组
+  /// 直接下,JPG+RAW 全要)。非 null 时按该格式收集,组内缺该格式提示
   /// 不下。网格显示不受影响,仅下载口径跟随相册页筛选。
   final PhotoDownloadFormat? downloadFormat;
 
@@ -324,13 +323,13 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
     );
   }
 
-  /// 下载:筛选弹层预定格式(widget.downloadFormat 非 null)直接按该
-  /// 格式收集,组内缺该格式(纯 JPG 组 × 仅 RAW 等)提示不下;「全部」
-  /// 维持现状 —— 双格式组先选格式(取消即放弃),单格式/视频直接整组。
+  /// 下载:全程不弹格式面板 —— 筛选弹层预定格式(widget.downloadFormat
+  /// 非 null)按该格式收集,组内缺该格式(纯 JPG 组 × 仅 RAW 等)提示
+  /// 不下;null(全部)整组直接入队,双格式组 JPG+RAW 全要。
   Future<void> _download(
       PhotoGroup group, TransferDestination destination) async {
     var entries = group.members;
-    PhotoDownloadFormat? format = widget.downloadFormat;
+    final format = widget.downloadFormat;
     if (format != null) {
       entries = group.membersFor(format);
       if (entries.isEmpty) {
@@ -341,13 +340,6 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
                   {'label': context.t(format.label)}))));
         return;
       }
-    } else if (!group.isVideo && group.hasJpg && group.hasRaw) {
-      format = await showDownloadFormatSheet(context,
-          subtitle: context.t('viewer.dualFormat'));
-      if (format == null) {
-        return; // 取消,不下载
-      }
-      entries = group.membersFor(format);
     }
     await _engine.enqueue(entries, destination: destination);
     if (!mounted) {

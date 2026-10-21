@@ -686,8 +686,6 @@ const Map<String, String> enCatalog = {
   'grid.selectAll': 'Select All',
   'grid.clearSelection': 'Clear Selection',
   'common.refresh': 'Refresh',
-  'grid.selectedDual': 'Selected {n} items, {m} of them dual-format',
-  'grid.selectedMixed': 'Selected {n} items (photos and videos mixed)',
   'grid.noMatchNoDownload':
       'No files matching "{label}"; download not started',
   'grid.toAlbum': 'to the album',
@@ -720,7 +718,6 @@ const Map<String, String> enCatalog = {
   'viewer.rating': 'Rating',
   'viewer.clearRating': 'Clear Rating',
   'viewer.burstCount': 'Burst ×{n}',
-  'viewer.dualFormat': 'This photo has both a JPG and a RAW file',
   'viewer.downloadStarted':
       'Download started {where} {tag}; see "Gallery" for progress',
   'viewer.viewProgress': 'View Progress',
@@ -736,17 +733,9 @@ const Map<String, String> enCatalog = {
   'viewer.preparingPlay': 'Preparing to Play',
   'viewer.videoUnsupported':
       'Video playback is not yet supported on this platform',
-  'fmt.chooseTitle': 'Choose Download Format',
   'fmt.jpgOnly': 'JPG Only',
   'fmt.rawOnly': 'RAW Only',
   'fmt.videoOnly': 'Video Only',
-  'fmt.jpgSkipNote':
-      'Photos without a JPG are skipped (videos still download)',
-  'fmt.rawSkipNote':
-      'Photos without a RAW are skipped (videos still download)',
-  'fmt.anyNote':
-      'Download whatever is there (if one format is missing, only the other downloads)',
-  'fmt.videoOnlyNote': 'Videos only; all photos are skipped',
   'libpage.all': 'All',
   'libpage.filter': 'Filter',
   'libpage.filterColon': 'Filter:',
