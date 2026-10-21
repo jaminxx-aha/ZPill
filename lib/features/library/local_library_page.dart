@@ -131,9 +131,9 @@ List<List<File>> groupLocalBurstRuns(List<File> files) {
   return out;
 }
 
-/// 网格布局(4 列,紧凑间距)。
+/// 网格布局(3 列,紧凑间距)。
 const _gridDelegate = SliverGridDelegateWithFixedCrossAxisCount(
-  crossAxisCount: 4,
+  crossAxisCount: 3,
   mainAxisSpacing: 2,
   crossAxisSpacing: 2,
 );
