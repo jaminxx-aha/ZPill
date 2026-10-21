@@ -6,6 +6,7 @@
 library;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 
 import '../../design/app_colors.dart';
 import '../../design/app_dimens.dart';
@@ -111,6 +112,7 @@ class ConnErrorSlot extends StatelessWidget {
                 color: error
                     ? theme.colorScheme.error
                     : theme.colorScheme.onSurfaceVariant,
+                copyable: error, // 红字长按可复制(诊断串直通上屏)
               ),
             ),
     );
@@ -126,11 +128,16 @@ class ConnHintText extends StatelessWidget {
     required this.text,
     this.args,
     required this.color,
+    this.copyable = false,
   });
 
   final String text;
   final Map<String, Object>? args;
   final Color color;
+
+  /// 长按复制(红字诊断串用:原始平台错误直通上屏,长按抓全文给开发;
+  /// 普通灰字引导不需要)。
+  final bool copyable;
 
   @override
   Widget build(BuildContext context) {
@@ -141,16 +148,26 @@ class ConnHintText extends StatelessWidget {
     // requestRecovery 流入),翻译命中则落地,动态串直通不误伤。
     final localized = context.tm((key: text, args: args));
     final idx = localized.indexOf(':');
-    if (idx < 0) {
-      return Text(localized, style: style);
-    }
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(localized.substring(0, idx + 1),
-            style: style.copyWith(fontWeight: FontWeight.w600)),
-        Text(localized.substring(idx + 1), style: style),
-      ],
+    final body = idx < 0
+        ? Text(localized, style: style)
+        : Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(localized.substring(0, idx + 1),
+                  style: style.copyWith(fontWeight: FontWeight.w600)),
+              Text(localized.substring(idx + 1), style: style),
+            ],
+          );
+    if (!copyable) return body;
+    return GestureDetector(
+      onLongPress: () {
+        Clipboard.setData(ClipboardData(text: localized));
+        ScaffoldMessenger.of(context)
+          ..removeCurrentSnackBar()
+          ..showSnackBar(
+              SnackBar(content: Text(context.t('common.copied'))));
+      },
+      child: body,
     );
   }
 }

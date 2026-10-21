@@ -27,6 +27,16 @@ class GeoFix {
     required this.satellites,
     required this.utcTime,
   });
+
+  /// 同点位换时刻(保鲜重发用:重发缓存点时把时间刷到当前,坐标/海拔
+  /// /卫星数原样 —— 否则静止期 EXIF GPS 时间冻在最后一次定位回调)。
+  GeoFix withUtcTime(DateTime utcTime) => GeoFix(
+        latitude: latitude,
+        longitude: longitude,
+        altitude: altitude,
+        satellites: satellites,
+        utcTime: utcTime,
+      );
 }
 
 final class GeoPayload {

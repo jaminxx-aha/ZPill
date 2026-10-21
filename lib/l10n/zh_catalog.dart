@@ -172,7 +172,7 @@ const Map<String, String> zhCatalog = {
   'conn.reconnect': '重连',
   'conn.gpsInjection': 'GPS 位置注入',
   'conn.gpsInjectionHint': '拍摄时自动把手机定位写进相机,卡内照片原生带坐标',
-  'conn.gpsAuthFailed': '未获后台定位授权(须「始终允许」),GPS 注入未开启',
+  'conn.gpsAuthFailed': '未获定位授权(拒授/受限),GPS 注入未开启',
   'conn.wakeCameraWifi': '远程连接相机',
   'conn.hintToggle': '连接说明',
   'conn.wifiAwakeCardTitle': '相机 Wi-Fi 已开启,请手动入网',
