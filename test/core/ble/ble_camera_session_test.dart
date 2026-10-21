@@ -321,7 +321,7 @@ void main() {
         handshakeTimeout: const Duration(milliseconds: 60));
     // expectLater 急切挂接(同 salt-miss 例)。
     final done = expectLater(
-        short.pair(device), throwsA(isA<BlePairingException>()));
+        short.pair(device, waitTimeout: const Duration(milliseconds: 1)), throwsA(isA<BlePairingException>()));
     host.emit(const BleConnected(
         uuid: 'P1', characteristics: {}, writeWithoutResponseMtu: 20));
     await pump();
@@ -333,7 +333,7 @@ void main() {
   test('stage2 无 salt 命中 → pair 抛 BlePairingException,回 idle', () async {
     // expectLater 急切挂接,避免 pair 抛错先落成 unhandled async error。
     final done = expectLater(
-        session.pair(device), throwsA(isA<BlePairingException>()));
+        session.pair(device, waitTimeout: const Duration(milliseconds: 1)), throwsA(isA<BlePairingException>()));
     host.emit(const BleConnected(
         uuid: 'P1', characteristics: {}, writeWithoutResponseMtu: 20));
     await pump();
@@ -355,12 +355,13 @@ void main() {
 
   test('握手期间断连 → pair 抛错回 idle', () async {
     final done = expectLater(
-        session.pair(device), throwsA(isA<BlePairingException>()));
+        session.pair(device, waitTimeout: const Duration(milliseconds: 1)), throwsA(isA<BlePairingException>()));
     host.emit(const BleConnected(
         uuid: 'P1', characteristics: {}, writeWithoutResponseMtu: 20));
     await pump();
     host.emit(const BleDisconnected('P1'));
     await pump();
+    session.directFirstPending = false; // 扫描路径用例:直连优先不适用
     await done;
     expect(session.state, BleSessionState.idle);
   });
@@ -502,6 +503,7 @@ void main() {
 
     host.emit(const BleDisconnected('P1'));
     await pump();
+    session.directFirstPending = false; // 扫描路径用例:直连优先不适用
     host.reconnectDeviceId = session.identity!.deviceId;
     now = now.add(const Duration(seconds: 1));
     await runHandshake(resume: true); // 重连 ready(一次性补发待办置上)
@@ -519,6 +521,7 @@ void main() {
     final saved = session.identity!;
     host.emit(const BleDisconnected('P1'));
     await pump();
+    session.directFirstPending = false; // 扫描路径用例:直连优先不适用
     host.reconnectDeviceId = null; // 爬高:三轮无命中
     for (var i = 0; i < 3; i++) {
       await session.retryReconnect();
@@ -554,11 +557,35 @@ void main() {
     host.writeError = null;
   });
 
+  test('断链首轮直连优先:静默态不空转扫描,直连失败才落回扫描', () async {
+    await runHandshake();
+    host.emit(const BleDisconnected('P1'));
+    await pump();
+    session.directFirstPending = false; // (replace_all 注入的扫描路径复位)
+    // 本用例专属:重新武装直连优先 —— 静默态不空转扫描,直连先发
+    session.directFirstPending = true;
+    host.reconnectDeviceId = null; // 扫描必空(静默态)
+    final fut = session.retryReconnect();
+    await pump();
+    expect(host.connects.length, 2); // 配对握手 1 + 直连 1(先发)
+    expect(host.connects.last, 'P1');
+    expect(host.scanIdCalls, 0); // 扫描未跑
+    // 直连挂上但 stage1 被踢 → 直连失败 → 落回扫描
+    host.writeError = Exception('连接已断开');
+    host.emit(const BleConnected(
+        uuid: 'P1', characteristics: {}, writeWithoutResponseMtu: 20));
+    await pump();
+    host.writeError = null;
+    expect(await fut, isFalse);
+    expect(host.scanIdCalls, 1); // 落回扫描(静默态空扫一轮)
+  });
+
   test('ready 断连 → reconnecting;重连复用身份(deviceId/nonce 不变)', () async {
     await runHandshake();
     final saved = session.identity!;
     host.emit(const BleDisconnected('P1'));
     await pump();
+    session.directFirstPending = false; // 扫描路径用例:直连优先不适用
     expect(session.state, BleSessionState.reconnecting);
     expect(session.nextRetryDelay, const Duration(seconds: 1));
 
@@ -575,6 +602,7 @@ void main() {
     await runHandshake();
     host.emit(const BleDisconnected('P1'));
     await pump();
+    session.directFirstPending = false; // 扫描路径用例:直连优先不适用
     host.reconnectDeviceId = null; // 扫不到
     for (final expected in const [2, 4, 8, 16, 30, 60, 60]) {
       final ok = await session.retryReconnect();
@@ -587,6 +615,7 @@ void main() {
     await runHandshake();
     host.emit(const BleDisconnected('P1'));
     await pump();
+    session.directFirstPending = false; // 扫描路径用例:直连优先不适用
     host.reconnectDeviceId = session.identity!.deviceId;
     // Zf 真机 2026-10-17:待机 0x1F(bit0=1;字节布局 99 03 + deviceId + 状态)。
     host.reconnectMfg =
@@ -605,6 +634,7 @@ void main() {
     await runHandshake();
     host.emit(const BleDisconnected('P1'));
     await pump();
+    session.directFirstPending = false; // 扫描路径用例:直连优先不适用
     host.reconnectDeviceId = session.identity!.deviceId;
     host.reconnectMfg =
         Uint8List.fromList([0x99, 0x03, 0x44, 0x5d, 0x4b, 0x24, 0x1e]);
@@ -619,6 +649,7 @@ void main() {
     await runHandshake();
     host.emit(const BleDisconnected('P1'));
     await pump();
+    session.directFirstPending = false; // 扫描路径用例:直连优先不适用
     host.reconnectDeviceId = session.identity!.deviceId;
     host.reconnectMfg =
         Uint8List.fromList([0x99, 0x03, 0x44, 0x5d, 0x4b, 0x24, 0x1f]);
@@ -634,6 +665,7 @@ void main() {
     await runHandshake();
     host.emit(const BleDisconnected('P1'));
     await pump();
+    session.directFirstPending = false; // 扫描路径用例:直连优先不适用
     host.reconnectDeviceId = session.identity!.deviceId;
     now = now.add(const Duration(seconds: 1));
     await runHandshake(resume: true);
@@ -723,6 +755,7 @@ void main() {
 
     host.emit(const BleDisconnected('P1'));
     await pump();
+    session.directFirstPending = false; // 扫描路径用例:直连优先不适用
     expect(session.state, BleSessionState.reconnecting);
 
     now = now.add(const Duration(seconds: 100));
@@ -1122,7 +1155,7 @@ void main() {
 
   test('v7 全表扫描读:权限含 read 的特征全读,0x2000/0x2008/write-only 除外',
       () async {
-    final done = expectLater(session.pair(device), completes);
+    final done = expectLater(session.pair(device, waitTimeout: const Duration(milliseconds: 1)), completes);
     host.emit(const BleConnected(
         uuid: 'P1',
         characteristics: {
