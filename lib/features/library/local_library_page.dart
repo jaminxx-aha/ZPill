@@ -674,12 +674,21 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
                             _iconCell(context, name),
                       ),
                       if (video)
-                        const Align(
+                        Align(
                           alignment: Alignment.bottomRight,
                           child: Padding(
-                            padding: EdgeInsets.all(4),
-                            child: Icon(Icons.videocam,
-                                size: 16, color: Colors.white),
+                            padding: const EdgeInsets.all(4),
+                            child: Container(
+                              // 黑半透明圆角小底(与相机相册网格同款):
+                              // 亮帧上纯白图标不可辨。
+                              padding: const EdgeInsets.all(2),
+                              decoration: BoxDecoration(
+                                color: Colors.black.withValues(alpha: 0.55),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: const Icon(Icons.videocam,
+                                  size: 16, color: Colors.white),
+                            ),
                           ),
                         ),
                     ],

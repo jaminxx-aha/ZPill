@@ -185,6 +185,19 @@ PhotoGroup _rawPhoto(int handle) => PhotoGroup([
       ),
     ]);
 
+/// 单文件视频组(MOV,quickTime 容器码)。
+PhotoGroup _video(int handle) => PhotoGroup([
+      ObjectEntry(
+        handle: handle,
+        name: 'DSC_0099.MOV',
+        sizeInBytes: 100,
+        kind: ObjectKind.video,
+        parentHandle: 0x11,
+        capturedAt: DateTime.utc(2026, 10, 1, 12),
+        formatCode: 0x300D,
+      ),
+    ]);
+
 /// 记录入队调用的假引擎。
 final class _FakeEngine implements TransferEngine {
   final List<(List<ObjectEntry>, TransferDestination)> calls = [];
@@ -249,6 +262,43 @@ void main() {
 
     repo.completeLoad(
         [CameraAlbum.allPhotos([_photo(1), _photo(2), _photo(3), _photo(4)])]);
+    await loading;
+  });
+
+  testWidgets('视频角标带底色:黑半透明圆角小底,亮缩略上可辨', (tester) async {
+    final repo = _FakeRepo();
+    final controller = BrowserController(repository: repo);
+    await tester.pumpWidget(_host(PhotoGridPage(
+      controller: controller,
+      folderHandle: CameraAlbum.allPhotosHandle,
+      fallbackName: '全部照片',
+      thumbnails: _FakeThumbs(),
+    )));
+
+    final loading = controller.load();
+    repo.updatesCtrl.add(AlbumsUpdate(
+        albums: [CameraAlbum.allPhotos([_video(1), _photo(2)])],
+        loaded: 2,
+        total: 2,
+        complete: true));
+    await tester.pump();
+
+    // 角标图标最近的 DecoratedBox 祖先 = 底:黑 0.55 圆角矩形(与
+    // 左下类型角标同视觉语言),纯白图标不再裸叠缩略。
+    final iconEl = tester.element(find.byIcon(Icons.videocam));
+    late final Element badgeBase;
+    iconEl.visitAncestorElements((e) {
+      if (e.widget is DecoratedBox) {
+        badgeBase = e;
+        return false;
+      }
+      return true;
+    });
+    final deco = (badgeBase.widget as DecoratedBox).decoration as BoxDecoration;
+    expect(deco.color, Colors.black.withValues(alpha: 0.55));
+    expect(deco.borderRadius, BorderRadius.circular(4));
+
+    repo.completeLoad([CameraAlbum.allPhotos([_video(1), _photo(2)])]);
     await loading;
   });
 

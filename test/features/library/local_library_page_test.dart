@@ -413,6 +413,36 @@ void main() {
     expect(find.byIcon(Icons.videocam_outlined), findsOneWidget);
   });
 
+  testWidgets('视频缩略格角标带底色:黑半透明圆角小底,亮帧上可辨',
+      (tester) async {
+    writeFile('c.mov', modified: DateTime(2026, 10, 3));
+    final gallery = _FakeGallery(dir);
+    final player = _FakeVideoPlayer(failThumbs: false); // 抽帧出小档路径
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    await tester.pumpWidget(host(gallery, controller, videoPlayer: player));
+    await tester.pumpAndSettle();
+
+    // 抽帧小档就位:缩略铺图格 + 摄像机角标(非图标格的 outlined)。
+    expect(find.byIcon(Icons.videocam), findsOneWidget);
+    expect(find.byIcon(Icons.videocam_outlined), findsNothing);
+
+    // 角标图标最近的 DecoratedBox 祖先 = 底:黑 0.55 圆角矩形(与
+    // 相机相册网格同款视觉语言)。
+    final iconEl = tester.element(find.byIcon(Icons.videocam));
+    late final Element badgeBase;
+    iconEl.visitAncestorElements((e) {
+      if (e.widget is DecoratedBox) {
+        badgeBase = e;
+        return false;
+      }
+      return true;
+    });
+    final deco = (badgeBase.widget as DecoratedBox).decoration as BoxDecoration;
+    expect(deco.color, Colors.black.withValues(alpha: 0.55));
+    expect(deco.borderRadius, BorderRadius.circular(4));
+  });
+
   testWidgets('过滤无匹配:提示该格式暂无,切回全部即恢复', (tester) async {
     writeFile('a.jpg', modified: DateTime(2026, 10, 1));
     final gallery = _FakeGallery(dir);
