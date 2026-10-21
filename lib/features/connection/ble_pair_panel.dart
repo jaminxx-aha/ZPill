@@ -39,6 +39,61 @@ import 'connection_widgets.dart';
 String hexOf(List<int> bytes) =>
     bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ');
 
+/// 扫描行:设备 + 最后见到时刻(过期修剪依据,行自持 —— 合并可改行
+/// 的名,新鲜度跟着行走,无键漂移问题)。
+class ScanRow {
+  ScanRow(this.device, this.seenAt);
+  BleDevice device;
+  DateTime seenAt;
+}
+
+/// 扫描合并键:广播名归一化(去空格/下划线、小写)。广播名自身不可靠:
+/// ①写法漂移(正常态/配对态空格/下划线不同);②**缩短名截断** —— BLE
+/// 广播包 31B,mfg 数据挤占时名字用缩短名,`Z_f_8014411` 变 `Z_f_`
+/// (2026-10-21 截图实证,两行并不上);空名无可信稳定键,退回 uuid
+/// 专属键。
+String _scanMergeKey(BleDevice d) => d.name.isEmpty
+    ? 'uuid:${d.uuid}'
+    : 'n:${d.name.replaceAll(RegExp(r'[\s_]+'), '').toLowerCase()}';
+
+/// 行合并(纯函数,原地改行返回同表):①归一化键命中 → 整条换新;
+/// ②**缩短名前缀命中**(一方名是另一方前缀,双方非空)→ 同机身:名取
+/// **更长**一方(信息多者),地址/信号/mfg 取最新事件,行身份随之生长
+/// (`Z_f_` 行遇 `Z_f_8014411` 即长成后者);③miss 追加。前缀判定在两台
+/// 同型号机身同播且其一被截断时理论可能张冠李戴(截断名无序列号可
+/// 辨),实测单机身场景,接受。
+List<ScanRow> mergeScanRow(
+    List<ScanRow> current, BleDevice device, DateTime now) {
+  final key = _scanMergeKey(device);
+  final i = current.indexWhere((r) => _scanMergeKey(r.device) == key);
+  if (i >= 0) {
+    current[i]
+      ..device = device
+      ..seenAt = now;
+    return current;
+  }
+  if (device.name.isNotEmpty) {
+    for (final r in current) {
+      if (r.device.name.isEmpty) continue;
+      if (r.device.name.startsWith(device.name) ||
+          device.name.startsWith(r.device.name)) {
+        final name = r.device.name.length >= device.name.length
+            ? r.device.name
+            : device.name;
+        r
+          ..device = BleDevice(
+              name: name,
+              uuid: device.uuid,
+              rssi: device.rssi,
+              mfgData: device.mfgData)
+          ..seenAt = now;
+        return current;
+      }
+    }
+  }
+  return current..add(ScanRow(device, now));
+}
+
 class BlePairPanel extends StatefulWidget {
   const BlePairPanel({
     super.key,
@@ -87,7 +142,7 @@ class BlePairPanelState extends State<BlePairPanel>
     with WidgetsBindingObserver {
   StreamSubscription<BleSessionState>? _stateSub;
   StreamSubscription<BleEvent>? _eventSub;
-  List<BleDevice> _devices = [];
+  final List<ScanRow> _scanRows = [];
   bool _scanning = false;
   BleSessionState _sessionState = BleSessionState.idle;
   BlePairedIdentity? _saved;
@@ -95,6 +150,12 @@ class BlePairPanelState extends State<BlePairPanel>
   /// 本次配对设备的 BLE 广播名(鸿蒙经典绑定按名匹配用)。
   String _pairedName = '';
   bool _binding = false;
+
+  /// 扫描条目新鲜度:行自持 seenAt。「相机退出了,列表里就该消失」的
+  /// 用户预期落地 —— **5s 无再见到期**,2s 周期修剪(2026-10-21 定稿,
+  /// 用户裁定 20s 太久)。配对窗广播连续,不会误删。
+  Timer? _scanPruneTimer;
+  static const Duration _scanEntryTtl = Duration(seconds: 5);
 
   static const MethodChannel _bleChannel = MethodChannel('nikonpill/ble');
 
@@ -120,12 +181,14 @@ class BlePairPanelState extends State<BlePairPanel>
       // 题中之义);用户显式断开意图(manualOff)不越。
       if (s == BleSessionState.reconnecting &&
           !_retryActive &&
+          !AppServices.instance.bleDriverRunning && // 驱动在跑则让位(双循环防)
           !AppServices.instance.bleManualOff) {
         unawaited(_resume(gateStandby: true, autoRearm: true));
       }
     });
     // 开页即 reconnecting(掉线态打开页面):无状态事件,起自动循环。
     if (_sessionState == BleSessionState.reconnecting &&
+        !AppServices.instance.bleDriverRunning &&
         !AppServices.instance.bleManualOff) {
       unawaited(_resume(gateStandby: true, autoRearm: true));
     }
@@ -133,6 +196,10 @@ class BlePairPanelState extends State<BlePairPanel>
     // 全走统一日志(AppLog ble 域,通用日志页可查;帧级 trace 由
     // AppServices 常年接线,不在此管)。
     _eventSub = PlatformServices.ble.events.listen(_onEvent);
+    // 条目过期修剪(2s 周期,dispose 收;TTL 5s)。
+    _scanPruneTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+      if (mounted) _pruneStaleDevices();
+    });
     // 宿主喂的身份首帧即入:重连钮/冲突比较不等异步(盘档读盘悬着时
     // 身份不能跟着悬)。
     _saved = widget.savedIdentity;
@@ -168,6 +235,7 @@ class BlePairPanelState extends State<BlePairPanel>
     AppServices.instance.resumeBleDriver();
     _stateSub?.cancel();
     _eventSub?.cancel();
+    _scanPruneTimer?.cancel();
     super.dispose();
   }
 
@@ -210,14 +278,7 @@ class BlePairPanelState extends State<BlePairPanel>
         // 实时列示:原生每发现一台就推,不等扫描窗收口(30s 全窗太久,
         // 用户对着空列表干等)。原生侧已过尼康过滤,事件即有效命中。
         if (!mounted) return;
-        setState(() {
-          final i = _devices.indexWhere((d) => d.uuid == device.uuid);
-          if (i >= 0) {
-            _devices[i] = device;
-          } else {
-            _devices = [..._devices, device];
-          }
-        });
+        setState(() => mergeScanRow(_scanRows, device, DateTime.now()));
       case BleConnected(
           :final uuid,
           :final characteristics,
@@ -246,6 +307,19 @@ class BlePairPanelState extends State<BlePairPanel>
     }
   }
 
+  /// 过期修剪:行 5s 未再见到即摘除 —— 相机退菜单/睡眠 = 停广播 = 行
+  /// 消失(2026-10-21 用户定稿「扫描不到就不该存在」+「20s 太久,5s」)。
+  void _pruneStaleDevices() {
+    final now = DateTime.now();
+    final alive =
+        _scanRows.where((r) => now.difference(r.seenAt) <= _scanEntryTtl);
+    if (alive.length == _scanRows.length) return;
+    if (!mounted) return;
+    setState(() => _scanRows
+      ..clear()
+      ..addAll(alive));
+  }
+
   Future<void> _startScan() async {
     if (_scanning || _sessionState == BleSessionState.pairing) return;
     // 扫描与重连循环互踩(扫描互踩扫描,BLE 无线电独占):扫描起步
@@ -254,7 +328,7 @@ class BlePairPanelState extends State<BlePairPanel>
     _cancelRetry();
     setState(() {
       _scanning = true;
-      _devices = [];
+      _scanRows.clear(); // 新窗口新账本
     });
     try {
       final devices = await _session.scanForPairing();
@@ -262,7 +336,17 @@ class BlePairPanelState extends State<BlePairPanel>
       // 「命中时相机是否深睡」。
       _log('扫描结束:${devices.length} 台(${devices.map(_deviceLabel).join(', ')})');
       if (!mounted) return;
-      setState(() => _devices = devices);
+      // 收口表同样过行合并:原生按地址收集,相机一轮配对换一次 RPA,窗
+      // 内多轮配对(用户实测:配对→返回→再配对)会让收口表自身带重复,
+      // 直接替换会把实时侧合并好的列表整个覆盖回去(2026-10-21 二次实
+      // 证)。
+      final now = DateTime.now();
+      setState(() {
+        _scanRows.clear();
+        for (final d in devices) {
+          mergeScanRow(_scanRows, d, now);
+        }
+      });
     } on Exception catch (e) {
       _log('扫描失败:$e');
     } finally {
@@ -303,10 +387,14 @@ class BlePairPanelState extends State<BlePairPanel>
       cameraName: device.name,
       pairedAt: DateTime.now(),
     ));
-    app.refreshBleInjection();
-    widget.onIdentityChanged?.call();
+    // 配对成功即驱动接管(2026-10-21:用户定稿「配对成功后直接连接」
+    // —— 旧流程面板挂起驱动直到离页,配对成功后停在面板里注入层永远
+    // 不起、定位流不开、GPS 零写入)。resume 清挂起 + 按当前会话态续上
+    // (ready → 注入层即刻对齐;重连循环由驱动接管,面板让位)。
+    app.resumeBleDriver();
     _log('配对成功 ✓ device=${id.deviceId.toRadixString(16)} '
-        'serial=${id.serial} 身份已落盘');
+        'serial=${id.serial} 身份已落盘(驱动接管)');
+    widget.onIdentityChanged?.call();
     await _loadSaved();
     // iOS 首配注册 = 系统配件选择器经典 bond(机制:SnapBridge 程序化
     // 拉起 CoreBluetoothUI.BTDevicePickerUI 完成经典 BR/EDR SSP bond,
@@ -581,8 +669,8 @@ class BlePairPanelState extends State<BlePairPanel>
   BleDevice? _foreignWaiting() {
     final own = _ownDeviceId;
     if (own == null) return null;
-    for (final d in _devices) {
-      if (cameraWaitsForOtherController(d.mfgData, own)) return d;
+    for (final r in _scanRows) {
+      if (cameraWaitsForOtherController(r.device.mfgData, own)) return r.device;
     }
     return null;
   }
@@ -748,7 +836,7 @@ class BlePairPanelState extends State<BlePairPanel>
             clipBehavior: Clip.antiAlias,
             child: Material(
               type: MaterialType.transparency,
-              child: _devices.isEmpty
+              child: _scanRows.isEmpty
                   ? const _GroupEmpty(text: 'conn.noOtherDevices')
                   // ListTile 在最近 Material 祖先上画底/墨效:透明
                   // Material 垫在 DecoratedBox 与子项之间(ConnTileGroup
@@ -759,8 +847,8 @@ class BlePairPanelState extends State<BlePairPanel>
                         shrinkWrap: true,
                         padding: const EdgeInsets.symmetric(vertical: 4),
                         children: [
-                          for (final device in _devices)
-                            _scanRow(context, device),
+                          for (final row in _scanRows)
+                            _scanRow(context, row.device),
                         ],
                       ),
                     ),

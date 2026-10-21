@@ -517,6 +517,10 @@ final class AppServices {
   /// 注入层在跑(wantInject:链路层之上再叠加 GPS 开关)。
   bool _bleInjecting = false;
 
+  /// 平台定位流已起(BLE 断连不清 —— 定位流独立于链路;注入层收口才
+  /// 复位)。tick 兜底自愈的判据,防每 5s 重复 startStream。
+  bool _locationStreamUp = false;
+
   /// BLE 持有式后台保活同步(调用点:会话状态沿/设置沿/挂起沿,均
   /// 幂等):会话 ready → hold('ble', bluetoothInteraction);GPS 注入
   /// 层在跑(_bleInjecting)再并 location。模式须有真实业务背书 ——
@@ -573,6 +577,9 @@ final class AppServices {
   /// 配对页配对成功/解除后刷新(设置监听之外的显式入口)。
   void refreshBleInjection() => _updateBleInjection();
 
+  /// 驱动循环在跑(面板重连循环让位判据;挂起沿 false)。
+  bool get bleDriverRunning => _bleRunning;
+
   void _updateBleInjection() {
     // 三层门(2026-10-17 全自动重连定案 + 2026-10-19 手动断开意图):
     // 链路层只认「已配对+未挂起+非用户显式断开」—— 重连循环与 TIME
@@ -626,8 +633,17 @@ final class AppServices {
     // 拍频 5s = 到点判定分辨率(首写门 2.5s/GEO 失败回补重闸 2.5s →
     // 实际首写 ≤7.5s);TIME 写本身由会话按 45s/90s 档位门控,拍频加密
     // 不抬 BLE 流量。
-    _bleTick = Timer.periodic(
-        const Duration(seconds: 5), (_) => unawaited(bleSession.tick()));
+    _bleTick = Timer.periodic(const Duration(seconds: 5), (_) async {
+      // 自愈兜底(2026-10-21 实证):ready 沿的 _syncInjectLayer 偶发不
+      // 达(边沿丢失机制未定案),定位流从没起过 → 注入层零写入。tick
+      // 每拍核查「注入在跑+ready+流没起」即补起,不再赌单次边沿。
+      if (_bleInjecting &&
+          !_locationStreamUp &&
+          bleSession.state == BleSessionState.ready) {
+        await _startLocationStream();
+      }
+      await bleSession.tick();
+    });
     // 冷启恢复档:idle/reconnecting 且盘载身份在 → 直接进重试循环(免
     // 重走菜单配对;挂起恢复沿链路保留,可停在 reconnecting,同样续跑)。
     if (bleSession.state == BleSessionState.idle ||
@@ -658,6 +674,7 @@ final class AppServices {
   /// 注入层对齐(幂等,翻面沿与 ready 沿均可直调):开关开 → 挂定位流
   /// 订阅 + ready 时起平台流;关 → 订阅与平台流一起收。链路层不沾。
   void _syncInjectLayer() {
+    bleSession.geoEnabled = _bleInjecting; // 开关投影:关断即停保鲜重发
     if (_bleInjecting) {
       _bleFixSub ??= PlatformServices.locationStream.stream().listen(
             (s) => bleSession.onFix(GeoFix(
@@ -698,6 +715,7 @@ final class AppServices {
 
   /// 注入层收口:定位流订阅 + 平台流停。
   void _teardownInjectLayer() {
+    _locationStreamUp = false;
     unawaited(_bleFixSub?.cancel());
     _bleFixSub = null;
     unawaited(() async {
@@ -712,6 +730,7 @@ final class AppServices {
   Future<void> _startLocationStream() async {
     try {
       await PlatformServices.locationStream.startStream();
+      _locationStreamUp = true;
     } on Exception {
       // 定位源不可用(未授权/通道缺失):会话 TIME 心跳照常,零坐标注入
     }

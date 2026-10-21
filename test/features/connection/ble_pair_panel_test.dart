@@ -9,6 +9,7 @@ import 'package:nikon_pill/core/ble/ble_camera_session.dart';
 import 'package:nikon_pill/core/log/app_log.dart';
 import 'package:nikon_pill/data/ble_identity_store.dart';
 import 'package:nikon_pill/features/connection/ble_pair_panel.dart';
+import 'package:nikon_pill/platform/ble_scanner.dart';
 
 /// 配对面板(2026-10-19 改版):「已配对 / 其它设备」两段列表 + 打开
 /// 沿自动扫描(静默 —— 无扫描钮、无「扫描中」指示)+ 打开沿**不自动
@@ -413,5 +414,55 @@ void main() {
     expect(scanIdCalls, 0, reason: '退避等待期不再扫');
     await disposePage(tester, drain: const Duration(seconds: 3));
     expect(scanIdCalls, 0, reason: '拆面板废在途重连,退避 2s 到点也不续跑');
+  });
+
+  group('mergeScanRow(RPA 轮换/缩短名/过期,2026-10-21 实证串)', () {
+    final t0 = DateTime(2026, 10, 21, 15);
+    final t1 = t0.add(const Duration(seconds: 1));
+    const zfa = BleDevice(name: 'Z_f_8014411', uuid: 'RPA-A', rssi: -50);
+    const zfb = BleDevice(name: 'Z_f_8014411', uuid: 'RPA-B', rssi: -60);
+    const short = BleDevice(name: 'Z_f_', uuid: 'RPA-C', rssi: -55);
+    const other = BleDevice(name: 'Z_f_9999999', uuid: 'RPA-D', rssi: -55);
+    const anon = BleDevice(name: '', uuid: 'RPA-E', rssi: -70);
+
+    test('RPA 轮换:同机身跨会话按归一化名并一行,地址信号换新', () {
+      final rows = mergeScanRow(mergeScanRow([], zfa, t0), zfb, t1);
+      expect(rows.length, 1);
+      expect(rows.single.device.uuid, 'RPA-B');
+      expect(rows.single.seenAt, t1);
+    });
+
+    test('缩短名前缀:Z_f_ 遇全名长成全名,地址取最新事件', () {
+      final rows = mergeScanRow(mergeScanRow([], zfa, t0), short, t1);
+      expect(rows.length, 1); // 不拆行
+      expect(rows.single.device.name, 'Z_f_8014411'); // 名取长者
+      expect(rows.single.device.uuid, 'RPA-C'); // 地址取最新
+      // 反向先后:先短后全,同样长成全名
+      final rows2 = mergeScanRow(mergeScanRow([], short, t0), zfa, t1);
+      expect(rows2.length, 1);
+      expect(rows2.single.device.name, 'Z_f_8014411');
+      expect(rows2.single.device.uuid, 'RPA-A');
+    });
+
+    test('名写法漂移(空格/下划线)仍合并:归一化键', () {
+      const spaced = BleDevice(name: 'Z f 8014411', uuid: 'RPA-F', rssi: -52);
+      final rows = mergeScanRow(mergeScanRow([], zfa, t0), spaced, t1);
+      expect(rows.length, 1);
+      expect(rows.single.device.uuid, 'RPA-F');
+    });
+
+    test('不同机身各行;空名独立行不参与前缀合并', () {
+      final rows = mergeScanRow(
+          mergeScanRow(mergeScanRow([], zfa, t0), other, t0), anon, t1);
+      expect(rows.length, 3);
+      expect(rows.map((r) => r.device.uuid),
+          ['RPA-A', 'RPA-D', 'RPA-E']);
+    });
+
+    test('同键命中优先,行 seenAt 刷新(过期修剪依据)', () {
+      final rows = mergeScanRow([], zfa, t0);
+      mergeScanRow(rows, zfa, t1);
+      expect(rows.single.seenAt, t1);
+    });
   });
 }

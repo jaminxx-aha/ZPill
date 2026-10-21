@@ -170,10 +170,15 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   /// GPS 注入开关(唯一开关入口,2026-10-18 自连接页收编;拍摄浮层
-  /// 芯片同一条设置路):打开沿申请后台定位授权,系统弹窗异步落定后
-  /// 复查授权态定成败 —— 未到「始终」(拒授/仅使用中/通道缺失)即切
-  /// 换失败翻回,不落库;关闭直落。注入驱动刷新由 AppServices 的
-  /// settingsController 监听收口,此处不碰驱动。
+  /// 芯片同一条设置路):打开沿复查授权态定成败 —— 「始终」或「仅使
+  /// 用中」皆放行(2026-10-21 试验改:10-13 账本「whenInUse 退后台即
+  /// 停」与 SnapBridge 仅使用中可用的实证相抵,待真机 A/B 复核;仅使
+  /// 用中的后台续命 = allowsBackgroundLocationUpdates 后台会话蓝胶囊
+  /// 路径);仅未定态才请求授权(requestAlways 未定时先弹「使用中」
+  /// 一级窗;已「仅使用中」再调只会招来「升级始终」二次弹窗,污染试
+  /// 验),拒授/受限/通道缺失即切换失败翻回,不落库;关闭直落。注入
+  /// 驱动刷新由 AppServices 的 settingsController 监听收口,此处不碰
+  /// 驱动。
   Future<void> _setBleGpsInject(
       BuildContext context, SettingsController controller, bool on) async {
     if (!on) {
@@ -182,12 +187,23 @@ class _SettingsPageState extends State<SettingsPage> {
     }
     var granted = false;
     try {
-      await PlatformServices.locationStream.requestAlwaysAuthorization();
-      // 系统弹窗异步落定(原配对面板同款两拍),再查授权态定成败。
-      await Future<void>.delayed(const Duration(seconds: 2));
-      granted =
-          await PlatformServices.locationStream.authorizationStatus() ==
-              'always';
+      var status =
+          await PlatformServices.locationStream.authorizationStatus();
+      if (status == 'notDetermined') {
+        await PlatformServices.locationStream.requestAlwaysAuthorization();
+        // 系统弹窗落定时长不定(用户手速):轮询等授权离开未定态,上限
+        // 10s。固定 2s 会跟手速赛跑 —— 2026-10-21 真机实证:用户 6s 才
+        // 点允许,2s 查询扑空,开关误翻回把注入层整个拆了(BLE ready 后
+        // 定位流再没起来,相机位置数据冻结)。
+        final deadline = DateTime.now().add(const Duration(seconds: 10));
+        while (DateTime.now().isBefore(deadline)) {
+          await Future<void>.delayed(const Duration(milliseconds: 500));
+          status =
+              await PlatformServices.locationStream.authorizationStatus();
+          if (status != 'notDetermined') break;
+        }
+      }
+      granted = status == 'always' || status == 'whenInUse';
     } on Exception {
       granted = false;
     }
