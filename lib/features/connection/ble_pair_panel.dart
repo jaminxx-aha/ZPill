@@ -90,6 +90,15 @@ List<ScanRow> mergeScanRow(
       ..seenAt = now;
     return current;
   }
+  // 同 uuid 命中(同一播报会话内地址稳定)→ 整条换新但**名取非空/更
+  // 长一方**:相机的名放在 scan response 里,iOS 每扫描会话只送一次,
+  // 后续 ADV 事件同名空 —— 若按空名键另开行,有名行 5s 无刷新即过期
+  // 消失(2026-10-21 实证:设备出现又消失)。
+  final u = current.indexWhere((r) => r.device.uuid == device.uuid);
+  if (u >= 0) {
+    current[u] = mergedRow(current[u]);
+    return current;
+  }
   final devId = expectedControllerDeviceId(device.mfgData);
   if (devId != null) {
     final j = current
@@ -174,6 +183,9 @@ class BlePairPanelState extends State<BlePairPanel>
   /// 用户预期落地 —— **5s 无再见到期**,2s 周期修剪(2026-10-21 定稿,
   /// 用户裁定 20s 太久)。配对窗广播连续,不会误删。
   Timer? _scanPruneTimer;
+  Timer? _scanCycleTimer;
+  bool _scanWanted = false;
+  bool _panelScanHeld = false;
   static const Duration _scanEntryTtl = Duration(seconds: 5);
 
   static const MethodChannel _bleChannel = MethodChannel('nikonpill/ble');
@@ -193,6 +205,7 @@ class BlePairPanelState extends State<BlePairPanel>
     _sessionState = _session.state;
     _stateSub = _session.states.listen((s) {
       if (mounted) setState(() => _sessionState = s);
+      _syncScanOwnership(); // 态变即重算扫描权(idle 面板持有,余态让位)
       // ready 沿驱动接管(2026-10-21 实证:面板在非 ready 态打开 = 挂
       // 起,会话其后连上时挂起无人解除 → 注入层冻死、GPS 零写入;
       // StateTracker updatingLocation=false 实锤)。resume 幂等:驱动已
@@ -231,13 +244,37 @@ class BlePairPanelState extends State<BlePairPanel>
     // 身份不能跟着悬)。
     _saved = widget.savedIdentity;
     // 打开沿自动扫描(下一帧:setState 路径里有异步,initState 直调
-    // 非法)。静默 —— 无扫描钮、无「扫描中」指示。
+    // 非法)。静默 —— 无扫描钮、无「扫描中」指示。面板存活期持续扫描
+    // (_scanWanted + 状态机仲裁,见 _syncScanOwnership)。
+    _scanWanted = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
         _autoStartScan();
       }
     });
     unawaited(_loadSaved());
+  }
+
+  /// 扫描权仲裁(2026-10-21):面板存活期只有 **idle 态**由面板循环持
+  /// 续扫描 —— 单发 30s 扫描窗过后无人再扫,行 5s 过期清空,「设备出
+  /// 现一次就再也不出现」实证。ready/reconnecting = 驱动接管(连接/
+  /// 重连扫描 scanForDeviceId),pairing = 会话握手不扫。态变即重算,
+  /// _panelScanActive 随持有态同步(驱动扫描让位/归还)。
+  void _syncScanOwnership() {
+    // manualOff 只压制回链,不压制发现扫描(看设备列表是面板本职能)。
+    final want = mounted &&
+        _scanWanted &&
+        _sessionState == BleSessionState.idle;
+    if (want && !_panelScanHeld) {
+      _panelScanHeld = true;
+      AppServices.instance.setPanelScanActive(true);
+      if (!_scanning) unawaited(_startScan());
+    } else if (!want && _panelScanHeld) {
+      _panelScanHeld = false;
+      AppServices.instance.setPanelScanActive(false);
+      _scanCycleTimer?.cancel();
+      if (mounted && _scanning) unawaited(_session.stopScan());
+    }
   }
 
   @override
@@ -263,6 +300,12 @@ class BlePairPanelState extends State<BlePairPanel>
     _stateSub?.cancel();
     _eventSub?.cancel();
     _scanPruneTimer?.cancel();
+    _scanCycleTimer?.cancel();
+    _scanWanted = false;
+    if (_panelScanHeld) {
+      _panelScanHeld = false;
+      AppServices.instance.setPanelScanActive(false);
+    }
     super.dispose();
   }
 
@@ -294,7 +337,7 @@ class BlePairPanelState extends State<BlePairPanel>
         _sessionState == BleSessionState.pairing) {
       return;
     }
-    unawaited(_startScan());
+    _syncScanOwnership();
   }
 
   void _onEvent(BleEvent event) {
@@ -356,14 +399,23 @@ class BlePairPanelState extends State<BlePairPanel>
   }
 
   Future<void> _startScan() async {
-    if (_scanning || _sessionState == BleSessionState.pairing) return;
+    if (_scanning ||
+        _sessionState == BleSessionState.pairing ||
+        !_panelScanHeld) {
+      return; // 非持有态(ready/reconnecting/关页)不扫:驱动接管或无需
+    }
     // 扫描与重连循环互踩(扫描互踩扫描,BLE 无线电独占):扫描起步
     // 即废在途重连(打开沿/回前台沿的自动扫描不会走到这 —— 有重连
-    // 在跑就不起扫;显式路径已无,保留护栏)。
+    // 在跑就不起扫;显式路径已无,保留护栏)。2026-10-21:_cancelRetry
+    // 只能废**待发**重连,在途 retryReconnect 的续棒会把驱动扫描带回来
+    // 反复顶掉本扫描(发现事件断流、5s 过期剪行实证)→ 面板扫描期置
+    // _panelScanActive,驱动让位,收口沿归还并续跑。
     _cancelRetry();
+    AppServices.instance.setPanelScanActive(true);
     setState(() {
       _scanning = true;
-      _scanRows.clear(); // 新窗口新账本
+      // 不清列表(2026-10-21):每窗清空 = 窗切换闪烁(设备出现-消失-
+      // 出现实证);行存续由合并+5s 过期修剪唯一裁决,新窗发现即续刷新。
     });
     try {
       final devices = await _session.scanForPairing();
@@ -377,7 +429,7 @@ class BlePairPanelState extends State<BlePairPanel>
       // 证)。
       final now = DateTime.now();
       setState(() {
-        _scanRows.clear();
+        // 同上:收口不清列表,合并刷新 + 5s 过期修剪负责存续与淘汰。
         for (final d in devices) {
           mergeScanRow(_scanRows, d, now);
         }
@@ -386,6 +438,15 @@ class BlePairPanelState extends State<BlePairPanel>
       _log('扫描失败:$e');
     } finally {
       if (mounted) setState(() => _scanning = false);
+      // 持续扫描循环:面板持有期间窗与窗之间留 2s 空隙(<5s TTL,行不
+      // 会因窗间静默被剪)。_panelScanActive 横跨整段持有期恒真(驱动
+      // 让位),释放只在所有权变更(_syncScanOwnership !want)与 dispose。
+      if (mounted && _panelScanHeld) {
+        _scanCycleTimer?.cancel();
+        _scanCycleTimer = Timer(const Duration(seconds: 2), () {
+          if (mounted && _panelScanHeld) unawaited(_startScan());
+        });
+      }
     }
   }
 
