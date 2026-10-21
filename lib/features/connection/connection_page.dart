@@ -804,12 +804,8 @@ class _ConnectionPageState extends State<ConnectionPage>
   /// 状态机上一拍(只在「连接 → 断开」沿上刷新档案列表,防通知循环)。
   CameraLinkState? _lastState;
 
-  /// 已连接期间的拍摄模式轮询(2s 单读 0xD1A6):0x4006 事件沿依赖
-  /// 拍摄页的厂商事件队列轮询,连接页不开取景就收不到 —— 拨杆翻转
-  /// 在这里只能靠轮询跟随(2026-10-17 实证:连接沿初读后不再更新)。
-  /// triggerRefresh:false 不拉参数链(本页无参数面板,且不与拍摄页
-  /// 争锁)。断开/离页即停。
-  Timer? _modePollTimer;
+  /// 拍摄模式事件订阅在挂(已连接期,[_syncModeFollow] 管理)。
+  bool _remoteModeListened = false;
 
   /// 视频档代持取景可见性(2026-10-17):帧头 @816 只随取景帧来,
   /// 连接页视频档时恢复拉帧(setViewerVisible(true) —— 相机侧取景
@@ -831,19 +827,38 @@ class _ConnectionPageState extends State<ConnectionPage>
   /// onRetryingChanged 上抛到此,hero busy = 会话态 ∪ 面板循环。
   final ValueNotifier<bool> _bleRetrying = ValueNotifier<bool>(false);
 
-  void _syncModePoll() {
+  /// 拍摄模式跟随(0xD1A6 镜像)走事件通道,页内不再自设轮询
+  /// (2026-10-22 撤 2s 单读):AppServices 级事件轮询器(GetEventEx
+  /// 0x941C,2s 节拍,连接沿启动)把 0x4006(0xD1A6)并入
+  /// session.events,RemoteController 消费后重读镜像并 notifyListeners
+  /// (连接沿初读也在其 _onConnectedChain 打头)—— 存储卡脚注(消费
+  /// 在 _connectedView 的 merge 监听)与视频档取景代持由通知沿驱动,
+  /// 页内轮询是与事件通道重复的 2s 事务。(旧注释「事件沿只在拍摄页
+  /// 事件轮询内达」与装配不符:轮询器 2026-10-07 起即挂在 AppServices
+  /// 连接沿,与页面无关;连接页的镜头卡实时追平同走此通道。)
+  /// 已连接期挂 [_remote] 通知监听、断开即摘;懒解析 _remote ——
+  /// 未连接态不触碰 AppServices(与已连接视图消费 _remote 同一时刻
+  /// 才解析)。
+  void _syncModeFollow() {
     final connected = _controller.state == CameraLinkState.connected;
-    if (connected && _modePollTimer == null) {
-      _modePollTimer = Timer.periodic(const Duration(seconds: 2), (_) {
-        unawaited(() async {
-          await _remote.refreshCameraMode(triggerRefresh: false);
-          _syncViewerForMode();
-        }());
-      });
-    } else if (!connected && _modePollTimer != null) {
-      _modePollTimer?.cancel();
-      _modePollTimer = null;
+    if (connected && !_remoteModeListened) {
+      _remote.addListener(_onRemoteChanged);
+      _remoteModeListened = true;
+      // 连接沿即重判代持:重连同档时 RemoteController 不发通知
+      // (cameraMode 跨断连保值),本沿是重新代持的锚点。
+      _syncViewerForMode();
+    } else if (!connected && _remoteModeListened) {
+      _remote.removeListener(_onRemoteChanged);
+      _remoteModeListened = false;
+      // 断开沿撤代持:视频态不再成立。
+      _syncViewerForMode();
     }
+  }
+
+  /// RemoteController 通知沿(模式翻转 = 0x4006 事件重读 / 切换链定态
+  /// / 连接沿初读):重判视频档取景代持。
+  void _onRemoteChanged() {
+    _syncViewerForMode();
   }
 
   /// 按当前档位代持/撤回取景可见性。只在「视频档 + 自己前台」时顶
@@ -868,14 +883,17 @@ class _ConnectionPageState extends State<ConnectionPage>
     WidgetsBinding.instance.addObserver(this);
     _controller.addListener(_onControllerChanged);
     _controller.loadSaved();
-    _syncModePoll();
+    _syncModeFollow();
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _controller.removeListener(_onControllerChanged);
-    _modePollTimer?.cancel();
+    if (_remoteModeListened) {
+      _remote.removeListener(_onRemoteChanged);
+      _remoteModeListened = false;
+    }
     if (_viewerByConnPage) {
       _remote.setViewerVisible(false);
       _viewerByConnPage = false;
@@ -895,8 +913,8 @@ class _ConnectionPageState extends State<ConnectionPage>
   }
 
   void _onControllerChanged() {
-    // 连接沿起停模式轮询(已连接才轮)。
-    _syncModePoll();
+    // 连接沿起停模式事件订阅(已连接才挂)。
+    _syncModeFollow();
     final controller = _controller;
     // 无感配对:验证码仅展示用(不回传相机,0x935A 参数与码无关),
     // 进 pairing 态即自动确认 —— 用户全程不感知,状态卡橙灯一闪而过。
@@ -1927,7 +1945,7 @@ class _ConnectionPageState extends State<ConnectionPage>
   /// 挂起帧轮询,取景生命周期跟连接走,相机侧保持取景)。
   void _openRemote() {
     // 拍摄页在前台:可见性主权移交(setViewerVisible 由它汇报),
-    // 连接页的模式轮询不再代持顶真;返回沿收回主权并按档位重判。
+    // 连接页的模式事件跟随不再代持顶真;返回沿收回主权并按档位重判。
     _shootingOpen = true;
     Navigator.of(context)
         .push(

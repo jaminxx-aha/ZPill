@@ -1217,6 +1217,68 @@ void main() {
       await tester.pumpAndSettle();
       expect(conn.disconnectCalls, 1);
     });
+
+    testWidgets('拍摄模式跟随走 0x4006 事件通道(页内无轮询,节拍内零事务)',
+        (WidgetTester tester) async {
+      // 2026-10-22 撤页内 2s 单读 0xD1A6 轮询:AppServices 级事件轮询器
+      // (GetEventEx 0x941C)把 0x4006(0xD1A6)并入 session.events →
+      // RemoteController 定向重读 → notifyListeners → 页面 merge 监听
+      // (_connectedView)重建。emitPolledEvents 即轮询器的注入口,注入
+      // 一枚事件验证全链;再推进假时钟越过旧 2s 节拍两拍,确认 0xD1A6
+      // 读事务只有事件触发的这一笔(页内不再自读)。
+      tester.view
+        ..physicalSize = const Size(800, 2400)
+        ..devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      final conn = _FakeConnection();
+      final controller = ConnectionController(connection: conn);
+      // overview 不接 conn:已连接视图渲染用(读数占位),免整链脚本。
+      final overview = CameraOverviewController(
+          session: PtpSession(transport: _ScriptTransport()),
+          connection: _FakeConnection());
+      // remote 同款不接 connection:无连接沿初读链,模式只随事件走
+      // (连接沿初读归 _onConnectedChain,remote 系测试覆盖)。
+      final remoteTransport = _ScriptTransport();
+      final remoteSession = PtpSession(transport: remoteTransport);
+      final remote = RemoteController(
+          session: remoteSession,
+          engine: LiveViewEngine(session: remoteSession, delay: _parkedDelay),
+          delay: _parkedDelay,
+          aeDelay: _parkedDelay);
+      addTearDown(remote.dispose);
+      await tester.pumpWidget(MaterialApp(
+        home: ConnectionPage(
+            controller: controller,
+            overview: overview,
+            remoteController: remote),
+      ));
+
+      conn.statesCtrl.add(CameraLinkState.connected);
+      await tester.pumpAndSettle();
+      expect(remote.cameraMode, isNull, reason: '未发事件前模式未知');
+
+      // 拨杆拨到视频档:0x4006(0xD1A6)→ 定向重读(u8=1 视频)→ 跟随。
+      remoteTransport.reply(PtpResult(
+          responseCode: PtpResponseCode.ok,
+          data: Uint8List.fromList([1])));
+      remoteSession.emitPolledEvents(const [
+        PtpEvent(
+            code: PtpEventCode.devicePropChanged,
+            transactionId: 0xFFFFFFFF,
+            params: [PtpDevicePropCode.liveViewSelector]),
+      ]);
+      await tester.pumpAndSettle();
+      expect(remote.cameraMode, CaptureMode.video);
+
+      // 页内零轮询:推进 5s(旧 2s 节拍已越两拍),0xD1A6 读事务仅此一笔
+      //(轮询若在,脚本早已耗尽抛 StateError,读数也翻倍)。
+      await tester.pump(const Duration(seconds: 5));
+      expect(
+          remoteTransport.requests.where((r) =>
+              r.opcode == PtpOperationCode.getDevicePropValue &&
+              r.params.first == PtpDevicePropCode.liveViewSelector),
+          hasLength(1));
+    });
   });
 
   group('ConnectionPage 蓝牙工具通道:', () {
