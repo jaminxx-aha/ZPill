@@ -210,28 +210,67 @@ final class BleCameraSession {
 
   /// 与已发现设备完整配对:连接 → 4 步握手 → 写控制器名。
   /// 成功填 [identity] 并转 ready;失败抛 [BlePairingException] 回 idle。
-  Future<void> pair(BleDevice device) async {
+  /// 配对(菜单窗流程):连接 → 复用握手 → ready。2026-10-21 用户定
+  /// 稿 SnapBridge 同款「先点配对卡住等相机」:首次握手若被踢(正常
+  /// 态相机拒新凭据,T4a 签名 = 连上即掐),**不报错**,进「等配对窗」
+  /// 循环 —— 2s 拍重连+握手,直到相机进配对窗收下凭据(实测秒过)或
+  /// 60s 上限;取消走 [_cancelEpoch] 纪元闸(面板取消沿即停)。
+  /// 配对(菜单窗流程),SnapBridge 同款「先点配对卡住等相机」(用户
+  /// 定稿 2026-10-21「配对成功后马上连接」):连接+握手 → 若被踢(正
+  /// 常态相机拒新凭据,T4a 签名 = 连上即掐)= 相机还没进窗,**不报
+  /// 错**,2s 拍重连+握手等窗 —— 相机点配对(进窗)的下一拍即连上;
+  /// 60s 上限;取消经纪元闸(面板收口沿 cancelPairWait)。
+  /// [waitTimeout] 等窗上限(测试注短值免真延时;生产默认 60s)。
+  Future<void> pair(BleDevice device,
+      {Duration waitTimeout = const Duration(seconds: 60)}) {
+    // 等窗上限用**真 Timer 的 .timeout**(测试注短值即快断;假时钟
+    // deadline 在真延时循环里永不触发,01:30 挂测试实证)。
+    return _pairWithWait(device).timeout(waitTimeout, onTimeout: () async {
+      _cancelEpoch++; // 纪元推闸:废在途握手/循环(迟到收口沿自灭)
+      if (_state == BleSessionState.pairing) _failHandshake();
+      throw BlePairingException(
+          '配对等待超时 —— 相机须停在「连接至智能设备」配对页(广播窗约'
+          ' 30s)再点扫描连接');
+    });
+  }
+
+  Future<void> _pairWithWait(BleDevice device) async {
     if (_state != BleSessionState.idle) {
       throw StateError('会话非 idle(state=$_state)');
     }
     lastMatchName = device.name;
     _resuming = false;
     _serial = null;
-    _setState(BleSessionState.pairing);
-    final done = _handshake = Completer<void>();
+    final epoch = _cancelEpoch;
+    _pairWaitActive = true;
     try {
-      await _host.connectPaired(device.uuid).timeout(handshakeTimeout);
-      await done.future.timeout(handshakeTimeout);
-    } on TimeoutException {
-      _abandonHandshake(done);
-      throw BlePairingException(
-          '握手超时(${handshakeTimeout.inSeconds}s 无相机应答)—— 相机须停在'
-          '「连接至智能设备」配对页(广播窗约 30s)再点扫描连接');
-    } on Exception {
-      _setState(BleSessionState.idle);
-      _handshake = null;
-      rethrow;
+      while (_cancelEpoch == epoch) {
+        _setState(BleSessionState.pairing);
+        final done = _handshake = Completer<void>();
+        try {
+          await _host.connectPaired(device.uuid).timeout(handshakeTimeout);
+          await done.future.timeout(handshakeTimeout);
+          return; // ready(握手沿置上)
+        } on TimeoutException {
+          _abandonHandshake(done); // 无应答:相机不在场/深睡,继续等窗
+        } on Exception {
+          _setState(BleSessionState.idle);
+          _handshake = null; // 被踢 = 还没进窗(T4a),继续等
+        }
+        if (_cancelEpoch != epoch) return; // 已取消:外层超时收口
+        await Future<void>.delayed(const Duration(seconds: 2));
+      }
+    } finally {
+      _pairWaitActive = false;
+      if (_state == BleSessionState.pairing) {
+        _setState(BleSessionState.idle); // 循环退出未成:回 idle 待重试
+      }
     }
+  }
+
+  /// 面板收口沿取消配对等待(仅配对等待在跑时推纪元;其余态无害)。
+  void cancelPairWait() {
+    if (_pairWaitActive) _cancelEpoch++;
   }
 
   /// 配对码探针进行中(面板自动重连/注入驱动让路;真机 2026-10-19
@@ -255,6 +294,15 @@ final class BleCameraSession {
         (_state != BleSessionState.reconnecting &&
             _state != BleSessionState.idle)) {
       return false;
+    }
+    // 断链首轮直连优先:刚收线的相机处于静默等待态(零广播)或醒着可
+    // 连,直连两态通吃且 ~1-2s;失败落回扫描(未注册相机 RPA 轮换必须
+    // 重扫;深睡闸门随扫描生效)。
+    final directFirst = directFirstPending;
+    directFirstPending = false;
+    if (directFirst) {
+      final direct = await _reconnectDirect();
+      if (direct) return true;
     }
     final epoch = _cancelEpoch; // 十三轮:取消沿迟到收口不推态。
     final devices = await _host
@@ -348,6 +396,9 @@ final class BleCameraSession {
       await done.future.timeout(const Duration(seconds: 60));
       return true;
     } on TimeoutException {
+      // 失败落盘:直连超时(分段=链接建立/握手两段,排障定位用)。
+      AppLog.e(AppLog.ble,
+          'direct reconnect TIMEOUT linked=$linked'); // 真实失败,常驻
       lastError = linked
           ? (key: 'ble.stage2HandshakeTimeout', args: null)
           : (key: 'ble.stage2DirectTimeout', args: null);
@@ -357,6 +408,7 @@ final class BleCameraSession {
       _backoffStep = min(_backoffStep + 1, _backoffSeconds.length - 1);
       return false;
     } on Exception catch (e) {
+      AppLog.e(AppLog.ble, 'direct reconnect FAIL $e'); // 真实失败,常驻
       lastError = (key: 'ble.stage2ConnectFail', args: {'e': e.toString()});
       if (epoch != _cancelEpoch) return false; // 已取消:状态留在 idle。
       _setState(BleSessionState.reconnecting);
@@ -551,9 +603,20 @@ final class BleCameraSession {
   /// ready 沿一次定位更新待办(每次 ready 重置;首个过闸拍消费)。
   bool _readyOneShotPending = false;
 
+  /// 断链首轮直连优先待办(ready→reconnecting 沿置上,首个
+  /// retryReconnect 消费;测试直拨,公开同 geoEnabled 先例)。语义 =
+  /// SnapBridge 同款「配对成功后马上连接」(2026-10-21 用户定稿):注
+  /// 册后相机进静默等待态零广播,扫描 8s 必空转;链路刚断地址新鲜,直
+  /// 连 ~1-2s 对醒着/静默两态都成立,失败才落回扫描(深睡闸门随扫描
+  /// 生效)。
+  bool directFirstPending = false;
+
   /// 握手起始连续被踢计数(成功 ready 清零;瞬时踢 2s 快试,持续踢换
   /// 引导文案,见 handshakeStartFail 处)。
   int _kickStreak = 0;
+
+  /// 配对等待循环在跑(面板收口沿 cancelPairWait 的推纪元判据)。
+  bool _pairWaitActive = false;
 
   /// 定位到达(定位流回调,事件驱动)。ready、注入开(geoEnabled)、
   /// 过写闸且过去重门(距上次成功注入 <3s 且位移 <1.1m 跳过,见
@@ -786,6 +849,11 @@ final class BleCameraSession {
           _failHandshake();
         } else if (_state == BleSessionState.ready) {
           _backoffStep = 0;
+          // 收线武装直连优先 —— **仅限重连握手后的收线**(_resuming):
+          // v8b 静默态相机应答直连。菜单窗配对后的收线**不武装**(实证:
+          // 注册后相机静默期不接受直连,20s 超时白 hang 还盖住相机自己
+          // 的重连广播窗口,扫描本可接住)—— 该场景走扫描接广播。
+          directFirstPending = _resuming;
           _setState(BleSessionState.reconnecting);
         }
       case BleError(:final code, :final message):

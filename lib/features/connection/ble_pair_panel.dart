@@ -262,9 +262,14 @@ class BlePairPanelState extends State<BlePairPanel>
   /// _panelScanActive 随持有态同步(驱动扫描让位/归还)。
   void _syncScanOwnership() {
     // manualOff 只压制回链,不压制发现扫描(看设备列表是面板本职能)。
+    // **有身份即不持扫描权**(2026-10-21 定稿:回链优先,已配对相机也
+    // 不进其它设备 —— 面板发现扫描此时无意义,无线电让给驱动回链)。
+    // 无身份(真首配)才由面板持有,持续扫描配对菜单相机。
     final want = mounted &&
         _scanWanted &&
-        _sessionState == BleSessionState.idle;
+        _sessionState == BleSessionState.idle &&
+        _session.identity == null &&
+        _saved == null;
     if (want && !_panelScanHeld) {
       _panelScanHeld = true;
       AppServices.instance.setPanelScanActive(true);
@@ -296,6 +301,7 @@ class BlePairPanelState extends State<BlePairPanel>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _cancelRetry(notify: false);
+    _session.cancelPairWait(); // 配对等待循环即停(纪元闸)
     AppServices.instance.resumeBleDriver();
     _stateSub?.cancel();
     _eventSub?.cancel();
