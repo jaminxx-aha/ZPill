@@ -168,6 +168,7 @@ void main() {
     host = FakeBleHost();
     now = DateTime.utc(2026, 10, 13, 8, 0, 0);
     session = BleCameraSession(host: host, now: () => now);
+    session.geoEnabled = true; // 测试模型:注入层在跑(生产由 _syncInjectLayer 投影)
     // 拆链弃写:Ready 沿自驱首写是真实 2.5s 延迟,tearDown 断链让守卫
     // 弃写,防迟发写漏进下一测试的时序。
     addTearDown(() => session.disconnect());
@@ -182,6 +183,25 @@ void main() {
         satellites: sats,
         utcTime: now,
       );
+
+  /// 解第 [index] 笔 GEO 写入的 UTC 时间字段
+  /// (年@16 u16LE/月@18/日@19/时@20/分@21/秒@22,见 GeoPayload 布局)。
+  (int, int, int, int, int, int) geoTimeOf(int index) {
+    final data = host
+        .writes
+        .where((w) => w.$1 == kNikonCharGeo)
+        .toList()[index]
+        .$2;
+    final bd = ByteData.sublistView(data);
+    return (
+      bd.getUint16(16, Endian.little),
+      bd.getUint8(18),
+      bd.getUint8(19),
+      bd.getUint8(20),
+      bd.getUint8(21),
+      bd.getUint8(22),
+    );
+  }
 
   /// 驱动完整握手:连接 → stage1 → stage2 → stage4 → NOT1。
   /// [not1] 传 false 抑制尾部 NOT1(探针用例:注册信号由探针路自收,
@@ -435,6 +455,7 @@ void main() {
     await session.tick(); // 首笔回补 GEO + TIME
     expect(host.countWrite(kNikonCharGeo), 1);
     expect(host.countWrite(kNikonCharTime), 1);
+    expect(geoTimeOf(0), (2026, 10, 13, 8, 0, 0)); // 原点时间
 
     now = now.add(const Duration(seconds: 20));
     await session.tick(); // 20s:GEO 未到 30s、TIME 未到 45s → 静默
@@ -444,12 +465,52 @@ void main() {
     now = now.add(const Duration(seconds: 12)); // 累计 32s
     await session.tick();
     expect(host.countWrite(kNikonCharGeo), 2); // GEO 保鲜重发
+    expect(geoTimeOf(1), (2026, 10, 13, 8, 0, 35)); // 时间刷新到当前
     expect(host.countWrite(kNikonCharTime), 1); // 32s < 45s 仍未到点
 
     now = now.add(const Duration(seconds: 14)); // 距上次 TIME 46s
     await session.tick();
     expect(host.countWrite(kNikonCharTime), 2); // 45s 档到点
     expect(host.countWrite(kNikonCharGeo), 2); // 距保鲜成功 14s → 不重发
+  });
+
+  test('geoEnabled=false:关断后 onFix/tick 零 GEO(保鲜回补全停),TIME 心跳照常', () async {
+    await runHandshake();
+    session.geoEnabled = false; // 注入层关(设置开关沿投影)
+    session.onFix(fixAt(35.5));
+    now = now.add(const Duration(seconds: 3));
+    await session.tick(); // TIME 到点写;GEO 全闸
+    expect(host.countWrite(kNikonCharGeo), 0);
+    expect(host.countWrite(kNikonCharTime), 1);
+    now = now.add(const Duration(seconds: 45));
+    await session.tick(); // 保鲜窗早过,关断期仍零 GEO
+    expect(host.countWrite(kNikonCharGeo), 0);
+    // 重新打开:下一个 fix 恢复发送
+    session.geoEnabled = true;
+    session.onFix(fixAt(35.5));
+    expect(host.countWrite(kNikonCharGeo), 1);
+  });
+
+  test('重连 ready 沿即时一笔 GEO:缓存点刷当前时刻(SnapBridge 对齐)', () async {
+    await runHandshake();
+    session.onFix(fixAt(35.5)); // 闸内缓存
+    now = now.add(const Duration(seconds: 3)); // 过首写门
+    await session.tick(); // 首拍:回补 GEO + TIME
+    expect(host.countWrite(kNikonCharGeo), 1);
+    expect(host.countWrite(kNikonCharTime), 1);
+
+    host.emit(const BleDisconnected('P1'));
+    await pump();
+    host.reconnectDeviceId = session.identity!.deviceId;
+    now = now.add(const Duration(seconds: 1));
+    await runHandshake(resume: true); // 重连 ready(一次性补发待办置上)
+    now = now.add(const Duration(seconds: 3)); // 过首写门(重连新账)
+    await session.tick();
+    expect(host.countWrite(kNikonCharGeo), 2); // 即时一笔(无新点,缓存补)
+    expect(geoTimeOf(1), (2026, 10, 13, 8, 0, 7)); // 时间=重连后当前时刻
+    // 重连重置 TIME 锚(ready 沿 _lastTimeOkAt=null)→ 首拍即校时
+    // (SnapBridge 每连必校时同款)。
+    expect(host.countWrite(kNikonCharTime), 2);
   });
 
   test('ready 断连 → reconnecting;重连复用身份(deviceId/nonce 不变)', () async {
@@ -850,37 +911,44 @@ void main() {
       expect(session.state, BleSessionState.reconnecting);
     });
 
-    test('探针期 Conn 请求位自动清位应答;探针外只跟踪不应答', () async {
+    test('0x2008 请求位清位应答常轨:Time/Loc/Conn 各自清位(2026-10-21 SnapBridge 对齐)',
+        () async {
       await runHandshake(not1: false);
-      final fut = session.runIosBondProbe(
-          settle: Duration.zero,
-          leg2Grace: Duration.zero,
-          window: const Duration(seconds: 5));
-      await pump();
-      host.emit(const BleConnected(
-          uuid: 'P1', characteristics: {}, writeWithoutResponseMtu: 20));
-      await pump();
-      final stage1b = PairingMessage.decode(host.lastWrite(kNikonCharPairing));
-      host.emit(BleNotified(
-          uuid: kNikonCharPairing, data: buildStage2(stage1b).encode()));
-      await pump();
-      host.emit(BleNotified(
-          uuid: kNikonCharPairing, data: buildStage4().encode()));
-      await pump();
-      final before = host.countWrite(kNikonCharNot1); // leg-1 清位应答
-      host.emit(BleNotified(
-          uuid: kNikonCharNot1, data: Uint8List.fromList([0x00, 0x01])));
-      await pump();
-      expect(host.countWrite(kNikonCharNot1), before + 1); // 探针期自动应答
-      expect(host.lastWrite(kNikonCharNot1), [0x00, 0x00]);
+      // Time 请求(`01 00`)→ 应答 `00 00`(清 Time 位)
+      var before = host.countWrite(kNikonCharNot1);
       host.emit(BleNotified(
           uuid: kNikonCharNot1, data: Uint8List.fromList([0x01, 0x00])));
-      expect(await fut, isTrue);
-      final after = host.countWrite(kNikonCharNot1);
+      await pump();
+      expect(host.countWrite(kNikonCharNot1), before + 1);
+      expect(host.lastWrite(kNikonCharNot1), [0x00, 0x00]);
+      // Loc 请求(`10 00`)→ 应答 `00 00`(清 Loc 位;重配对清 GPS 后
+      // 位置会话重开的候选钥匙)
+      before = host.countWrite(kNikonCharNot1);
+      host.emit(BleNotified(
+          uuid: kNikonCharNot1, data: Uint8List.fromList([0x10, 0x00])));
+      await pump();
+      expect(host.countWrite(kNikonCharNot1), before + 1);
+      expect(host.lastWrite(kNikonCharNot1), [0x00, 0x00]);
+      // Conn 请求(`00 01`)→ 应答 `00 00`(清 Conn 位,v5 实证语义)
+      before = host.countWrite(kNikonCharNot1);
       host.emit(BleNotified(
           uuid: kNikonCharNot1, data: Uint8List.fromList([0x00, 0x01])));
       await pump();
-      expect(host.countWrite(kNikonCharNot1), after); // 探针外:只跟踪不应答
+      expect(host.countWrite(kNikonCharNot1), before + 1);
+      expect(host.lastWrite(kNikonCharNot1), [0x00, 0x00]);
+      // 组合请求(Time+Loc)→ 一次应答双清
+      before = host.countWrite(kNikonCharNot1);
+      host.emit(BleNotified(
+          uuid: kNikonCharNot1, data: Uint8List.fromList([0x11, 0x00])));
+      await pump();
+      expect(host.countWrite(kNikonCharNot1), before + 1);
+      expect(host.lastWrite(kNikonCharNot1), [0x00, 0x00]);
+      // 零请求位 → 不应答
+      before = host.countWrite(kNikonCharNot1);
+      host.emit(BleNotified(
+          uuid: kNikonCharNot1, data: Uint8List.fromList([0x00, 0x00])));
+      await pump();
+      expect(host.countWrite(kNikonCharNot1), before);
     });
 
     test('探针期三方让路:retryReconnect/reconnectDirect/reconnectScan 零扫描零连接',
