@@ -198,7 +198,7 @@ const Map<String, String> enCatalog = {
   'conn.gpsInjectionHint':
       'Automatically write the phone location into the camera while shooting; photos on the card get native coordinates',
   'conn.gpsAuthFailed':
-      'Background location not granted ("Always" required); GPS injection stays off',
+      'Location permission not granted (denied or restricted); GPS injection stays off',
   'conn.wakeCameraWifi': 'Remote Connect Camera',
   'conn.hintToggle': 'Connection Info',
   'conn.wifiAwakeCardTitle': 'Camera Wi-Fi is on — join it manually',

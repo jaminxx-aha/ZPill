@@ -543,11 +543,20 @@ final class BleCameraSession {
   /// 前台档。切档只改下一拍到点判定,不立即补写。
   void setForeground(bool foreground) => _keepalive.foreground = foreground;
 
-  /// 定位到达(定位流回调,事件驱动)。ready 且过写闸且过去重门(距上
-  /// 次成功注入 <3s 且位移 <1.1m 跳过,见 [BleKeepalive])即写 GEO;
-  /// 写闸期与探针静默窗均缓存待回补(不弃点)。
+  /// 注入层开关投影(驱动翻面沿同步,2026-10-21 实证补):关断后保鲜
+  /// 重发与缓存回补全停 —— 否则关了开关,30s 重发仍拿缓存点刷时间,
+  /// 相机位置数据一直在走。TIME 心跳是链路保活,不受此闸。
+  bool geoEnabled = false;
+
+  /// ready 沿一次定位更新待办(每次 ready 重置;首个过闸拍消费)。
+  bool _readyOneShotPending = false;
+
+  /// 定位到达(定位流回调,事件驱动)。ready、注入开(geoEnabled)、
+  /// 过写闸且过去重门(距上次成功注入 <3s 且位移 <1.1m 跳过,见
+  /// [BleKeepalive])即写 GEO;写闸期缓存待回补(不弃点)。
   void onFix(GeoFix fix) {
     if (_state != BleSessionState.ready) return;
+    if (!geoEnabled) return;
     final t = _now();
     if (_gated(t) || _bondProbeActive) {
       _pendingFix = fix;
@@ -588,17 +597,33 @@ final class BleCameraSession {
       final pending = _pendingFix;
       if (pending != null) {
         _pendingFix = null;
-        await _sendGeo(pending, t);
-        if (_gated(_now())) return; // GEO 失败重进闸:后续写等下一拍
+        if (geoEnabled) {
+          await _sendGeo(pending, t);
+          if (_gated(_now())) return; // GEO 失败重进闸:后续写等下一拍
+        }
+      }
+      // ready 沿一次定位更新:pending 已带新点则它本身就是更新,缓存点
+      // 补发只在这轮没有新点时才做(防双发)。
+      if (_readyOneShotPending) {
+        _readyOneShotPending = false;
+        final cached = _lastOkFix;
+        if (geoEnabled && pending == null && cached != null) {
+          await _sendGeo(cached.withUtcTime(t.toUtc()), t);
+        }
       }
       if (_keepalive.timeDue(t, _lastTimeOkAt)) {
         await _sendTime(t);
       }
       final lastOk = _lastOkFix;
-      if (lastOk != null &&
+      if (geoEnabled &&
+          lastOk != null &&
           _lastOkAt != null &&
           t.difference(_lastOkAt!) >= _keepAlive) {
-        await _sendGeo(lastOk, t);
+        // 保鲜重发:坐标用缓存点,时间刷到当前 —— fix 时间取定位回调
+        // 沿,静止期 distanceFilter 3m 零回调,原样重发会把 EXIF GPS
+        // 时间冻在最后一次移动时刻(2026-10-21 真机实证,同 nsg 重发
+        // 保鲜口径)。
+        await _sendGeo(lastOk.withUtcTime(t.toUtc()), t);
       }
     } finally {
       _flushing = false;
@@ -710,6 +735,9 @@ final class BleCameraSession {
               'nonce=${stage1.nonce.toRadixString(16)}'
               '${_resuming ? '(复用)' : '(全新)'}');
         } on Exception catch (e) {
+          // 失败落盘(AppLog.e → errorTail/tail.log):握手起始失败的
+          // 原生异常串上盘,真机排障唯一持久面(2026-10-21 夜教训)。
+          AppLog.e(AppLog.ble, 'handshake start FAIL $e');
           lastError = (key: 'ble.handshakeStartFail', args: {'e': e.toString()});
           _failHandshake();
         }
@@ -728,6 +756,9 @@ final class BleCameraSession {
         }
       case BleDisconnected():
         if (_state == BleSessionState.pairing) {
+          // 失败落盘:配对期断链时序(死在哪一拍)上盘排障。
+          AppLog.e(AppLog.ble,
+              'handshake DISCONNECTED (stage3Sent=$_stage3Sent)');
           lastError = (key: 'ble.handshakeDisconnected', args: null);
           _failHandshake();
         } else if (_state == BleSessionState.ready) {
@@ -777,6 +808,8 @@ final class BleCameraSession {
       _trace('stage3 → device=${stage3.device.toRadixString(16)} '
           'nonce=${stage3.nonce.toRadixString(16)}');
     } on Exception catch (e) {
+      // 失败落盘:stage3 认证写被掐的原生异常串上盘排障。
+      AppLog.e(AppLog.ble, 'stage3 write FAIL $e');
       lastError = (key: 'ble.stage3WriteFail', args: {'e': e.toString()});
       _failHandshake();
     }
@@ -798,17 +831,29 @@ final class BleCameraSession {
         final w = _registrationWait;
         if (w != null && !w.isCompleted) w.complete(true);
       }
-      if (_bondProbeActive && conn >= 1) {
-        // 探针期相机重发连接请求位 → 照 SnapBridge 语义清位应答(原链
-        // v5 已证相机收下;二段不答则相机可能悬等)。
-        final answer = (data[0] | (data[1] << 8)) & ~0x0100;
-        _trace('探针期 Conn 请求位应答 '
-            '0x${answer.toRadixString(16).padLeft(4, '0')}');
-        try {
-          await _host.write(kNikonCharNot1,
-              Uint8List.fromList([answer & 0xFF, (answer >> 8) & 0xFF]));
-        } on Exception catch (e) {
-          _trace('探针期 Conn 应答写失败:$e');
+      // 清位应答(SnapBridge 常规语义,2026-10-21 从探针提为常轨):
+      // 相机 notify 请求位 = 开口要时间/位置/连接;app 供给(TIME/GEO
+      // 帧)后写回清位值确认 —— 不清位则相机悬等、位置会话不开、GEO
+      // 静默丢弃(重配对清 GPS 后零进账的真凶候选)。Conn 位应答 v5
+      // 已证相机收下。
+      // ⚠️ 只在 ready 态应答:配对事务内写 0x2008 疑似搅坏注册
+      // (2026-10-21 实证:应答常轨化后的首次重配对,重连 stage1 全
+      // 部「连接已断开」,相机亮着也次次掐;13:41 无应答版同流程可连)。
+      if (_state == BleSessionState.ready) {
+        final raw = data[0] | (data[1] << 8);
+        var answer = raw;
+        if (time >= 1) answer &= ~0x000F; // 时间由 TIME 帧供给
+        if (loc >= 1) answer &= ~0x00F0; // 位置由 GEO 帧供给
+        if (conn >= 1) answer &= ~0x0100; // v5 实证
+        if (answer != raw) {
+          _trace('0x2008 清位应答 '
+              '0x${answer.toRadixString(16).padLeft(4, '0')}');
+          try {
+            await _host.write(kNikonCharNot1,
+                Uint8List.fromList([answer & 0xFF, (answer >> 8) & 0xFF]));
+          } on Exception catch (e) {
+            _trace('0x2008 应答写失败:$e');
+          }
         }
       }
     } else {
@@ -1076,6 +1121,10 @@ final class BleCameraSession {
     // 减灾,非替代重试)。
     _gateWritesUntil = _now().add(writeGate);
     _lastTimeOkAt = null;
+    // 连接/配对成功沿一次定位更新(SnapBridge 同款,2026-10-21 用户定
+    // 稿「蓝牙一连接或配对成功就发起一次位置数据更新」):ready 后首个
+    // 过闸拍,缓存点带当前时刻立刻补发一笔,不等流首帧/30s 保鲜窗。
+    _readyOneShotPending = true;
     _setState(BleSessionState.ready);
     _handshake?.complete();
     _handshake = null;
