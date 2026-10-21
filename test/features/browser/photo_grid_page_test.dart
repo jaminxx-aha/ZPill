@@ -488,7 +488,7 @@ void main() {
     await loading;
   });
 
-  // ── 多选批量下载:格式选择 ─────────────────────────────────────
+  // ── 多选批量下载:格式按筛选预定档收集 ─────────────────────────
 
   /// 装载网格并选中指定组(长按第一项进入多选);返回控制器与假引擎供断言。
   Future<(BrowserController, _FakeEngine)> selectGroups(
@@ -526,7 +526,7 @@ void main() {
     return (controller, engine);
   }
 
-  testWidgets('多选含双格式组:先「下载」展开目的地,弹格式面板,仅 JPG 时纯 RAW 组跳过',
+  testWidgets('多选含双格式组:筛选「全部」整组全量直接入队,不弹面板',
       (tester) async {
     final (_, engine) =
         await selectGroups(tester, [_pair(101, 102), _rawPhoto(201)]);
@@ -535,65 +535,15 @@ void main() {
     await tester.pump();
     await tester.tap(find.text('下载到相册'));
     await tester.pumpAndSettle();
-    expect(find.text('选择下载格式'), findsOneWidget);
-    expect(find.textContaining('其中 1 项为双格式'), findsOneWidget);
-
-    await tester.tap(find.text('仅 JPG'));
-    await tester.pumpAndSettle();
-
-    final (entries, destination) = engine.calls.single;
-    expect(entries.map((e) => e.name), ['DSC_0001.JPG']);
-    expect(destination, TransferDestination.gallery);
-    expect(find.textContaining('跳过 1 项无 JPG'), findsOneWidget);
-    expect(find.text('已选 2 项'), findsNothing); // 下载后清空选择
-
-    await _drainSnackBar(tester);
-  });
-
-  testWidgets('多选含双格式组:选 JPG+RAW,缺格式组下另一格式不跳过', (tester) async {
-    final (_, engine) =
-        await selectGroups(tester, [_pair(101, 102), _rawPhoto(201)]);
-
-    await tester.tap(find.text('下载'));
-    await tester.pump();
-    await tester.tap(find.text('下载到相册'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('JPG + RAW'));
-    await tester.pumpAndSettle();
+    expect(find.text('选择下载格式'), findsNothing,
+        reason: '全部 = 整组全量直接下,不弹格式面板');
 
     final (entries, destination) = engine.calls.single;
     expect(entries.map((e) => e.name),
         ['DSC_0001.JPG', 'DSC_0001.NEF', 'DSC_0002.NEF']);
     expect(destination, TransferDestination.gallery);
     expect(find.textContaining('跳过'), findsNothing);
-
-    await _drainSnackBar(tester);
-  });
-
-  testWidgets('多选取消格式面板:不入队,选中保留(可改选再下)', (tester) async {
-    final (_, engine) =
-        await selectGroups(tester, [_pair(101, 102), _rawPhoto(201)]);
-
-    await tester.tap(find.text('下载'));
-    await tester.pump();
-    await tester.tap(find.text('下载到相册'));
-    await tester.pumpAndSettle();
-    // 点面板外遮罩取消。
-    await tester.tapAt(const Offset(20, 20));
-    await tester.pumpAndSettle();
-
-    expect(engine.calls, isEmpty);
-    expect(find.text('已选 2 项'), findsOneWidget);
-
-    // 改选仅 RAW 再下到应用:双格式组取 NEF,纯 RAW 组照常全量。
-    await tester.tap(find.text('下载到应用'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('仅 RAW'));
-    await tester.pumpAndSettle();
-
-    final (entries, destination) = engine.calls.single;
-    expect(entries.map((e) => e.name), ['DSC_0001.NEF', 'DSC_0002.NEF']);
-    expect(destination, TransferDestination.app);
+    expect(find.text('已选 2 项'), findsNothing); // 下载后清空选择
 
     await _drainSnackBar(tester);
   });
