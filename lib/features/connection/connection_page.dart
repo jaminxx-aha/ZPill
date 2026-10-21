@@ -1300,8 +1300,10 @@ class _ConnectionPageState extends State<ConnectionPage>
   /// 行挪 AppBar -36、缩径 116→96 中心不漂 +10)得 130;七轮裁定
   /// 「图标往下移」+40 → 170(hero 中心落屏体视觉中心)。四轮裁定
   /// 「配对信息往上移」仍有效:列表紧随图标之下,剩余空间全在底部
-  /// (内容短则留白,长则区内滚动)。
-  static const double _heroTopGap = 170;
+  /// (内容短则留白,长则区内滚动)。2026-10-21:状态行与已连接侧
+  /// ConnectedHeader 同几何(行高 21→30:竖 pad 4 + 钉
+  /// kConnStatusRowHeight 26,+9),170-9=161 回收,图标坐标不动。
+  static const double _heroTopGap = 161;
 
   /// USB/AP 主视图:状态行 + 固定错误位 + 方式 hero(**点按即连接、
   /// 在途点按取消**,五轮中央连接钮退役)+ AP 凭据卡(沉底)。失败态

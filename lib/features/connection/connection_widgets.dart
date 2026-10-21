@@ -11,9 +11,17 @@ import '../../design/app_colors.dart';
 import '../../design/app_dimens.dart';
 import '../../l10n/l10n.dart';
 
-/// 状态行:12px 状态圆点 + 状态词(w600)+ busy 尾槽 16px spinner
-/// (连接在途允许转圈;页面扫描一律静默不出圈)。label 传**已 t()**
-/// 的状态词。
+/// 状态行:9px 状态圆点 + 状态词(titleMedium w700)+ busy 尾槽 16px
+/// spinner(连接在途允许转圈;页面扫描一律静默不出圈)。label 传**已
+/// t()**的状态词。几何与已连接侧 ConnectedHeader 全同(2026-10-21:
+/// 状态行恒位 —— 圆点/字号/行高一致,连接前后状态词不跳),行高钉
+/// [kConnStatusRowHeight]。
+
+/// 状态行行高定标(2026-10-21):已连接侧链路 pill 高 26 是全行最高
+/// 件,两侧行高都钉此值 —— 尾部内容(转圈/电池壳/胶囊)增减不再牵动
+/// 圆点与状态词的纵向位置,连接前后恒位。
+const double kConnStatusRowHeight = 26;
+
 class ConnStatusHeader extends StatelessWidget {
   const ConnStatusHeader({
     super.key,
@@ -29,29 +37,37 @@ class ConnStatusHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Row(
-      children: [
-        Container(
-          width: 12,
-          height: 12,
-          decoration: BoxDecoration(color: dotColor, shape: BoxShape.circle),
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: SizedBox(
+        height: kConnStatusRowHeight,
+        child: Row(
+          children: [
+            Container(
+              width: 9,
+              height: 9,
+              decoration:
+                  BoxDecoration(color: dotColor, shape: BoxShape.circle),
+            ),
+            const SizedBox(width: AppSpacing.sm),
+            Expanded(
+              child: Text(
+                label,
+                style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                    color: theme.colorScheme.onSurface),
+              ),
+            ),
+            if (busy)
+              SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(
+                    strokeWidth: 2, color: theme.colorScheme.primary),
+              ),
+          ],
         ),
-        const SizedBox(width: AppSpacing.sm),
-        Expanded(
-          child: Text(
-            label,
-            style: theme.textTheme.titleSmall?.copyWith(
-                fontWeight: FontWeight.w600, color: theme.colorScheme.onSurface),
-          ),
-        ),
-        if (busy)
-          SizedBox(
-            width: 16,
-            height: 16,
-            child: CircularProgressIndicator(
-                strokeWidth: 2, color: theme.colorScheme.primary),
-          ),
-      ],
+      ),
     );
   }
 }
