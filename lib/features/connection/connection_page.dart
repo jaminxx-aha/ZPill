@@ -2155,6 +2155,21 @@ class _StaScanBodyState extends State<_StaScanBody> {
     super.dispose();
   }
 
+  /// 「其它设备」列示源:mDNS 发现里滤掉已配对相机(2026-10-21 用户
+  /// 定稿,与 BLE 面板同款)—— 匹配 = 归一化名相等(两侧都是 mDNS 实
+  /// 例名)或 host == lastIp(最强信号)。
+  List<DiscoveredIpCamera> _othersIpCameras(ConnectionController controller) {
+    bool paired(DiscoveredIpCamera c) => controller.savedCameras.any((s) {
+          String norm(String v) =>
+              v.replaceAll(RegExp(r'[\s_]+'), '').toLowerCase();
+          if (s.lastIp != null && s.lastIp == c.host) return true;
+          return s.name.isNotEmpty &&
+              c.name.isNotEmpty &&
+              norm(s.name) == norm(c.name);
+        });
+    return controller.cameras.where((c) => !paired(c)).toList();
+  }
+
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
@@ -2250,16 +2265,17 @@ class _StaScanBodyState extends State<_StaScanBody> {
                     ],
                   ),
                   const SizedBox(height: AppSpacing.md),
-                  // 其它设备:mDNS 发现(点行连接)。扫描静默 —— 无「扫描中」
-                  // 指示,结果静默入列;相机须停留在「等待连接」画面等解释
-                  // 收进 hero 说明(点图标弹说明弹窗)。
+                  // 其它设备:mDNS 发现(点行连接),已配对相机滤除不重复
+                  // 列示(2026-10-21 用户定稿,与 BLE 面板同款)。扫描静默
+                  // —— 无「扫描中」指示,结果静默入列;相机须停留在「等
+                  // 待连接」画面等解释收进 hero 说明(点图标弹说明弹窗)。
                   const ConnSectionHeader(label: 'conn.sectionOthers'),
                   ConnTileGroup(
                     children: [
-                      if (controller.cameras.isEmpty)
+                      if (_othersIpCameras(controller).isEmpty)
                         const _EmptyGroupRow(text: 'conn.noOtherDevices')
                       else
-                        for (final camera in controller.cameras)
+                        for (final camera in _othersIpCameras(controller))
                           ListTile(
                             dense: true,
                             leading: const Icon(Icons.photo_camera_outlined),
