@@ -176,7 +176,13 @@ public final class BlePlugin: NSObject, FlutterPlugin, CBCentralManagerDelegate,
     scanResult = result
     scanFilterDeviceId = filterDeviceId
     scanHits.removeAll()
-    central.scanForPeripherals(withServices: nil)
+    // 重复上报开关(2026-10-21):iOS 单扫描会话对同一设备只回调一次
+    // didDiscover(广播内容不变时)—— 面板扫描行 5s 过期依赖连续刷新,
+    // 不打开就会「出现→5s 消失→下窗再出现」循环。回调率 ≈ 广播间隔,
+    // 单设备场景可忽略。
+    central.scanForPeripherals(
+        withServices: nil,
+        options: [CBCentralManagerScanOptionAllowDuplicatesKey: true])
     scanTimer?.invalidate()
     scanTimer = Timer.scheduledTimer(withTimeInterval: TimeInterval(timeoutSeconds), repeats: false) { [weak self] _ in
       self?.endScan()

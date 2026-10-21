@@ -9,7 +9,7 @@
 library;
 
 import 'dart:async';
-import 'dart:io' show Directory, File, FileMode, Platform;
+import 'dart:io' show Directory, File, FileMode, Platform, exit;
 
 import 'package:flutter/foundation.dart' show debugPrint, kDebugMode;
 import 'package:flutter/widgets.dart' show AppLifecycleListener, AppLifecycleState;
@@ -49,6 +49,7 @@ import 'features/settings/settings_page.dart';
 import 'features/settings/snapshot_controller.dart';
 import 'features/transfers/transfers_page.dart';
 import 'platform/background_transfer.dart';
+import 'platform/instance_watch.dart';
 import 'platform/location_host.dart';
 import 'platform/services.dart';
 import 'platform/usb/usb_host.dart';
@@ -92,6 +93,25 @@ final class AppServices {
         FileSettingsStore(dataDir: PlatformServices.gallery.dataDir);
     bleIdentityStore =
         BleIdentityStore(dataDir: PlatformServices.gallery.dataDir);
+
+    // 实例心跳看门狗(2026-10-21):升级安装留僵尸(旧实例不终止)的
+    // App 内自愈 —— 新实例出现,旧实例 3-6s 内自我退出。dataDir 通道
+    // 缺失(测试/异端)跳过。
+    unawaited(() async {
+      try {
+        final dir = await PlatformServices.gallery.dataDir();
+        if (dir.isEmpty) return;
+        InstanceWatch(
+          lockFile: File('$dir/instance.json'),
+          onExit: (reason) {
+            AppLog.e(AppLog.ble, 'instance watch: $reason');
+            exit(0);
+          },
+        ).start();
+      } on Exception {
+        // 通道缺失(测试/异端):看门狗缺席,僵尸回潮可容忍
+      }
+    }());
 
     // 看门狗装饰器包住平台通道:相机拔出/挂死时 bulk 收发秒败 +
     // breakages 事件(连接层订阅转 failed)。裸通道无检测能力。
@@ -663,11 +683,32 @@ final class AppServices {
     _syncInjectLayer();
   }
 
+  /// 面板配对扫描期标志:面板扫描占无线电(iOS 扫描单槽),驱动重连
+  /// 循环在此期间让位 —— 否则驱动的 8s scanForDeviceId 空扫反复顶掉
+  /// 面板的 scanForPairing,发现事件断流、5s 过期剪行(2026-10-21 实
+  /// 证:面板能发现设备但过一会就消失)。收口沿归还并续跑重连循环。
+  bool _panelScanActive = false;
+
+  /// 面板扫描起/止(ble_pair_panel._startScan 调用):true = 驱动重连
+  /// 让位;false = 归还,链路在跑且会话在 idle/reconnecting 则续跑循环。
+  void setPanelScanActive(bool active) {
+    if (_panelScanActive == active) return;
+    _panelScanActive = active;
+    if (!active &&
+        _bleRunning &&
+        (bleSession.state == BleSessionState.idle ||
+            bleSession.state == BleSessionState.reconnecting)) {
+      _scheduleBleRetry();
+    }
+  }
+
   void _scheduleBleRetry() {
     _bleRetry?.cancel();
     if (!_bleRunning) return;
+    if (_panelScanActive) return; // 面板扫描占台:驱动让位(收口沿归还)
     _bleRetry = Timer(bleSession.nextRetryDelay, () async {
       if (!_bleRunning) return;
+      if (_panelScanActive) return; // 在途尝试结束后不再续棒(面板扫描期)
       // 无参调用 = 深睡闸门开:扫到待机广播不连,被动扫描等唤醒沿
       // 快连(手动重连路一律显式绕闸);此循环无人值守常跑数小时。
       final ok = await bleSession.retryReconnect();
