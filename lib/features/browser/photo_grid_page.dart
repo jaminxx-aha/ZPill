@@ -619,7 +619,7 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
                     sliver: SliverGrid.builder(
                       gridDelegate:
                           const SliverGridDelegateWithFixedCrossAxisCount(
-                        crossAxisCount: 4,
+                        crossAxisCount: 3,
                         mainAxisSpacing: 2,
                         crossAxisSpacing: 2,
                       ),
@@ -987,7 +987,7 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
 
 /// 懒枚举首块前骨架(2026-10-17,替代旧转圈):0x9805 全库枚举单笔
 /// ~3.8s 相机端编目(真机日志定案),期间界面不再是空心 spinner,而是
-/// 4 列方块网格形占位(与真网格同几何:4 列/2px 缝/lg 圆角/日期头)。
+/// 3 列方块网格形占位(与真网格同几何:3 列/2px 缝/lg 圆角/日期头)。
 /// **静态无动画**:AppBar 不定进度细条已承担「在动」反馈,页内再加
 /// 无限动画会卡死测试的 pumpAndSettle(渐进时序用例全依赖它)。
 class _EnumSkeleton extends StatelessWidget {
@@ -1009,7 +1009,7 @@ class _EnumSkeleton extends StatelessWidget {
           for (var r = 0; r < 6; r++)
             Row(
               children: [
-                for (var c = 0; c < 4; c++)
+                for (var c = 0; c < 3; c++)
                   Expanded(
                     child: AspectRatio(
                       aspectRatio: 1,
