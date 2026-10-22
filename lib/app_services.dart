@@ -9,13 +9,12 @@
 library;
 
 import 'dart:async';
-import 'dart:io' show Directory, File, FileMode, Platform, exit;
+import 'dart:io' show Directory, File, FileMode, Platform;
 
 import 'package:flutter/foundation.dart' show debugPrint, kDebugMode;
 import 'package:flutter/widgets.dart' show AppLifecycleListener, AppLifecycleState;
 
 import 'core/ble/ble_camera_session.dart';
-import 'core/ble/geo_payload.dart';
 import 'core/log/app_log.dart';
 import 'core/browser/camera_file_ops.dart';
 import 'core/browser/object_repository.dart';
@@ -48,8 +47,9 @@ import 'features/remote/remote_controller.dart';
 import 'features/settings/settings_page.dart';
 import 'features/settings/snapshot_controller.dart';
 import 'features/transfers/transfers_page.dart';
+import 'platform/ble_driver.dart';
 import 'platform/background_transfer.dart';
-import 'platform/instance_watch.dart';
+import 'platform/session_lifecycle.dart';
 import 'platform/location_host.dart';
 import 'platform/services.dart';
 import 'platform/usb/usb_host.dart';
@@ -63,25 +63,23 @@ import 'platform/usb/watchdog_usb_host.dart';
 /// 窗);门含楔死自愈梯,正常 ~1-3s,超时兜底防押死。
 const Duration kConnectStartGateTimeout = Duration(seconds: 3);
 
-/// BLE 重连循环重臂谓词(纯函数,供单测):无命中且驱动在跑 →
-/// reconnecting(连上又掉)或 idle+有身份(冷启扫空/闸门等唤醒)
-/// 都续跑,循环不死;命中(ok)或驱动停/身份没了才收。
-bool bleRetryRearm({
-  required bool ok,
-  required bool running,
-  required BleSessionState state,
-  required bool hasIdentity,
-}) =>
-    !ok &&
-    running &&
-    (state == BleSessionState.reconnecting ||
-        (state == BleSessionState.idle && hasIdentity));
-
 final class AppServices {
   AppServices._() {
     // 幂等:测试直接 pumpWidget 不经 main(),这里保证平台服务就绪。
     PlatformServices.bootstrap();
     _wireAppLog();
+    _wireStores();
+    _wireLinkAndSession();
+    _wireBrowseAndTransfer();
+    _wireBleSession();
+    _wireControllers();
+    _wireBleDriver();
+    _wireBackgroundHolds();
+    _wireSessionLifecycle();
+  }
+
+  /// 数据店装配(全部持久层,dataDir = applicationSupport)。
+  void _wireStores() {
 
     // 无线身份与配对档案(dataDir = applicationSupport,持久):
     // 客户端 GUID 跨启动复用,相机按它记忆已配对设备;换 GUID = 新客户端。
@@ -93,7 +91,11 @@ final class AppServices {
         FileSettingsStore(dataDir: PlatformServices.gallery.dataDir);
     bleIdentityStore =
         BleIdentityStore(dataDir: PlatformServices.gallery.dataDir);
+  }
 
+  /// 链路与会话装配:USB 看门狗装饰 → USB 传输 → 链路路由器 → 会话
+  /// → 连接层(路由器挂载由连接层在 connect/teardown 驱动)。
+  void _wireLinkAndSession() {
     // 看门狗装饰器包住平台通道:相机拔出/挂死时 bulk 收发秒败 +
     // breakages 事件(连接层订阅转 failed)。裸通道无检测能力。
     // probe:幽灵设备防线 —— usb_service 删除记录失败后 getDevices()
@@ -123,6 +125,11 @@ final class AppServices {
         enableKeepalive: true,
       ),
     );
+  }
+
+  /// 浏览/传输装配:仓库 → 文件操作 → 评分 → 下载器 → 缩略缓存 →
+  /// 传输引擎(水印/XMP 注入闭包)→ 速传 → 设置与快照。
+  void _wireBrowseAndTransfer() {
     repository = ObjectRepositoryImpl(session: session);
     fileOps = CameraFileOps(session: session, repository: repository);
     ratingsStore = FileRatingsStore(
@@ -217,6 +224,10 @@ final class AppServices {
       connection: connection,
       store: configSnapshots,
     );
+  }
+
+  /// BLE 会话装配(协议层周期驱动零 Timer,前台驱动见 [_wireBleDriver])。
+  void _wireBleSession() {
     // BLE 相机会话先建(连接页「蓝牙」分段装配要引用;注入驱动挂接在
     // 其后 —— 协议层周期驱动零 Timer,前台驱动全收在这里:定位流 →
     // onFix;5s tick → 保活到点判定/缓存回补;退避重试一次性 Timer
@@ -242,6 +253,11 @@ final class AppServices {
         }
       },
     );
+  }
+
+  /// 控制器装配:连接/浏览/概览/双卡槽/取景引擎与拍摄控制器,设置
+  /// 沿同步(自动起景/SDRAM 直拍/画质档)。
+  void _wireControllers() {
     connectionController = ConnectionController(
       connection: connection,
       scanner: PlatformServices.nsd,
@@ -315,9 +331,19 @@ final class AppServices {
       remoteController.liveViewImageCompression =
           settingsController.value.liveViewImageCompression;
     });
-    // BLE 会话已提前创建(连接页装配沿);这里只挂驱动:注入开关监听
-    // + 盘载身份恢复(冷启直进重连,免重走相机菜单配对)。
-    settingsController.addListener(_updateBleInjection);
+  }
+
+  /// BLE 驱动装配:双层驱动实例化(平台面注入)+ 注入开关监听 +
+  /// 盘载身份恢复(冷启直进重连,免重走相机菜单配对)。
+  void _wireBleDriver() {
+    bleDriver = BleDriver(
+      session: bleSession,
+      gpsInjectEnabled: () => settingsController.value.bleGpsInject,
+      locationStream: PlatformServices.locationStream,
+      background: PlatformServices.background,
+      dataDir: () => PlatformServices.gallery.dataDir(),
+    );
+    settingsController.addListener(bleDriver.refresh);
     unawaited(() async {
       final saved = await bleIdentityStore.load();
       if (saved != null) {
@@ -329,8 +355,12 @@ final class AppServices {
           name: saved.controllerName,
         );
       }
-      _updateBleInjection();
+      bleDriver.refresh();
     }());
+  }
+
+  /// 传输控制器与后台保活装配(持有式,各业务按 tag 持有)。
+  void _wireBackgroundHolds() {
     transfersController = TransfersController(
       engine: transferEngine,
       gallery: PlatformServices.gallery,
@@ -357,7 +387,7 @@ final class AppServices {
     // BLE 持有独立订阅(广播流;注入驱动的 _bleStateSub 只在驱动在跑
     // 期存活,配对页挂起期链路仍在 —— 持有须全程跟随会话状态)。
     bleSession.states.listen((s) {
-      _syncBleBackgroundHold();
+      bleDriver.syncBackgroundHold();
       if (s == BleSessionState.ready) {
         // ready 沿旧档相机名回填(配对页挂起期的手动重连路也覆盖;
         // 幂等,新档同值即短路)。
@@ -369,6 +399,22 @@ final class AppServices {
     // 异步事件通道(OpenZCine/libgphoto2 口径)—— 连接期间定时拉取
     // 并入 session.events;不支持/连续失败自动停(回退异步通道)。
     eventPoller = NikonEventPoller(session: session);
+  }
+
+  /// 会话生命周期装配:连接沿协调器(轮询启停/缓存失效/诊断/侧链
+  /// 让路)挂接,三沿语义见 SessionLifecycle。
+  void _wireSessionLifecycle() {
+    SessionLifecycle(
+      connection: connection,
+      session: session,
+      repository: repository,
+      thumbnails: thumbnails,
+      eventPoller: eventPoller,
+      startSettledGate: _connectSideChainGate,
+      diagnosticsOnConnect: kPtpDiagnosticsOnConnect,
+      runDiagnostics: () =>
+          PtpDiagnostics.run(session: session, repository: repository),
+    ).attach();
 
     // 断开/失败 → 对象缓存与缩略图内存索引失效(缩略图磁盘缓存是
     // 内容键,跨会话稳定,保留;重连后重新全量枚举)。
@@ -377,64 +423,6 @@ final class AppServices {
     // 会话重开,全在串行锁上 —— 2026-10-16 真机定案收闸,Wi-Fi 下它
     // 把取景首帧/进页刷参/信息卡全部压到分钟级(拍摄页「进页卡很久、
     // 无实时取景」主因)。见 debug/ptp_diagnostics.dart。
-    var diagRan = false;
-    connection.states.listen((s) {
-      // 连接成功沿(含重连成功)每沿必启轮询器(start 幂等);诊断只
-      // 跑一次。2026-10-10 修:旧结构把 start() 关在 !diagRan 门里,
-      // 首连后重连成功的 connected 沿轮询器永远不再跑。
-      if (s == CameraLinkState.connected) {
-        if (kPtpDiagnosticsOnConnect && !diagRan) {
-          diagRan = true;
-          PtpDiagnostics.run(session: session, repository: repository);
-        }
-        // 侧链整组让路:等起景段落定门(事件驱动,见 kConnectStartGate
-        // Timeout)再上路;先清再开轮询器的次序不变。轮询器周期 2s,等
-        // 窗内事件不丢(首拍顺延一并拉)。
-        unawaited(() async {
-          await _connectSideChainGate();
-          // 门等窗里沿翻篇(断开/重连)不追;重连沿有自己的新定时。
-          if (connection.state != CameraLinkState.connected) return;
-          // 重连沿清相机事件队列残留(0x9461,官方候选;best-effort ——
-          // 不支持/会话未开静默跳过,不挡连接)。先清再开轮询器,免得
-          // 首拍把陈年事件当新鲜货推给 UI。
-          unawaited(() async {
-            try {
-              await session.clearEvent();
-            } on Exception {
-              // 静默:候选码,机身不支持属常态
-            }
-          }());
-          eventPoller.start();
-          // 相机时钟校准(OpenZCine CameraClockSync 口径:漂移 > 5s 才写,
-          // 尽力而为不影响连接)。
-          unawaited(session.syncCameraClock());
-          // 相册预热:门放行后后台开枚举(分页快路 + 页间让路,与刷参
-          // 链轮转)—— 进相册页时 _ensureLoaded 去重共享在途/已成缓存,
-          // 免首屏等待。失败静默:进页时 _ensureLoaded 自然重开一轮。
-          unawaited(() async {
-            try {
-              await repository.loadAlbums();
-            } on Exception {
-              // 静默:预热是尽力而为,失败语义归进页重试
-            }
-          }());
-        }());
-      }
-      if (s == CameraLinkState.disconnected || s == CameraLinkState.failed) {
-        eventPoller.stop();
-        diagRan = false;
-        repository.reset();
-        thumbnails.reset();
-      }
-      if (s == CameraLinkState.reconnecting) {
-        // 自动重连期:停轮询、弃对象缓存(断连窗口里可能拍了新照,
-        // 重连成功的 connected 沿 BrowserController.load() 会重枚举;
-        // 浏览页的冻结靠控制器自持的列表,不靠仓库缓存);缩略图内存
-        // 索引保留 —— 内容键跨会话稳定,冻结 UI 滚动照常出图。
-        eventPoller.stop();
-        repository.reset();
-      }
-    });
   }
 
   // ------------------------------------------------------------------
@@ -500,320 +488,6 @@ final class AppServices {
     }
   }
 
-  // ------------------------------------------------------------------
-  // BLE 链路/注入双层驱动(2026-10-17 全自动重连定案):有身份+未挂起
-  // → 链路层常跑(tick 保活 + 退避重连循环,无人值守);注入开关只翻
-  // GPS 层(定位流+GEO),关开关不再拆链停循环。session 层零 Timer,
-  // 前台驱动全收在这里。
-  // ------------------------------------------------------------------
-
-  Timer? _bleTick;
-  Timer? _bleRetry;
-  StreamSubscription<LocationSample>? _bleFixSub;
-  StreamSubscription<BleSessionState>? _bleStateSub;
-
-  /// 链路层在跑(wantLink:有身份+未挂起)。
-  bool _bleRunning = false;
-
-  /// 注入层在跑(wantInject:链路层之上再叠加 GPS 开关)。
-  bool _bleInjecting = false;
-
-  /// 平台定位流已起(BLE 断连不清 —— 定位流独立于链路;注入层收口才
-  /// 复位)。tick 兜底自愈的判据,防每 5s 重复 startStream。
-  bool _locationStreamUp = false;
-
-  /// 实例心跳看门狗(2026-10-21):升级安装留僵尸(旧实例不终止)的
-  /// App 内自愈 —— 新实例出现,旧实例 3-6s 内自我退出。随驱动启停
-  /// (无线电战争只存在于跑驱动的实例;测试无 pending Timer)。
-  InstanceWatch? _instanceWatch;
-  bool _instanceWatchStarted = false;
-
-  /// 看门狗武装(幂等,dataDir 通道缺失则缺席):随驱动启停,测试的
-  /// 「无 pending Timer」断言不炸。
-  Future<void> _ensureInstanceWatch() async {
-    if (_instanceWatchStarted) return;
-    _instanceWatchStarted = true;
-    try {
-      final dir = await PlatformServices.gallery.dataDir();
-      if (dir.isEmpty) return;
-      _instanceWatch = InstanceWatch(
-        lockFile: File('$dir/instance.json'),
-        onExit: (reason) {
-          AppLog.e(AppLog.ble, 'instance watch: $reason');
-          exit(0);
-        },
-      )..start();
-    } on Exception {
-      // 通道缺失(测试/异端):看门狗缺席,僵尸回潮可容忍
-      _instanceWatchStarted = false;
-    }
-  }
-
-  /// BLE 持有式后台保活同步(调用点:会话状态沿/设置沿/挂起沿,均
-  /// 幂等):会话 ready → hold('ble', bluetoothInteraction);GPS 注入
-  /// 层在跑(_bleInjecting)再并 location。模式须有真实业务背书 ——
-  /// location 挂着但 GPS 不采样,系统可能按「未使用」吊销整个长时
-  /// 任务(HarmoNiLink 实证口径)。
-  void _syncBleBackgroundHold() {
-    if (bleSession.state != BleSessionState.ready) {
-      unawaited(PlatformServices.background.stop('ble'));
-      return;
-    }
-    final modes = <BgMode>{BgMode.bluetoothInteraction};
-    if (_bleInjecting) {
-      modes.add(BgMode.location);
-    }
-    unawaited(PlatformServices.background.ensureRunning('ble', modes));
-  }
-
-  /// 配对页手动流程期间挂起(驱动自动重连/ GEO tick 会与手动配对撞车:
-  /// 扫描互踩 + 拆链沿 GEO 写 notFound 污染 lastError —— 真机实证)。
-  bool _bleSuspended = false;
-
-  /// 配对页进入时挂驱动、离页恢复(见 _bleSuspended)。只停驱动循环
-  /// (tick/重试/定位流/订阅),不动已建立的 BLE 链路 —— 管理页进出
-  /// 不应拆链(真机 2026-10-14:挂起沿 disconnect 把 ready 链路也拆了,
-  /// 连接页「配对管理」一点蓝牙就断)。
-  void suspendBleDriver() {
-    // 有身份不挂起(2026-10-21 用户定稿 SnapBridge 行为「配对后马上连
-    // 接」:回链优先于一切面板流程)—— 旧规「面板打开即挂起」只该管
-    // 首次配对(无身份):有身份时挂起 = 相机在广播等我们、驱动却被摁
-    // 死,「已配对,未连接」僵持实证。ready 会话同理(扫描/配对已收
-    // 口,无撞车面)。仅无身份(真首配,扫描/配对手动流程)才挂。
-    if (bleSession.identity != null) {
-      _bleSuspended = false;
-      AppLog.e(AppLog.ble,
-          'driver suspend skipped (identity present, state=${bleSession.state.name})'); // 运营必需
-      return;
-    }
-    _bleSuspended = true;
-    AppLog.e(AppLog.ble,
-        'driver suspend (first-pairing flow, state=${bleSession.state.name})'); // 运营必需
-    if (_bleRunning) {
-      _bleRunning = false;
-      _bleInjecting = false;
-      _stopBleDriverLoop();
-    }
-    // 挂起期 GPS 不再采样:location 模式撤出(防系统按「location
-    // 未使用」吊销整个长时任务)。
-    _syncBleBackgroundHold();
-  }
-
-  void resumeBleDriver() {
-    _bleSuspended = false;
-    _updateBleInjection();
-  }
-
-  /// 用户显式断开意图(蓝牙页「断开」沿置位):压制一切自动回链 ——
-  /// 驱动冷启动/空闲沿续轮询/面板打开沿与回前台守候全哑,直到显式
-  /// 「连接」/重新配对沿清除。仅内存态:冷启 App 即回归默认守候。
-  bool _bleManualOff = false;
-  bool get bleManualOff => _bleManualOff;
-  set bleManualOff(bool v) {
-    if (_bleManualOff == v) return;
-    _bleManualOff = v;
-    refreshBleInjection(); // 翻面沿驱动跟随(置位收链路层,清除恢复守候)
-  }
-
-  /// 配对页配对成功/解除后刷新(设置监听之外的显式入口)。
-  void refreshBleInjection() => _updateBleInjection();
-
-  /// 驱动循环在跑(面板重连循环让位判据;挂起沿 false)。
-  bool get bleDriverRunning => _bleRunning;
-
-  void _updateBleInjection() {
-    // 三层门(2026-10-17 全自动重连定案 + 2026-10-19 手动断开意图):
-    // 链路层只认「已配对+未挂起+非用户显式断开」—— 重连循环与 TIME
-    // 保活是链路义务,不随 GPS 开关走;注入层 = 链路层之上再叠加开关,
-    // 只管定位流+GEO。
-    final wantLink = !_bleSuspended &&
-        bleSession.identity != null &&
-        !_bleManualOff;
-    final wantInject = wantLink && settingsController.value.bleGpsInject;
-    // 三层门判定落盘(运营必需:冷启链/挂起链断点全靠它定位,每次调
-    // 用一行,频率=设置/身份/生命周期变更)。
-    AppLog.e(AppLog.ble,
-        'inj gate: wantLink=$wantLink wantInject=$wantInject running=$_bleRunning '
-        'inj=$_bleInjecting susp=$_bleSuspended manualOff=$_bleManualOff '
-        'id=${bleSession.identity != null} gps=${settingsController.value.bleGpsInject} '
-        'state=${bleSession.state.name}');
-    if (wantLink == _bleRunning && wantInject == _bleInjecting) return;
-    final wasRunning = _bleRunning;
-    _bleRunning = wantLink;
-    _bleInjecting = wantInject;
-    // 翻面后再同步:hold 并集跟 _bleInjecting(挂起恢复沿链路仍是
-    // ready、无状态沿可蹭,必须在此对齐)。
-    _syncBleBackgroundHold();
-    if (!wantLink) {
-      if (wasRunning) {
-        _stopBleDriverLoop();
-        // 解除配对沿(身份没了)连链路一起收;挂起沿保留 —— 真机
-        // 2026-10-14:挂起沿 disconnect 把 ready 链路也拆了,连接页
-        // 「配对管理」一点蓝牙就断。
-        if (bleSession.identity == null) {
-          unawaited(bleSession.disconnect());
-        }
-      }
-      return;
-    }
-    if (!wasRunning) {
-      _startBleInjection(); // 链路层首启(内含注入层对齐)
-    } else {
-      _syncInjectLayer(); // 仅注入层翻面(开关沿):链路循环不动
-    }
-  }
-
-  void _startBleInjection() {
-    AppLog.e(AppLog.ble, 'driver start (state=${bleSession.state.name})');
-    _ensureInstanceWatch(); // 僵尸自愈看门狗随驱动武装(无线电战争面)
-    _bleStateSub = bleSession.states.listen((s) {
-      // 状态沿落盘(运营必需:重连链断点定位,频率=连接态变更)。
-      AppLog.e(AppLog.ble, 'state → ${s.name}');
-      if (s == BleSessionState.reconnecting) {
-        _scheduleBleRetry();
-      } else if (s == BleSessionState.ready) {
-        // 就绪沿注入层复启(断连重连沿天然跟上;未授权/通道缺失时
-        // 静默零坐标,TIME 心跳仍维持会话)。
-        _syncInjectLayer();
-      } else if (s == BleSessionState.idle) {
-        // 空闲沿(握手放弃/超时):有身份就续轮询 —— 全自动重连的
-        // 冷恢复锚点,循环不再一轮即死。
-        _bleRetry?.cancel();
-        _scheduleBleRetry();
-      }
-    });
-    // 拍频 5s = 到点判定分辨率(首写门 2.5s/GEO 失败回补重闸 2.5s →
-    // 实际首写 ≤7.5s);TIME 写本身由会话按 45s/90s 档位门控,拍频加密
-    // 不抬 BLE 流量。
-    _bleTick = Timer.periodic(const Duration(seconds: 5), (_) async {
-      // 自愈兜底(2026-10-21 实证):ready 沿的 _syncInjectLayer 偶发不
-      // 达(边沿丢失机制未定案),定位流从没起过 → 注入层零写入。tick
-      // 每拍核查「注入在跑+ready+流没起」即补起,不再赌单次边沿。
-      if (_bleInjecting &&
-          !_locationStreamUp &&
-          bleSession.state == BleSessionState.ready) {
-        await _startLocationStream();
-      }
-      await bleSession.tick();
-    });
-    // 冷启恢复档:idle/reconnecting 且盘载身份在 → 直接进重试循环(免
-    // 重走菜单配对;挂起恢复沿链路保留,可停在 reconnecting,同样续跑)。
-    if (bleSession.state == BleSessionState.idle ||
-        bleSession.state == BleSessionState.reconnecting) {
-      _scheduleBleRetry();
-    }
-    _syncInjectLayer();
-  }
-
-  /// 面板配对扫描期标志:面板扫描占无线电(iOS 扫描单槽),驱动重连
-  /// 循环在此期间让位 —— 否则驱动的 8s scanForDeviceId 空扫反复顶掉
-  /// 面板的 scanForPairing,发现事件断流、5s 过期剪行(2026-10-21 实
-  /// 证:面板能发现设备但过一会就消失)。收口沿归还并续跑重连循环。
-  bool _panelScanActive = false;
-
-  /// 面板扫描起/止(ble_pair_panel._startScan 调用):true = 驱动重连
-  /// 让位;false = 归还,链路在跑且会话在 idle/reconnecting 则续跑循环。
-  void setPanelScanActive(bool active) {
-    if (_panelScanActive == active) return;
-    _panelScanActive = active;
-    if (!active &&
-        _bleRunning &&
-        (bleSession.state == BleSessionState.idle ||
-            bleSession.state == BleSessionState.reconnecting)) {
-      _scheduleBleRetry();
-    }
-  }
-
-  void _scheduleBleRetry() {
-    _bleRetry?.cancel();
-    if (!_bleRunning) return;
-    if (_panelScanActive) return; // 面板扫描占台:驱动让位(收口沿归还)
-    _bleRetry = Timer(bleSession.nextRetryDelay, () async {
-      if (!_bleRunning) return;
-      if (_panelScanActive) return; // 在途尝试结束后不再续棒(面板扫描期)
-      // 无参调用 = 深睡闸门开:扫到待机广播不连,被动扫描等唤醒沿
-      // 快连(手动重连路一律显式绕闸);此循环无人值守常跑数小时。
-      var ok = await bleSession.retryReconnect();
-      // (2026-10-21 撤无命中直连兜底:菜单窗配对后的静默期相机不接受
-      // 直连,20s 超时白 hang 还盖住相机自己的重连广播窗;扫描接广播
-      // 才是正路。直连保留在会话 directFirstPending —— 重连握手收线
-      // 场景武装,see BleCameraSession。)
-      if (bleRetryRearm(
-          ok: ok,
-          running: _bleRunning,
-          state: bleSession.state,
-          hasIdentity: bleSession.identity != null)) {
-        _scheduleBleRetry();
-      }
-    });
-  }
-
-  /// 注入层对齐(幂等,翻面沿与 ready 沿均可直调):开关开 → 挂定位流
-  /// 订阅 + ready 时起平台流;关 → 订阅与平台流一起收。链路层不沾。
-  void _syncInjectLayer() {
-    bleSession.geoEnabled = _bleInjecting; // 开关投影:关断即停保鲜重发
-    if (_bleInjecting) {
-      _bleFixSub ??= PlatformServices.locationStream.stream().listen(
-            (s) => bleSession.onFix(GeoFix(
-              latitude: s.latitude,
-              longitude: s.longitude,
-              altitude: s.altitude,
-              // iOS 无卫星数 API。真机 2026-10-13:填 0 相机按「无定位」
-              // 处理 —— EXIF 只落 GPS 空壳(仅 VersionID)不写坐标,故
-              // 填常规可视卫星数(坐标本身是真实的,卫星数仅为修饰)。
-              satellites: 8,
-              utcTime: DateTime.now().toUtc(),
-            )),
-            onError: (Object e) => bleSession.lastError = (
-              key: 'ble.locationStreamFail',
-              args: {'e': e.toString()},
-            ),
-          );
-      if (bleSession.state == BleSessionState.ready) {
-        unawaited(_startLocationStream());
-      }
-    } else if (_bleFixSub != null) {
-      _teardownInjectLayer();
-    }
-  }
-
-  /// 停驱动循环(tick/重试/订阅/注入层),保留 BLE 链路本身。恢复时
-  /// [_startBleInjection] 按当前会话态续上(ready → 注入层;idle/
-  /// reconnecting → 重试循环)。
-  void _stopBleDriverLoop() {
-    _bleRetry?.cancel();
-    _bleRetry = null;
-    _bleTick?.cancel();
-    _bleTick = null;
-    _instanceWatch?.stop(); // 看门狗随驱动停(无无线电即无战争面)
-    unawaited(_bleStateSub?.cancel());
-    _bleStateSub = null;
-    _teardownInjectLayer();
-  }
-
-  /// 注入层收口:定位流订阅 + 平台流停。
-  void _teardownInjectLayer() {
-    _locationStreamUp = false;
-    unawaited(_bleFixSub?.cancel());
-    _bleFixSub = null;
-    unawaited(() async {
-      try {
-        await PlatformServices.locationStream.stopStream();
-      } on Exception {
-        // 通道未实现(异端):流本就没起,无妨
-      }
-    }());
-  }
-
-  Future<void> _startLocationStream() async {
-    try {
-      await PlatformServices.locationStream.startStream();
-      _locationStreamUp = true;
-    } on Exception {
-      // 定位源不可用(未授权/通道缺失):会话 TIME 心跳照常,零坐标注入
-    }
-  }
-
   static AppServices? _instance;
 
   /// 应用级单例;首次访问时构建(pumpWidget 的测试不经 main 也能跑)。
@@ -855,6 +529,17 @@ final class AppServices {
   Future<void> _connectSideChainGate() =>
       remoteController.connectedStartSettled
           .timeout(kConnectStartGateTimeout, onTimeout: () {});
+
+  late final BleDriver bleDriver;
+
+  // BLE 驱动门面(BleDriver 持全部状态;调用面与抽出前一致)。
+  void suspendBleDriver() => bleDriver.suspend();
+  void resumeBleDriver() => bleDriver.resume();
+  bool get bleManualOff => bleDriver.manualOff;
+  set bleManualOff(bool v) => bleDriver.manualOff = v;
+  void refreshBleInjection() => bleDriver.refresh();
+  bool get bleDriverRunning => bleDriver.running;
+  void setPanelScanActive(bool active) => bleDriver.setPanelScanActive(active);
 
   late final TransfersController transfersController;
   late final BleIdentityStore bleIdentityStore;
