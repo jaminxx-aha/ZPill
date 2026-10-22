@@ -3391,4 +3391,83 @@ void main() {
     await tester.pump(const Duration(seconds: 5));
     await tester.pump(const Duration(milliseconds: 400));
   });
+
+  testWidgets('帧沿收口:逐帧字节更替不重建取景区整树,画面子树自换帧',
+      (tester) async {
+    _portrait(tester);
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = _directRemoteController(transport, conn: conn);
+    addTearDown(controller.dispose);
+    transport
+      ..ok() // 0x9201(进页自动起景)
+      ..ok(data: _realJpeg()); // 首帧
+    await tester
+        .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
+    await tester.pumpAndSettle();
+    expect(controller.liveViewActive, isTrue);
+
+    // 逐帧沿探针:engine.frame 新字节只走画面子树的
+    // ValueListenableBuilder —— 外层 AnimatedBuilder(controller+status)
+    // 不参与。RemoteFeedArea widget 实例换新 = 外层整树重建过,故以
+    // identical 断言外层零参与。
+    final before = tester.widget<RemoteFeedArea>(find.byType(RemoteFeedArea));
+    final nextFrame = _realJpeg();
+    controller.engine.frame.value = nextFrame;
+    await tester.pump();
+    final after = tester.widget<RemoteFeedArea>(find.byType(RemoteFeedArea));
+    expect(identical(before, after), isTrue,
+        reason: '逐帧沿不得重建取景区整树(外层 merge 已摘 frame)');
+
+    // 收口不是断流:画面子树真的换到新帧(MemoryImage 持有新字节,
+    // gaplessPlayback 换帧不闪黑)。
+    expect(
+        find.byWidgetPredicate((w) =>
+            w is Image &&
+            w.image is MemoryImage &&
+            identical((w.image as MemoryImage).bytes, nextFrame)),
+        findsOneWidget,
+        reason: '画面子树随帧更替换源');
+  });
+
+  testWidgets('首帧入场淡入:存在沿恰一次 180ms 淡入,后续帧更替不再淡入',
+      (tester) async {
+    _portrait(tester);
+    final transport = _ScriptTransport();
+    final conn = _FakeConnection();
+    final controller = _directRemoteController(transport, conn: conn);
+    addTearDown(controller.dispose);
+    transport
+      ..ok() // 0x9201(进页自动起景)
+      ..ok(data: _realJpeg()); // 首帧(开机沿已在 pumpAndSettle 内走完)
+    await tester
+        .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
+    await tester.pumpAndSettle();
+
+    double fadeOpacity() => tester
+        .widget<FadeTransition>(find
+            .descendant(
+                of: find.byType(RemoteFeedArea),
+                matching: find.byType(FadeTransition))
+            .first)
+        .opacity
+        .value;
+
+    // 造「等待→首帧」沿:引擎常态不回 null(冻结帧保留),测试直接
+    // 驱动 notifier 复现存在沿。
+    controller.engine.frame.value = null;
+    await tester.pump();
+    expect(find.textContaining('等待首帧'), findsOneWidget,
+        reason: '清帧回等待占位(存在沿反向也整树自理)');
+    controller.engine.frame.value = _realJpeg();
+    await tester.pump();
+    expect(fadeOpacity(), lessThan(1.0), reason: '入场淡入进行中(恰此一次)');
+    await tester.pump(const Duration(milliseconds: 220));
+    expect(fadeOpacity(), 1.0, reason: '180ms 淡入收口');
+
+    // 后续帧更替不再淡入:opacity 恒 1,不闪。
+    controller.engine.frame.value = _realJpeg();
+    await tester.pump();
+    expect(fadeOpacity(), 1.0, reason: '逐帧更替直通,不重放淡入');
+  });
 }
