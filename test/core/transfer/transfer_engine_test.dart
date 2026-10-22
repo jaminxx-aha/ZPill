@@ -17,10 +17,9 @@ import 'package:nikon_pill/core/ptpip/object_format.dart';
 import 'package:nikon_pill/core/transfer/object_downloader.dart';
 import 'package:nikon_pill/core/transfer/transfer_engine.dart';
 import 'package:nikon_pill/core/transfer/transfer_task.dart';
-import 'package:nikon_pill/data/settings_store.dart' show WatermarkStyle;
 import 'package:nikon_pill/platform/gallery_saver.dart';
 
-import '../ptp/ptp_session_test.dart'
+import '../ptp/ptp_session_harness.dart'
     show FakePtpTransport, buildDeviceInfoDataset;
 
 /// 假相册:目录落在真实临时目录(验证落盘/清理),导入行为可配置。

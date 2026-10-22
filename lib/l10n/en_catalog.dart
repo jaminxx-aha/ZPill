@@ -233,6 +233,8 @@ const Map<String, String> enCatalog = {
       'Tapping "Connect to camera" takes over the camera: its screen shows "Connected to Computer" and the dials lock; released on disconnect.',
   'conn.hotspotCred': 'Camera Hotspot Credentials (decoded via Bluetooth)',
   'conn.password': 'Password',
+  // SSID is a technical term, same as zh on purpose.
+  'conn.ssid': 'SSID',
   'conn.security':
       'Security: {s} · join the hotspot, then tap "Connect to camera" on the connection page',
   'common.empty': '(empty)',
@@ -408,6 +410,8 @@ const Map<String, String> enCatalog = {
   'remote.autofocus': 'Autofocus',
   'common.autoSuffix': '(auto)',
   'remote.notConnected': 'Camera not connected',
+  // REC prefix: universal recording mark, same as zh on purpose.
+  'remote.recPrefix': 'REC',
   'remote.shootingMode': 'Shooting Mode',
   'param.mode': 'Mode',
   'param.wb': 'White Balance',
@@ -748,6 +752,8 @@ const Map<String, String> enCatalog = {
       'This will delete {n} files.\nThis cannot be undone (the originals on the camera are unaffected).',
   'libpage.empty':
       'No files in the app yet\n(choose "Download to App" in the camera album)',
+  'libpage.scanning': 'Scanning files…',
+  'libpage.clearFilter': 'Clear Filter',
   'libpage.noFormatFiles': 'No {label} files',
   'libpage.noMatching': 'No matching files',
   'transfers.title': 'Transfers',
@@ -801,6 +807,10 @@ const Map<String, String> enCatalog = {
   'edit.untitled': 'Untitled',
   'edit.importedTitle': 'Imported "{title}" ({size}³)',
   'edit.importFailed': 'Import failed: {e}',
+  'edit.discardTitle': 'Discard Changes?',
+  'edit.discardBody': 'Unsaved changes will be lost',
+  'edit.discardConfirm': 'Discard',
+  'edit.loadingPreview': 'Loading preview…',
   'film.title': 'Film',
   'film.fuji': 'Fuji Film',
   'film.kodak': 'Kodak Film',

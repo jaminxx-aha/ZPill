@@ -1,10 +1,49 @@
-import 'package:flutter/material.dart';
+import 'dart:io';
+
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nikon_pill/app.dart';
+import 'package:nikon_pill/app_services.dart';
+import 'package:nikon_pill/platform/gallery_saver.dart';
 
 /// 整棵 UI 树冒烟:真机上"屏幕只打一堆文字"疑似渲染异常,
 /// 此处先在本地复现/排除 Widget 层异常。
 void main() {
+  // 图库 tab 随首屏预建:首次目录扫描走真单例 + 真 dart:IO(2026-10-22
+  // refreshAppFiles 异步化)。mock 给真实临时目录(空),扫描链可在
+  // runAsync 排水窗内收口(通道错误不落进窗,local_library_page_test
+  // 同款)。
+  late Directory dir;
+  setUp(() {
+    dir = Directory.systemTemp.createTempSync('nikonpill_smoke');
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(MethodChannelGallerySaver.channel,
+            (call) async => switch (call.method) {
+                  'dataDir' || 'previewsDir' || 'downloadsDir' => dir.path,
+                  _ => null,
+                });
+    // 同因:AppServices 装配即 ConnectionController 起 BLE/NSD 两个扫描
+    // 事件流,listen 无 mock 即 MissingPluginException,异步错在哪个用例
+    // 的排水窗上浮看运气 —— mock 成空应答(冒烟只验渲染,不发事件)
+    // 钉死顺序无关(local_library_page_test 同款)。
+    for (final name in const ['nikonpill/ble/events', 'nikonpill/nsd/events']) {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(MethodChannel(name),
+              (call) async => call.method == 'listen' ? '' : null);
+    }
+  });
+  tearDown(() {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(MethodChannelGallerySaver.channel, null);
+    for (final name in const ['nikonpill/ble/events', 'nikonpill/nsd/events']) {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(MethodChannel(name), null);
+    }
+    if (dir.existsSync()) {
+      dir.deleteSync(recursive: true);
+    }
+  });
+
   // 加高视口:ListView 懒构建,默认 600 逻辑高把页面尾部/设置项
   // 挡在折线下(未 build 即不可断言)。
   Future<void> boot(WidgetTester tester) async {
@@ -13,6 +52,14 @@ void main() {
       ..devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
     await tester.pumpWidget(const NikonPillApp());
+    // 首扫排水:扫描未收口前图库 tab 在转圈,pumpAndSettle 会挂在动画
+    // 帧上 —— 逐窗排水到收口(单例跨用例保值,首用例排水后续直通)。
+    final transfers = AppServices.instance.transfersController;
+    for (var i = 0; i < 20 && !transfers.appFilesScanned; i++) {
+      await tester
+          .runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+      await tester.pump();
+    }
     await tester.pumpAndSettle();
   }
 

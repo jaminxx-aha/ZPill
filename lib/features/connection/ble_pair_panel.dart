@@ -31,6 +31,7 @@ import '../../core/log/app_log.dart';
 import '../../data/ble_identity_store.dart';
 import '../../design/app_colors.dart';
 import '../../design/app_dimens.dart';
+import '../../design/app_haptics.dart';
 import '../../l10n/l10n.dart';
 import '../../platform/ble_scanner.dart';
 import '../../platform/services.dart';
@@ -495,6 +496,7 @@ class BlePairPanelState extends State<BlePairPanel>
     // 不起、定位流不开、GPS 零写入)。resume 清挂起 + 按当前会话态续上
     // (ready → 注入层即刻对齐;重连循环由驱动接管,面板让位)。
     app.resumeBleDriver();
+    unawaited(AppHaptics.success()); // 配对成功确认沿(展示「配对成功」处震)
     _log('配对成功 ✓ device=${id.deviceId.toRadixString(16)} '
         'serial=${id.serial} 身份已落盘(驱动接管)');
     widget.onIdentityChanged?.call();

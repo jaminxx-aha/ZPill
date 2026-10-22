@@ -22,6 +22,13 @@ import 'operation_codes.dart';
 import 'ptp_transport.dart';
 
 /// 相机返回非 OK 响应码时抛出;上层(UI/连接层)以此提示用户。
+
+/// 会话内部按域三分的 mixin(同库私有):[_SessionCore] 持串行锁/会话
+/// 生命周期/事件流/配对与全局状态字段(跨域复位沿在 open/close,字段
+/// 必须同处),[_BrowseOps] 浏览下载域,[_RemoteOps] 遥控域;门面
+/// [PtpSession] 按序 mix,公开 API 与静态成员位置不变(静态不随 mixin
+/// 继承,kSetPropEnabled/ladderRc 留在门面)。域内方法与原实现逐行一致。
+
 final class PtpResponseException implements Exception {
   const PtpResponseException({
     required this.opcode,
@@ -51,7 +58,7 @@ final class PtpResponseException implements Exception {
 /// 同一解析):standardVersion u16 / vendorExtensionId u32 /
 /// vendorExtensionVersion u16 / desc STRING / functionalMode u16,
 /// 随后 5 组「u32 计数 + N 个 u16」(操作/事件/属性/捕获格式/图像格式),
-/// 最后 manufacturer / model / deviceVersion / serialNumber 四个 STRING。
+
 final class PtpDeviceInfo {
   const PtpDeviceInfo({
     required this.standardVersion,
@@ -146,25 +153,30 @@ enum MfDriveOutcome {
   refused,
 }
 
-/// PTP 会话:open/close 生命周期 + 浏览/下载操作封装。
-///
-/// 事务串行:相机一次只接受一个事务,本层用 future-chain 互斥把所有
-/// [PtpTransport.execute] 排成全局队列(缩略图/大图预览/下载混流时,
-/// 上层可放心并发调用;单文件下载在整个事务期间持锁)。
-/// 锁不可重入:加锁段内不得再调用本类的其他加锁方法。
-final class PtpSession {
-  PtpSession({
-    required this.transport,
-    this.mfReadyPolls = 25,
-    this.mfReadyPollInterval = const Duration(milliseconds: 80),
-  });
+/// JPEG SOI(FFD8)嗅探:数据非 FFD8 开头时在前 512B 内找 SOI 并剥头
+/// (Nikon 0x90C4 数据布局真机验证中,防御性处理「头 + JPEG」形态);
+/// 找不到返回 null = 非 JPEG 载荷(0x90C4 对 NEF 回压缩条带的形态)。
+/// 连接梯诊断用的响应码短记(OK / 0xA004 形);域内 mixin 用,
+/// 门面静态 [PtpSession.ladderRc] 委托于此(静态不随 mixin 继承)。
+String _ladderRc(int rc) => rc == PtpResponseCode.ok
+    ? 'OK'
+    : '0x${rc.toRadixString(16).toUpperCase()}';
 
-  final PtpTransport transport;
+Uint8List? _sniffJpegStart(Uint8List data) {
+  if (data.length >= 2 && data[0] == 0xFF && data[1] == 0xD8) {
+    return data;
+  }
+  for (var i = 0; i + 1 < data.length && i < 512; i++) {
+    if (data[i] == 0xFF && data[i + 1] == 0xD8) {
+      return Uint8List.sublistView(data, i);
+    }
+  }
+  return null;
+}
 
-  /// MfDrive(0x9204)激活后完成态就绪轮询的拍数与间隔(官方 §6.2.5.3);
-  /// 测试注入收窄(拍数/间隔归零)免真钟等待。
-  final int mfReadyPolls;
-  final Duration mfReadyPollInterval;
+/// 会话核心:串行锁、状态字段、生命周期、事件流、配对、应答断言。
+mixin _SessionCore {
+  PtpTransport get transport;
 
   Future<void> _gate = Future<void>.value();
 
@@ -220,11 +232,6 @@ final class PtpSession {
 
   /// 记一笔连接梯诊断(见 [connectLadder])。
   void noteLadder(String step) => connectLadder.add(step);
-
-  /// 连接梯诊断用的响应码短记(OK / 0xA004 形)。
-  static String ladderRc(int rc) => rc == PtpResponseCode.ok
-      ? 'OK'
-      : '0x${rc.toRadixString(16).toUpperCase()}';
 
   PtpDeviceInfo? _deviceInfo;
 
@@ -307,6 +314,146 @@ final class PtpSession {
       }
     });
   }
+
+  /// 0x90C4 会话级降级旗标:本会话内 GetLargeThumb 已被真发证实不可用
+  /// (错误应答/非 SOI/超时),缩略管线据此直走 0x100A。[open()] /
+  /// [close()] 复位 —— 新连接重新探测。
+  bool _largeThumbDegraded = false;
+
+  /// 0x9805 会话级降级旗标(语义同 [_largeThumbDegraded]):本会话内
+  /// GetObjectPropList 已被真发证实不可用(错误应答/数据集不可信/链路
+  /// 异常),仓库层据此直走逐对象 GetObjectInfo。[open()] / [close()]
+  /// 复位 —— 新连接重新探测;码表不在册不置位(不做 supportsOperation
+  /// 门禁,STA 9-op 小表假门,直发纪律同 0x90C4/0x920F)。
+  bool _objectPropListDegraded = false;
+
+  /// 事件流 = 异步通道(USB interrupt / PTP-IP 事件 socket)+ 轮询注入
+  /// ([emitPolledEvents],[NikonEventPoller] 用)的并流。尼康机身的重要
+  /// 事件(ObjectAdded/CaptureComplete/0x4006)可能只走 GetEventEx
+  /// 0x941C 轮询通道(OpenZCine/libgphoto2 实测口径),两路并存、
+  /// 消费端幂等。
+  late final Stream<PtpEvent> _events =
+      _mergedStreams([transport.events, _eventInjections.stream]);
+  final _eventInjections = StreamController<PtpEvent>.broadcast();
+
+  Stream<PtpEvent> get events => _events;
+
+  /// 轮询事件注入([NikonEventPoller] 调用)。
+  void emitPolledEvents(Iterable<PtpEvent> polled) {
+    for (final e in polled) {
+      _eventInjections.add(e);
+    }
+  }
+
+  /// 广播并流(单订阅源 → 广播聚合;单监听者模型,close 后不再复听)。
+  static Stream<T> _mergedStreams<T>(List<Stream<T>> streams) {
+    late StreamController<T> ctrl;
+    final subs = <StreamSubscription<T>>[];
+    var pending = streams.length;
+    ctrl = StreamController<T>.broadcast(
+      onListen: () {
+        for (final s in streams) {
+          subs.add(s.listen(ctrl.add, onError: ctrl.addError, onDone: () {
+            if (--pending == 0) ctrl.close();
+          }));
+        }
+      },
+      onCancel: () {
+        for (final s in subs) {
+          s.cancel();
+        }
+        subs.clear();
+      },
+    );
+    return ctrl.stream;
+  }
+
+  /// Nikon GetEventEx(0x941C,Gen-3 事件轮询):拉取并清空厂商事件队列。
+  ///
+  /// 布局(OpenZCine PTPNikonEventList):`u32 元素数 + N ×
+  /// (u16 事件码 + u16 参数数 + 参数数 × u32)`;元素数上限 2048 防御。
+  /// 相机不支持(旧机身回 0x2005)时上抛,由 [NikonEventPoller] 停轮询。
+  Future<List<PtpEvent>> getEventEx() async {
+    final result = await _serialized(() => transport.execute(const PtpRequest(
+          opcode: NikonOperationCode.getEventEx,
+        )));
+    _ensureOk(result, NikonOperationCode.getEventEx);
+    final data = result.data ?? Uint8List(0);
+    if (data.length < 4) return const [];
+    var count = data[0] | (data[1] << 8) | (data[2] << 16) | (data[3] << 24);
+    if (count > 2048) count = 2048;
+    final events = <PtpEvent>[];
+    var offset = 4;
+    for (var i = 0; i < count; i++) {
+      if (offset + 4 > data.length) break;
+      final code = data[offset] | (data[offset + 1] << 8);
+      final paramCount = data[offset + 2] | (data[offset + 3] << 8);
+      offset += 4;
+      if (offset + paramCount * 4 > data.length) break;
+      final params = <int>[
+        for (var p = 0; p < paramCount; p++)
+          data[offset + p * 4] |
+              (data[offset + p * 4 + 1] << 8) |
+              (data[offset + p * 4 + 2] << 16) |
+              (data[offset + p * 4 + 3] << 24),
+      ];
+      offset += paramCount * 4;
+      events
+          .add(PtpEvent(code: code, transactionId: 0xFFFFFFFF, params: params));
+    }
+    return events;
+  }
+
+  /// Nikon GetPtpIpPairingCode(0x952B):智能设备模式的配对验证码。
+  ///
+  /// 数据集 = count(u32 LE)+ count 个字节,各字节的十进制值连成验证码
+  /// (NiConn_DEMO 对 SnapBridge 抓包的语义;例:count=4,字节
+  /// 05 00 07 07 → "5077")。**响应非 OK 时返回 null**(多半意味着本
+  /// 客户端已配对或相机不要求配对,上层据此跳过配对相;具体语义待真机
+  /// 核对);链路级异常照常抛出,不在此吞。
+  Future<String?> getPairingCode() async {
+    late final PtpResult result;
+    try {
+      result = await _serialized(() => transport.execute(
+          const PtpRequest(opcode: NikonOperationCode.getPtpIpPairingCode)));
+      _ensureOk(result, NikonOperationCode.getPtpIpPairingCode);
+    } on PtpResponseException {
+      return null;
+    }
+    final data = result.data;
+    if (data == null || data.length < 4) return null;
+    final count = data[0] | (data[1] << 8) | (data[2] << 16) | (data[3] << 24);
+    if (count <= 0 || count > data.length - 4) return null;
+    return [for (var i = 0; i < count; i++) data[4 + i]].join();
+  }
+
+  /// Nikon CompletePairing(0x935A,param 0x2001):确认配对。
+  ///
+  /// 相机把本客户端(Init 载荷里的 16B UUID)记为已配对设备;Z50II 实测
+  /// 配对完成后相机自行结束会话(Zf 待真机核对)—— 响应前链路被收线
+  /// 属预期,上层按配对完成处理,不当作失败。
+  Future<void> completePairing() async {
+    final result = await _serialized(() => transport.execute(const PtpRequest(
+        opcode: NikonOperationCode.completePairing, params: [0x2001])));
+    _ensureOk(result, NikonOperationCode.completePairing);
+  }
+
+  void _ensureOk(PtpResult result, int opcode) {
+    if (result.responseCode != PtpResponseCode.ok) {
+      throw PtpResponseException(
+        opcode: opcode,
+        responseCode: result.responseCode,
+        params: result.params,
+      );
+    }
+  }
+}
+
+/// 浏览/下载域:对象枚举、存储、缩略、整档/分块下载。
+mixin _BrowseOps on _SessionCore {
+  bool get largeThumbDegraded => _largeThumbDegraded;
+
+  bool get objectPropListDegraded => _objectPropListDegraded;
 
   /// GetObjectHandles:u32 计数 + N 个 u32 handle。
   ///
@@ -489,155 +636,13 @@ final class PtpSession {
     }
     return jpeg;
   }
+}
 
-  /// 0x90C4 会话级降级旗标:本会话内 GetLargeThumb 已被真发证实不可用
-  /// (错误应答/非 SOI/超时),缩略管线据此直走 0x100A。[open()] /
-  /// [close()] 复位 —— 新连接重新探测。
-  bool _largeThumbDegraded = false;
-  bool get largeThumbDegraded => _largeThumbDegraded;
-
-  /// 0x9805 会话级降级旗标(语义同 [_largeThumbDegraded]):本会话内
-  /// GetObjectPropList 已被真发证实不可用(错误应答/数据集不可信/链路
-  /// 异常),仓库层据此直走逐对象 GetObjectInfo。[open()] / [close()]
-  /// 复位 —— 新连接重新探测;码表不在册不置位(不做 supportsOperation
-  /// 门禁,STA 9-op 小表假门,直发纪律同 0x90C4/0x920F)。
-  bool _objectPropListDegraded = false;
-  bool get objectPropListDegraded => _objectPropListDegraded;
-
-  /// JPEG SOI(FFD8)嗅探:数据非 FFD8 开头时在前 512B 内找 SOI 并剥头
-  /// (Nikon 0x90C4 数据布局真机验证中,防御性处理「头 + JPEG」形态);
-  /// 找不到返回 null = 非 JPEG 载荷(0x90C4 对 NEF 回压缩条带的形态)。
-  static Uint8List? _sniffJpegStart(Uint8List data) {
-    if (data.length >= 2 && data[0] == 0xFF && data[1] == 0xD8) {
-      return data;
-    }
-    for (var i = 0; i + 1 < data.length && i < 512; i++) {
-      if (data[i] == 0xFF && data[i + 1] == 0xD8) {
-        return Uint8List.sublistView(data, i);
-      }
-    }
-    return null;
-  }
-
-  /// 事件流 = 异步通道(USB interrupt / PTP-IP 事件 socket)+ 轮询注入
-  /// ([emitPolledEvents],[NikonEventPoller] 用)的并流。尼康机身的重要
-  /// 事件(ObjectAdded/CaptureComplete/0x4006)可能只走 GetEventEx
-  /// 0x941C 轮询通道(OpenZCine/libgphoto2 实测口径),两路并存、
-  /// 消费端幂等。
-  late final Stream<PtpEvent> _events =
-      _mergedStreams([transport.events, _eventInjections.stream]);
-  final _eventInjections = StreamController<PtpEvent>.broadcast();
-
-  Stream<PtpEvent> get events => _events;
-
-  /// 轮询事件注入([NikonEventPoller] 调用)。
-  void emitPolledEvents(Iterable<PtpEvent> polled) {
-    for (final e in polled) {
-      _eventInjections.add(e);
-    }
-  }
-
-  /// 广播并流(单订阅源 → 广播聚合;单监听者模型,close 后不再复听)。
-  static Stream<T> _mergedStreams<T>(List<Stream<T>> streams) {
-    late StreamController<T> ctrl;
-    final subs = <StreamSubscription<T>>[];
-    var pending = streams.length;
-    ctrl = StreamController<T>.broadcast(
-      onListen: () {
-        for (final s in streams) {
-          subs.add(s.listen(ctrl.add, onError: ctrl.addError, onDone: () {
-            if (--pending == 0) ctrl.close();
-          }));
-        }
-      },
-      onCancel: () {
-        for (final s in subs) {
-          s.cancel();
-        }
-        subs.clear();
-      },
-    );
-    return ctrl.stream;
-  }
-
-  /// Nikon GetEventEx(0x941C,Gen-3 事件轮询):拉取并清空厂商事件队列。
-  ///
-  /// 布局(OpenZCine PTPNikonEventList):`u32 元素数 + N ×
-  /// (u16 事件码 + u16 参数数 + 参数数 × u32)`;元素数上限 2048 防御。
-  /// 相机不支持(旧机身回 0x2005)时上抛,由 [NikonEventPoller] 停轮询。
-  Future<List<PtpEvent>> getEventEx() async {
-    final result = await _serialized(() => transport.execute(const PtpRequest(
-          opcode: NikonOperationCode.getEventEx,
-        )));
-    _ensureOk(result, NikonOperationCode.getEventEx);
-    final data = result.data ?? Uint8List(0);
-    if (data.length < 4) return const [];
-    var count = data[0] | (data[1] << 8) | (data[2] << 16) | (data[3] << 24);
-    if (count > 2048) count = 2048;
-    final events = <PtpEvent>[];
-    var offset = 4;
-    for (var i = 0; i < count; i++) {
-      if (offset + 4 > data.length) break;
-      final code = data[offset] | (data[offset + 1] << 8);
-      final paramCount = data[offset + 2] | (data[offset + 3] << 8);
-      offset += 4;
-      if (offset + paramCount * 4 > data.length) break;
-      final params = <int>[
-        for (var p = 0; p < paramCount; p++)
-          data[offset + p * 4] |
-              (data[offset + p * 4 + 1] << 8) |
-              (data[offset + p * 4 + 2] << 16) |
-              (data[offset + p * 4 + 3] << 24),
-      ];
-      offset += paramCount * 4;
-      events
-          .add(PtpEvent(code: code, transactionId: 0xFFFFFFFF, params: params));
-    }
-    return events;
-  }
-
-  /// Nikon GetPtpIpPairingCode(0x952B):智能设备模式的配对验证码。
-  ///
-  /// 数据集 = count(u32 LE)+ count 个字节,各字节的十进制值连成验证码
-  /// (NiConn_DEMO 对 SnapBridge 抓包的语义;例:count=4,字节
-  /// 05 00 07 07 → "5077")。**响应非 OK 时返回 null**(多半意味着本
-  /// 客户端已配对或相机不要求配对,上层据此跳过配对相;具体语义待真机
-  /// 核对);链路级异常照常抛出,不在此吞。
-  Future<String?> getPairingCode() async {
-    late final PtpResult result;
-    try {
-      result = await _serialized(() => transport.execute(
-          const PtpRequest(opcode: NikonOperationCode.getPtpIpPairingCode)));
-      _ensureOk(result, NikonOperationCode.getPtpIpPairingCode);
-    } on PtpResponseException {
-      return null;
-    }
-    final data = result.data;
-    if (data == null || data.length < 4) return null;
-    final count = data[0] | (data[1] << 8) | (data[2] << 16) | (data[3] << 24);
-    if (count <= 0 || count > data.length - 4) return null;
-    return [for (var i = 0; i < count; i++) data[4 + i]].join();
-  }
-
-  /// Nikon CompletePairing(0x935A,param 0x2001):确认配对。
-  ///
-  /// 相机把本客户端(Init 载荷里的 16B UUID)记为已配对设备;Z50II 实测
-  /// 配对完成后相机自行结束会话(Zf 待真机核对)—— 响应前链路被收线
-  /// 属预期,上层按配对完成处理,不当作失败。
-  Future<void> completePairing() async {
-    final result = await _serialized(() => transport.execute(const PtpRequest(
-        opcode: NikonOperationCode.completePairing, params: [0x2001])));
-    _ensureOk(result, NikonOperationCode.completePairing);
-  }
-
-  // ---- 遥控域:曝光参数 / Live View / 快门释放 ----
-
-  /// SetDevicePropValue(0x1016)总开关。2026-10-05 生产翻开:Zf 真机
-  /// 已实证 0x1016 可写(probe 写 0xD406 成功、回读生效),且 app 的
-  /// 写入值域一律取自相机自报 PropDesc(枚举域/getSet/类型),不发
-  /// 臆造值。旗标保留作紧急关断:写路径真机出问题时置回 false,
-  /// setDevicePropValue 直接抛 UnsupportedError、UI 调节入口静默只读。
-  static bool kSetPropEnabled = true;
+/// 遥控域:曝光参数 / Live View / 快门释放 / 属性族(文件原分节注释)。
+mixin _RemoteOps on _SessionCore {
+  /// MfDrive 就绪轮询拍数/间隔(facade 注入,测试收窄归零免真钟等待)。
+  int get mfReadyPolls;
+  Duration get mfReadyPollInterval;
 
   /// GetDevicePropValue(0x1015):当前值。响应是裸值数据集,解码类型
   /// 查标准表(见 [PtpDevicePropValue.parse]);方言偏离时改走
@@ -676,11 +681,11 @@ final class PtpSession {
         expectedCode: propCode);
   }
 
-  /// SetDevicePropValue(0x1016,数据入相)。门禁 [kSetPropEnabled]。
+  /// SetDevicePropValue(0x1016,数据入相)。门禁 [PtpSession.kSetPropEnabled]。
   /// 扩展属性码(> 0xFFFF)自动改走 Gen-3 Ex 写(0x943C,同
   /// [getDevicePropValue] 的路由口径)。
   Future<void> setDevicePropValue(PtpDevicePropValue value) async {
-    if (!kSetPropEnabled) {
+    if (!PtpSession.kSetPropEnabled) {
       throw UnsupportedError(
           'SetDevicePropValue 已被总闸关断(kSetPropEnabled=false,紧急关断)');
     }
@@ -817,7 +822,7 @@ final class PtpSession {
   /// 不写 + remote 模式 + 连接即开取景(HomeShell autoLiveViewOnConnect)
   /// = 及时取景。usbfs 主机实证过的身份写只保留在 LiveViewEngine 的
   /// 0xA004 自愈末级(见 [writeInitiatorIdentity])。
-  /// **不走 [kSetPropEnabled] 门禁** —— 它是连接模式控制而非拍摄参数
+  /// **不走 [PtpSession.kSetPropEnabled] 门禁** —— 它是连接模式控制而非拍摄参数
   /// 写,且发生在任何参数面板之前;连双失败也只返回 false 不抛(尽力
   /// 而为,拍照/读参数不依赖它,真机核对)。
   Future<bool> enableAppControl({bool remoteLatch = false}) async {
@@ -828,7 +833,7 @@ final class PtpSession {
             params: [1],
           )));
       rc = result.responseCode;
-      noteLadder('9435:${ladderRc(rc)}');
+      noteLadder('9435:${_ladderRc(rc)}');
     } on Object {
       // op 缺席/链路类(含脚本耗尽类 StateError):走回退。
       // 尽力而为步骤,on Object 兜底 —— 它失败不得影响连接主流程。
@@ -857,7 +862,7 @@ final class PtpSession {
         }
         return true;
       } on PtpResponseException catch (e) {
-        noteLadder('90C2:${ladderRc(e.responseCode)}');
+        noteLadder('90C2:${_ladderRc(e.responseCode)}');
       } on Object {
         // 0x90C2 也被拒/链路类:落到 0xD1F0。
         noteLadder('90C2:ERR');
@@ -871,7 +876,7 @@ final class PtpSession {
             params: [PtpDevicePropCode.applicationMode],
             dataOut: w.takeBytes(),
           )));
-      noteLadder('D1F0:${ladderRc(result.responseCode)}');
+      noteLadder('D1F0:${_ladderRc(result.responseCode)}');
       return result.responseCode == PtpResponseCode.ok;
     } on Object {
       noteLadder('D1F0:ERR');
@@ -1596,16 +1601,43 @@ final class PtpSession {
     }
     return out;
   }
+}
 
-  void _ensureOk(PtpResult result, int opcode) {
-    if (result.responseCode != PtpResponseCode.ok) {
-      throw PtpResponseException(
-        opcode: opcode,
-        responseCode: result.responseCode,
-        params: result.params,
-      );
-    }
-  }
+/// PTP 会话:open/close 生命周期 + 浏览/下载/遥控操作封装(域内实现在
+/// 三个同库私有 mixin,见文件头注记)。
+///
+/// 事务串行:相机一次只接受一个事务,本层用 future-chain 互斥把所有
+/// [PtpTransport.execute] 排成全局队列(缩略图/大图预览/下载混流时,
+/// 上层可放心并发调用;单文件下载在整个事务期间持锁)。
+final class PtpSession
+    with _SessionCore, _BrowseOps, _RemoteOps {
+  PtpSession({
+    required this.transport,
+    this.mfReadyPolls = 25,
+    this.mfReadyPollInterval = const Duration(milliseconds: 80),
+  });
+
+  @override
+  final PtpTransport transport;
+
+  /// MfDrive(0x9204)激活后完成态就绪轮询的拍数与间隔(官方 §6.2.5.3);
+  /// 测试注入收窄(拍数/间隔归零)免真钟等待。
+  @override
+  final int mfReadyPolls;
+  @override
+  final Duration mfReadyPollInterval;
+
+
+  /// 连接梯诊断用的响应码短记(OK / 0xA004 形)。静态成员不随 mixin
+  /// 继承,留在门面(下游按 PtpSession.ladderRc 引用)。
+  static String ladderRc(int rc) => _ladderRc(rc);
+
+  /// SetDevicePropValue(0x1016)总开关。2026-10-05 生产翻开:Zf 真机
+  /// 已实证 0x1016 可写(probe 写 0xD406 成功、回读生效),且 app 的
+  /// 写入值域一律取自相机自报 PropDesc(枚举域/getSet/类型),不发
+  /// 臆造值。旗标保留作紧急关断:写路径真机出问题时置回 false,
+  /// setDevicePropValue 直接抛 UnsupportedError、UI 调节入口静默只读。
+  static bool kSetPropEnabled = true;
 }
 
 /// 0x9805 GetObjectPropList 数据集元素(官方 §6.2.11.5)。

@@ -10,12 +10,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../core/camera/camera_info.dart';
-
-abstract interface class PairedCamerasStore {
-  Future<List<CameraInfo>> list();
-  Future<void> save(CameraInfo camera);
-  Future<void> remove(String id);
-}
+import '../core/camera/paired_cameras_store.dart';
 
 /// JSON 文件实现:`<dataDir>/paired_cameras.json`,内存缓存 + 全量写回。
 ///

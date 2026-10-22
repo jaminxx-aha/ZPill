@@ -36,6 +36,7 @@ import '../../core/transfer/object_downloader.dart';
 import '../../core/transfer/transfer_engine.dart';
 import '../../core/transfer/transfer_task.dart';
 import '../../design/app_colors.dart';
+import '../../design/app_haptics.dart';
 import '../../l10n/l10n.dart';
 import '../../platform/gallery_saver.dart';
 import '../../platform/services.dart';
@@ -281,6 +282,7 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
                           ? AppColors.brandYellow
                           : Theme.of(context).disabledColor,
                       onPressed: () {
+                        AppHaptics.selection(); // 逐星轻震(选择确认沿)
                         _ratings.rate(group, stars);
                         Navigator.of(context).pop();
                       },

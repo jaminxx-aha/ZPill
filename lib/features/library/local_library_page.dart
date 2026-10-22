@@ -303,20 +303,28 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
               ],
             ],
           ),
-          body: files.isEmpty
-              ? EmptyState(
-                  icon: Icons.download_outlined,
-                  // EmptyState 显示端已包 t(),此处再包属双重包裹(无害)
-                  message: context.t('libpage.empty'),
-                )
-              : filtered.isEmpty
-                  ? Center(
-                      child: Text(_emptyMessage,
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                              color: Theme.of(context).hintColor)),
+          // 首扫未回:扫描态(异步列目录后存在真实扫描窗,与「真空库」
+          // 区分);列表已回后按未筛/筛后分流空态。本页底是主题 surface
+          // (非 AppMedia 深色媒体底),状态件直接用主题色,无需
+          // edit_page 的 _statesOnMedia 深色适配。
+          body: !_controller.appFilesScanned
+              ? LoadingState(message: context.t('libpage.scanning'))
+              : files.isEmpty
+                  ? EmptyState(
+                      icon: Icons.download_outlined,
+                      // EmptyState 显示端已包 t(),此处再包属双重包裹(无害)
+                      message: context.t('libpage.empty'),
                     )
-                  : _grid(context, filtered),
+                  : filtered.isEmpty
+                      // 筛后空(未筛过不会到这:全部档 filtered == files):
+                      // 与真空库分开表态,带「清除筛选」一键回全部。
+                      ? EmptyState(
+                          icon: Icons.tune, // 与筛选弹层入口同图标
+                          message: _emptyMessage,
+                          actionLabel: 'libpage.clearFilter',
+                          onAction: () => _setFilter(_LibFilter.all),
+                        )
+                      : _grid(context, filtered),
           bottomSheet: _selectMode ? _actionBar() : null,
         );
       },
@@ -674,12 +682,21 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
                             _iconCell(context, name),
                       ),
                       if (video)
-                        const Align(
+                        Align(
                           alignment: Alignment.bottomRight,
                           child: Padding(
-                            padding: EdgeInsets.all(4),
-                            child: Icon(Icons.videocam,
-                                size: 16, color: Colors.white),
+                            padding: const EdgeInsets.all(4),
+                            child: Container(
+                              // 黑半透明圆角小底(与相机相册网格同款):
+                              // 亮帧上纯白图标不可辨。
+                              padding: const EdgeInsets.all(2),
+                              decoration: BoxDecoration(
+                                color: Colors.black.withValues(alpha: 0.55),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: const Icon(Icons.videocam,
+                                  size: 16, color: Colors.white),
+                            ),
                           ),
                         ),
                     ],
@@ -971,6 +988,11 @@ class _LibraryViewerState extends State<_LibraryViewer> {
 
   /// NEF 大图解码缓存(会话内合并:页滑出视口被 dispose 后 future 仍
   /// 在,翻回不重解 —— 整档 RAW 解码是秒级重活)。
+  ///
+  /// LRU 封顶 16 张:解码产物 JPEG 每张 ~1-2MB,无界驻留会在大库翻页
+  /// 时把内存吃穿(16 × ~2MB ≈ 32MB 上限,即单手翻页的回看窗口);
+  /// 访问即提升,超限逐最旧。键 = 文件路径(旧版同语义,不改)。
+  static const _decodeCacheLimit = 16;
   final Map<String, Future<Uint8List>> _decodes = {};
 
   @override
@@ -1004,10 +1026,21 @@ class _LibraryViewerState extends State<_LibraryViewer> {
         .catchError((Object _) {});
   }
 
-  Future<Uint8List> _decodeFor(File file) => _decodes.putIfAbsent(
-        file.path,
-        () => widget.rawDecoder.decodeJpeg(file.path, maxPixelSize: 2560),
-      );
+  Future<Uint8List> _decodeFor(File file) {
+    final key = file.path;
+    final cached = _decodes.remove(key); // 先摘:重插即提升到最新端
+    if (cached != null) {
+      _decodes[key] = cached;
+      return cached;
+    }
+    final fresh =
+        widget.rawDecoder.decodeJpeg(file.path, maxPixelSize: 2560);
+    _decodes[key] = fresh;
+    while (_decodes.length > _decodeCacheLimit) {
+      _decodes.remove(_decodes.keys.first); // LinkedHashMap 首位 = 最旧
+    }
+    return fresh;
+  }
 
   /// 邻页预解码(i±1,视频跳过):滑到前把邻居解好,上屏即缓存命中
   /// —— 旧版邻页上屏才开始解码全幅 JPG,解码窗里只有黑底在屏(翻页
@@ -1026,8 +1059,12 @@ class _LibraryViewerState extends State<_LibraryViewer> {
       if (isRawFilename(name)) {
         unawaited(_warmNefDecode(file));
       } else if (_isViewableName(name)) {
-        unawaited(precacheImage(FileImage(file), context)
-            .catchError((Object _) {}));
+        // 静默收口走 onError:precache 失败(邻档被删/不可解码)走
+        // FlutterError.reportError 框架错误道,不进返回 future 的错误
+        // 道 —— future 侧 .catchError 接不到,widget 测试里会翻成致命
+        // 红屏;onError 是官方静默口(真滑到时 FutureBuilder 原路兜)。
+        unawaited(precacheImage(FileImage(file), context,
+            onError: (Object _, StackTrace? __) {}));
       }
     }
   }

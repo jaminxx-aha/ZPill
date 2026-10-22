@@ -16,6 +16,7 @@ import 'package:flutter/material.dart';
 
 import '../../../core/media/watermark.dart' show ExifCardData, exifCardFromHead;
 import '../../../l10n/l10n.dart';
+import 'kv_row.dart';
 import '../format.dart' show formatBytes, formatDateTime;
 
 /// 本地文件的 EXIF 头读(JPG APP1 / NEF TIFF 头同路,≤64KB)。
@@ -56,85 +57,114 @@ Future<void> showPhotoInfoSheet(
   final exifFuture = loadExif?.call();
   return showModalBottomSheet<void>(
     context: context,
-    builder: (context) => SafeArea(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-            child: Text(
-              context.t('info.title'),
-              style: TextStyle(
-                fontSize: 13,
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
+    builder: (context) {
+      // 标签列宽:全量标签(文件级 + EXIF 两段)取最长实测,两段行共用
+      // 一宽列对齐;zh 短标签落 64 下限观感不变(原钉宽),EN 长词
+      // (Captured/Exposure)放行不折行不省略。
+      final labelWidth = kvLabelWidth(
+        context,
+        labels: [
+          context.t('info.file'),
+          context.t('info.size'),
+          context.t('info.burst'),
+          context.t('info.time'),
+          context.t('info.captured'),
+          context.t('info.body'),
+          context.t('info.lens'),
+          context.t('info.exposure'),
+        ],
+        style: const TextStyle(fontSize: 13),
+        minWidth: 64,
+      );
+      return SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+              child: Text(
+                context.t('info.title'),
+                style: TextStyle(
+                  fontSize: 13,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
               ),
             ),
-          ),
-          _row(context.t('info.file'), filename),
-          if (sizeBytes != null) _row(context.t('info.size'), formatBytes(sizeBytes)),
-          if (burstLabel != null) _row(context.t('info.burst'), burstLabel),
-          if (exifFuture == null)
-            _row(context.t('info.time'), fallbackTime ?? '—')
-          else
-            FutureBuilder<ExifCardData?>(
-              future: exifFuture,
-              builder: (context, snap) {
-                if (snap.connectionState != ConnectionState.done) {
-                  return const Padding(
-                    padding: EdgeInsets.fromLTRB(16, 10, 16, 12),
-                    child: SizedBox(
-                      height: 18,
-                      width: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    ),
+            _row(context, context.t('info.file'), filename, labelWidth),
+            if (sizeBytes != null)
+              _row(context, context.t('info.size'), formatBytes(sizeBytes),
+                  labelWidth),
+            if (burstLabel != null)
+              _row(context, context.t('info.burst'), burstLabel, labelWidth),
+            if (exifFuture == null)
+              _row(context, context.t('info.time'), fallbackTime ?? '—',
+                  labelWidth)
+            else
+              FutureBuilder<ExifCardData?>(
+                future: exifFuture,
+                builder: (context, snap) {
+                  if (snap.connectionState != ConnectionState.done) {
+                    return const Padding(
+                      padding: EdgeInsets.fromLTRB(16, 10, 16, 12),
+                      child: SizedBox(
+                        height: 18,
+                        width: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    );
+                  }
+                  final card = snap.data;
+                  final time =
+                      formatDateTime(card?.takenAt) ?? fallbackTime;
+                  return Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      if (time != null)
+                        _row(
+                            context,
+                            context.t(card?.takenAt != null
+                                ? 'info.captured'
+                                : 'info.time'),
+                            time,
+                            labelWidth),
+                      if (card?.titleLine.isNotEmpty == true)
+                        _row(context, context.t('info.body'), card!.titleLine,
+                            labelWidth),
+                      if (card?.lens != null)
+                        _row(
+                            context, context.t('info.lens'), card!.lens!, labelWidth),
+                      if (card?.paramLine.isNotEmpty == true)
+                        _row(context, context.t('info.exposure'),
+                            card!.paramLine, labelWidth),
+                    ],
                   );
-                }
-                final card = snap.data;
-                final time =
-                    formatDateTime(card?.takenAt) ?? fallbackTime;
-                return Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    if (time != null)
-                      _row(context.t(
-                          card?.takenAt != null ? 'info.captured' : 'info.time'),
-                          time),
-                    if (card?.titleLine.isNotEmpty == true)
-                      _row(context.t('info.body'), card!.titleLine),
-                    if (card?.lens != null) _row(context.t('info.lens'), card!.lens!),
-                    if (card?.paramLine.isNotEmpty == true)
-                      _row(context.t('info.exposure'), card!.paramLine),
-                  ],
-                );
-              },
-            ),
-          const SizedBox(height: 8),
-        ],
-      ),
-    ),
+                },
+              ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      );
+    },
   );
 }
 
-Widget _row(String label, String value) {
-  return Padding(
+/// 底单行(KvRow 收编):标签列共用 [labelWidth](见 showPhotoInfoSheet
+/// 内的整组实测);标签单行省略、色 token 化(onSurfaceVariant,原
+/// Colors.grey 对比度不过 AA),行高/行距/边距与旧布局一致。
+Widget _row(BuildContext context, String label, String value,
+    double labelWidth) {
+  return KvRow(
+    labelWidth: labelWidth,
+    label: label,
+    labelStyle: TextStyle(
+        fontSize: 13, color: Theme.of(context).colorScheme.onSurfaceVariant),
+    value: Text(value,
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(fontSize: 14)),
+    crossAxisAlignment: CrossAxisAlignment.start,
     padding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
-    child: Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        SizedBox(
-          width: 64,
-          child: Text(label,
-              style: const TextStyle(fontSize: 13, color: Colors.grey)),
-        ),
-        Expanded(
-          child: Text(value,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 14)),
-        ),
-      ],
-    ),
   );
 }

@@ -1,5 +1,7 @@
-/// 取景区:帧 + 监看叠层 + 底边横幅(帧到达与状态由外层
-/// AnimatedBuilder merge(controller+frame+status) 驱动重建)。
+/// 取景区:帧 + 监看叠层 + 底边横幅(控制器/状态沿由外层
+/// AnimatedBuilder merge(controller+status) 驱动整树重建;帧沿在本件
+/// 自订收口 —— 首帧出现/清空与帧尺寸变化才整树重建,逐帧字节更替只走
+/// 画面子树的 ValueListenableBuilder,叠层与浮层不随帧率重建)。
 ///
 /// 画面与全部图像系叠层(网格/斑马纹/伪色/峰值/AF 框)画在**图像
 /// 坐标系**的盒子里,外层一个 [Transform] 应用 [FeedTransform]
@@ -68,8 +70,7 @@ class RemoteFeedArea extends StatefulWidget {
 
   /// 横幅底让位:间隔拍摄状态行占贴边位时抬高一行(状态行高 32 +
   /// 间隙 10)。
-  double get bannerInset =>
-      bottomInset + (controller.intervalActive ? 42 : 0);
+  double get bannerInset => bottomInset + (controller.intervalActive ? 42 : 0);
 
   /// 适配模式(2026-10-12 用户定案「不留黑边」):竖屏传
   /// [FeedFit.widthFill](画面恒满宽,两侧无黑边)、横屏传
@@ -90,8 +91,9 @@ class RemoteFeedArea extends StatefulWidget {
   State<RemoteFeedArea> createState() => _RemoteFeedAreaState();
 }
 
-class _RemoteFeedAreaState extends State<RemoteFeedArea> {
-  // ── 双指缩放/拖移(状态在 State:外层 AnimatedBuilder 逐帧重建不丢)──
+class _RemoteFeedAreaState extends State<RemoteFeedArea>
+    with TickerProviderStateMixin {
+  // ── 双指缩放/拖移(状态在 State:任何重建路径都不丢)──
   static const double _zoomMax = 8.0;
 
   double _zoom = 1.0;
@@ -107,26 +109,83 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea> {
   DateTime? _lastTapAt;
   Offset? _lastTapPos;
 
+  /// 首帧入场淡入时长(等待态→首帧的存在沿恰一次;后续帧更替不再淡入)。
+  static const Duration _fadeInDuration = Duration(milliseconds: 180);
+
+  /// 入场淡入驱动。重进页(引擎已持有冻结帧)非「等待→首帧」沿,
+  /// initState 直取 1.0 全显,不重放。
+  late final AnimationController _fadeIn;
+
+  /// 帧存在性镜像:引擎 frame 不回 null(pause/failed 都保留末帧),
+  /// 常态只在首帧翻转一次;翻转沿 = 唯一触发整树重建的帧事件。
+  bool _framePresent = false;
+
+  /// 帧头旋转四分之一圈数缓存(header 逐帧换新对象逐帧 notify,只认
+  /// quarter 真变化才重建 —— 旧路每帧 setState 同一子树重建两遍)。
+  int _headerQuarter = 0;
+
   late final ValueListenable<AppSettings> _settings =
       widget.settingsListenable ?? AppServices.instance.settingsController;
 
   @override
   void initState() {
     super.initState();
-    // 帧头旋转位的变化不一定伴随帧通知(解析成功的头重设),单独听。
-    widget.controller.engine.header.addListener(_rebuild);
+    final engine = widget.controller.engine;
+    _framePresent = engine.frame.value != null;
+    _fadeIn = AnimationController(
+        vsync: this,
+        duration: _fadeInDuration,
+        value: _framePresent ? 1.0 : 0.0);
+    _headerQuarter =
+        feedQuarterFromRotationRaw(engine.header.value?.rotationRaw ?? 0);
+    // 帧沿只订**存在性**(等待占位↔画面切换):逐帧字节更替由画面子树
+    // 的 ValueListenableBuilder 自取,不整树 setState。
+    engine.frame.addListener(_onFramePresence);
+    // 帧尺寸沿(SOF 嗅探,尺寸真变才 notify):画面布局重算的合法触发,
+    // 不随帧率走(旧路借外层逐帧重建捎带,收口后须自订)。
+    widget.controller.frameSize.addListener(_rebuild);
+    // 帧头旋转位的变化不一定伴随帧通知(解析成功的头重设),单独听 ——
+    // 但收窄为 quarter 变化沿(AF 框/录制读出/水平仪已各自
+    // ValueListenableBuilder 局部化,不经本层)。
+    engine.header.addListener(_onHeaderQuarter);
     _settings.addListener(_rebuild);
   }
 
   @override
   void dispose() {
     _settings.removeListener(_rebuild);
-    widget.controller.engine.header.removeListener(_rebuild);
+    widget.controller.engine.header.removeListener(_onHeaderQuarter);
+    widget.controller.frameSize.removeListener(_rebuild);
+    widget.controller.engine.frame.removeListener(_onFramePresence);
+    _fadeIn.dispose();
     super.dispose();
   }
 
   void _rebuild() {
     if (mounted) setState(() {});
+  }
+
+  /// 帧存在性沿:首帧出现 = 等待占位切画面,同时放行入场淡入(从零
+  /// 180ms,只此一次 —— 引擎不回 null,重连/失败都保留冻结帧)。
+  void _onFramePresence() {
+    if (!mounted) return;
+    final present = widget.controller.engine.frame.value != null;
+    if (present == _framePresent) return;
+    _framePresent = present;
+    if (present) _fadeIn.forward(from: 0);
+    setState(() {});
+  }
+
+  /// 帧头沿收窄:只认旋转四分之一圈数变化,且仅在自动旋转开着时重建
+  /// (关着 quarter 不进变换);缓存无条件更新,开关翻开那一下由设置
+  /// 监听的整树重建吃到新值。
+  void _onHeaderQuarter() {
+    if (!mounted) return;
+    final quarter = feedQuarterFromRotationRaw(
+        widget.controller.engine.header.value?.rotationRaw ?? 0);
+    if (quarter == _headerQuarter) return;
+    _headerQuarter = quarter;
+    if (_settings.value.autoRotateFeed) setState(() {});
   }
 
   void _handleTapUp(TapUpDetails d, FeedTransform t) {
@@ -194,7 +253,9 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea> {
     // 横幅/监看叠层)恒用暗面(LiveDesign.dark),不随主题。
     final live = LiveDesign.of(context);
     final controller = widget.controller;
-    final Uint8List? frame = controller.engine.frame.value;
+    // 帧只看存在性(null↔有帧):决定占位/画面分支。字节更替由画面
+    // 子树的 ValueListenableBuilder 自取,不触发本层重建。
+    final bool hasFrame = controller.engine.frame.value != null;
     final status = controller.engine.status;
     return LayoutBuilder(builder: (context, constraints) {
       final boxSize = constraints.biggest;
@@ -210,10 +271,9 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea> {
         imageSize: imageSize,
         boxSize: boxSize,
         fit: widget.fit,
-        quarter: settings.autoRotateFeed
-            ? feedQuarterFromRotationRaw(
-                controller.engine.header.value?.rotationRaw ?? 0)
-            : 0,
+        // 旋转四分之一圈数由 header 监听沿缓存(_onHeaderQuarter):
+        // 逐帧头对象不再触发整树 setState,旋转真翻转才重建。
+        quarter: settings.autoRotateFeed ? _headerQuarter : 0,
         deSqueeze: settings.deSqueeze,
         zoom: _zoom,
         pan: _pan,
@@ -230,132 +290,169 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea> {
           fit: StackFit.expand,
           children: [
             // ── 画面子树(图像坐标系;外层 Transform 一次收口)──────
-            if (frame != null && t.hasImage)
-              ClipRect(
-                child: Transform(
-                  transform: t.imageToScreen,
-                  // 命中测试不走变换:对焦点按由上面的外层手势在屏幕系
-                  // 收口(screenToNorm),子树全是非交互视觉件。
-                  transformHitTests: false,
-                  child: OverflowBox(
-                    // StackFit.expand 的紧约束会经 enforce 顶掉
-                    // SizedBox 的帧尺寸(minWidth 继承自父级):min 归
-                    // 零 + max 放开,子树才能按帧尺寸布局。
-                    alignment: Alignment.topLeft,
-                    minWidth: 0,
-                    minHeight: 0,
-                    maxWidth: double.infinity,
-                    maxHeight: double.infinity,
-                    child: SizedBox(
-                      width: imageSize.width,
-                      height: imageSize.height,
-                      // expand:Image 解码完成前按 RenderImage 内在规则
-                      // 出 0×0(loose 最小约束),紧约束立即填满图像系
-                      // 盒;叠层件同样定尺寸。画质档路由:关 = 低采样
-                      // (最省)、快速 = 双线性 high、高质量 = shader
-                      // (Catmull-Rom + 可选时域降噪,不可用自动回落
-                      // high,见 feed_quality.dart)。
-                      child: Stack(fit: StackFit.expand, children: [
-                          switch (settings.feedUpscaler) {
-                            // LUT 开 → shader 档(查表只在片元路径;
-                            // off/fast 仅在无 LUT 时维持原路)。
-                            FeedUpscaler.off when lut == null =>
-                              Image.memory(frame,
-                                  fit: BoxFit.fill,
-                                  gaplessPlayback: true, // 换帧不闪黑
-                                  filterQuality: FilterQuality.low),
-                            FeedUpscaler.fast when lut == null =>
-                              Image.memory(frame,
-                                  fit: BoxFit.fill,
-                                  gaplessPlayback: true, // 换帧不闪黑
-                                  filterQuality: FilterQuality.high),
-                            _ => ShaderFeed(
-                                frame: frame,
-                                temporalDenoise: settings.temporalDenoise,
-                                lut: lut,
-                              ),
-                          },
-                        if (widget.toggles.grid)
-                          ValueListenableBuilder(
-                            valueListenable: controller.analyzer.analysis,
-                            builder: (context, FrameAnalysis? analysis, _) =>
-                                GridOverlay(
-                                    aspect: analysis == null
-                                        ? null
-                                        : analysis.width /
-                                            analysis.height),
-                          ),
-                        if (widget.toggles.zebra)
-                          ValueListenableBuilder(
-                            valueListenable: controller.analyzer.analysis,
-                            builder: (context, FrameAnalysis? analysis, _) =>
-                                ZebraOverlay(analysis: analysis),
-                          ),
-                        if (widget.toggles.falseColor)
-                          ValueListenableBuilder(
-                            valueListenable: controller.analyzer.analysis,
-                            builder: (context, FrameAnalysis? analysis, _) =>
-                                FalseColorOverlay(analysis: analysis),
-                          ),
-                        if (widget.toggles.peaking)
-                          ValueListenableBuilder(
-                            valueListenable: controller.analyzer.analysis,
-                            builder: (context, FrameAnalysis? analysis, _) =>
-                                PeakingOverlay(
-                              analysis: analysis,
-                              // 色档(金/白/红)随持久化设置,表外档回落金。
-                              color: peakingColorOf(
-                                  widget.toggles.peakingColor),
+            // 帧沿收口(2026-10-22):① 首帧入场淡入 —— 等待占位→画面
+            // 的存在沿恰一次 FadeTransition(重进页/断连冻结帧直接全显,
+            // 后续帧更替不再淡入);② 重绘收口 —— RepaintBoundary 包整幅
+            // 画面子树,帧更替的重绘不外溢(叠层各有自己的边界)。边界
+            // 刻意在 Transform **之外**:ShaderFeed 的解码降采样目标量测
+            // 读 canvas.getTransform(),画布路径才折有适配/旋转/缩放;
+            // 边界落进 Transform 内会让子树改走 TransformLayer 合成路径,
+            // 子画布 CTM 归零、量测失效。
+            if (hasFrame && t.hasImage)
+              FadeTransition(
+                opacity: _fadeIn,
+                child: RepaintBoundary(
+                  child: ClipRect(
+                    child: Transform(
+                      transform: t.imageToScreen,
+                      // 命中测试不走变换:对焦点按由上面的外层手势在屏幕系
+                      // 收口(screenToNorm),子树全是非交互视觉件。
+                      transformHitTests: false,
+                      child: OverflowBox(
+                        // StackFit.expand 的紧约束会经 enforce 顶掉
+                        // SizedBox 的帧尺寸(minWidth 继承自父级):min 归
+                        // 零 + max 放开,子树才能按帧尺寸布局。
+                        alignment: Alignment.topLeft,
+                        minWidth: 0,
+                        minHeight: 0,
+                        maxWidth: double.infinity,
+                        maxHeight: double.infinity,
+                        child: SizedBox(
+                          width: imageSize.width,
+                          height: imageSize.height,
+                          // expand:Image 解码完成前按 RenderImage 内在规则
+                          // 出 0×0(loose 最小约束),紧约束立即填满图像系
+                          // 盒;叠层件同样定尺寸。画质档路由:关 = 低采样
+                          // (最省)、快速 = 双线性 high、高质量 = shader
+                          // (Catmull-Rom + 可选时域降噪,不可用自动回落
+                          // high,见 feed_quality.dart)。
+                          child: Stack(fit: StackFit.expand, children: [
+                            // 逐帧消费收口:engine.frame 每帧 notify 只重建
+                            // 这一格(帧 Image/ShaderFeed 换字节),取景区
+                            // 整树与全部叠层不随帧率重建。
+                            ValueListenableBuilder<Uint8List?>(
+                              valueListenable: controller.engine.frame,
+                              builder: (context, liveFrame, _) => liveFrame ==
+                                      null
+                                  ? const SizedBox.shrink()
+                                  : switch (settings.feedUpscaler) {
+                                      // LUT 开 → shader 档(查表只在
+                                      // 片元路径;off/fast 仅在无 LUT
+                                      // 时维持原路)。
+                                      FeedUpscaler.off when lut == null =>
+                                        Image.memory(liveFrame,
+                                            fit: BoxFit.fill,
+                                            gaplessPlayback: true, // 换帧不闪黑
+                                            filterQuality: FilterQuality.low),
+                                      FeedUpscaler.fast when lut == null =>
+                                        Image.memory(liveFrame,
+                                            fit: BoxFit.fill,
+                                            gaplessPlayback: true, // 换帧不闪黑
+                                            filterQuality: FilterQuality.high),
+                                      _ => ShaderFeed(
+                                          frame: liveFrame,
+                                          temporalDenoise:
+                                              settings.temporalDenoise,
+                                          lut: lut,
+                                        ),
+                                    },
                             ),
-                          ),
-                        // 构图框(遮幅/安全框/中心标;纯显示层,不占
-                        // 分析器 —— 叠层随外层变换上屏)。
-                        if (widget.toggles.framingAspect !=
-                                FramingAspect.off ||
-                            widget.toggles.framingSafeArea ||
-                            widget.toggles.framingCenterMark)
-                          FramingOverlay(
-                            aspect: widget.toggles.framingAspect.ratio,
-                            deSqueeze: settings.deSqueeze,
-                            safeArea: widget.toggles.framingSafeArea,
-                            centerMark: widget.toggles.framingCenterMark,
-                          ),
-                        // 相机自报 AF 框组(真实尺寸随 AF 区域设置:单点
-                        // 小框/动态大框;主体检测开着时附人脸/眼睛框)——
-                        // 头在册即替代点按占位框。whole-size 坐标按帧尺寸
-                        // 等比投到图像系,随外层变换上屏。
-                        ValueListenableBuilder<LiveViewHeader?>(
-                          valueListenable: controller.engine.header,
-                          builder: (context, LiveViewHeader? h, _) => h ==
-                                  null ||
-                                  !controller.liveViewActive
-                              ? const SizedBox.shrink()
-                              : AfAreasOverlay(
-                                  header: h,
-                                  imageRect:
-                                      Offset.zero & imageSize),
+                            if (widget.toggles.grid)
+                              ValueListenableBuilder(
+                                valueListenable: controller.analyzer.analysis,
+                                builder: (context, FrameAnalysis? analysis,
+                                        _) =>
+                                    GridOverlay(
+                                        aspect: analysis == null
+                                            ? null
+                                            : analysis.width / analysis.height),
+                              ),
+                            if (widget.toggles.zebra)
+                              ValueListenableBuilder(
+                                valueListenable: controller.analyzer.analysis,
+                                builder:
+                                    (context, FrameAnalysis? analysis, _) =>
+                                        ZebraOverlay(analysis: analysis),
+                              ),
+                            if (widget.toggles.falseColor)
+                              ValueListenableBuilder(
+                                valueListenable: controller.analyzer.analysis,
+                                builder:
+                                    (context, FrameAnalysis? analysis, _) =>
+                                        FalseColorOverlay(analysis: analysis),
+                              ),
+                            if (widget.toggles.peaking)
+                              ValueListenableBuilder(
+                                valueListenable: controller.analyzer.analysis,
+                                builder:
+                                    (context, FrameAnalysis? analysis, _) =>
+                                        PeakingOverlay(
+                                  analysis: analysis,
+                                  // 色档(金/白/红)随持久化设置,表外档回落金。
+                                  color: peakingColorOf(
+                                      widget.toggles.peakingColor),
+                                ),
+                              ),
+                            // 构图框(遮幅/安全框/中心标;纯显示层,不占
+                            // 分析器 —— 叠层随外层变换上屏)。
+                            if (widget.toggles.framingAspect !=
+                                    FramingAspect.off ||
+                                widget.toggles.framingSafeArea ||
+                                widget.toggles.framingCenterMark)
+                              FramingOverlay(
+                                aspect: widget.toggles.framingAspect.ratio,
+                                deSqueeze: settings.deSqueeze,
+                                safeArea: widget.toggles.framingSafeArea,
+                                centerMark: widget.toggles.framingCenterMark,
+                              ),
+                            // 相机自报 AF 框组(真实尺寸随 AF 区域设置:单点
+                            // 小框/动态大框;主体检测开着时附人脸/眼睛框)——
+                            // 头在册即替代点按占位框。whole-size 坐标按帧尺寸
+                            // 等比投到图像系,随外层变换上屏。
+                            ValueListenableBuilder<LiveViewHeader?>(
+                              valueListenable: controller.engine.header,
+                              builder: (context, LiveViewHeader? h, _) =>
+                                  h == null || !controller.liveViewActive
+                                      ? const SizedBox.shrink()
+                                      : AfAreasOverlay(
+                                          header: h,
+                                          imageRect: Offset.zero & imageSize),
+                            ),
+                            // 点按占位框只在**拿不到相机自报框**时兜底
+                            // (0x9203 旧码裸 JPEG / 头框数组空):头在册即
+                            // 让位,否则同屏双框。
+                            ValueListenableBuilder<LiveViewHeader?>(
+                              valueListenable: controller.engine.header,
+                              builder: (context, LiveViewHeader? h, _) =>
+                                  controller.afBox != null &&
+                                          (h == null || h.boxes.isEmpty)
+                                      ? _afBoxOverlay(
+                                          imageSize, controller.afBox!)
+                                      : const SizedBox.shrink(),
+                            ),
+                          ]),
                         ),
-                        // 点按占位框只在**拿不到相机自报框**时兜底
-                        // (0x9203 旧码裸 JPEG / 头框数组空):头在册即
-                        // 让位,否则同屏双框。
-                        ValueListenableBuilder<LiveViewHeader?>(
-                          valueListenable: controller.engine.header,
-                          builder: (context, LiveViewHeader? h, _) =>
-                              controller.afBox != null &&
-                                      (h == null || h.boxes.isEmpty)
-                                  ? _afBoxOverlay(imageSize, controller.afBox!)
-                                  : const SizedBox.shrink(),
-                        ),
-                      ]),
+                      ),
                     ),
                   ),
                 ),
               )
-            else if (frame != null)
+            else if (hasFrame)
               // 帧尺寸嗅探失败(非 JPEG 帧,基本不发生):contain 直铺,
-              // 叠层无从对位不上。
-              Image.memory(frame, fit: BoxFit.contain,
-                  gaplessPlayback: true) // 换帧不闪黑
+              // 叠层无从对位不上。同样吃入场淡入 + 重绘收口 + 帧局部消费。
+              FadeTransition(
+                opacity: _fadeIn,
+                child: RepaintBoundary(
+                  child: ValueListenableBuilder<Uint8List?>(
+                    valueListenable: controller.engine.frame,
+                    builder: (context, liveFrame, _) => liveFrame == null
+                        ? const SizedBox.shrink()
+                        : Image.memory(liveFrame,
+                            fit: BoxFit.contain,
+                            gaplessPlayback: true), // 换帧不闪黑
+                  ),
+                ),
+              )
             else
               Center(
                 child: Column(
@@ -370,21 +467,23 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea> {
                           size: 44, color: live.faint),
                       const SizedBox(height: 10),
                     ] else if (status.value == LiveViewStatus.failed) ...[
-                      Icon(Icons.error_outline,
-                          size: 44, color: live.bad),
+                      Icon(Icons.error_outline, size: 44, color: live.bad),
                       const SizedBox(height: 10),
                     ],
                     Text(
                       status.value == LiveViewStatus.running
                           ? context.t('live.waitingFirstFrame')
                           : status.value == LiveViewStatus.failed
-                              ? context.tm((key: 'live.failed', args: {
-                                  'e': controller.engine.lastError ??
-                                      const (
-                                        key: 'common.unknownError',
-                                        args: null
-                                      ),
-                                }))
+                              ? context.tm((
+                                  key: 'live.failed',
+                                  args: {
+                                    'e': controller.engine.lastError ??
+                                        const (
+                                          key: 'common.unknownError',
+                                          args: null
+                                        ),
+                                  }
+                                ))
                               : context.t('live.offHint'),
                       textAlign: TextAlign.center,
                       style: TextStyle(color: live.faint),
@@ -403,8 +502,7 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea> {
                       // 连接沿已主动接管 —— 落到此处 = 连接沿开闩被拒/
                       // 取景总闸关;STA 门天然开、USB 连接流已开闩,均不
                       // 出此引导)。
-                      if (controller.apMode &&
-                          !controller.takeoverActive) ...[
+                      if (controller.apMode && !controller.takeoverActive) ...[
                         Text(
                           context.t('live.needsTakeover'),
                           textAlign: TextAlign.center,
@@ -412,14 +510,13 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea> {
                         ),
                         const SizedBox(height: 6),
                         FilledButton.tonalIcon(
-                          onPressed:
-                              controller.enableTakeoverAndRetryLiveView,
+                          onPressed: controller.enableTakeoverAndRetryLiveView,
                           style: FilledButton.styleFrom(
                             foregroundColor: live.bad,
                             textStyle: const TextStyle(fontSize: 13),
                           ),
-                          icon: const Icon(Icons.screen_lock_portrait,
-                              size: 16),
+                          icon:
+                              const Icon(Icons.screen_lock_portrait, size: 16),
                           label: Text(context.t('live.enableTakeoverRetry')),
                         ),
                       ] else
@@ -429,8 +526,7 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea> {
                             foregroundColor: live.bad,
                             textStyle: const TextStyle(fontSize: 13),
                           ),
-                          icon: Icon(Icons.refresh,
-                              size: 16, color: live.bad),
+                          icon: Icon(Icons.refresh, size: 16, color: live.bad),
                           label: Text(context.t('live.retry')),
                         ),
                     ],
@@ -448,8 +544,7 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea> {
               Align(
                 alignment: Alignment.topLeft,
                 child: Container(
-                  margin: EdgeInsets.fromLTRB(
-                      10, 10 + widget.topInset, 10, 10),
+                  margin: EdgeInsets.fromLTRB(10, 10 + widget.topInset, 10, 10),
                   padding: const EdgeInsets.all(3),
                   decoration: BoxDecoration(
                     color: LiveDesign.dark.glass,
@@ -467,8 +562,7 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea> {
               Align(
                 alignment: Alignment.bottomLeft,
                 child: Padding(
-                  padding: EdgeInsets.fromLTRB(
-                      8, 8, 8, 8 + widget.bottomInset),
+                  padding: EdgeInsets.fromLTRB(8, 8, 8, 8 + widget.bottomInset),
                   child: ValueListenableBuilder(
                     valueListenable: controller.analyzer.analysis,
                     builder: (context, FrameAnalysis? analysis, _) =>
@@ -493,8 +587,7 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea> {
                   child: ValueListenableBuilder(
                     valueListenable: controller.analyzer.analysis,
                     // 红绿灯带标签由 TrafficLightsView 自行 t() 落地。
-                    builder: (context, FrameAnalysis? analysis, _) =>
-                        ScopeView(
+                    builder: (context, FrameAnalysis? analysis, _) => ScopeView(
                       kind: widget.toggles.scope,
                       analysis: analysis,
                       nLogScale: widget.toggles.scopeNLog,
@@ -509,8 +602,8 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea> {
             ValueListenableBuilder<LiveViewHeader?>(
               valueListenable: controller.engine.header,
               builder: (context, LiveViewHeader? h, _) {
-                final v =
-                    recordingReadoutOf(h, liveViewActive: controller.liveViewActive);
+                final v = recordingReadoutOf(h,
+                    liveViewActive: controller.liveViewActive);
                 if (!v.timecode && !v.meters && v.overheat == null) {
                   return const SizedBox.shrink();
                 }
@@ -579,22 +672,21 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea> {
               Align(
                 alignment: Alignment.bottomCenter,
                 child: LiveBanner(
-                    context.t('live.frozenFrame'),
-                    LiveDesign.dark.accent,
+                    context.t('live.frozenFrame'), LiveDesign.dark.accent,
                     bottomInset: widget.bannerInset),
               )
             else if (controller.liveViewBusyHold)
               Align(
                 alignment: Alignment.bottomCenter,
-                child: LiveBanner(context.t('live.cameraBusy'),
-                    LiveDesign.dark.accent,
+                child: LiveBanner(
+                    context.t('live.cameraBusy'), LiveDesign.dark.accent,
                     bottomInset: widget.bannerInset),
               )
             else if (!controller.linkUp)
               Align(
                 alignment: Alignment.bottomCenter,
-                child: LiveBanner(context.t('live.notConnected'),
-                    LiveDesign.dark.accent,
+                child: LiveBanner(
+                    context.t('live.notConnected'), LiveDesign.dark.accent,
                     bottomInset: widget.bannerInset),
               )
             else if (controller.error != null)
@@ -756,7 +848,8 @@ class _FocusDialRailState extends State<_FocusDialRail> {
       onVerticalDragStart:
           enabled ? (_) => setState(() => _dragging = true) : null,
       onVerticalDragUpdate: enabled ? (d) => widget.onDrag(d.delta.dy) : null,
-      onVerticalDragEnd: enabled ? (_) => setState(() => _dragging = false) : null,
+      onVerticalDragEnd:
+          enabled ? (_) => setState(() => _dragging = false) : null,
       onVerticalDragCancel:
           enabled ? () => setState(() => _dragging = false) : null,
       child: Opacity(
