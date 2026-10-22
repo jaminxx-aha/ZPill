@@ -706,6 +706,10 @@ const Map<String, String> enCatalog = {
   'grid.download': 'Download',
   'grid.albums': 'Albums',
   'grid.downloadFormat': 'Download Format',
+  'grid.rating': 'Rating',
+  'grid.ratingNone': 'Unrated',
+  'grid.ratingTrash': 'Reject',
+  'grid.ratingRated': 'Rated',
   'viewer.protect': 'Protect in Camera (Lock)',
   'viewer.unprotect': 'Remove Camera Protection',
   'viewer.protected': 'Protected in camera (read-only)',
@@ -715,6 +719,8 @@ const Map<String, String> enCatalog = {
   'viewer.edit': 'Edit',
   'viewer.rating': 'Rating',
   'viewer.clearRating': 'Clear Rating',
+  'viewer.ratingFail':
+      "Couldn't save the rating to the camera; check the connection and retry",
   'viewer.burstCount': 'Burst ×{n}',
   'viewer.downloadStarted':
       'Download started {where} {tag}; see "Gallery" for progress',
@@ -749,6 +755,7 @@ const Map<String, String> enCatalog = {
   'libpage.empty':
       'No files in the app yet\n(choose "Download to App" in the camera album)',
   'libpage.noFormatFiles': 'No {label} files',
+  'libpage.noRatingFiles': 'No files with this rating',
   'libpage.noMatching': 'No matching files',
   'transfers.title': 'Transfers',
   'libpage.deleteAppTitle': 'Delete In-App File?',

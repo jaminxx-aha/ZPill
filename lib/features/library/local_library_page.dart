@@ -4,20 +4,21 @@
 ///
 /// 网格默认按修改时间倒序(新下载在前,弹层可翻「旧→新」);筛选收进
 /// AppBar 右上弹层(排序单行「时间+方向箭头」点按翻向 × 格式
-/// 全部/RAW/JPG/视频 × 视图选项 连拍聚合开关,内存态不落库,与旧 chips
-/// 同先例)。「连拍聚合」
-/// 开时相邻拍摄时刻的同段文件合为一格(×N 角标,与相机相册连拍簇同参,
-/// 见 [groupLocalBurstRuns];mtime = 拍摄时刻由下载引擎落盘回写)。
-/// 可解码图与 NEF/MOV 同走缩略小档管线(≤512px 落盘,格双源 gapless
-/// 切换 —— cache 被系统内存警告清空后重解的也是毫秒级小档,2026-10-20
-/// 「看大图返回缩略重刷新」根治);点任意可看件进黑底查看器:PageView 左右滑翻页
-/// (网格过滤序同源),图片双指缩放、NEF 原生解码长边 ≤2560(会话
-/// 缓存,翻回不重解)。视频在页面内直接播放(2026-10-09:点开即播,
-/// 不再「海报帧 + 播放钮 + 弹全屏新页」三步走;iOS 平台视图嵌
-/// AVPlayerViewController,播放控制在 Flutter 侧自绘 —— 原生传输条
-/// 关掉,横滑才归 PageView 翻页不抢手势;高帧率素材浮「24fps 顺帧」
-/// 开关,非阻塞点了才变速静音;Android/ohos 通道待补回落海报帧 +
-/// 说明文案)。查看器可删除/把文件补导入系统相册。
+/// 全部/RAW/JPG/视频 × 评级 全部/无评级/★1-5 × 视图选项 连拍聚合开关,
+/// 内存态不落库,与旧 chips 同先例)。评级数据源 = 应用内文件快照
+///([LibraryRatings],下载落盘沿按所在组相机评级写入、相册改评沿传播,
+/// 见 [fileRatingKey]);「连拍聚合」开时相邻拍摄时刻的同段文件合为
+/// 一格(×N 角标,与相机相册连拍簇同参,见 [groupLocalBurstRuns];
+/// mtime = 拍摄时刻由下载引擎落盘回写)。可解码图与 NEF/MOV 同走缩略
+/// 小档管线(≤512px 落盘,格双源 gapless 切换 —— cache 被系统内存警告
+/// 清空后重解的也是毫秒级小档,2026-10-20「看大图返回缩略重刷新」根治);
+/// 点任意可看件进黑底查看器:PageView 左右滑翻页(网格过滤序同源),
+/// 图片双指缩放、NEF 原生解码长边 ≤2560(会话缓存,翻回不重解)。视频
+/// 在页面内直接播放(2026-10-09:点开即播,不再「海报帧 + 播放钮 +
+/// 弹全屏新页」三步走;iOS 平台视图嵌 AVPlayerViewController,播放控制
+/// 在 Flutter 侧自绘 —— 原生传输条关掉,横滑才归 PageView 翻页不抢手势;
+/// 高帧率素材浮「24fps 顺帧」开关,非阻塞点了才变速静音;Android/ohos
+/// 通道待补回落海报帧 + 说明文案)。查看器可删除/把文件补导入系统相册。
 ///
 /// 多选:长按任意格进入(长按格预选);多选中点格
 /// = 勾/取消(连拍格整段原子勾),AppBar 变「已选 {n} 项」+ 全选/
@@ -47,12 +48,14 @@ import '../../platform/services.dart';
 import '../../platform/video_lut_export.dart';
 import '../../platform/video_player.dart';
 import '../common/format.dart' show formatDateTime;
+import '../common/rating_filter.dart';
 import '../common/widgets/confirm_dialog.dart';
 import '../common/widgets/de_squeezed_image.dart';
 import '../common/widgets/embedded_video_player.dart';
 import '../common/widgets/photo_info_sheet.dart';
 import '../common/widgets/states.dart';
 import '../transfers/transfers_page.dart';
+import 'library_ratings.dart';
 import 'lut_export_sheet.dart';
 
 /// 图库格式过滤:按扩展名分流,与相机侧条目判定同源。
@@ -75,9 +78,10 @@ enum _LibFilter {
       };
 }
 
-/// 图库排序:时间两向(新→旧 = 既有默认,下载的新货在前)。评分档
-/// 不做 —— 本地评分键挂相机侧照片组(基名+组总字节),应用内文件
-/// 没有现成评分数据源,不发明。方向不落词表:弹层只有单行「时间」,
+/// 图库排序:时间两向(新→旧 = 既有默认,下载的新货在前)。评级档
+/// 数据源 = 应用内文件快照([LibraryRatings]:下载落盘沿按所在组相机
+/// 评级写入、相册改评沿按基名传播),星档精确匹配(与相机相册筛选
+/// 同口径)。方向不落词表:弹层只有单行「时间」,
 /// 方向由行尾箭头表达(↓ = 大→小 = 新→旧,↑ = 小→大 = 旧→新)。
 enum _LibSort {
   newestFirst,
@@ -147,10 +151,14 @@ class LocalLibraryPage extends StatefulWidget {
     this.videoPlayer,
     this.embeddedVideoView,
     this.videoLutExport,
+    this.ratings,
   });
 
   /// 测试注入;缺省用 AppServices 单例(应用级共享,本页不持有)。
   final TransfersController? controller;
+
+  /// 测试注入;缺省用 AppServices 单例(评级快照,与相册改评传播共享)。
+  final LibraryRatings? ratings;
 
   /// 测试注入;缺省用平台服务单例。
   final GallerySaver? gallery;
@@ -185,8 +193,14 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   VideoPlayer get _videoPlayer =>
       widget.videoPlayer ?? PlatformServices.videoPlayer;
 
+  LibraryRatings get _ratings =>
+      widget.ratings ?? AppServices.instance.libraryRatings;
+
   _LibFilter _filter = _LibFilter.all;
   _LibSort _sort = _LibSort.newestFirst;
+
+  /// 评级筛选(筛选弹层;快照装载后可选)。
+  RatingFilter _ratingFilter = RatingFilter.all;
 
   /// 连拍聚合开关(内存级,不落 AppSettings —— 与筛选弹层各档同
   /// 先例):开时网格条目 = [groupLocalBurstRuns] 的段,成段合为一格。
@@ -262,7 +276,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: _controller,
+      listenable: Listenable.merge([_controller, _ratings]),
       builder: (context, _) {
         // 修改时间排序:默认新在前(新下载的先看),「旧→新」翻向。
         final newestFirst = _sort == _LibSort.newestFirst;
@@ -323,9 +337,14 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     );
   }
 
-  // 格式筛子按扩展名收窄(筛选弹层唯一滤网)。
+  // 格式筛子按扩展名收窄 + 评级滤网(快照未装载恒放行,防「没读到」
+  // 被「无评级」筛空)。
   List<File> _filtered(List<File> files) => files
-      .where((f) => _filter.allows(_nameOf(f)))
+      .where((f) =>
+          _filter.allows(_nameOf(f)) &&
+          (_ratingFilter.isAll ||
+              !_ratings.loaded ||
+              _ratingFilter.allows(_ratings.ratingOf(f))))
       .toList(growable: false);
 
   /// 网格主体:平铺(现状)或连拍聚合。「连拍」开时条目 =
@@ -370,6 +389,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     final cover = run.firstWhere((f) => isJpgFilename(_nameOf(f)),
         orElse: () => run.first);
     final shots = run.map((f) => baseNameOf(_nameOf(f))).toSet().length;
+    final stars = _ratings.ratingOf(cover);
     return GestureDetector(
       key: ValueKey(_nameOf(cover)), // 测试/定位锚:格 = 封面文件名
       onTap: _selectMode
@@ -380,6 +400,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
         fit: StackFit.expand,
         children: [
           _cellBody(context, cover),
+          if (stars > 0) _ratingBadge(stars),
           // ×N 角标(左下,半透明黑底白字小胶囊 —— 与相机相册网格
           // typeLabel 角标、本页视频格 videocam 角标同一写法)。
           Align(
@@ -410,9 +431,11 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     );
   }
 
-  /// 空筛选文案:格式名片段经 t() 内嵌(模板中文拼回与原串逐字一致)。
-  String get _emptyMessage =>
-      context.t('libpage.noFormatFiles', {'label': context.t(_filter.label)});
+  /// 空筛选文案:格式名片段经 t() 内嵌(模板中文拼回与原串逐字一致);
+  /// 评级档筛空走专用文案(格式档不背锅)。
+  String get _emptyMessage => _ratingFilter.isAll
+      ? context.t('libpage.noFormatFiles', {'label': context.t(_filter.label)})
+      : context.t('libpage.noRatingFiles');
 
   /// 筛选弹层(AppBar 右上,iPhone 图库式分区卡片):排序单行「时间」
   /// (行尾方向箭头,点按翻向并收层)/ 格式四档 / 视图选项(连拍聚合)。
@@ -465,6 +488,29 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
             onPressed: () => _setFilter(f),
             child: Text(context.t(f.label)),
           ),
+        // 评级分区(快照装载后出现;星档 = 行内实心星。图库快照只有
+        // 已知档位,垃圾星/未知档两行不设 —— 数据模型里不存在)。
+        if (_ratings.loaded) ...[
+          _menuHeader(context, 'grid.rating'),
+          for (final r in RatingFilter.values)
+            if (r != RatingFilter.trash && r != RatingFilter.rated)
+              MenuItemButton(
+                key: ValueKey('ratingFilter-${r.index}'),
+                style: _menuRowStyle,
+                leadingIcon: r == RatingFilter.all
+                    ? const Icon(Icons.apps)
+                    : r == RatingFilter.none
+                        ? const Icon(Icons.star_border)
+                        : _ratingStars(r.stars),
+                trailingIcon: _ratingFilter == r
+                    ? Icon(Icons.check, size: 18, color: scheme.primary)
+                    : null,
+                onPressed: () => _setRatingFilter(r),
+                child: r.label.isEmpty
+                    ? const SizedBox.shrink()
+                    : Text(context.t(r.label)),
+              ),
+        ],
         _menuHeader(context, 'libpage.viewOptions'),
         MenuItemButton(
           style: _menuRowStyle,
@@ -515,6 +561,54 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
         _LibFilter.jpg => Icons.image_outlined,
         _LibFilter.video => Icons.videocam_outlined,
       };
+
+  /// 评级星档行首的实心星组(与相机相册筛选弹层同款)。
+  Widget _ratingStars(int n) => Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (var i = 0; i < n; i++)
+            const Icon(Icons.star, size: 16, color: AppColors.brandYellow),
+        ],
+      );
+
+  void _setRatingFilter(RatingFilter r) {
+    if (r == _ratingFilter) return;
+    setState(() {
+      _ratingFilter = r;
+      _selected.clear();
+    });
+  }
+
+  /// 评级角标(左上,品牌黄底 —— 与相机相册网格同款)。
+  Widget _ratingBadge(int stars) => Align(
+        alignment: Alignment.topLeft,
+        child: Padding(
+          padding: const EdgeInsets.all(4),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+            decoration: BoxDecoration(
+              color: AppColors.brandYellow,
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.star,
+                    size: 9, color: AppColors.onBrandYellow),
+                const SizedBox(width: 2),
+                Text(
+                  '$stars',
+                  style: const TextStyle(
+                    color: AppColors.onBrandYellow,
+                    fontSize: 9,
+                    height: 1.3,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
 
   void _setFilter(_LibFilter f) {
     setState(() {
@@ -584,6 +678,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   /// 单文件格:手势(多选中点格勾/取消,平时点开查看器;长按进多选并
   /// 预选)包内容(见 [_cellBody])。
   Widget _cell(BuildContext context, File file, List<File> peers) {
+    final stars = _ratings.ratingOf(file);
     return GestureDetector(
       key: ValueKey(_nameOf(file)), // 测试/定位锚:格 = 文件名
       onTap: _selectMode
@@ -594,6 +689,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
         fit: StackFit.expand,
         children: [
           _cellBody(context, file),
+          if (stars > 0) _ratingBadge(stars),
           if (_selectMode) ..._selectOverlay(_selected.contains(file.path)),
         ],
       ),

@@ -13,6 +13,8 @@ import 'package:nikon_pill/core/ptpip/object_format.dart';
 import 'package:nikon_pill/core/transfer/transfer_engine.dart';
 import 'package:nikon_pill/core/transfer/transfer_task.dart';
 import 'package:nikon_pill/core/utils/byte_writer.dart';
+import 'package:nikon_pill/data/ratings_store.dart';
+import 'package:nikon_pill/features/library/library_ratings.dart';
 import 'package:nikon_pill/features/library/local_library_page.dart';
 import 'package:nikon_pill/features/transfers/transfers_page.dart';
 import 'package:nikon_pill/platform/gallery_saver.dart';
@@ -324,7 +326,8 @@ void main() {
           {RawDecoder? rawDecoder,
           VideoPlayer? videoPlayer,
           EmbeddedVideoViewBuilder? embeddedView,
-          VideoLutExportHost? videoLut}) =>
+          VideoLutExportHost? videoLut,
+          LibraryRatings? ratings}) =>
       MaterialApp(
           home: LocalLibraryPage(
         controller: controller,
@@ -333,6 +336,7 @@ void main() {
         videoPlayer: videoPlayer ?? _FakeVideoPlayer(),
         embeddedVideoView: embeddedView,
         videoLutExport: videoLut,
+        ratings: ratings,
       ));
 
   /// 内嵌播放人设:embedded 播放器 + 假视图(onCreated 回固定 viewId 7)。
@@ -427,6 +431,59 @@ void main() {
 
     await pickFilter(tester, '全部');
     expect(find.byType(Image), findsOneWidget);
+  });
+
+  testWidgets('评级:徽标上屏;评级档(快照装载后)收窄网格,筛空走专用文案',
+      (tester) async {
+    // a.jpg ★3(3 字节档,见 writeFile)/ b.jpg 未评。
+    writeFile('a.jpg', modified: DateTime(2026, 10, 1));
+    writeFile('b.jpg', modified: DateTime(2026, 10, 2));
+    final gallery = _FakeGallery(dir);
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    final store = InMemoryRatingsStore();
+    await store.set(fileRatingKey('a.jpg', 3), 3);
+    final ratings = LibraryRatings(store: store);
+    addTearDown(ratings.dispose);
+    await tester.pumpWidget(host(gallery, controller, ratings: ratings));
+    await tester.pumpAndSettle();
+
+    // 徽标:a.jpg 左上黄底星标;两格照常。
+    expect(find.byType(Image), findsNWidgets(2));
+    expect(find.text('3'), findsOneWidget);
+
+    // 评级分区在(快照已装载;图库无垃圾星/未知档,星档键 = 4-8)。
+    await openFilterMenu(tester);
+    expect(find.text('评级'), findsOneWidget);
+    expect(find.text('无评级'), findsOneWidget);
+    expect(find.text('已评级'), findsNothing);
+    expect(find.text('垃圾星'), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('ratingFilter-6')));
+    await tester.pumpAndSettle();
+    expect(find.byType(Image), findsOneWidget); // 只剩 a.jpg
+    expect(find.text('3'), findsOneWidget);
+
+    // 无评级:只剩 b.jpg,星标消失。(评级区「全部」与格式区重名,
+    // 评级行一律按键点。)
+    await openFilterMenu(tester);
+    await tester.tap(find.byKey(const ValueKey('ratingFilter-1')));
+    await tester.pumpAndSettle();
+    expect(find.byType(Image), findsOneWidget);
+    expect(find.text('3'), findsNothing);
+
+    // ★4 筛空:专用文案(格式档不背锅)。
+    await openFilterMenu(tester);
+    await tester.tap(find.byKey(const ValueKey('ratingFilter-7')));
+    await tester.pumpAndSettle();
+    expect(find.text('没有该评级的文件'), findsOneWidget);
+    expect(find.byType(Image), findsNothing);
+
+    // 切回全部:两格与星标复原。
+    await openFilterMenu(tester);
+    await tester.tap(find.byKey(const ValueKey('ratingFilter-0')));
+    await tester.pumpAndSettle();
+    expect(find.byType(Image), findsNWidgets(2));
+    expect(find.text('3'), findsOneWidget);
   });
 
   testWidgets('查看器:导入系统相册(kind 按扩展名)→ 相册服务落账', (tester) async {

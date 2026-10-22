@@ -50,6 +50,38 @@ final class _RecordingRepo implements ObjectRepository {
 
   @override
   void reset() {}
+
+  // ── 评级面(删除编排不消费,空实现)──
+  @override
+  bool get ratingsLoaded => false;
+
+  @override
+  void requestRating(int handle) {}
+
+  @override
+  int ratingForHandle(int handle) => 0;
+
+  @override
+  int ratingForGroup(PhotoGroup group) => 0;
+
+  @override
+  bool ratedUnknownFor(int handle) => false;
+
+  @override
+  bool groupRatedUnknown(PhotoGroup group) => false;
+
+  @override
+  bool trashMarkedFor(int handle) => false;
+
+  @override
+  bool groupTrashStar(PhotoGroup group) => false;
+
+  @override
+  PhotoGroup? groupOf(int handle) => null;
+
+  @override
+  Future<void> rateGroup(PhotoGroup group, int stars) async =>
+      throw UnimplementedError();
 }
 
 PtpResult _ok() => const PtpResult(responseCode: PtpResponseCode.ok);

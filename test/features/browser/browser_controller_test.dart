@@ -49,6 +49,38 @@ final class _FakeRepo implements ObjectRepository {
 
   @override
   void removeHandles(Iterable<int> handles) {}
+
+  // ── 评级面(控制器只透传仓库发布,测试不消费,空实现)──
+  @override
+  bool get ratingsLoaded => false;
+
+  @override
+  void requestRating(int handle) {}
+
+  @override
+  int ratingForHandle(int handle) => 0;
+
+  @override
+  int ratingForGroup(PhotoGroup group) => 0;
+
+  @override
+  bool ratedUnknownFor(int handle) => false;
+
+  @override
+  bool groupRatedUnknown(PhotoGroup group) => false;
+
+  @override
+  bool trashMarkedFor(int handle) => false;
+
+  @override
+  bool groupTrashStar(PhotoGroup group) => false;
+
+  @override
+  PhotoGroup? groupOf(int handle) => null;
+
+  @override
+  Future<void> rateGroup(PhotoGroup group, int stars) async =>
+      throw UnimplementedError();
 }
 
 /// 伪连接:只驱动 states 流(控制器只订阅它)。

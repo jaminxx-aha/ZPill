@@ -1,15 +1,19 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:nikon_pill/core/browser/album.dart';
 import 'package:nikon_pill/core/browser/object_repository.dart';
+import 'package:nikon_pill/core/browser/photo_group.dart';
 import 'package:nikon_pill/core/ptp/operation_codes.dart';
 import 'package:nikon_pill/core/ptp/ptp_session.dart';
 import 'package:nikon_pill/core/ptp/ptp_transport.dart';
 import 'package:nikon_pill/core/ptpip/object_format.dart';
 import 'package:nikon_pill/core/utils/byte_writer.dart';
+
+import '../../helpers/video_container.dart';
 
 import '../ptp/ptp_session_test.dart' show FakePtpTransport, PropListDataset;
 
@@ -176,7 +180,7 @@ Uint8List _page101Dataset() {
     ..u16(0x21, PtpObjectPropCode.objectFormat, 0x3001)
     ..u32(0x21, PtpObjectPropCode.parentObject, 0x10)
     ..str(0x22, PtpObjectPropCode.objectFilename, 'DSC_0003.MOV')
-    ..u16(0x22, PtpObjectPropCode.objectFormat, 0x3008)
+    ..u16(0x22, PtpObjectPropCode.objectFormat, 0x300D) // quickTime(评级适用表)
     ..u64(0x22, PtpObjectPropCode.objectSize, 2000000)
     ..u32(0x22, PtpObjectPropCode.parentObject, 0x21)
     ..str(0x22, PtpObjectPropCode.dateCreated, '20260928T120000');
@@ -184,7 +188,8 @@ Uint8List _page101Dataset() {
 }
 
 /// 100NIKON 页(0x11 自身 + NEF 0x12 + JPG 0x13),值与逐对象树同源。
-Uint8List _page100Dataset() {
+/// [rated] = 页内附评级条目(JPG ★3 / NEF ★5,「全属性应答携评级」形态)。
+Uint8List _page100Dataset({bool rated = false}) {
   final d = PropListDataset()
     ..str(0x11, PtpObjectPropCode.objectFilename, '100NIKON')
     ..u16(0x11, PtpObjectPropCode.objectFormat, 0x3001)
@@ -199,6 +204,11 @@ Uint8List _page100Dataset() {
     ..u64(0x13, PtpObjectPropCode.objectSize, 8400000)
     ..u32(0x13, PtpObjectPropCode.parentObject, 0x11)
     ..str(0x13, PtpObjectPropCode.dateCreated, '20260926T090000');
+  if (rated) {
+    d
+      ..u16(0x13, PtpObjectPropCode.rating, 50) // ★3
+      ..u16(0x12, PtpObjectPropCode.rating, 100); // ★5
+  }
   return d.build();
 }
 
@@ -212,6 +222,19 @@ Uint8List _rootProbeOnly100Dataset() {
     ..u16(0x11, PtpObjectPropCode.objectFormat, 0x3001)
     ..u32(0x11, PtpObjectPropCode.parentObject, 0x10);
   return d.build();
+}
+
+/// 0x9434 数据集手搓(16B/条真机布局;§6.2.3.3,2026-10-22 392B 校准):
+/// u32 Version(100)+ u32 计数 + N×(u32 句柄 + u32 属性 + 8B 保留时刻)。
+Uint8List _metaDataset(List<(int handle, int attr)> entries) {
+  final w = ByteWriter()..u32(100)..u32(entries.length);
+  for (final (handle, attr) in entries) {
+    w
+      ..u32(handle)
+      ..u32(attr)
+      ..raw(List.filled(8, 0));
+  }
+  return w.takeBytes();
 }
 
 int _infoCount(FakePtpTransport fake) =>
@@ -884,8 +907,9 @@ void main() {
 
     final albums = await repo.loadAlbums();
 
-    // 请求全景:全量 + 根层两次 0x1007,三笔 0x9805(根探 + 两页),
-    // GetObjectInfo 一次不发(全库被分页覆盖)。
+    // 请求全景:全量 + 根层两次 0x1007,三笔 0x9805(根探 + 两页;
+    // 评级走逐张 0x9803 后台补读,不再发批量探针),GetObjectInfo 一次
+    // 不发(全库被分页覆盖)。
     expect(fake.requests.map((r) => r.opcode), [
       PtpOperationCode.getObjectHandles,
       PtpOperationCode.getObjectHandles,
@@ -1117,5 +1141,455 @@ void main() {
     expect(repo.isLoaded, isFalse);
     // 链路级异常不吞也不降级硬敲:无任何 GetObjectInfo 发出。
     expect(_infoCount(fake), 0);
+  });
+
+  // ── 相机评级(MTP 0xDC8A,官方 §6.6.3.3)──────────────────────
+
+  test('评级档位映射:六合法值直映,表外值按档向下取整(§6.6.3.3)', () {
+    expect(ratingRawToStars(0), 0);
+    expect(ratingRawToStars(1), 1);
+    expect(ratingRawToStars(25), 2);
+    expect(ratingRawToStars(50), 3);
+    expect(ratingRawToStars(75), 4);
+    expect(ratingRawToStars(100), 5);
+    // 表外(相机写入侧 60→50 同款向下取整语义,读侧防御同规)。
+    expect(ratingRawToStars(60), 3);
+    expect(ratingRawToStars(2), 1);
+    expect(ratingRawToStars(24), 1);
+    expect(starsToRatingRaw(0), 0);
+    expect(starsToRatingRaw(3), 50);
+    expect(starsToRatingRaw(5), 100);
+  });
+
+  test('全属性应答携评级:枚举零额外事务收割;组评级 = 成员最大值', () async {
+    final fake = FakePtpTransport();
+    final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
+    _replyPagedHandles(fake);
+    _replyRoots(fake);
+    fake.reply(_okData(_rootProbeDataset()));
+    fake.reply(_okData(_page101Dataset()));
+    fake.reply(_okData(_page100Dataset(rated: true))); // JPG ★3 / NEF ★5
+
+    final albums = await repo.loadAlbums();
+
+    expect(repo.ratingsLoaded, isTrue);
+    expect(repo.ratingForHandle(0x13), 3); // 50 → ★3
+    expect(repo.ratingForHandle(0x12), 5); // 100 → ★5
+    // 组评级 = 成员最大值(手拼双成员组:夹内 NEF/JPG 基名不同,枚举
+    // 分组本就各自成条;评级口径以组为单位)。
+    final group =
+        PhotoGroup([await repo.entryFor(0x12), await repo.entryFor(0x13)]);
+    expect(group.primary.name, 'DSC_0002.JPG');
+    expect(repo.ratingForGroup(group), 5); // max(NEF 5, JPG 3)
+    // groupOf 命中:返回条目含该句柄、代表件正确。
+    final found = repo.groupOf(0x13);
+    expect(found, isNotNull);
+    expect(found!.primary.name, 'DSC_0002.JPG');
+    expect(albums[0].items.map((g) => g.primary.name),
+        contains('DSC_0002.JPG'));
+    // 零额外事务:0x9805 只有根探 + 两页,评级不另发。
+    final propLists =
+        fake.requests.where((r) => r.opcode == NikonOperationCode.getObjectPropList);
+    expect(propLists.length, 3);
+  });
+
+  test('requestRating:逐张 0x9803 拉取成功入缓存;重复请求去重(批量收割已被真机证伪)',
+      () async {
+    final fake = FakePtpTransport();
+    final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
+    _replyPagedHandles(fake);
+    _replyRoots(fake);
+    fake.reply(_okData(_rootProbeDataset()));
+    fake.reply(_okData(_page101Dataset()));
+    fake.reply(_okData(_page100Dataset()));
+    await repo.loadAlbums();
+    expect(repo.ratingsLoaded, isFalse);
+
+    fake.reply(_okData(Uint8List.fromList([50, 0]))); // 0x9803 → 50 = ★3
+    repo.requestRating(0x13); // JPG 0x3801:读得动
+    await pumpEventQueue();
+
+    expect(repo.ratingsLoaded, isTrue);
+    expect(repo.ratingForHandle(0x13), 3);
+    final reads = fake.requests
+        .where((r) => r.opcode == NikonOperationCode.getObjectPropValue)
+        .toList();
+    expect(reads, hasLength(1));
+    expect(reads.single.params, [0x13, PtpObjectPropCode.rating]);
+
+    repo.requestRating(0x13); // 已问过:空转不发
+    await pumpEventQueue();
+    expect(
+      fake.requests
+          .where((r) => r.opcode == NikonOperationCode.getObjectPropValue),
+      hasLength(1),
+    );
+  });
+
+  test('requestRating NEF:能力门拦截不发读(0x3000 不在适用表,机身可评 API 不开)',
+      () async {
+    final fake = FakePtpTransport();
+    final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
+    _replyPagedHandles(fake);
+    _replyRoots(fake);
+    fake.reply(_okData(_rootProbeDataset()));
+    fake.reply(_okData(_page101Dataset()));
+    fake.reply(_okData(_page100Dataset()));
+    await repo.loadAlbums();
+
+    repo.requestRating(0x12); // NEF:门内直接空转
+    await pumpEventQueue();
+
+    expect(repo.ratingsLoaded, isFalse); // 没见过真数据,评级面不开
+    expect(
+      fake.requests
+          .where((r) => r.opcode == NikonOperationCode.getObjectPropValue)
+          .where((r) => r.params.first == 0x12),
+      isEmpty,
+    );
+  });
+
+  test('0x9434 被拒:回退逐张补读(逐 JPEG 渐进点亮,NEF 不问)', () async {
+    final fake = FakePtpTransport();
+    final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
+    _replyPagedHandles(fake);
+    _replyRoots(fake);
+    fake.reply(_okData(_rootProbeDataset()));
+    fake.reply(_okData(_page101Dataset()));
+    fake.reply(_okData(_page100Dataset()));
+    final updates = <AlbumsUpdate>[];
+    final sub = repo.updates.listen(updates.add);
+    addTearDown(sub.cancel);
+    await repo.loadAlbums();
+    expect(repo.ratingForHandle(0x13), 0); // 枚举完即发布,补读随后
+
+    fake.reply(_noPropList); // 0x9434 被拒 → 回退逐张
+    // 补读按缓存序:MOV 0x22(0x300D 在 §6.6.3.3 适用表,也问)先出,
+    // JPG 0x13 后到;NEF/夹对象不问。
+    fake.reply(_okData(Uint8List.fromList([00, 00]))); // 补读 0x22(MOV)未评
+    fake.reply(_okData(Uint8List.fromList([50, 0]))); // 补读 0x13
+    await Future<void>.delayed(const Duration(milliseconds: 1100));
+
+    expect(repo.ratingForHandle(0x13), 3);
+    // NEF 0x12 与夹对象(0x3000/0x3001 不在适用表)从不发评级读。
+    final readHandles = fake.requests
+        .where((r) => r.opcode == NikonOperationCode.getObjectPropValue)
+        .map((r) => r.params.first)
+        .toList();
+    expect(readHandles, [0x22, 0x13]);
+    expect(repo.ratingsLoaded, isTrue);
+  });
+
+  test('降级逐对象世界:无批量则无评级补读外的额外 0x9805(批量死路不再撞)',
+      () async {
+    final fake = FakePtpTransport();
+    final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
+    _replyTreeNoBatch(fake);
+
+    await repo.loadAlbums();
+
+    expect(repo.ratingsLoaded, isFalse);
+    // 0x9805 只有开场被拒那一笔。
+    expect(
+      fake.requests
+          .where((r) => r.opcode == NikonOperationCode.getObjectPropList),
+      hasLength(1),
+    );
+  });
+
+  test('0x9434 位图:有星 NEF 走 XMP 头读兜底拿档位;拿不到才落未知档',
+      () async {
+    final fake = FakePtpTransport();
+    final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
+    _replyPagedHandles(fake);
+    _replyRoots(fake);
+    fake.reply(_okData(_rootProbeDataset()));
+    fake.reply(_okData(_page101Dataset()));
+    fake.reply(_okData(_page100Dataset()));
+    // 位图:NEF 0x12 bit0=1(相机上评过星)、JPG 0x13 bit0=0。
+    fake.reply(_okData(_metaDataset([(0x12, 0x1), (0x13, 0x0)])));
+    fake.reply(_refused); // 0x9803 NEF 拒答(0xA80A 真机形态)
+    // XMP 头读兜底:NEF 头部明文 Rating=2(真机 ★1 同构)。
+    fake.reply(_okData(
+        Uint8List.fromList(utf8.encode('<x:xmpmeta><xmp:Rating>2</xmp:Rating>'))));
+
+    await repo.loadAlbums();
+    await Future<void>.delayed(const Duration(milliseconds: 900));
+
+    expect(repo.ratingsLoaded, isTrue);
+    expect(repo.ratingForHandle(0x12), 2); // XMP 兜底拿到档位
+    expect(repo.ratedUnknownFor(0x12), isFalse);
+    expect(repo.ratingForHandle(0x13), 0); // 无星:零事务
+    expect(
+      fake.requests
+          .where((r) => r.opcode == NikonOperationCode.getObjectPropValue)
+          .where((r) => r.params.first == 0x13),
+      isEmpty,
+    ); // JPEG 无星:零评级事务(NEF 的先试后被拒属预期)
+  });
+
+  test('0x9434 位图:XMP 无标记的 NEF 落「已评级·档位未知」(兜底不误标)',
+      () async {
+    final fake = FakePtpTransport();
+    final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
+    _replyPagedHandles(fake);
+    _replyRoots(fake);
+    fake.reply(_okData(_rootProbeDataset()));
+    fake.reply(_okData(_page101Dataset()));
+    fake.reply(_okData(_page100Dataset()));
+    fake.reply(_okData(_metaDataset([(0x12, 0x1), (0x13, 0x0)])));
+    fake.reply(_refused); // 0x9803 NEF 拒答
+    fake.reply(_okData(
+        Uint8List.fromList(utf8.encode('<x:xmpmeta></x:xmpmeta>')))); // 无标记
+
+    await repo.loadAlbums();
+    await Future<void>.delayed(const Duration(milliseconds: 900));
+
+    expect(repo.ratingsLoaded, isTrue);
+    expect(repo.ratedUnknownFor(0x12), isTrue);
+    expect(repo.ratingForHandle(0x12), 0);
+    expect(repo.ratingForHandle(0x13), 0);
+  });
+
+  test('0x9434 位图:有星 JPEG 逐张拉档位(25 → ★2),有星 NEF 走 XMP 兜底',
+      () async {
+    final fake = FakePtpTransport();
+    final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
+    _replyPagedHandles(fake);
+    _replyRoots(fake);
+    fake.reply(_okData(_rootProbeDataset()));
+    fake.reply(_okData(_page101Dataset()));
+    fake.reply(_okData(_page100Dataset()));
+    // 位图:NEF/JPG 都有星 → NEF 0xDC8A 拒走 XMP,JPG 直读档位。
+    fake.reply(_okData(_metaDataset([(0x12, 0x1), (0x13, 0x1)])));
+    fake.reply(_refused); // 0x9803 NEF 拒
+    fake.reply(_okData(Uint8List.fromList(
+        utf8.encode('<x:xmpmeta><xmp:Rating>2</xmp:Rating>')))); // XMP 兜底
+    fake.reply(_okData(Uint8List.fromList([25, 0]))); // 0x9803 JPG → ★2
+
+    await repo.loadAlbums();
+    await Future<void>.delayed(const Duration(milliseconds: 900));
+
+    expect(repo.ratingsLoaded, isTrue);
+    expect(repo.ratedUnknownFor(0x12), isFalse);
+    expect(repo.ratingForHandle(0x12), 2); // XMP 兜底
+    expect(repo.ratingForHandle(0x13), 2); // 协议直读
+    final reads = fake.requests
+        .where((r) => r.opcode == NikonOperationCode.getObjectPropValue)
+        .map((r) => r.params.first)
+        .toList();
+    expect(reads, [0x12, 0x13]); // 两位图有星成员都拉
+  });
+
+  test('删除候选甄别:位图外图像 XMP Rating=-1 = 垃圾桶;0 = 无评级',
+      () async {
+    final fake = FakePtpTransport();
+    final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
+    _replyPagedHandles(fake);
+    _replyRoots(fake);
+    fake.reply(_okData(_rootProbeDataset()));
+    fake.reply(_okData(_page101Dataset()));
+    fake.reply(_okData(_page100Dataset()));
+    // 位图空(全卡无人有 1-5 星):视频 0x22 先甄别(容器头 16 零字节
+    // → boxSize 0 速败不误判),再图像 0x12/0x13 走 XMP。
+    fake.reply(_okData(_metaDataset(const [])));
+    fake.reply(_okData(Uint8List.fromList(List.filled(16, 0)))); // 视频速败
+    // NEF:xmp:Rating=-1 = 删除候选(真机复标实证:未评分 0 → 标后 -1)。
+    fake.reply(_okData(Uint8List.fromList(
+        utf8.encode('<x:xmpmeta><xmp:Rating>-1</xmp:Rating></x:xmpmeta>'))));
+    // JPG:xmp:Rating=0 = 无评级(非垃圾桶)。
+    fake.reply(_okData(Uint8List.fromList(utf8.encode(
+        '<x:xmpmeta><xmp:Rating>0</xmp:Rating></x:xmpmeta>'))));
+
+    await repo.loadAlbums();
+    // 主同步 500ms 起步 + 甄别两笔 256KB 头读,等它跑完再断言。
+    await Future<void>.delayed(const Duration(milliseconds: 1200));
+
+    expect(repo.ratingsLoaded, isTrue);
+    expect(repo.trashMarkedFor(0x12), isTrue); // -1 = 删除候选
+    expect(repo.groupTrashStar(PhotoGroup([await repo.entryFor(0x12)])),
+        isTrue);
+    expect(repo.trashMarkedFor(0x13), isFalse); // 0 = 无评级
+    expect(repo.ratingForHandle(0x13), 0);
+    expect(repo.ratingForHandle(0x12), 0);
+    // 甄别读序:视频 0x22 容器速败(0x101b)→ NEF → JPG。
+    final partialHandles = fake.requests
+        .where((r) => r.opcode == PtpOperationCode.getPartialObject)
+        .map((r) => r.params.first)
+        .toList();
+    expect(partialHandles, [0x22, 0x12, 0x13]);
+  });
+
+  test('删除候选甄别与协议读解耦:0xDC8A 已问不挡 XMP 甄别(查看器沿不吞垃圾桶)',
+      () async {
+    final fake = FakePtpTransport();
+    final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
+    _replyPagedHandles(fake);
+    _replyRoots(fake);
+    fake.reply(_okData(_rootProbeDataset()));
+    fake.reply(_okData(_page101Dataset()));
+    fake.reply(_okData(_page100Dataset()));
+    // 应答按**消费者时间线**排:视频 0x22 容器甄别速败(16 零字节)→
+    // 查看器 0xDC8A(t=0)→ 主同步位图(+500ms)→ 图像甄别 0x12/0x13。
+    fake.reply(_okData(Uint8List.fromList(List.filled(16, 0)))); // 视频速败
+    fake.reply(_okData(Uint8List.fromList([00, 00]))); // 查看器 0xDC8A(0)
+    fake.reply(_okData(_metaDataset(const []))); // 主同步位图:全卡无 1-5 星
+    fake.reply(_okData(Uint8List.fromList(
+        utf8.encode('<x:xmpmeta><xmp:Rating>-1</xmp:Rating></x:xmpmeta>')))); // 甄别 0x12
+    fake.reply(_okData(Uint8List.fromList(
+        utf8.encode('<x:xmpmeta><xmp:Rating>-1</xmp:Rating></x:xmpmeta>')))); // 甄别 0x13
+    await repo.loadAlbums();
+    repo.requestRating(0x13); // 协议读先问(回答星档,不回答垃圾桶)
+    await Future<void>.delayed(const Duration(milliseconds: 1200));
+
+    expect(repo.trashMarkedFor(0x12), isTrue);
+    expect(repo.trashMarkedFor(0x13), isTrue); // 协议已问不吞甄别
+    expect(repo.ratingForHandle(0x13), 0);
+    expect(repo.groupTrashStar(PhotoGroup([await repo.entryFor(0x13)])),
+        isTrue);
+  });
+
+  test('删除候选甄别:视频走容器 NCTG(0xFFFF = 垃圾桶)', () async {
+    final fake = FakePtpTransport();
+    final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
+    _replyPagedHandles(fake);
+    _replyRoots(fake);
+    fake.reply(_okData(_rootProbeDataset()));
+    fake.reply(_okData(_page101Dataset()));
+    fake.reply(_okData(_page100Dataset()));
+    fake.reply(_okData(_metaDataset(const [])));
+    // 视频容器箱行走 5 笔部分读的应答(0 / 24 / 32 / 140 / 148 起)。
+    final container = videoContainerBytes(0xffff);
+    fake.reply(_okData(Uint8List.sublistView(container, 0, 64)));
+    fake.reply(_okData(Uint8List.sublistView(container, 24, 88)));
+    fake.reply(_okData(Uint8List.sublistView(container, 32, 96)));
+    fake.reply(_okData(Uint8List.sublistView(container, 140, 204)));
+    fake.reply(_okData(Uint8List.sublistView(container, 148, container.length)));
+
+    await repo.loadAlbums();
+    await Future<void>.delayed(const Duration(milliseconds: 1200));
+
+    expect(repo.ratingsLoaded, isTrue);
+    expect(repo.trashMarkedFor(0x22), isTrue); // MOV 垃圾桶
+    expect(repo.groupTrashStar(PhotoGroup([await repo.entryFor(0x22)])),
+        isTrue);
+    expect(repo.ratingForHandle(0x22), 0);
+  });
+
+  test('改评成功:只写 JPG 成员(u16 LE 载荷)、NEF 不撞、读回对齐相机口径',
+      () async {
+    final fake = FakePtpTransport();
+    final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
+    _replyPagedHandles(fake);
+    _replyRoots(fake);
+    fake.reply(_okData(_rootProbeDataset()));
+    fake.reply(_okData(_page101Dataset()));
+    fake.reply(_okData(_page100Dataset(rated: true)));
+    await repo.loadAlbums();
+    // 手拼双成员组(枚举夹内基名不同各成条):members [NEF 0x12, JPG 0x13]。
+    final group =
+        PhotoGroup([await repo.entryFor(0x12), await repo.entryFor(0x13)]);
+
+    // 写:仅 JPG;读回:50 → ★3(相机口径)。
+    fake.reply(_okData(Uint8List(0))); // 0x9804 → 0x13
+    fake.reply(_okData(Uint8List.fromList([50, 0]))); // 0x9803 读回
+    await repo.rateGroup(group, 3);
+
+    final writes = fake.requests
+        .where((r) => r.opcode == NikonOperationCode.setObjectPropValue)
+        .toList();
+    expect(writes, hasLength(1)); // NEF 0x3000 不撞(真机 0xA801 恒拒)
+    expect(writes.single.params, [0x13, PtpObjectPropCode.rating]);
+    expect(writes.single.dataOut, [50, 0]); // u16 LE
+    final readback = fake.requests
+        .where((r) => r.opcode == NikonOperationCode.getObjectPropValue)
+        .toList();
+    expect(readback.map((r) => r.params.first), [0x13]);
+    expect(repo.ratingForHandle(0x13), 3);
+    expect(repo.ratingForHandle(0x12), 5); // NEF 旧值不动(批量收割带来的)
+    expect(repo.ratingForGroup(group), 5); // 组 = 成员最大值
+  });
+
+  test('改评 JPG 被拒:整笔失败回滚(全成员回写前值)并上抛', () async {
+    final fake = FakePtpTransport();
+    final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
+    _replyPagedHandles(fake);
+    _replyRoots(fake);
+    fake.reply(_okData(_rootProbeDataset()));
+    fake.reply(_okData(_page101Dataset()));
+    fake.reply(_okData(_page100Dataset(rated: true))); // NEF ★5 / JPG ★3
+    await repo.loadAlbums();
+    final group =
+        PhotoGroup([await repo.entryFor(0x12), await repo.entryFor(0x13)]);
+
+    fake.reply(_refused); // JPG 0x9804 被拒
+    await expectLater(
+        repo.rateGroup(group, 4), throwsA(isA<PtpResponseException>()));
+    // 乐观上屏撤回:全成员回写前值;NEF 从未被发出。
+    expect(repo.ratingForHandle(0x13), 3);
+    expect(repo.ratingForHandle(0x12), 5);
+    expect(
+      fake.requests
+          .where((r) => r.opcode == NikonOperationCode.setObjectPropValue),
+      hasLength(1),
+    );
+  });
+
+  test('纯 RAW 组改评:不撞相机直接报错(0x3000 无评级能力)', () async {
+    final fake = FakePtpTransport();
+    final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
+    _replyPagedHandles(fake);
+    _replyRoots(fake);
+    fake.reply(_okData(_rootProbeDataset()));
+    fake.reply(_okData(_page101Dataset()));
+    fake.reply(_okData(_page100Dataset()));
+    await repo.loadAlbums();
+    final rawGroup = PhotoGroup([await repo.entryFor(0x12)]);
+
+    await expectLater(repo.rateGroup(rawGroup, 3), throwsA(isA<StateError>()));
+    expect(
+      fake.requests
+          .where((r) => r.opcode == NikonOperationCode.setObjectPropValue),
+      isEmpty,
+    );
+  });
+
+  test('reset 清评级面:徽标/筛选随断连收摊,重连重新建立', () async {
+    final fake = FakePtpTransport();
+    final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
+    _replyPagedHandles(fake);
+    _replyRoots(fake);
+    fake.reply(_okData(_rootProbeDataset()));
+    fake.reply(_okData(_page101Dataset()));
+    fake.reply(_okData(_page100Dataset(rated: true)));
+    await repo.loadAlbums();
+    expect(repo.ratingsLoaded, isTrue);
+
+    repo.reset();
+    expect(repo.ratingsLoaded, isFalse);
+    expect(repo.ratingForHandle(0x13), 0);
+    expect(repo.groupOf(0x13), isNull);
+  });
+
+  test('0x4007 ObjectInfoChanged:相机侧改评沿重拉评级(两向同步)',
+      () async {
+    final fake = FakePtpTransport();
+    final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
+    _replyPagedHandles(fake);
+    _replyRoots(fake);
+    fake.reply(_okData(_rootProbeDataset()));
+    fake.reply(_okData(_page101Dataset()));
+    fake.reply(_okData(_page100Dataset(rated: true))); // JPG ★3
+    await repo.loadAlbums();
+
+    fake.reply(_okData(Uint8List.fromList([100, 0]))); // 重拉:100 → ★5
+    fake.emitEvent(const PtpEvent(
+      code: PtpEventCode.objectInfoChanged,
+      transactionId: 1,
+      params: [0x13],
+    ));
+    await pumpEventQueue();
+
+    expect(repo.ratingForHandle(0x13), 5);
   });
 }

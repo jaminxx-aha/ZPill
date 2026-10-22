@@ -7,8 +7,9 @@
 /// 筛选弹层的图片下载格式档(全部/仅 JPG/仅 RAW)只定批量下载的格式
 /// 预选,全程不弹格式面板:「全部」整组全量直接下(双格式组 JPG+RAW
 /// 全要,视频整段),仅 JPG / 仅 RAW 按该格式收集(网格显示不变)。
-/// 本地评分角标(左上星标)随 [RatingsController] 变化;连拍簇一条目
-/// (typeLabel 带 ×N)。
+/// 评级角标(左上星标)随 [AlbumRatingsController] 变化,真源 = 相机
+///(MTP 0xDC8A);评级筛选分区在相机评级数据建立后出现(全部/无评级/
+/// ★1-5 精确匹配)。连拍簇一条目(typeLabel 带 ×N)。
 ///
 /// 活页模式:随 [BrowserController] 的渐进发布增长(最新优先,新对象尾部
 /// 追加);AppBar 细进度条 + 刷新按钮 + 下拉刷新重枚举;首块前骨架态,
@@ -35,14 +36,15 @@ import '../../core/transfer/transfer_engine.dart';
 import '../../core/transfer/transfer_task.dart';
 import '../../l10n/l10n.dart';
 import '../common/format.dart';
+import '../common/rating_filter.dart';
 import '../common/widgets/confirm_dialog.dart';
 import '../common/widgets/states.dart';
 import '../../design/app_colors.dart';
 import '../../design/app_dimens.dart';
+import 'album_ratings_controller.dart';
 import 'browser_controller.dart';
 import '../transfers/transfers_page.dart';
 import 'photo_viewer_page.dart';
-import 'ratings_controller.dart';
 
 /// 图片下载格式筛选(筛选弹层第三区):只定批量下载的格式预选,网格
 /// 显示不受影响。全部 = 整组全量直接下(双格式组 JPG+RAW 全要,视频
@@ -101,7 +103,7 @@ class PhotoGridPage extends StatefulWidget {
   final CameraFileOps? fileOps;
 
   /// 测试注入;缺省用 AppServices 单例。
-  final RatingsController? ratings;
+  final AlbumRatingsController? ratings;
 
   /// 下载 SnackBar 的「查看进度」动作注入(测试;AppServices 里的传输
   /// 控制器在裸测试树不可建)。null = 默认推 TransfersPage(生产)。
@@ -142,6 +144,17 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
 
   /// 图片下载格式筛选(筛选弹层;只定下载格式,不改网格)。
   _FormatFilter _formatFilter = _FormatFilter.all;
+
+  /// 评级筛选(筛选弹层;网格收窄,相机评级数据建立后可选)。
+  RatingFilter _ratingFilter = RatingFilter.all;
+
+  /// 评级滤网:评级数据未建立时恒放行(防把「未取到」当「未评」筛空)。
+  bool _ratingAllows(PhotoGroup group) =>
+      _ratingFilter.isAll ||
+      !_ratings.available ||
+      _ratingFilter.allows(_ratings.ratingOf(group),
+          ratedUnknown: _ratings.ratedUnknown(group),
+          trashStar: _ratings.trashStar(group));
 
   /// 底栏两段式下载:「下载」钮点按后换出「到相册/到应用」双目的地;
   /// 选择集一变(改选/整日/全选/切相册/清空)即复位,重新从「下载」
@@ -216,9 +229,8 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
   TransferEngine get _engine =>
       widget.engine ?? AppServices.instance.transferEngine;
   CameraFileOps get _fileOps => widget.fileOps ?? AppServices.instance.fileOps;
-  RatingsController get _ratings =>
+  AlbumRatingsController get _ratings =>
       widget.ratings ?? AppServices.instance.ratings;
-
   bool get _selecting => _selected.isNotEmpty;
 
   /// 日期分段:items 按拍摄时间倒序(仓库序),本地日期变化即切段;
@@ -508,6 +520,11 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
         }
         final album = live ?? _lastAlbum;
         final items = album?.items ?? const <PhotoGroup>[];
+        // 评级筛后可见集(查看器翻页/整日段/全选同源,与相册筛选同规)。
+        final visible = [
+          for (final group in items)
+            if (_ratingAllows(group)) group,
+        ];
         // 筛选弹层相册区源:活列表优先,断连后用快照(切换保持可用)。
         if (controller.albums.isNotEmpty) _lastAlbums = controller.albums;
         final filterAlbums =
@@ -522,7 +539,7 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
               if (_selecting) ...[
                 IconButton(
                   tooltip: context.t('grid.selectAll'),
-                  onPressed: () => _selectAll(items),
+                  onPressed: () => _selectAll(visible),
                   icon: const Icon(Icons.select_all),
                 ),
                 IconButton(
@@ -554,7 +571,7 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
                   )
                 : null,
           ),
-          body: _body(controller, filterAlbums, album, items),
+          body: _body(controller, filterAlbums, album, visible),
           bottomSheet: _selecting ? _actionBar(items) : null,
         );
       },
@@ -678,6 +695,29 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
             onPressed: () => setState(() => _formatFilter = f),
             child: Text(context.t(f.label)),
           ),
+        // 评级分区(相机评级数据建立后出现;星档 = 行内实心星)。
+        if (_ratings.available) ...[
+          _menuHeader(context, 'grid.rating'),
+          for (final r in RatingFilter.values)
+            MenuItemButton(
+              key: ValueKey('ratingFilter-${r.index}'),
+              style: _menuRowStyle,
+              leadingIcon: switch (r) {
+                RatingFilter.all => const Icon(Icons.apps),
+                RatingFilter.none => const Icon(Icons.star_border),
+                RatingFilter.trash => const Icon(Icons.delete_outline),
+                RatingFilter.rated => const Icon(Icons.star_half),
+                _ => _ratingStars(r.stars),
+              },
+              trailingIcon: _ratingFilter == r
+                  ? Icon(Icons.check, size: 18, color: scheme.primary)
+                  : null,
+              onPressed: () => _setRatingFilter(r),
+              child: r.label.isEmpty
+                  ? const SizedBox.shrink()
+                  : Text(context.t(r.label)),
+            ),
+        ],
       ],
       builder: (context, controller, child) => IconButton(
         tooltip: context.t('libpage.filter'),
@@ -717,6 +757,24 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
         _FormatFilter.jpg => Icons.image_outlined,
         _FormatFilter.raw => Icons.raw_on_outlined,
       };
+
+  /// 评级星档行首的实心星组(N 颗,品牌黄 —— 与网格评级角标同色)。
+  Widget _ratingStars(int n) => Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (var i = 0; i < n; i++)
+            const Icon(Icons.star, size: 16, color: AppColors.brandYellow),
+        ],
+      );
+
+  void _setRatingFilter(RatingFilter r) {
+    if (r == _ratingFilter) return;
+    setState(() {
+      _ratingFilter = r;
+      _selected.clear();
+      _revealDownload = false;
+    });
+  }
 
   /// 网格缩略取数(句柄去重):失败不驻留 —— 移除在途 future 并限次
   /// 自动重试(3 次,间隔 3s;耗尽留断图占位,滚动重建自然再试)。旧版
@@ -858,8 +916,11 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
                 child: Icon(Icons.videocam, size: 16, color: Colors.white),
               ),
             ),
-          // 评分角标(左上):有星才显示;星数并入角标文本。
-          if (_ratings.ratingOf(group) > 0)
+          // 评级角标(左上):有星显星+数;垃圾星显垃圾桶;档位未知
+          //(NEF 位图有星)只显星。
+          if (_ratings.ratingOf(group) > 0 ||
+              _ratings.ratedUnknown(group) ||
+              _ratings.trashStar(group))
             Align(
               alignment: Alignment.topLeft,
               child: Padding(
@@ -876,17 +937,24 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      const Icon(Icons.star,
-                          size: 9, color: AppColors.onBrandYellow),
-                      const SizedBox(width: 2),
-                      Text(
-                        '${_ratings.ratingOf(group)}',
-                        style: const TextStyle(
-                          color: AppColors.onBrandYellow,
-                          fontSize: 9,
-                          height: 1.3,
-                        ),
-                      ),
+                      if (_ratings.trashStar(group))
+                        const Icon(Icons.delete_outline,
+                            size: 10, color: AppColors.onBrandYellow)
+                      else ...[
+                        const Icon(Icons.star,
+                            size: 9, color: AppColors.onBrandYellow),
+                        if (_ratings.ratingOf(group) > 0) ...[
+                          const SizedBox(width: 2),
+                          Text(
+                            '${_ratings.ratingOf(group)}',
+                            style: const TextStyle(
+                              color: AppColors.onBrandYellow,
+                              fontSize: 9,
+                              height: 1.3,
+                            ),
+                          ),
+                        ],
+                      ],
                     ],
                   ),
                 ),

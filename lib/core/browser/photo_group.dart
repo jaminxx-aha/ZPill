@@ -193,6 +193,28 @@ bool isJpgFile(ObjectEntry entry) {
 /// RAW 判定:尼康 NEF/NRW 扩展名(NEF 格式码 0x3000,只能靠文件名)。
 bool isRawFile(ObjectEntry entry) => isRawFilename(entry.name);
 
+/// 评级适用格式(官方 §6.6.3.3):0x3800 Unknown Image / 0x3801 EXIF/
+/// JPEG / 0x300D MOV / 0x380D TIFF / 0xB200 HEIF / 0xB982 MP4。
+/// NEF(0x3000 Undefined)**不在表** —— 真机实证(2026-10-22 Zf 双链)
+/// API 读写均拒(0xA801/0xA80A),虽然机身 UI 可评 NEF(固件 API 落差,
+/// NEF 的星级 App 侧摸不到)。
+const Set<int> kRatingCapableFormats = {
+  0x3800,
+  ObjectFormatCode.exifJpeg,
+  ObjectFormatCode.quickTime,
+  ObjectFormatCode.tiff,
+  ObjectFormatCode.heif,
+  ObjectFormatCode.mp4,
+};
+
+/// 评级能力判定(读/写/补读的目标门):格式码在适用表为准;码缺失
+///(异常形态)退扩展名兜底(非 RAW 即试 —— 相机会以拒答回答)。
+bool isRatingCapable(ObjectEntry entry) {
+  final code = entry.formatCode;
+  if (code != null) return kRatingCapableFormats.contains(code);
+  return !isRawFile(entry);
+}
+
 /// 视频文件判定:PTP 格式码(QuickTime/MPEG)或 .mov/.mp4 扩展名兜底。
 bool isVideoFile(ObjectEntry entry) {
   if (entry.kind == ObjectKind.video) return true;

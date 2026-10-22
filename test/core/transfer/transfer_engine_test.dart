@@ -127,7 +127,8 @@ Future<List<TransferTask>> waitUntil(TransferEngine engine,
 (TransferEngineImpl, FakePtpTransport, FakeGallerySaver) _engine(
     {Future<XmpMetadata?> Function(ObjectEntry entry)? metadataFor,
     Future<WatermarkOptions?> Function(ObjectEntry entry)? watermarkFor,
-    TextRaster? watermarkRaster}) {
+    TextRaster? watermarkRaster,
+    Future<void> Function(ObjectEntry entry, String path)? onAppFileSaved}) {
   final fake = FakePtpTransport();
   final gallery = FakeGallerySaver();
   final engine = TransferEngineImpl(
@@ -136,6 +137,7 @@ Future<List<TransferTask>> waitUntil(TransferEngine engine,
     metadataFor: metadataFor,
     watermarkFor: watermarkFor,
     watermarkRaster: watermarkRaster,
+    onAppFileSaved: onAppFileSaved,
     backoffFor: (_) => Duration.zero,
   );
   return (engine, fake, gallery);
@@ -748,5 +750,51 @@ void main() {
     final mtime = gallery.importMtimes.single.single;
     expect(mtime.difference(DateTime.now()).abs(),
         lessThan(const Duration(seconds: 2)));
+  });
+
+  test('onAppFileSaved:app 目的地单文件落盘沿回调(entry+路径);'
+      'gallery 目的地不回调;回调抛异常任务照常完成', () async {
+    final saved = <(ObjectEntry, String)>[];
+    // app 目的地:回调一次,参数 = 条目 + 落盘路径。
+    final (engine, fake, _) = _engine(onAppFileSaved: (entry, path) async {
+      saved.add((entry, path));
+    });
+    fake.reply(_okBytes(12));
+    final done = waitUntil(
+        engine, (ts) => ts.length == 1 && ts.single.isTerminal);
+    await engine.enqueue([_entry(1, 'A.NEF', 12)],
+        destination: TransferDestination.app);
+    final tasks = await done;
+    expect(tasks.single.state, TransferState.completed);
+    expect(saved, hasLength(1));
+    expect(saved.single.$1.handle, 1);
+    expect(saved.single.$2, endsWith('A.NEF'));
+
+    // gallery 目的地:不回调。
+    final (engine2, fake2, gallery2) =
+        _engine(onAppFileSaved: (entry, path) async {
+      saved.add((entry, path));
+    });
+    fake2.reply(_okBytes(12));
+    gallery2.importResult = [Uri.parse('content://media/1')];
+    final done2 = waitUntil(engine2, (ts) =>
+        ts.length == 1 &&
+        ts.single.state == TransferState.completed &&
+        ts.single.galleryUri != null);
+    await engine2.enqueue([_entry(2, 'B.JPG', 12)],
+        destination: TransferDestination.gallery);
+    await done2;
+    expect(saved, hasLength(1)); // 未新增
+
+    // 回调抛异常:任务照常 completed(收尾扩展点失败不挡传输)。
+    final (engine3, fake3, _) =
+        _engine(onAppFileSaved: (entry, path) async => throw Exception('boom'));
+    fake3.reply(_okBytes(12));
+    final done3 = waitUntil(
+        engine3, (ts) => ts.length == 1 && ts.single.isTerminal);
+    await engine3.enqueue([_entry(3, 'C.NEF', 12)],
+        destination: TransferDestination.app);
+    final tasks3 = await done3;
+    expect(tasks3.single.state, TransferState.completed);
   });
 }
