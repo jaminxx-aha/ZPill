@@ -235,6 +235,8 @@ const Map<String, String> enCatalog = {
       'Tapping "Connect to camera" takes over the camera: its screen shows "Connected to Computer" and the dials lock; released on disconnect.',
   'conn.hotspotCred': 'Camera Hotspot Credentials (decoded via Bluetooth)',
   'conn.password': 'Password',
+  // SSID is a technical term, same as zh on purpose.
+  'conn.ssid': 'SSID',
   'conn.security':
       'Security: {s} · join the hotspot, then tap "Connect to camera" on the connection page',
   'common.empty': '(empty)',
@@ -410,6 +412,8 @@ const Map<String, String> enCatalog = {
   'remote.autofocus': 'Autofocus',
   'common.autoSuffix': '(auto)',
   'remote.notConnected': 'Camera not connected',
+  // REC prefix: universal recording mark, same as zh on purpose.
+  'remote.recPrefix': 'REC',
   'remote.shootingMode': 'Shooting Mode',
   'param.mode': 'Mode',
   'param.wb': 'White Balance',

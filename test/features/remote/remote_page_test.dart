@@ -2238,7 +2238,8 @@ void main() {
                 BorderRadius.circular(4)),
         findsOneWidget,
         reason: '录制中芯内白色停止方块');
-    expect(find.textContaining('REC'), findsOneWidget, reason: 'REC 时长入胶囊');
+    expect(find.textContaining(RegExp('^REC ')), findsOneWidget,
+        reason: 'REC 时长入胶囊(remote.recPrefix 键化,锚定开头)');
     expect(haptics,
         ['HapticFeedbackType.selectionClick', 'HapticFeedbackType.mediumImpact'],
         reason: '起录 = mediumImpact(重于选择)');

@@ -202,6 +202,8 @@ const Map<String, String> zhCatalog = {
       '点「连接相机」后 app 将自动接管相机:机身屏幕停在「已连接到计算机」、拨盘锁定,断开连接后恢复。',
   'conn.hotspotCred': '相机热点凭据(蓝牙通道解出)',
   'conn.password': '密码',
+  // SSID 技术专名,zh/en 同值(键化收口 e635175 漏网)。
+  'conn.ssid': 'SSID',
   'conn.security': '安全:{s} · 加入热点后回连接页点「连接相机」',
   'common.empty': '(空)',
   'conn.copyLabel': '复制{label}',
@@ -349,6 +351,8 @@ const Map<String, String> zhCatalog = {
   'remote.autofocus': '自动对焦',
   'common.autoSuffix': '(自动)',
   'remote.notConnected': '未连接相机',
+  // REC 前缀:录制指示通用记号,zh/en 同值有意为之(键化为闸门完整与未来可调)。
+  'remote.recPrefix': 'REC',
   'remote.shootingMode': '拍摄模式',
   'param.mode': '模式',
   'param.wb': '白平衡',

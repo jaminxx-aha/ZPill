@@ -1690,7 +1690,7 @@ class _ConnectionPageState extends State<ConnectionPage>
     final labelWidth = kvLabelWidth(
       context,
       labels: [
-        context.t('SSID'),
+        context.t('conn.ssid'),
         if (creds.password.isNotEmpty) context.t('conn.password'),
       ],
       style: Theme.of(context).textTheme.bodyMedium!,
@@ -1699,7 +1699,8 @@ class _ConnectionPageState extends State<ConnectionPage>
     return [
       Text(context.t('conn.hotspotCred'),
           style: Theme.of(context).textTheme.labelMedium),
-      _credentialRow(context, 'SSID', creds.ssid, labelWidth: labelWidth),
+      _credentialRow(context, 'conn.ssid', creds.ssid,
+          labelWidth: labelWidth),
       if (creds.password.isNotEmpty)
         _credentialRow(context, 'conn.password', creds.password,
             labelWidth: labelWidth),
@@ -1717,8 +1718,8 @@ class _ConnectionPageState extends State<ConnectionPage>
     String value, {
     double? labelWidth,
   }) {
-    // label 原文即键(SSID 非中文,未命中原文直返);tooltip/SnackBar
-    // 以 {label} 参数复用同一模板。
+    // label 原文即词表键(凭据两行均真键化;SSID 技术专名 zh/en 同值);
+    // tooltip/SnackBar 以 {label} 参数复用同一模板。
     final localizedLabel = context.t(label);
     return KvRow(
       labelWidth: labelWidth ??
