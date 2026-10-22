@@ -123,3 +123,10 @@ flutter build hap
 - [lib/core/ptpip/README.md](lib/core/ptpip/README.md) — 尼康 Wi-Fi 方言定案
 - [lib/core/ptpusb/README.md](lib/core/ptpusb/README.md) — PTP/USB 容器差异备忘
 - [lib/platform/README.md](lib/platform/README.md) — 平台适配层现状
+
+## 许可证
+
+本项目以 [MIT](LICENSE) 协议开源:任何人可自由使用、修改、分发与商用,仅需保留版权与许可声明。
+
+> 免责:本项目为独立个人开发,与 Nikon Corporation 无隶属、合作或背书关系;
+> Nikon、Zf 等商标归其权利人所有,文中提及仅作兼容性说明。软件按「现状」提供,不附任何担保。
