@@ -29,7 +29,7 @@ import '../../core/ptpip/probe.dart';
 import '../../core/ptpip/subnet_scan.dart';
 import '../../data/ble_identity_store.dart';
 import '../../data/client_identity_store.dart';
-import '../../data/paired_cameras_store.dart';
+import '../../core/camera/paired_cameras_store.dart';
 import '../../platform/interface_addresses.dart';
 import '../../platform/network_monitor.dart';
 import '../../platform/nsd_scanner.dart';

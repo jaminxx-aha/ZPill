@@ -15,6 +15,7 @@ import 'package:nikon_pill/core/ptpip/channels.dart';
 import 'package:nikon_pill/core/ptpip/codec.dart';
 import 'package:nikon_pill/core/ptpip/packet.dart';
 import 'package:nikon_pill/core/ptpip/transport.dart';
+import 'package:nikon_pill/core/camera/paired_cameras_store.dart';
 import 'package:nikon_pill/data/paired_cameras_store.dart';
 import 'package:nikon_pill/platform/usb/usb_host.dart';
 

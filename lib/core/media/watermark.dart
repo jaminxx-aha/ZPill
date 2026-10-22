@@ -25,7 +25,6 @@ import 'dart:ui' as ui;
 import 'package:flutter/painting.dart';
 import 'package:image/image.dart' as img;
 
-import '../../data/settings_store.dart' show WatermarkStyle;
 
 final class WatermarkOptions {
   const WatermarkOptions({required this.style, this.text});
@@ -35,6 +34,10 @@ final class WatermarkOptions {
   /// 角标 = 水印字样;卡片 = 日期行追加落款;空 = 用相机型号。
   final String? text;
 }
+
+/// 水印模板(设置页「水印」三态;枚举归 watermark 域,data 层设置
+/// 店引用 —— core→data 反向边消解,2026-10-22 上提)。
+enum WatermarkStyle { off, corner, card }
 
 /// 文本位图渲染器:返回带 alpha 的 RGBA 位图([img.Image],4 通道)。
 typedef TextRaster = Future<img.Image> Function(

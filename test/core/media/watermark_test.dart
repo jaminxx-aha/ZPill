@@ -5,7 +5,6 @@ import 'package:image/image.dart' as img;
 
 import 'package:nikon_pill/core/media/watermark.dart';
 import 'package:nikon_pill/core/utils/byte_writer.dart';
-import 'package:nikon_pill/data/settings_store.dart' show WatermarkStyle;
 
 /// 小端 TIFF EXIF 载荷:IFD0(Make/Model/DateTime + Exif 指针)+
 /// Exif 子表(FNumber/曝光/ISO/焦距)。偏移手工排布:

@@ -20,7 +20,6 @@ import '../media/motion_photo.dart' show splitMotionPhoto;
 import '../media/watermark.dart';
 import '../media/xmp_metadata.dart';
 import '../ptpip/object_format.dart' show ObjectKind;
-import '../../data/settings_store.dart' show WatermarkStyle;
 import '../../platform/gallery_saver.dart';
 import 'object_downloader.dart';
 import 'transfer_task.dart';

@@ -214,7 +214,14 @@ final class AppServices {
     autoTransfer = AutoTransferService(
       session: session,
       engine: transferEngine,
-      settings: settingsStore,
+      // 速传策略投影:core 不认 data 层设置店,回调从 current() 取二字段。
+      policyFor: () async {
+        final config = await settingsStore.current();
+        return (
+          enabled: config.autoTransfer,
+          format: config.autoTransferFormat,
+        );
+      },
     );
     settingsController = SettingsController(store: settingsStore);
     configSnapshots = ConfigSnapshotStore(
