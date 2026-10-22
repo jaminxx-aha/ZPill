@@ -69,8 +69,6 @@ const Map<String, String> zhCatalog = {
   'ble.unpairBody': '清除「{name}」的配对身份并断开连接。之后重连须在相机菜单重新配对。',
   'ble.reconnecting': '连接中…',
   'ble.connect': '连接',
-  'ble.binding': '绑定中…',
-  'ble.bindClassic': '绑定经典蓝牙',
   'ble.wakeWifi': '唤起 WiFi',
   'ble.closeWifi': '关闭 WiFi',
   'ble.stage2HandshakeTimeout': '二段握手超时(弹窗确认窗满)',

@@ -89,8 +89,6 @@ const Map<String, String> enCatalog = {
       'Clear the pairing identity for "{name}" and disconnect. To reconnect, pair again via the camera menu.',
   'ble.reconnecting': 'Connecting…',
   'ble.connect': 'Connect',
-  'ble.binding': 'Binding…',
-  'ble.bindClassic': 'Bind Classic Bluetooth',
   'ble.wakeWifi': 'Wake Wi-Fi',
   'ble.closeWifi': 'Close Wi-Fi',
   'ble.stage2HandshakeTimeout': 'Stage-2 handshake timed out (pairing window elapsed)',

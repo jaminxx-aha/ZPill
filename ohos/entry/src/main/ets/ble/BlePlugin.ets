@@ -17,7 +17,10 @@
  *   **不含**两字节 ID 前缀(与 iOS 不同,对外补齐成同形);
  * - GATT = ble.createGattClientDevice(deviceId),连接态 2=连/0=断;
  *   特征订阅 = setCharacteristicChangeNotification,indicate 特征须再
- *   手写 CCCD 描述符 0x0200(notify 特征 CCN 即生效);
+ *   手写 CCCD 描述符 0x0200(notify 特征 CCN 即生效);读/写/CCN
+ *   一条链路同时只容一个在途操作,并发即 2900011 busy(2026-10-22
+ *   握手起始失败+订阅被打死实证)—— 全部入队串行,写与 CCN 优先于
+ *   读出队;
  * - 绑定 = connection.startBluetoothDiscovery + pairDevice +
  *   bondStateChange(经典蓝牙;匹配按名字/序列号,防误配兄弟机身)。
  */
@@ -52,8 +55,9 @@ interface ScanHit {
   mfg: Uint8Array; // 含 [0x99,0x03] 前缀(对外与 iOS 同形);无则空
 }
 
-/** 单笔在途写(排队串行;回调解锁后取下一笔)。 */
-class PendingWrite {
+/** 单笔在途 GATT 操作(排队串行;回调解锁后取下一笔)。 */
+class PendingOp {
+  kind: string = 'write'; // 'read' | 'write' | 'ccn'(订阅,indicate 接续 CCCD)
   uuid: string = '';
   data: Uint8Array = new Uint8Array(0);
   result: MethodResult | null = null;
@@ -80,8 +84,8 @@ export class BlePlugin implements FlutterPlugin, AbilityAware {
   private propsMap: Map<string, string> = new Map();
   private lastMtu: number = 20;
   private pendingConnect: MethodResult | null = null;
-  private writeBusy = false;
-  private writeQueue: PendingWrite[] = [];
+  private opBusy = false;
+  private opQueue: PendingOp[] = [];
   // 服务发现:链路未稳时 getServices 回空表(D5600/Zf 实证),须等 MTU
   // 协商完成再发现 + 空表重试(HarmoNiLink 同款节奏:3 次 × 2s)
   private discoveryRetries = 0;
@@ -548,125 +552,202 @@ export class BlePlugin implements FlutterPlugin, AbilityAware {
       result.error('notFound', `特征不存在:${uuid}`, null);
       return;
     }
-    const indicate = (this.propsMap.get(uuid.toLowerCase()) ?? '')
+    // CCN 同样占栈操作槽(d.ts 只标 2900001/2900099,真机 2900011
+    // 实证 2026-10-22:0x2020/0x2021 订阅被在途读打死)—— 入队串行;
+    // indicate 特征的 CCCD 0x0200 在同笔操作内接续手写。
+    const op = new PendingOp();
+    op.kind = 'ccn';
+    op.uuid = uuid;
+    op.result = result;
+    this.opQueue.push(op);
+    if (!this.opBusy) {
+      this.flushOps();
+    }
+  }
+
+  private read(uuid: string, result: MethodResult): void {
+    // 入队串行:裸发会与在途写/全表诊断读互踩(2900011 busy)
+    const op = new PendingOp();
+    op.kind = 'read';
+    op.uuid = uuid;
+    op.result = result;
+    this.opQueue.push(op);
+    if (!this.opBusy) {
+      this.flushOps();
+    }
+  }
+
+  private write(uuid: string, data: Uint8Array, result: MethodResult): void {
+    const op = new PendingOp();
+    op.uuid = uuid;
+    op.data = data;
+    op.result = result;
+    this.opQueue.push(op);
+    if (!this.opBusy) {
+      this.flushOps();
+    }
+  }
+
+  private flushOps(): void {
+    if (this.opBusy) {
+      return;
+    }
+    // 写/CCN 优先出队:握手关键路径(订阅→stage1)不得排在全表诊断
+    // 读后面;同类保 FIFO,读只在无写待发时放行(写流走完读自然跟进,
+    // 不会饿死)。
+    let idx = -1;
+    for (let i = 0; i < this.opQueue.length; i++) {
+      if (this.opQueue[i].kind !== 'read') {
+        idx = i;
+        break;
+      }
+    }
+    if (idx === -1 && this.opQueue.length > 0) {
+      idx = 0;
+    }
+    if (idx === -1) {
+      return;
+    }
+    const op = this.opQueue[idx];
+    this.opQueue.splice(idx, 1);
+    if (op.kind === 'read') {
+      this.dispatchRead(op);
+    } else if (op.kind === 'ccn') {
+      this.dispatchCcn(op);
+    } else {
+      this.dispatchWrite(op);
+    }
+  }
+
+  private dispatchCcn(op: PendingOp): void {
+    const client = this.gattClient;
+    const ch = this.findChar(op.uuid);
+    if (client === null || ch === null) {
+      op.result?.error('notFound', `特征不存在:${op.uuid}`, null);
+      this.flushOps();
+      return;
+    }
+    this.opBusy = true;
+    const indicate = (this.propsMap.get(op.uuid.toLowerCase()) ?? '')
       .includes('indicate');
     const c = client as Object as Record<string, Function>;
     try {
       c['setCharacteristicChangeNotification'](ch, true,
         (err: BusinessError): void => {
           if (err) {
-            Log.w(TAG, `CCN ${uuid}: ${err.code} ${err.message}`);
+            Log.w(TAG, `CCN ${op.uuid}: ${err.code} ${err.message}`);
           }
           if (!indicate) {
-            // notify 特征:CCN 即生效(栈内写 CCCD 0x0001)
-            result.success(null);
+            // notify 特征:CCN 即生效(栈内写 CCCD 0x0001);失败照旧
+            // 只记日志不挡握手(旧语义)
+            this.opBusy = false;
+            op.result?.success(null);
+            this.flushOps();
             return;
           }
-          // indicate 特征:必须手写 CCCD 0x0200
-          const buf = new ArrayBuffer(2);
-          const v = new Uint8Array(buf);
-          v[0] = 0x02;
-          v[1] = 0x00;
+          // indicate 特征:必须手写 CCCD 0x0200(CCN 败也照写 —— 旧
+          // 语义,CCCD 才是 ATT 层开关)
+          const dbuf = new ArrayBuffer(2);
+          const dv = new Uint8Array(dbuf);
+          dv[0] = 0x02;
+          dv[1] = 0x00;
           const desc: Record<string, Object> = {
             'serviceUuid': SVC,
-            'characteristicUuid': uuid,
+            'characteristicUuid': op.uuid,
             'descriptorUuid': CCCD_UUID,
-            'descriptorValue': buf,
+            'descriptorValue': dbuf,
           };
           try {
             c['writeDescriptorValue'](desc, (err2: BusinessError): void => {
+              this.opBusy = false;
               if (err2) {
-                Log.w(TAG, `CCCD ${uuid}: ${err2.code} ${err2.message}`);
+                Log.w(TAG, `CCCD ${op.uuid}: ${err2.code} ${err2.message}`);
               }
-              result.success(null);
+              op.result?.success(null);
+              this.flushOps();
             });
           } catch (e) {
+            this.opBusy = false;
             Log.e(TAG, `writeDescriptor EXC: ${JSON.stringify(e)}`);
-            result.error('notifyFailed', `${JSON.stringify(e)}`, null);
+            op.result?.error('notifyFailed', `${JSON.stringify(e)}`, null);
+            this.flushOps();
           }
         });
     } catch (e) {
+      this.opBusy = false;
       Log.e(TAG, `setNotify EXC: ${JSON.stringify(e)}`);
-      result.error('notifyFailed', `${JSON.stringify(e)}`, null);
+      op.result?.error('notifyFailed', `${JSON.stringify(e)}`, null);
+      this.flushOps();
     }
   }
 
-  private read(uuid: string, result: MethodResult): void {
+  private dispatchRead(op: PendingOp): void {
     const client = this.gattClient;
-    const ch = this.findChar(uuid);
+    const ch = this.findChar(op.uuid);
     if (client === null || ch === null) {
-      result.error('notFound', `特征不存在:${uuid}`, null);
+      op.result?.error('notFound', `特征不存在:${op.uuid}`, null);
+      this.flushOps();
       return;
     }
+    this.opBusy = true;
     const c = client as Object as Record<string, Function>;
     try {
       c['readCharacteristicValue'](ch, (err: BusinessError,
         out: ble.BLECharacteristic): void => {
+        this.opBusy = false;
         if (err) {
-          result.error('readFailed', `${err.message}`, null);
-          return;
+          Log.w(TAG, `read ${op.uuid}: ${err.code} ${err.message}`);
+          op.result?.error('readFailed', `${err.message}`, null);
+        } else {
+          const v = out.characteristicValue;
+          op.result?.success(v instanceof Uint8Array ? v : new Uint8Array(v));
         }
-        const v = out.characteristicValue;
-        result.success(v instanceof Uint8Array ? v : new Uint8Array(v));
+        this.flushOps();
       });
     } catch (e) {
-      result.error('readFailed', `${JSON.stringify(e)}`, null);
+      this.opBusy = false;
+      op.result?.error('readFailed', `${JSON.stringify(e)}`, null);
+      this.flushOps();
     }
   }
 
-  private write(uuid: string, data: Uint8Array, result: MethodResult): void {
-    const pending = new PendingWrite();
-    pending.uuid = uuid;
-    pending.data = data;
-    pending.result = result;
-    this.writeQueue.push(pending);
-    if (!this.writeBusy) {
-      this.flushWrites();
-    }
-  }
-
-  private flushWrites(): void {
-    const head = this.writeQueue.shift();
-    if (head === undefined) {
-      this.writeBusy = false;
-      return;
-    }
+  private dispatchWrite(op: PendingOp): void {
     const client = this.gattClient;
-    const ch = this.findChar(head.uuid);
+    const ch = this.findChar(op.uuid);
     if (client === null || ch === null) {
-      head.result?.error('notFound', `特征不存在:${head.uuid}`, null);
-      this.flushWrites();
+      op.result?.error('notFound', `特征不存在:${op.uuid}`, null);
+      this.flushOps();
       return;
     }
-    this.writeBusy = true;
-    const buf = new ArrayBuffer(head.data.byteLength);
-    const v = new Uint8Array(buf);
-    for (let i = 0; i < head.data.byteLength; i++) {
-      v[i] = head.data[i];
-    }
-    const obj: ble.BLECharacteristic = {
-      serviceUuid: SVC,
-      characteristicUuid: head.uuid,
-      characteristicValue: buf,
-      descriptors: [],
-    };
+    this.opBusy = true;
     const c = client as Object as Record<string, Function>;
     try {
+      const buf = new ArrayBuffer(op.data.byteLength);
+      const v = new Uint8Array(buf);
+      for (let i = 0; i < op.data.byteLength; i++) {
+        v[i] = op.data[i];
+      }
+      const obj: ble.BLECharacteristic = {
+        serviceUuid: SVC,
+        characteristicUuid: op.uuid,
+        characteristicValue: buf,
+        descriptors: [],
+      };
       // 第二参 1 = WRITE(带响应);相机拒写以此回错(Dart 侧转异常)
       c['writeCharacteristicValue'](obj, 1, (err: BusinessError): void => {
-        this.writeBusy = false;
+        this.opBusy = false;
         if (err) {
-          Log.w(TAG, `write ${head.uuid}: ${err.code} ${err.message}`);
-          head.result?.error('writeFailed', `${err.message}`, null);
+          Log.w(TAG, `write ${op.uuid}: ${err.code} ${err.message}`);
+          op.result?.error('writeFailed', `${err.message}`, null);
         } else {
-          head.result?.success(null);
+          op.result?.success(null);
         }
-        this.flushWrites();
+        this.flushOps();
       });
     } catch (e) {
-      this.writeBusy = false;
-      head.result?.error('writeFailed', `${JSON.stringify(e)}`, null);
-      this.flushWrites();
+      this.opBusy = false;
+      op.result?.error('writeFailed', `${JSON.stringify(e)}`, null);
+      this.flushOps();
     }
   }
 
@@ -690,12 +771,12 @@ export class BlePlugin implements FlutterPlugin, AbilityAware {
       }
       this.gattClient = null;
     }
-    // 队列里的写全部落错(Dart 侧转异常,会话层已有缓存重发兜底)
-    for (const p of this.writeQueue) {
+    // 队列里的操作全部落错(Dart 侧转异常,会话层已有缓存重发兜底)
+    for (const p of this.opQueue) {
       p.result?.error('disconnected', '连接已断开', null);
     }
-    this.writeQueue = [];
-    this.writeBusy = false;
+    this.opQueue = [];
+    this.opBusy = false;
     this.charMap.clear();
     this.propsMap.clear();
   }
@@ -736,13 +817,6 @@ export class BlePlugin implements FlutterPlugin, AbilityAware {
           Log.w(TAG, `stopDiscovery: ${e}`);
         }
         Log.i(TAG, `bond: matched ${dName} ${addr}`);
-        try {
-          connection.pairDevice(addr);
-        } catch (e) {
-          Log.e(TAG, `pairDevice: ${JSON.stringify(e)}`);
-          result.error('bondFailed', '配对请求失败', null);
-          return;
-        }
         const stateCb = (bond: connection.BondStateParam): void => {
           if (bond.deviceId !== addr || bonded) {
             return;
@@ -761,14 +835,30 @@ export class BlePlugin implements FlutterPlugin, AbilityAware {
             result.error('bondRejected', '配对被拒绝或失败', null);
           }
         };
+        // 先挂监听再发配对(秒回 BONDED 不丢事件);Promise 形拒签
+        // (栈忙/重复配对)即刻回错,不等 30s 超时
         connection.on('bondStateChange', stateCb);
+        try {
+          connection.pairDevice(addr).catch((e: Object): void => {
+            if (!bonded) {
+              bonded = true;
+              connection.off('bondStateChange', stateCb);
+              result.error('bondFailed', `配对请求被拒:${JSON.stringify(e)}`, null);
+            }
+          });
+        } catch (e) {
+          Log.e(TAG, `pairDevice: ${JSON.stringify(e)}`);
+          connection.off('bondStateChange', stateCb);
+          result.error('bondFailed', '配对请求失败', null);
+          return;
+        }
         setTimeout((): void => {
           if (!bonded) {
             bonded = true;
             connection.off('bondStateChange', stateCb);
             result.error('bondTimeout', '绑定响应超时', null);
           }
-        }, 20000);
+        }, 30000);
         return;
       }
     };

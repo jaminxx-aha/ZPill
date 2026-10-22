@@ -12,8 +12,9 @@
 /// 落档后断链让相机暴露经典蓝牙,程序化拉起系统选择器,用户点相机
 /// 完成经典配对(CTKD 派生 BLE 密钥)后回本页重连注册;取消/失败落
 /// [onSystemBondNeeded] 红色引导卡深链兜底(宿主 Info.plist 须无
-/// UIApplicationSceneManifest,见 _pair 内注释);ohos 程序化经典绑定
-/// 直达;④回前台重扫一轮(挂起期系统可能停掉 BLE 扫描),重连循环在
+/// UIApplicationSceneManifest,见 _pair 内注释);ohos 首配沿自动程序
+/// 化经典绑定(2026-10-22 用户定稿:无手动按钮,系统弹窗即确认);
+/// ④回前台重扫一轮(挂起期系统可能停掉 BLE 扫描),重连循环在
 /// 跑则不打扰。
 library;
 
@@ -528,6 +529,28 @@ class BlePairPanelState extends State<BlePairPanel>
       }
       return;
     }
+    if (Platform.operatingSystem == 'ohos') {
+      // 鸿蒙首配收尾 = 程序化经典绑定(2026-10-22 用户定稿:对齐 iOS
+      // 剧本,配对成功沿自动进行,无手动按钮)。断链先行:相机等 BLE
+      // 释放才暴露经典蓝牙;manualOff 先压驱动回链(防回链扫描与经典
+      // 发现抢相机)。断链后留让位窗 —— 相机收拾 BLE 链路才在菜单配
+      // 对态暴露经典蓝牙(探针断链让位窗同款;首测零缓冲直发配对把
+      // 相机射频楔死,杀应用才解)。绑定收口后 manualResume 绕深睡闸
+      // 显式接回:刚配对完的相机多半已回待机,驱动自动回链会守闸干等
+      // 唤醒;注册在回链的复用握手上落地(NOT1 随 bond 落地后才出现)。
+      AppServices.instance.bleManualOff = true;
+      await _session.disconnect();
+      await Future<void>.delayed(const Duration(seconds: 3));
+      await _bondClassic();
+      // 绑定收口(成/败皆然)武装直连先行:断链后的相机在静默等待态
+      // 零广播(2026-10-22 真机 hilog 实证:扫描数分钟全空、设备灰,
+      // bond 落地与否都不回广播窗),唯直连可及 —— 扫描在直连未成时
+      // 照旧接力。manualResume 绕深睡闸显式接回,注册在复用握手上
+      // 落地(NOT1 随 bond 落地后才出现)。
+      _session.directFirstPending = true;
+      await manualResume();
+      return;
+    }
   }
 
   /// 已注册相机的重连:按已存 deviceId 扫 0x0399 重连广播,命中即以
@@ -699,9 +722,11 @@ class BlePairPanelState extends State<BlePairPanel>
     await _session.disconnect();
   }
 
-  /// 程序化经典蓝牙绑定(鸿蒙独有;iOS 无此 API 只能引导系统设置页,
-  /// 见宿主红色引导卡)。相机须先断开 BLE 才暴露经典蓝牙 —— 配对成功
-  /// 后 App 已自动断链;绑定完成(系统弹窗确认)后再「连接」即注册落档。
+  /// 程序化经典蓝牙绑定(鸿蒙独有;iOS 无此 API,走系统配件选择器,
+  /// 见宿主红色引导卡)。首配配对成功沿自动调用(相机须先断开 BLE
+  /// 才暴露经典蓝牙 —— 断链与驱动压制由调用方先行);绑定完成(系统
+  /// 弹窗确认)后驱动回链,注册落档。失败不拦流程:驱动照常回链,
+  /// bond 非运行必需。
   Future<void> _bondClassic() async {
     if (_binding) {
       return;
@@ -714,7 +739,7 @@ class BlePairPanelState extends State<BlePairPanel>
         'name': _pairedName,
         'serial': _saved!.serial,
       });
-      _log(ok == true ? '经典蓝牙绑定完成 ✓ 再点「连接」' : '绑定未完成');
+      _log(ok == true ? '经典蓝牙绑定完成 ✓(驱动回链中)' : '绑定未完成');
     } on MissingPluginException {
       _log('此平台不支持程序化绑定');
     } on PlatformException catch (e) {
@@ -887,6 +912,9 @@ class BlePairPanelState extends State<BlePairPanel>
             else if (ready)
               ListTile(
                 dense: true,
+                // 行尾钮内衬 12:右距收 4 让钮文本右沿回到 16,与
+                // leading 相机图标同距(2026-10-22 用户定稿)。
+                contentPadding: const EdgeInsets.only(left: 16, right: 4),
                 leading: const Icon(Icons.camera_alt_outlined),
                 // 展示名 = 相机广播名(旧档缺字段回落控制器名)——
                 // controllerName 是本机在相机侧的注册名,不是相机。
@@ -912,6 +940,9 @@ class BlePairPanelState extends State<BlePairPanel>
             else
               ListTile(
                 dense: true,
+                // 行尾钮内衬 12:右距收 4 让钮文本右沿回到 16,与
+                // leading 相机图标同距(2026-10-22 用户定稿)。
+                contentPadding: const EdgeInsets.only(left: 16, right: 4),
                 leading: const Icon(Icons.camera_alt_outlined),
                 title: Row(
                   mainAxisSize: MainAxisSize.min,
@@ -1017,23 +1048,8 @@ class BlePairPanelState extends State<BlePairPanel>
             ),
           ),
         ],
-        // 鸿蒙程序化经典绑定(红卡只限 iOS 无程序化绑定 API 的情形,
-        // ohos 直达不出卡;2026-10-19 裁定③)。
-        if (!ready &&
-            _saved != null &&
-            (_sessionState == BleSessionState.idle ||
-                _sessionState == BleSessionState.reconnecting) &&
-            Platform.operatingSystem == 'ohos')
-          Padding(
-            padding: const EdgeInsets.only(top: AppSpacing.sm),
-            child: OutlinedButton(
-              onPressed:
-                  _binding ? null : () => unawaited(_bondClassic()),
-              child: Text(_binding
-                  ? context.t('ble.binding')
-                  : context.t('ble.bindClassic')),
-            ),
-          ),
+        // 鸿蒙程序化经典绑定已并入首配流程(_pair 内自动进行,
+        // 2026-10-22 用户定稿:手动按钮退役)。
       ],
     );
   }
