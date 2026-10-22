@@ -881,6 +881,9 @@ const Map<String, String> enCatalog = {
   'log.header': 'NikonPill diagnostic log\nExported at {time}\n{n} entries\n',
   // EN 抽查补漏(2026-10-16)。
   'param.shutter': 'Shutter',
+  // 相机信息 sheet(已连接状态行弹层):快门数现读最新照片 MakerNote。
   'theme.light': 'Light',
   'theme.dark': 'Dark',
+  'conn.camInfoShutter': 'Shutter count',
+  'conn.camInfoReading': 'Reading…',
 };

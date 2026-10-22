@@ -751,4 +751,7 @@ const Map<String, String> zhCatalog = {
   'param.shutter': '快门',
   'theme.light': '浅色',
   'theme.dark': '深色',
+  // 相机信息弹窗(连接页右上,已连接态;快门数现读最新照片 MakerNote)。
+  'conn.camInfoShutter': '快门数',
+  'conn.camInfoReading': '读取中…',
 };

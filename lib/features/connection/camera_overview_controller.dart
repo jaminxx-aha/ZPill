@@ -22,7 +22,10 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import '../../core/browser/album.dart';
+import '../../core/browser/object_repository.dart';
 import '../../core/camera/camera_connection.dart';
+import '../../core/exif/nikon_maker_note.dart';
 import '../../core/ptp/operation_codes.dart';
 import '../../core/ptp/ptp_session.dart';
 import '../../core/ptp/ptp_transport.dart';
@@ -88,6 +91,7 @@ final class CameraOverviewController extends ChangeNotifier {
   CameraOverviewController({
     required this.session,
     required this.connection,
+    this.repository,
     this.propResyncDebounce = const Duration(milliseconds: 500),
     this.connectRefreshGate,
   }) {
@@ -110,6 +114,9 @@ final class CameraOverviewController extends ChangeNotifier {
 
   final PtpSession session;
   final CameraConnection connection;
+
+  /// 相册对象仓库(快门数现读的「最新照片」来源;测试可空走回退)。
+  final ObjectRepository? repository;
 
   /// 属性事件(0x4006)追平的去抖窗:拨轮串/变焦步进收敛为一次读值。
   /// 可注入(测试零等待)。
@@ -164,8 +171,109 @@ final class CameraOverviewController extends ChangeNotifier {
   /// ID 退规格描述(焦距 + 两端最大光圈,如「40mm ƒ/2」)。
   String? get lensDisplay => kLensIdNames[lensId] ?? lensSpec?.description;
 
+  /// 快门数现读(相机信息弹窗沿):最新照片 EXIF MakerNote 0x00A7。
+  /// 两个只读事务(GetObjectHandles + GetPartialObject 头部 512KB,
+  /// 被拒降级 64KB);口径 = 最后一张照片时刻的计数,拍一张 +1。
+  /// 任何失败静默回 null —— 信息卡锦上添花,不拦使用(概览惯例)。
+  Future<int?> fetchShutterCount() async {
+    try {
+      // 刚拍的照片优先:0x4002 ObjectAdded 直指句柄,零枚举且不依赖
+      // 仓库缓存新鲜度(loadAlbums 同会话复用首次枚举结果,新照片可能
+      // 不在)—— 拍照后弹层再开即读到新值。
+      final added = _lastAddedHandle;
+      if (added != null) {
+        try {
+          final head = await _readShutterHead(added);
+          final count = parseNikonShutterCount(head).shutterCount;
+          if (count != null) return count;
+        } catch (_) {/* 刚拍照片读失败回落常规路 */}
+      }
+      final handle = await _latestPhotoHandle();
+      if (handle == null) return null;
+      return parseNikonShutterCount(await _readShutterHead(handle))
+          .shutterCount;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 弹层实时刷新:现读快门数入状态并 notify;在途时置 dirty,读完
+  /// 补一轮(连拍多事件收敛为末值)。
+  Future<void> refreshShutterCount() async {
+    if (_shutterBusy) {
+      _shutterDirty = true;
+      return;
+    }
+    _shutterBusy = true;
+    shutterReading = true;
+    notifyListeners();
+    try {
+      do {
+        _shutterDirty = false;
+        final v = await fetchShutterCount();
+        shutterCount = v;
+        notifyListeners();
+      } while (_shutterDirty && _linkUp);
+    } finally {
+      _shutterBusy = false;
+      shutterReading = false;
+      notifyListeners();
+    }
+  }
+
+  /// 照片头部:EXIF/MakerNote 在文件头 ~42KB 内(HIF/NEF 实测),64KB
+  /// 足够且单事务小 8 倍 —— 弹层现读与取景帧同抢会话锁,重事务挤卡
+  /// 取景(「点进去闪一下」的成分之一);64KB 被拒再升 512KB。
+  Future<Uint8List> _readShutterHead(int handle) async {
+    try {
+      return await session.getPartialObject(handle, 0, 64 * 1024);
+    } catch (_) {
+      return session.getPartialObject(handle, 0, 512 * 1024);
+    }
+  }
+
+  /// 最新照片句柄:相册仓库「全部照片」排序第一(items 新的在前,与
+  /// 用户在相册页看到的最新一张一致)优先;仓库未就绪/为空/失败时
+  /// 回退句柄枚举取最大 —— **Zf 实证句柄序与拍摄序无关**(10-11 拍的
+  /// DSC_6252 句柄 0x691A986C > 10-22 拍的 DSC_6362 0x691958DA),
+  /// 回退路可能读到旧照片,仅供兜底。
+  Future<int?> _latestPhotoHandle() async {
+    final repo = repository;
+    if (repo != null) {
+      try {
+        final albums = await repo.loadAlbums();
+        for (final album in albums) {
+          if (album.folderHandle != CameraAlbum.allPhotosHandle) continue;
+          if (album.items.isEmpty) continue;
+          final g = album.items.first;
+          final e = g.jpg ?? g.raw ?? g.members.first;
+          return e.handle;
+        }
+      } catch (_) {/* 仓库失败回落枚举兜底 */}
+    }
+    final handles = await session.getObjectHandles();
+    if (handles.isEmpty) return null;
+    var handle = handles.first;
+    for (final v in handles) {
+      if (v > handle) handle = v;
+    }
+    return handle;
+  }
+
   bool _linkUp = false;
   bool _refreshing = false;
+
+  /// 会话内最近一次 ObjectAdded(0x4002)的对象句柄(拍照即推;
+  /// 快门数现读「刚拍照片」直指,_invalidate 清)。
+  int? _lastAddedHandle;
+
+  /// 快门数实时源:弹层在场(shutterLive)触发现读,拍照沿(0x4002)
+  /// 自动重读,读完 notifyListeners —— 弹层开着拍照数字当场涨。
+  int? shutterCount;
+  bool shutterReading = false;
+  bool shutterLive = false;
+  bool _shutterBusy = false;
+  bool _shutterDirty = false;
   bool _propReading = false;
   final Set<int> _pendingPropReads = <int>{};
   Timer? _propTimer;
@@ -225,6 +333,13 @@ final class CameraOverviewController extends ChangeNotifier {
   /// 事件沿:属性码走实时追平(不拍照)。
   void _onSessionEvent(PtpEvent event) {
     if (!_linkUp) return; // 断连后迟到事件一律丢弃
+    // 拍照即推的 ObjectAdded(0x4002):记下新句柄,快门数现读零枚举
+    // 直指刚落卡的照片(0xC101 Sdram 不落卡不记)。
+    if (event.code == PtpEventCode.objectAdded && event.params.isNotEmpty) {
+      _lastAddedHandle = event.params.first;
+      // 拍照沿现读:弹层在场时快门数当场涨(live 由弹层开关维护)。
+      if (shutterLive) unawaited(refreshShutterCount());
+    }
     // 属性事件(0x4006):焦距/光圈随拨轮、变焦、换镜即时追平。
     if (event.code == PtpEventCode.devicePropChanged) {
       if (event.params.isNotEmpty) _onPropChanged(event.params.first);
@@ -382,6 +497,10 @@ final class CameraOverviewController extends ChangeNotifier {
     lensSpec = null;
     lensId = null;
     _knownLensId = 0;
+    _lastAddedHandle = null;
+    shutterCount = null;
+    shutterReading = false;
+    shutterLive = false;
     _propTimer?.cancel();
     _pendingPropReads.clear();
     notifyListeners();

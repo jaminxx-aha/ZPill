@@ -1818,6 +1818,18 @@ class _ConnectionPageState extends State<ConnectionPage>
 
   /// 状态行点按 → 连接详情弹层:设备名/型号/链路/电池四行 + 红色
   /// 「断开连接」。设备名与链路串从主页面收编至此(2026-10-17)。
+  /// 快门数千分位分组:15963 → '15,963'。
+  static String _groupShutter(int v) {
+    final s = v.toString();
+    final b = StringBuffer();
+    for (var i = 0; i < s.length; i++) {
+      b.write(s[i]);
+      final rem = s.length - i;
+      if (rem > 1 && rem % 3 == 1) b.write(',');
+    }
+    return b.toString();
+  }
+
   void _showConnectionSheet(
       BuildContext context, ConnectionController controller) {
     final c = controller.connection;
@@ -1826,6 +1838,10 @@ class _ConnectionPageState extends State<ConnectionPage>
     final link = wireless
         ? (controller.activeIp == null ? 'Wi-Fi' : 'Wi-Fi(${controller.activeIp})')
         : context.t('conn.usbCable');
+    // 弹层在场期间快门数实时跟随(controller 状态 + 拍照沿自动重读):
+    // 置 live 后触发现读,关闭沿(pop/滑删)撤销 live。
+    _overview.shutterLive = true;
+    unawaited(_overview.refreshShutterCount());
     Widget row(String labelKey, String value) => Padding(
           padding: const EdgeInsets.symmetric(vertical: 7),
           child: Row(
@@ -1897,6 +1913,22 @@ class _ConnectionPageState extends State<ConnectionPage>
                 row('conn.sheetDevice', c?.deviceName ?? '--'),
                 row('conn.sheetModel', _overview.deviceInfo?.model ?? '--'),
                 row('conn.sheetLink', link),
+                // 快门数现读(卡上最新照片 MakerNote 0x00A7;口径 =
+                // 拍一张 +1):弹层在场跟随 controller 状态,拍照沿自动
+                // 重读当场涨;读取中出「读取中…」,失败静默 '--'。
+                ListenableBuilder(
+                  listenable: _overview,
+                  builder: (context, _) {
+                    String value;
+                    if (_overview.shutterReading) {
+                      value = sheetContext.t('conn.camInfoReading');
+                    } else {
+                      final v = _overview.shutterCount;
+                      value = v == null ? '--' : _groupShutter(v);
+                    }
+                    return row('conn.camInfoShutter', value);
+                  },
+                ),
                 const SizedBox(height: AppSpacing.sm),
                 Divider(color: scheme.outlineVariant, height: 1),
                 const SizedBox(height: AppSpacing.sm),
@@ -1920,7 +1952,7 @@ class _ConnectionPageState extends State<ConnectionPage>
           ),
         );
       },
-    );
+    ).whenComplete(() => _overview.shutterLive = false);
   }
 
   /// 进入拍摄:全屏 push 遥控监看页(返回即回相机页;拍摄页离页自动

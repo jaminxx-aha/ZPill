@@ -38,6 +38,7 @@ import 'data/config_snapshot_store.dart';
 import 'data/paired_cameras_store.dart';
 import 'data/ratings_store.dart';
 import 'data/settings_store.dart';
+import 'debug/nikon_exif_probe.dart';
 import 'debug/ptp_diagnostics.dart';
 import 'features/browser/browser_controller.dart';
 import 'features/browser/ratings_controller.dart';
@@ -267,6 +268,7 @@ final class AppServices {
     cameraOverview = CameraOverviewController(
       session: session,
       connection: connection,
+      repository: repository,
       connectRefreshGate: _connectSideChainGate,
     );
     // 双卡槽余量:连接成功即拉,相册页顶展示。
@@ -385,6 +387,9 @@ final class AppServices {
       if (s == CameraLinkState.connected) {
         if (kPtpDiagnosticsOnConnect && !diagRan) {
           diagRan = true;
+          // 轻探针(枚举+头部 512KB)先行出结果;重序列(全卡枚举×3
+          // +整图下载+会话重开,分钟级)随后。
+          NikonExifProbe.run(session);
           PtpDiagnostics.run(session: session, repository: repository);
         }
         // 侧链整组让路:等起景段落定门(事件驱动,见 kConnectStartGate
