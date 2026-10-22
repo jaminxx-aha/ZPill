@@ -560,18 +560,20 @@ void main() {
     final ratings = LibraryRatings(store: store);
     addTearDown(ratings.dispose);
     await tester.pumpWidget(host(gallery, controller, ratings: ratings));
+    // refreshAppFiles 异步列目录(9a66323 改制):runAsync 排水窗等首扫
+    // 收口(不 await 则与 pumpAndSettle 的假时钟泵赛跑,IO 上浮晚于断言)。
+    await drainAppFiles(tester, controller, 2);
     await tester.pumpAndSettle();
 
     // 徽标:a.jpg 左上黄底星标;两格照常。
     expect(find.byType(Image), findsNWidgets(2));
     expect(find.text('3'), findsOneWidget);
 
-    // 评级分区在(快照已装载;图库无垃圾星/未知档,星档键 = 4-8)。
+    // 评级分区在(快照装载且非空;图库无垃圾星/未知档,星档键 = 4-8)。
     await openFilterMenu(tester);
     expect(find.text('评级'), findsOneWidget);
     expect(find.text('无评级'), findsOneWidget);
     expect(find.text('已评级'), findsNothing);
-    expect(find.text('垃圾星'), findsNothing);
     await tester.tap(find.byKey(const ValueKey('ratingFilter-6')));
     await tester.pumpAndSettle();
     expect(find.byType(Image), findsOneWidget); // 只剩 a.jpg

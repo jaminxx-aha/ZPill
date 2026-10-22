@@ -498,7 +498,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
           ),
         // 评级分区(快照装载后出现;星档 = 行内实心星。图库快照只有
         // 已知档位,垃圾星/未知档两行不设 —— 数据模型里不存在)。
-        if (_ratings.loaded) ...[
+        if (_ratings.loaded && _ratings.hasAny) ...[
           _menuHeader(context, 'grid.rating'),
           for (final r in RatingFilter.values)
             if (r != RatingFilter.trash && r != RatingFilter.rated)

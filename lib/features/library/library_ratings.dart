@@ -22,6 +22,10 @@ final class LibraryRatings extends ChangeNotifier {
   /// 首轮装载是否完成(筛选分区只在装载后展示,防空筛)。
   bool loaded = false;
 
+  /// 是否已有任何评级数据(空库不渲染评级筛选分区 —— 与格式区
+  /// 「全部」重名,空档分区徒增歧义)。
+  bool get hasAny => _values.isNotEmpty;
+
   /// 文件当前评分(0 = 未评/文件不可读)。
   int ratingOf(File file) {
     try {
