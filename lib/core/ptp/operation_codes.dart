@@ -370,5 +370,11 @@ abstract final class PtpObjectPropCode {
   static const int dateCreated = 0xDC08; // STR YYYYMMDDThhmmss.s(§6.6.1.8)
   static const int dateModified = 0xDC09; // STR(§6.6.1.9)
   static const int parentObject = 0xDC0B; // u32(§6.6.1.11)
+
+  /// 评级(u16,§6.6.3.3,Get/Set):0/1/25/50/75/100 = 无/★~★★★★★,
+  /// 表外值相机向下取整(60→50)。适用格式 0x3800/0x3801/0x300D/
+  /// 0x380D/0xB200/0xB982(JPEG/TIFF/MOV/MP4/HEIF;NEF 0x3000 不在表,
+  /// 写侧按拒答跳过);照片/视频模式可读写,录像中与视频播放中拒绝。
+  static const int rating = 0xDC8A;
 }
 

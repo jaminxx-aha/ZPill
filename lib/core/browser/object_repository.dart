@@ -9,9 +9,35 @@ import '../ptpip/object_info.dart';
 import '../ptp/operation_codes.dart';
 import '../ptp/ptp_session.dart';
 import '../ptp/ptp_transport.dart';
+import '../log/app_log.dart';
+import '../media/video_rating.dart';
+import '../utils/byte_reader.dart';
+import '../utils/byte_writer.dart';
 import 'album.dart';
 import 'object_entry.dart';
 import 'photo_group.dart';
+
+/// MTP Rating 原始值(u16,官方 §6.6.3.3)→ 星(0-5):0/1/25/50/75/100
+/// 六个合法值,表外值按档位向下取整(相机写入侧同规,§6.6.3.3 例 60→50)。
+/// **>100 的野值(错位/垃圾字节)按未评处理** —— 防脚本/链路错位把
+/// 垃圾字节抬成 ★5。
+int ratingRawToStars(int raw) => raw > 100
+    ? 0
+    : raw >= 100
+        ? 5
+        : raw >= 75
+            ? 4
+            : raw >= 50
+                ? 3
+                : raw >= 25
+                    ? 2
+                    : raw >= 1
+                        ? 1
+                        : 0;
+
+/// 星(0-5)→ MTP Rating 原始值(§6.6.3.3 合法档,0 = 清除评级)。
+int starsToRatingRaw(int stars) =>
+    const [0, 1, 25, 50, 75, 100][stars.clamp(0, 5)];
 
 /// 一次增量发布:渐进枚举期间每块完成时广播,末尾一次 [complete] 事件
 /// (空相机 / 断点续传零缺口也至少有一次完成事件,订阅方有确定终态)。
@@ -55,6 +81,40 @@ abstract interface class ObjectRepository {
 
   /// 丢弃缓存并废弃在途枚举(世代计数);断连/手动刷新用。
   void reset();
+
+  /// 相机评级数据是否已建立(MTP 0xDC8A;徽标/筛选只在此下展示,
+  /// 防「未取到」被当「未评」)。
+  bool get ratingsLoaded;
+
+  /// 请求拉取某句柄的相机评级(逐张 0x9803;批量收割已被真机证伪)。
+  /// fire-and-forget:重复请求/在途/不在册空转,成果经 [updates] 发布。
+  void requestRating(int handle);
+
+  /// 单文件评级(0 = 未评/未取到)。
+  int ratingForHandle(int handle);
+
+  /// 组评级 = 成员最大值(RAW+JPG 相机侧逐文件评级,任一有星即展示)。
+  int ratingForGroup(PhotoGroup group);
+
+  /// 单文件「已评级·档位未知」(0x9434 bit0=1 但 0x9803 拒答且 XMP 头
+  /// 读无标记,NEF 形态)。
+  bool ratedUnknownFor(int handle);
+
+  /// 组「已评级·档位未知」:全组成员都无已知档位但有未知档成员。
+  bool groupRatedUnknown(PhotoGroup group);
+
+  /// 单文件删除候选(机身「垃圾桶」态;协议落点待取证,暂由
+  /// 位图有星 + 读回 0 判定)。
+  bool trashMarkedFor(int handle);
+
+  /// 组删除候选:无已知档位、无未知档成员、有删除候选成员。
+  bool groupTrashStar(PhotoGroup group);
+
+  /// 句柄 → 所在组(XMP 注入/落盘快照按组取评级用);不在册 = null。
+  PhotoGroup? groupOf(int handle);
+
+  /// 改评(组粒度,0 = 清除;写 0x9804,乐观上屏失败回滚,见实现)。
+  Future<void> rateGroup(PhotoGroup group, int stars);
 
   /// PtpObjectInfo → ObjectEntry(解析 PTP 日期串、格式码分类、扩展名兜底)。
   static ObjectEntry toEntry(PtpObjectInfo info) {
@@ -174,6 +234,10 @@ final class ObjectRepositoryImpl implements ObjectRepository {
   }
 
   void _onEvent(PtpEvent event) {
+    if (event.code == PtpEventCode.objectInfoChanged) {
+      _onObjectInfoChanged(event);
+      return;
+    }
     if (event.code != PtpEventCode.objectAdded) return;
     if (event.params.isEmpty) return;
     final handle = event.params.first;
@@ -197,6 +261,147 @@ final class ObjectRepositoryImpl implements ObjectRepository {
 
   final PtpSession session;
 
+  /// 0x4007 ObjectInfoChanged(§6.4.1.7):对象信息变化(相机侧改评是
+  /// 其一;是否真发未证)。best-effort 重拉该对象评级 —— 相机→App
+  /// 两向同步的落点;失败静默,下次重枚举对表。
+  void _onObjectInfoChanged(PtpEvent event) {
+    if (event.params.isEmpty) return;
+    final handle = event.params.first;
+    if (!_byHandle.containsKey(handle) || _loading != null) {
+      return; // 枚举中不另发:块发布重建相册自然带上
+    }
+    unawaited(_fetchRating(handle, force: true)); // 事件重拉:越过已问集
+    // NEF 等档位拿不到的成员:星级变化只能靠位图重同步(去抖 1s 合窗)。
+    if (!isRatingCapable(_byHandle[handle]!)) {
+      _metaResyncTimer?.cancel();
+      final gen = _generation;
+      _metaResyncTimer = Timer(const Duration(seconds: 1), () {
+        if (gen != _generation) return;
+        unawaited(() async {
+          try {
+            for (final m in await session.getObjectsMetaData()) {
+              if (gen != _generation) return;
+              if (m.hasRating) {
+                _metaRated.add(m.handle);
+                final entry = _byHandle[m.handle];
+                if (entry != null && !isRatingCapable(entry)) {
+                  _ratedUnknown.add(m.handle);
+                }
+              } else {
+                _metaRated.remove(m.handle);
+                _ratedUnknown.remove(m.handle);
+                _ratings.remove(m.handle);
+              }
+            }
+            _scheduleRatingPublish();
+          } on Exception {
+            // 重同步失败:静默,下次枚举对表
+          }
+        }());
+      });
+    }
+  }
+
+  /// 逐张评级读取(0x9803,官方 §6.2.11.3):批量收割已被真机证伪
+  /// (0x9805 按属性恒 0xA801,全属性应答不携带),评级数据只能这样
+  /// 一张一张拉。JPEG 成功即缓存+合并发布;NEF/拒答形态记入
+  /// [_ratingQueried] 不再重试;失败不抛(评级是加菜)。
+  Future<bool> _fetchRating(int handle, {bool force = false}) async {
+    if (!force && !_ratingQueried.add(handle)) return false;
+    if (!_ratingInFlight.add(handle)) return false;
+    final gen = _generation;
+    try {
+      final value =
+          await session.getObjectPropValue(handle, PtpObjectPropCode.rating);
+      if (gen != _generation) return false;
+      if (value.length >= 2) {
+        _ratings[handle] = ratingRawToStars(ByteReader(value).u16());
+        _ratingsSeen = true;
+        _ratedUnknown.remove(handle); // 档位到手,未知态解除
+        _scheduleRatingPublish();
+        return true;
+      }
+    } on Object {
+      if (_metaRated.contains(handle)) {
+        // 位图有星但 0xDC8A 拒(NEF 形态,真机 0xA80A):NEF 文件头
+        // 64KB 内嵌 XMP 明文带 xmp:Rating(真机 ★1 实证)—— 头读兜底
+        // 拿档位;拿不到(JPEG/MP4 不嵌/读失败)才落「已评级·未知」。
+        final stars = await _ratingFromXmpHead(handle);
+        if (stars != null) {
+          _ratings[handle] = stars;
+          _ratingsSeen = true;
+          _ratedUnknown.remove(handle);
+          _scheduleRatingPublish();
+          return true;
+        }
+        _ratedUnknown.add(handle);
+        _ratingsSeen = true;
+        _scheduleRatingPublish();
+      }
+      // 非位图有星的拒答(无星对象的例行探测):静默
+    } finally {
+      _ratingInFlight.remove(handle);
+    }
+    return false;
+  }
+
+  /// xmp:Rating 头读兜底:NEF 等 0xDC8A 拒答格式从文件头 64KB 抠档位
+  /// (NEF 的 XMP 是 TIFF 结构随文件头;JPEG 实测不嵌评级,MP4 的在
+  /// 尾部 moov,头读都落空 —— 此兜底只为嵌头部的格式存在)。
+  static final RegExp _xmpRatingPattern =
+      RegExp(r'<xmp:Rating>(-?\d+)</xmp:Rating>');
+
+  Future<int?> _ratingFromXmpHead(int handle) async {
+    try {
+      final head = await session.getPartialObject(handle, 0, 65536);
+      final match =
+          _xmpRatingPattern.firstMatch(String.fromCharCodes(head));
+      if (match == null) return null;
+      final stars = int.tryParse(match.group(1)!);
+      return stars == null || stars < 1 || stars > 5 ? null : stars;
+    } on Object {
+      return null; // 头读失败/无标记:调用方落未知档
+    }
+  }
+
+  /// 评级更新合并发布(300ms 窗):后台补读逐张到达,合窗防重建风暴。
+  void _scheduleRatingPublish() {
+    if (_ratingPublishTimer != null) return;
+    _ratingPublishTimer = Timer(const Duration(milliseconds: 300), () {
+      _ratingPublishTimer = null;
+      if (_loading != null) return; // 枚举中:块发布自然带上
+      _publish(_byHandle.length, _byHandle.length, complete: true);
+    });
+  }
+
+  /// 请求拉取某句柄的评级(查看器翻页/网格即时补读用;后台补读的
+  /// 单张入口):已问过/在途/不在册/是文件夹则空转。fire-and-forget。
+  @override
+  void requestRating(int handle) {
+    final entry = _byHandle[handle];
+    if (entry == null || entry.isFolder) return;
+    if (_ratingQueried.contains(handle)) return;
+    // 位图有星的拒答格式(NEF)也放行:fetch 拒后走 XMP 头读兜底。
+    if (!isRatingCapable(entry) && !_metaRated.contains(handle)) return;
+    unawaited(_fetchRating(handle));
+  }
+
+  /// 评级回退补读(0x9434 不可用时的旧路):按缓存序(新→旧)逐适用
+  /// 格式 0x9803 拉,张间留 30ms 缝让取景帧/用户操作插队(会话串行锁
+  /// 天然保证优先级,这里只是别把队列一次排死)。起步延 500ms(枚举沿
+  /// UI 先落定,测试断言窗口不被补读请求闯入);世代计数防 reset 后空转。
+  Future<void> _fillRatingsInBackground(int generation) async {
+    await Future<void>.delayed(const Duration(milliseconds: 500));
+    for (final entry in _byHandle.values.toList(growable: false)) {
+      if (generation != _generation) return;
+      if (entry.isFolder || !isRatingCapable(entry)) continue;
+      if (_ratingQueried.contains(entry.handle)) continue;
+      await _fetchRating(entry.handle);
+      if (generation != _generation) return;
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+    }
+  }
+
   /// 分块大小:每块结束广播一次(602 对象 ≈ 25 次刷新);真机节奏实测后可调。
   final int chunkSize;
 
@@ -209,6 +414,50 @@ final class ObjectRepositoryImpl implements ObjectRepository {
   Map<int, ObjectEntry> _byHandle = <int, ObjectEntry>{};
   bool _loaded = false;
 
+  /// 相机评级缓存(句柄 → 0-5 星;0 = 未评/未知)。真源 = 相机
+  /// (MTP 0xDC8A,官方 §6.6.3.3)。真机定案(2026-10-22 Zf 双链):
+  /// **只对 JPEG(0x3801)开门** —— 0x9803 读/0x9804 写 OK;NEF 0x3000
+  /// 0xA80A/0xA801 拒(合规);0x9805 按属性批量(含全属性携带)恒
+  /// 0xA801 拒 —— 批量收割是死路,评级只能逐张 0x9803 拉(见
+  /// [requestRating] 与枚举完成后的后台补读)。
+  final Map<int, int> _ratings = <int, int>{};
+
+  /// 已发过评级读取的句柄(含失败 —— NEF 等拒答形态不重试,防逐张硬敲)。
+  final Set<int> _ratingQueried = <int>{};
+
+  /// 在途评级读取(去重)。
+  final Set<int> _ratingInFlight = <int>{};
+
+  /// 评级更新发布合并器:后台补读每张一张,逐张发会导致相册全量重建
+  /// 风暴 —— 300ms 内的更新合一次发布。
+  Timer? _ratingPublishTimer;
+
+  /// 本会话已见过真实评级数据(徽标/筛选只在此下展示,防「未取到」
+  /// 被当「未评」)。
+  bool _ratingsSeen = false;
+
+  /// 0x9434 批量位(bit0)判「有星」的句柄 —— 全格式可得(含 NEF;
+  /// 2026-10-22 真机实证,24 元素 16B 布局)。
+  final Set<int> _metaRated = <int>{};
+
+  /// 有星但**档位拿不到**的句柄(NEF 等 0x9803 拒答形态):展示为
+  /// 「已评级·星级未知」,筛选归「已评级」。
+  final Set<int> _ratedUnknown = <int>{};
+
+  /// **删除候选**(机身「垃圾桶」态)—— 判据(2026-10-22 真机 7 态
+  /// 标定 + 复标实证):JPEG/HIF/NEF 头 256KB 的 XMP 包 `xmp:Rating`
+  /// **= -1 即删除候选**(0 = 无评级,1-5 = 星档;协议 0xDC8A 对垃圾
+  /// 桶读 0、位图不置位,文件 XMP 是唯一区分通道)。仅对头嵌 XMP 的
+  /// 图像格式可判(视频容器摸不到,其删除候选不可见 —— 已知限制)。
+  final Set<int> _trashMarked = <int>{};
+
+  /// 0x4007 触发的 0x9434 重同步去抖(NEF 星级档位拿不到,重拉全卡位图)。
+  Timer? _metaResyncTimer;
+
+  /// 删除候选甄别去重(独立于 [_ratingQueried] —— 查看器沿的 0xDC8A
+  /// 读只回答「星档」,回答不了垃圾桶;两路互不占坑)。
+  final Set<int> _trashProbed = <int>{};
+
   /// 枚举中标志:并发 loadAlbums/entryFor 共享同一次枚举。
   Future<void>? _loading;
 
@@ -217,6 +466,60 @@ final class ObjectRepositoryImpl implements ObjectRepository {
 
   /// 缓存是否已建立(全量枚举完成)。
   bool get isLoaded => _loaded;
+
+  /// 本会话评级数据是否已建立(枚举批量携带或探针补齐)。
+  @override
+  bool get ratingsLoaded => _ratingsSeen;
+
+  /// 单文件评级(0 = 未评/未取到)。
+  @override
+  int ratingForHandle(int handle) => _ratings[handle] ?? 0;
+
+  /// 组评级 = 成员最大值:RAW+JPG 相机侧逐文件评级,任一有星即展示
+  /// (代表件优先看到的与回写目标都是全成员,口径一致)。
+  @override
+  int ratingForGroup(PhotoGroup group) {
+    var stars = 0;
+    for (final m in group.members) {
+      final s = _ratings[m.handle] ?? 0;
+      if (s > stars) stars = s;
+    }
+    return stars;
+  }
+
+  /// 单文件「已评级·档位未知」(0x9434 bit0=1 但 0x9803 拒答,NEF 形态)。
+  @override
+  bool ratedUnknownFor(int handle) =>
+      _ratedUnknown.contains(handle) && (_ratings[handle] ?? 0) == 0;
+
+  /// 组「已评级·档位未知」:全组成员都无已知档位但有未知档成员。
+  @override
+  bool groupRatedUnknown(PhotoGroup group) =>
+      ratingForGroup(group) == 0 &&
+      group.members.any((m) => ratedUnknownFor(m.handle));
+
+  /// 单文件删除候选(头 256KB XMP Rating=-1;仅图像格式可判)。
+  @override
+  bool trashMarkedFor(int handle) =>
+      _trashMarked.contains(handle) && (_ratings[handle] ?? 0) == 0;
+
+  /// 组删除候选:无已知档位、无未知档成员、有删除候选成员。
+  @override
+  bool groupTrashStar(PhotoGroup group) =>
+      ratingForGroup(group) == 0 &&
+      !groupRatedUnknown(group) &&
+      group.members.any((m) => trashMarkedFor(m.handle));
+
+  /// 句柄 → 所在组(XMP 注入/落盘评级快照按组取评级用);不在册返回
+  /// null(仓库未加载也 null)。
+  @override
+  PhotoGroup? groupOf(int handle) {
+    if (!_loaded) return null;
+    for (final group in _buildAlbums().first.items) {
+      if (group.members.any((m) => m.handle == handle)) return group;
+    }
+    return null;
+  }
 
   @override
   Future<List<CameraAlbum>> loadAlbums() async {
@@ -239,6 +542,18 @@ final class ObjectRepositoryImpl implements ObjectRepository {
   void reset() {
     _generation++;
     _byHandle = <int, ObjectEntry>{};
+    _ratings.clear();
+    _ratingQueried.clear();
+    _ratingInFlight.clear();
+    _metaRated.clear();
+    _ratedUnknown.clear();
+    _trashMarked.clear();
+    _trashProbed.clear();
+    _ratingPublishTimer?.cancel();
+    _ratingPublishTimer = null;
+    _metaResyncTimer?.cancel();
+    _metaResyncTimer = null;
+    _ratingsSeen = false;
     _loaded = false;
     _loading = null; // 在途枚举由世代计数废弃;新调用立即开新一轮
   }
@@ -404,6 +719,210 @@ final class ObjectRepositoryImpl implements ObjectRepository {
     _loaded = true;
     // 完成事件兜底:空相机 / 续传零缺口(块循环没跑)也要有确定终态。
     _publish(loaded, ordered.length, complete: true);
+    // 评级同步:0x9434 批量位一发拿全卡「有无星」(SnapBridge 同款
+    // 通道,NEF 也在内),有星的适用格式再逐张 0x9803 拉档位 ——
+    // 无星的绝大多数对象零事务(不 await,不挡本 Future)。
+    unawaited(_syncRatingsViaMeta(generation));
+  }
+
+  /// 评级主同步路:0x9434 位图 → 逐张档位补拉。起步延 500ms(枚举沿
+  /// UI 先落定,事件窗/测试断言窗口不被闯入);失败(拒答/链路/解析)
+  /// 回退旧逐张全量补读([_fillRatingsInBackground])。
+  Future<void> _syncRatingsViaMeta(int generation) async {
+    await Future<void>.delayed(const Duration(milliseconds: 500));
+    try {
+      final metas = await session.getObjectsMetaData();
+      if (generation != _generation) return;
+      for (final m in metas) {
+        if (m.hasRating) _metaRated.add(m.handle);
+      }
+    } on Object {
+      AppLog.w(AppLog.browser, '0x9434 评级位图失败,回退逐张补读');
+      await _fillRatingsInBackground(generation);
+      return;
+    }
+    _ratingsSeen = true;
+    _scheduleRatingPublish();
+    for (final handle in _metaRated.toList(growable: false)) {
+      if (generation != _generation) return;
+      final entry = _byHandle[handle];
+      if (entry == null) continue; // 句柄已不在册(被删等)
+      if ((_ratings[handle] ?? 0) > 0) continue; // 档位已知(收割/写回)
+      // 一律先试 0xDC8A(适用格式 OK);拒答(NEF 形态)由 _fetchRating
+      // 内部落 XMP 头读兜底,再不行才「已评级·未知」。
+      await _fetchRating(handle, force: true);
+      if (generation != _generation) return;
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+    }
+    // 删除候选甄别(位图外):图像走头 256KB XMP(Rating=-1 = 垃圾桶,
+    // 0 = 无评级);视频走容器 NCTG(评级 u16,0xFFFF = 删除候选 ——
+    // 位图不标、0xDC8A 读 0,容器是唯一通道)。已拉过档位的(位图有
+    // 星)不再读;张间 100ms(图像一笔 256KB / 视频 ~10 笔小读)。
+    for (final entry in _byHandle.values.toList(growable: false)) {
+      if (generation != _generation) return;
+      if (entry.isFolder) continue;
+      if (_metaRated.contains(entry.handle)) continue;
+      if (entry.kind == ObjectKind.video) {
+        await _detectTrashViaNctg(entry);
+        if (generation != _generation) return;
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        continue;
+      }
+      if (entry.kind != ObjectKind.image) continue;
+      if (_trashProbed.contains(entry.handle)) continue;
+      await _detectTrashViaXmp(entry.handle);
+      if (generation != _generation) return;
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+    _scheduleRatingPublish();
+  }
+
+  /// 删除候选甄别单张:头 256KB XMP 包 Rating 值 —— **-1 = 删除候选**
+  /// (真机复标实证:未评分 0、标垃圾桶后变 -1);0 = 无评级;1-5 =
+  /// 星档(顺手收);无元素 = 不可判,保持无评级态。
+  Future<void> _detectTrashViaXmp(int handle) async {    if (!_trashProbed.add(handle)) return;
+    if (!_ratingInFlight.add(handle)) return;
+    final gen = _generation;
+    try {
+      final head = await session.getPartialObject(handle, 0, 262144);
+      if (gen != _generation) return;
+      final text = String.fromCharCodes(head);
+      if (!text.contains('<x:xmpmeta')) return; // 头里无 XMP 包:不作判
+      final match = _xmpRatingPattern.firstMatch(text);
+      if (match == null) return; // 无 Rating 元素:不可判
+      final value = int.tryParse(match.group(1)!) ?? 0;
+      if (value < 0) {
+        _trashMarked.add(handle); // -1 = 删除候选
+        _ratingsSeen = true;
+        _scheduleRatingPublish();
+      } else if (value >= 1) {
+        _ratings[handle] = value; // 位图外但文件里有星(顺手收)
+        _ratingsSeen = true;
+        _scheduleRatingPublish();
+      }
+      // 0 = 无评级:甄别已落账即可
+    } on Object {
+      // 头读失败:静默(保持无评级态)
+    } finally {
+      _ratingInFlight.remove(handle);
+    }
+  }
+
+  /// 视频删除候选甄别:容器 NCTG 评级提取(见 media/video_rating.dart)
+  /// —— 0xFFFF = 删除候选;1-5 = 星档(位图外顺手收);0/null = 无评级。
+  /// 每视频 ~12 笔小读(顶层/moov/udta 箱头 + udta 头 1KB),预算内
+  /// 有限步,失败静默不误判。
+  Future<void> _detectTrashViaNctg(ObjectEntry entry) async {
+    if (!_trashProbed.add(entry.handle)) return;
+    if (!_ratingInFlight.add(entry.handle)) return;
+    final gen = _generation;
+    try {
+      final size = entry.sizeInBytes;
+      final rating = await readVideoRating((off, len) async {
+        if (off >= size) return null;
+        return session.getPartialObject(
+            entry.handle, off, len.clamp(0, size - off));
+      });
+      if (gen != _generation) return;
+      if (rating == null) return; // 不可判:保持无评级
+      _ratingsSeen = true;
+      if (rating == 0xffff) {
+        _trashMarked.add(entry.handle);
+      } else if (rating >= 1) {
+        _ratings[entry.handle] = rating; // 位图外但容器里有星(顺手收)
+      }
+      _scheduleRatingPublish();
+    } on Object {
+      // 读失败:静默(保持无评级态)
+    } finally {
+      _ratingInFlight.remove(entry.handle);
+    }
+  }
+
+  /// 改评(组粒度,0 = 清除):只写**评级适用格式成员**(JPEG/HEIF/
+  /// 视频,见 [isRatingCapable])的 0xDC8A —— 真机定案(2026-10-22 Zf
+  /// 双链)NEF(0x3000)读写均被相机拒(0xA801/0xA80A,§6.6.3.3 适用
+  /// 表本就不含),撞了也是白撞;相机侧评级按文件存,组的星级展示取
+  /// 成员最大值。无适用成员(纯 RAW 组)直接报错(相机 API 层不可能
+  /// 成功)。乐观上屏(先写缓存即发布),失败整组回滚重发布再上抛;
+  /// 成功后读回(0x9803)对齐相机取整口径。
+  @override
+  Future<void> rateGroup(PhotoGroup group, int stars) async {
+    final targets = <int>{
+      for (final m in group.members)
+        if (isRatingCapable(m)) m.handle, // JPEG/HEIF/视频;NEF 无评级 API
+    };
+    if (targets.isEmpty) {
+      throw StateError(
+          '评级仅支持 JPEG/HEIF/视频(该组无可评级成员;NEF 机身可评但 API 不开放): '
+          '${group.name}');
+    }
+    final before = {for (final m in group.members) m.handle: _ratings[m.handle]};
+    _applyRating(targets, stars); // 乐观上屏只动 JPG 目标(NEF 无评级能力,不覆写)
+    if (_loading == null) {
+      _publish(_byHandle.length, _byHandle.length, complete: true);
+    }
+    final raw = starsToRatingRaw(stars);
+    final data = ByteWriter()..u16(raw);
+    Object? failure;
+    for (final handle in targets) {
+      try {
+        await session.setObjectPropValue(
+            handle, PtpObjectPropCode.rating, data.takeBytes());
+        _ratings[handle] = stars;
+        _ratingQueried.add(handle);
+      } on Exception catch (e) {
+        failure = e;
+        break;
+      }
+    }
+    if (failure != null) {
+      // 整组回滚到写前值(只动本组成员,别组评级不动)。
+      final beforeDesc =
+          before.entries.map((e) => '${e.key.toRadixString(16)}:${e.value}').join(' ');
+      AppLog.w(AppLog.browser,
+          '改评失败回滚 ${group.name} ★$stars(写前 $beforeDesc): $failure');
+      for (final m in group.members) {
+        final previous = before[m.handle];
+        if (previous != null) {
+          _ratings[m.handle] = previous;
+        } else {
+          _ratings.remove(m.handle);
+        }
+      }
+      if (_loading == null) {
+        _publish(_byHandle.length, _byHandle.length, complete: true);
+      }
+      throw failure;
+    }
+    // 读回对齐(相机取整 60→50 同款语义,读值以相机为准);失败不回滚
+    // —— OK 应答已是承诺,读回只是锦上添花。
+    try {
+      final value = await session
+          .getObjectPropValue(targets.first, PtpObjectPropCode.rating);
+      if (value.length >= 2) {
+        _ratings[targets.first] = ratingRawToStars(ByteReader(value).u16());
+      }
+    } on Exception {
+      // 读回失败不挡:按写入值展示
+    }
+    _ratingsSeen = true;
+    _metaRated.addAll(targets); // 写沿即有星(位图本地对表)
+    _ratedUnknown.removeAll(targets);
+    if (_loading == null) {
+      _publish(_byHandle.length, _byHandle.length, complete: true);
+    }
+  }
+
+  /// 评级缓存改写(乐观上屏沿;0 = 清除;只动发写目标)。
+  void _applyRating(Set<int> handles, int stars) {
+    for (final handle in handles) {
+      if (stars >= 1) {
+        _ratings[handle] = stars;
+      } else {
+        _ratings.remove(handle);
+      }
+    }
   }
 
   /// 分页快路页间让路窗(见 _loadAll 页循环)。
@@ -412,8 +931,11 @@ final class ObjectRepositoryImpl implements ObjectRepository {
   /// 0x9805 批量属性合并入缓存:仅收 [handleSet] 内句柄(句柄只能来自
   /// GetObjectHandles)、无名/无格式条目弃单、已在册
   /// 跳过(断点续传),返回本次新增的 entry(页发现与进度计数用)。
+  /// 评级属性(0xDC8A)独立收割 —— 全属性应答里它是普通成员,条目
+  /// 已在册(断点续传)也不丢星。
   List<ObjectEntry> _absorbProps(
       List<PtpObjectProp> props, Set<int> handleSet) {
+    _absorbRatings(props);
     final byHandle = <int, List<PtpObjectProp>>{};
     for (final p in props) {
       if (!handleSet.contains(p.handle)) continue;
@@ -429,6 +951,19 @@ final class ObjectRepositoryImpl implements ObjectRepository {
       }
     }
     return added;
+  }
+
+  /// 批量应答里的评级条目入缓存(0xDC8A 值 = u16 原始档);入已问集
+  ///(数据已在,后台补读不重复拉)。
+  void _absorbRatings(List<PtpObjectProp> props) {
+    for (final p in props) {
+      if (p.code != PtpObjectPropCode.rating) continue;
+      final value = p.value;
+      if (value is! int) continue;
+      _ratings[p.handle] = ratingRawToStars(value);
+      _ratingQueried.add(p.handle);
+      _ratingsSeen = true;
+    }
   }
 
   /// 广播一次增量快照;未完成发布丢弃未具名文件夹相册(见 _buildAlbums)。

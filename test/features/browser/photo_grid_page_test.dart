@@ -15,6 +15,7 @@ import 'package:nikon_pill/core/camera/camera_connection.dart';
 import 'package:nikon_pill/core/ptpip/object_format.dart';
 import 'package:nikon_pill/core/transfer/transfer_engine.dart';
 import 'package:nikon_pill/core/transfer/transfer_task.dart';
+import 'package:nikon_pill/features/browser/album_ratings_controller.dart';
 import 'package:nikon_pill/features/browser/browser_controller.dart';
 import 'package:nikon_pill/features/browser/photo_grid_page.dart';
 import 'package:nikon_pill/features/transfers/transfers_page.dart';
@@ -53,6 +54,49 @@ final class _FakeRepo implements ObjectRepository {
   @override
   void removeHandles(Iterable<int> handles) =>
       removedHandles.addAll(handles);
+
+  // ── 评级面(评级筛选用例驱动;句柄 → 星)──
+  final Map<int, int> ratings = {};
+  bool ratingsAvailable = false;
+
+  @override
+  bool get ratingsLoaded => ratingsAvailable;
+
+  @override
+  void requestRating(int handle) {}
+
+  @override
+  int ratingForHandle(int handle) => ratings[handle] ?? 0;
+
+  @override
+  int ratingForGroup(PhotoGroup group) => group.members
+      .fold(0, (m, e) => (ratings[e.handle] ?? 0) > m ? ratings[e.handle]! : m);
+
+  @override
+  bool ratedUnknownFor(int handle) => false;
+
+  @override
+  bool groupRatedUnknown(PhotoGroup group) => false;
+
+  @override
+  bool trashMarkedFor(int handle) => false;
+
+  @override
+  bool groupTrashStar(PhotoGroup group) => false;
+
+  @override
+  PhotoGroup? groupOf(int handle) => null;
+
+  @override
+  Future<void> rateGroup(PhotoGroup group, int stars) async {
+    for (final m in group.members) {
+      if (stars >= 1) {
+        ratings[m.handle] = stars;
+      } else {
+        ratings.remove(m.handle);
+      }
+    }
+  }
 }
 
 
@@ -876,6 +920,108 @@ void main() {
     expect(find.text('图片下载格式'), findsOneWidget);
 
     repo.completeLoad([aggregate]);
+    await loading;
+  });
+
+  // ── 评级(相机 0xDC8A 真源;角标与筛选分区) ─────────────────────
+
+  testWidgets('评级角标与筛选:数据建立后出分区,星档/无评级收窄网格',
+      (tester) async {
+    final repo = _FakeRepo();
+    final ratings = AlbumRatingsController(repository: repo);
+    addTearDown(ratings.dispose);
+    final controller = BrowserController(repository: repo);
+    await tester.pumpWidget(_host(PhotoGridPage(
+      controller: controller,
+      folderHandle: CameraAlbum.allPhotosHandle,
+      fallbackName: '相机相册',
+      thumbnails: _FakeThumbs(),
+      ratings: ratings,
+    )));
+
+    final loading = controller.load();
+    repo.ratings[1] = 3;
+    repo.ratings[3] = 5;
+    repo.ratingsAvailable = true;
+    repo.updatesCtrl.add(AlbumsUpdate(
+        albums: [
+          CameraAlbum.allPhotos([_photo(1), _photo(2), _photo(3)])
+        ],
+        loaded: 3,
+        total: 3,
+        complete: true));
+    await tester.pump();
+
+    // 角标:有星条目左上黄底星标(星图标 + 数字),无星条目无。
+    expect(find.text('3'), findsOneWidget);
+    expect(find.text('5'), findsOneWidget);
+
+    // 评级分区(7 档);星档行 = 行内实心星(1+2+3+4+5 = 15 颗)。
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
+    expect(find.text('评级'), findsOneWidget);
+    expect(find.text('无评级'), findsOneWidget);
+    expect(find.text('已评级'), findsOneWidget);
+    expect(
+      find.descendant(
+          of: find.byType(MenuItemButton), matching: find.byIcon(Icons.star)),
+      findsNWidgets(15),
+    );
+
+    // 无评级:只剩未评的 2。
+    await tester.tap(find.text('无评级'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey(2)), findsOneWidget);
+    expect(find.byKey(const ValueKey(1)), findsNothing);
+    expect(find.byKey(const ValueKey(3)), findsNothing);
+
+    // ★5:只剩 3(trash/rated 档入列,星档键 = 枚举序 4-8)。
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('ratingFilter-8')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey(3)), findsOneWidget);
+    expect(find.byKey(const ValueKey(2)), findsNothing);
+
+    repo.completeLoad([
+      CameraAlbum.allPhotos([_photo(1), _photo(2), _photo(3)])
+    ]);
+    await loading;
+  });
+
+  testWidgets('评级数据未建立:无分区无角标,网格不筛(防「未取到」当「未评」)',
+      (tester) async {
+    final repo = _FakeRepo();
+    final ratings = AlbumRatingsController(repository: repo);
+    addTearDown(ratings.dispose);
+    final controller = BrowserController(repository: repo);
+    await tester.pumpWidget(_host(PhotoGridPage(
+      controller: controller,
+      folderHandle: CameraAlbum.allPhotosHandle,
+      fallbackName: '相机相册',
+      thumbnails: _FakeThumbs(),
+      ratings: ratings,
+    )));
+
+    final loading = controller.load();
+    repo.updatesCtrl.add(AlbumsUpdate(
+        albums: [
+          CameraAlbum.allPhotos([_photo(1), _photo(2)])
+        ],
+        loaded: 2,
+        total: 2,
+        complete: true));
+    await tester.pump();
+
+    expect(find.byIcon(Icons.star), findsNothing);
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
+    expect(find.text('评级'), findsNothing);
+    expect(find.text('图片下载格式'), findsOneWidget);
+
+    repo.completeLoad([
+      CameraAlbum.allPhotos([_photo(1), _photo(2)])
+    ]);
     await loading;
   });
 }

@@ -21,6 +21,7 @@ final class SessionLifecycle {
     required this.startSettledGate,
     required this.diagnosticsOnConnect,
     required this.runDiagnostics,
+    this.onConnectedSettled,
   }) : _connection = connection;
 
   final CameraConnection _connection;
@@ -36,6 +37,9 @@ final class SessionLifecycle {
   /// 连接成功沿诊断序列开关(--dart-define=PTP_DIAG);只跑一次。
   final bool diagnosticsOnConnect;
   final void Function() runDiagnostics;
+
+  /// 门放行沿的追加钩子(评级定向诊断等;可空,装配侧显式注入)。
+  final void Function()? onConnectedSettled;
 
   var _diagRan = false;
 
@@ -84,6 +88,8 @@ final class SessionLifecycle {
             // 静默:预热是尽力而为,失败语义归进页重试
           }
         }());
+        // 门放行沿追加钩子(评级定向诊断等;显式装配才非空)。
+        onConnectedSettled?.call();
       }());
     }
     if (s == CameraLinkState.disconnected || s == CameraLinkState.failed) {

@@ -1372,6 +1372,27 @@ mixin _RemoteOps on _SessionCore {
     return _parseU16Array(result.data);
   }
 
+  /// GetObjectsMetaData(0x9434,官方 §6.2.3.3):尼康专有批量元数据 ——
+  /// 全卡句柄 + ObjectAttribute(**bit0 = Rating 有无、bit1 = Protected**)
+  /// + 修改时刻。删除候选(机身垃圾桶)的协议侧不出口(位图不标、
+  /// 0xDC8A 读 0),本 op 的属性位与文件层 NCTG/xmp 互为印证通道。
+  Future<List<PtpObjectMeta>> getObjectsMetaData() async {
+    final raw = await getObjectsMetaDataRaw();
+    return parseObjectsMetaData(raw);
+  }
+
+  /// 0x9434 裸数据集(诊断取证用:布局有疑,原文先落袋)。
+  Future<Uint8List> getObjectsMetaDataRaw() async {
+    final result = await _serialized(() => transport.execute(const PtpRequest(
+          opcode: NikonOperationCode.getObjectsMetaData,
+          // P1 = 0xFFFFFFFF 全卡;P2 = 0x00000000 全格式(§6.2.3.3 参数表)。
+          params: [0xFFFFFFFF, 0x00000000],
+        )));
+    _ensureOk(result, NikonOperationCode.getObjectsMetaData);
+    return result.data ?? Uint8List(0);
+  }
+
+
   /// GetObjectPropDesc(0x9802,官方 §6.2.11.2):对象属性描述(类型/
   /// 可写性/FORM)。数据集随类型变宽(u16 类型 + u8 GetSet + FORM),
   /// 本轮无消费方,先裸透传,接线时按属性定宽解。
@@ -1438,6 +1459,7 @@ mixin _RemoteOps on _SessionCore {
     int propCode = 0xFFFFFFFF,
     int? groupCode,
     int? depth,
+    bool degradeOnFailure = true,
   }) async {
     if (_objectPropListDegraded) {
       throw UnsupportedError('GetObjectPropList(0x9805) 本会话已降级');
@@ -1457,18 +1479,19 @@ mixin _RemoteOps on _SessionCore {
       _ensureOk(result, NikonOperationCode.getObjectPropList);
     } on Exception {
       // 错误应答(op 不在册/参数拒)或链路异常:真发证据,一次失败即
-      // 降级本会话;原异常上抛(诊断要真相),调用方回退逐对象路径。
-      _objectPropListDegraded = true;
+      // 降级本会话([degradeOnFailure] = false 的定向探测除外 —— 探针
+      // 拒答只证该形态,不该拖累 App 的批量快路);原异常上抛。
+      if (degradeOnFailure) _objectPropListDegraded = true;
       rethrow;
     }
     try {
       return _parseObjectPropList(result.data);
     } on FormatException {
-      _objectPropListDegraded = true; // 数据集不可信:整体弃,不产脏数据
-      rethrow;
+      if (degradeOnFailure) _objectPropListDegraded = true;
+      rethrow; // 数据集不可信:整体弃,不产脏数据
     } on ArgumentError {
       // ByteReader 越界(RangeError 族)= 截断数据集,与格式弃同判。
-      _objectPropListDegraded = true;
+      if (degradeOnFailure) _objectPropListDegraded = true;
       throw const FormatException('GetObjectPropList(0x9805) 数据集截断越界');
     }
   }
@@ -1638,6 +1661,44 @@ final class PtpSession
   /// 臆造值。旗标保留作紧急关断:写路径真机出问题时置回 false,
   /// setDevicePropValue 直接抛 UnsupportedError、UI 调节入口静默只读。
   static bool kSetPropEnabled = true;
+}
+
+/// 0x9434 GetObjectsMetaData 数据集元素(官方 §6.2.3.3)。
+final class PtpObjectMeta {
+  const PtpObjectMeta({required this.handle, required this.attribute});
+
+  final int handle;
+
+  /// ObjectAttribute:bit0 = Rating(有星级)、bit1 = Protected,其余保留。
+  final int attribute;
+
+  bool get hasRating => (attribute & 0x1) != 0;
+  bool get isProtected => (attribute & 0x2) != 0;
+}
+
+/// 0x9434 数据集解析(§6.2.3.3 数据集表;2026-10-22 真机 392B 实测
+/// 校准):u32 Version + u32 NumElement + N×16B = u32 ObjectHandle +
+/// u32 ObjectAttribute + u8 Reserved + 5×u8 时刻(秒/分/时/日/月)+
+/// u16 年。计数与字节数互证,不齐即 FormatException(防错位整体弃)。
+/// 顶层纯函数(mixin 静态不随门面暴露,诊断侧直接引用)。
+List<PtpObjectMeta> parseObjectsMetaData(Uint8List data) {
+  if (data.length < 8) return const [];
+  final r = ByteReader(data);
+  r.u32(); // Version(未消费)
+  final count = r.u32();
+  const metaBytes = 16;
+  if (data.length - 8 != count * metaBytes) {
+    throw const FormatException(
+        'GetObjectsMetaData(0x9434) 数据集字节数与计数不符(防错位整体弃)');
+  }
+  final out = <PtpObjectMeta>[];
+  for (var i = 0; i < count; i++) {
+    final handle = r.u32();
+    final attribute = r.u32();
+    r.raw(8); // Reserved + 时刻 5B + 年 2B(未消费)
+    out.add(PtpObjectMeta(handle: handle, attribute: attribute));
+  }
+  return out;
 }
 
 /// 0x9805 GetObjectPropList 数据集元素(官方 §6.2.11.5)。

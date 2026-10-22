@@ -18,6 +18,7 @@ import 'core/ble/ble_camera_session.dart';
 import 'core/log/app_log.dart';
 import 'core/browser/camera_file_ops.dart';
 import 'core/browser/object_repository.dart';
+import 'core/browser/photo_group.dart';
 import 'core/browser/thumbnail_cache.dart';
 import 'core/camera/camera_connection.dart';
 import 'core/media/watermark.dart';
@@ -39,11 +40,13 @@ import 'data/ratings_store.dart';
 import 'data/settings_store.dart';
 import 'debug/nikon_exif_probe.dart';
 import 'debug/ptp_diagnostics.dart';
+import 'debug/rating_diagnostics.dart';
+import 'features/browser/album_ratings_controller.dart';
 import 'features/browser/browser_controller.dart';
-import 'features/browser/ratings_controller.dart';
 import 'features/browser/storage_overview_controller.dart';
 import 'features/connection/camera_overview_controller.dart';
 import 'features/connection/connection_controller.dart';
+import 'features/library/library_ratings.dart';
 import 'features/remote/remote_controller.dart';
 import 'features/settings/settings_page.dart';
 import 'features/settings/snapshot_controller.dart';
@@ -135,7 +138,13 @@ final class AppServices {
     fileOps = CameraFileOps(session: session, repository: repository);
     ratingsStore = FileRatingsStore(
         dataDir: PlatformServices.gallery.dataDir);
-    ratings = RatingsController(store: ratingsStore);
+    // 图库文件级评级快照(下载落盘沿写、相册改评沿传播)。
+    libraryRatings = LibraryRatings(store: ratingsStore);
+    // 相册评级控制器:真源 = 相机(MTP 0xDC8A),改评成功沿把快照
+    // 传播到图库文件键。
+    ratings = AlbumRatingsController(
+        repository: repository,
+        onPropagate: (group, stars) => _propagateRating(group, stars));
     // iOS 下载走 GetPartialObject 分块:IC 通道一次回调收整个数据相位,
     // 大档 GetObject 未验证且是断链主嫌疑(2026-10-09 真机);分块在
     // 无线(PTP/IP)上每块一个完整事务,小块的事务往返开销摊大 ——
@@ -183,17 +192,12 @@ final class AppServices {
           int? rating;
           if (settings.xmpInjectRating && repository.isLoaded) {
             try {
-              // 句柄 → 所在组(评分以组为粒度,键 = 基名|组总字节)。
-              outer:
-              for (final album in await repository.loadAlbums()) {
-                for (final group in album.items) {
-                  if (group.members.any((m) => m.handle == entry.handle)) {
-                    final stars = ratings.ratingOf(group);
-                    if (stars >= 1) rating = stars;
-                    break outer;
-                  }
-                }
-              }
+              // 句柄 → 所在组(评级以组为粒度,真源 = 相机 0xDC8A;
+              // 组评级 = 成员最大值)。
+              final group = repository.groupOf(entry.handle);
+              final stars =
+                  group == null ? 0 : repository.ratingForGroup(group);
+              if (stars >= 1) rating = stars;
             } on Exception {
               rating = null;
             }
@@ -209,6 +213,18 @@ final class AppServices {
         } on Exception {
           return null;
         }
+      },
+      // 评级快照:app 目的地文件落盘沿,把所在组的相机评级记入图库
+      // 文件键(图库徽标/筛选数据面;键 = 文件名|字节)。best-effort:
+      // 组不在册/未评级/写盘失败都静默,传输照常。
+      onAppFileSaved: (entry, path) async {
+        if (!repository.ratingsLoaded) return;
+        final group = repository.groupOf(entry.handle);
+        final stars = group == null ? 0 : repository.ratingForGroup(group);
+        if (stars < 1) return;
+        final name = path.split(Platform.pathSeparator).last;
+        await libraryRatings
+            .setFile(name, await File(path).length(), stars);
       },
     );
     // 速传:ObjectAdded 事件驱动自动下载(开关/格式见设置页)。
@@ -427,6 +443,12 @@ final class AppServices {
         NikonExifProbe.run(session);
         PtpDiagnostics.run(session: session, repository: repository);
       },
+      // 评级定向诊断(显式开才跑,--dart-define=PTP_RATING_DIAG=true;
+      // 门放行沿、相册预热之后,不挤起景链)。
+      onConnectedSettled: kRatingDiagnostics
+          ? () => RatingDiagnostics.run(
+              session: session, repository: repository)
+          : null,
     ).attach();
 
     // 断开/失败 → 对象缓存与缩略图内存索引失效(缩略图磁盘缓存是
@@ -521,7 +543,23 @@ final class AppServices {
   late final ObjectRepositoryImpl repository;
   late final CameraFileOps fileOps;
   late final FileRatingsStore ratingsStore;
-  late final RatingsController ratings;
+
+  /// 图库文件级评级快照(徽标/筛选;下载落盘沿与改评传播沿写入)。
+  late final LibraryRatings libraryRatings;
+
+  /// 相册评级控制器(真源 = 相机 MTP 0xDC8A,仓库缓存承载状态)。
+  late final AlbumRatingsController ratings;
+
+  /// 相册改评沿 → 应用内文件快照传播:组内各基名对应的已下载文件
+  /// (名带扩展名,字节取现档)按新评级重写;无匹配文件即空转。
+  Future<void> _propagateRating(PhotoGroup group, int stars) async {
+    final names = {for (final m in group.members) baseNameOf(m.name)};
+    for (final file in transfersController.appFiles) {
+      final name = file.uri.pathSegments.last;
+      if (!names.contains(baseNameOf(name))) continue;
+      await libraryRatings.setFile(name, file.lengthSync(), stars);
+    }
+  }
   late final ThumbnailCache thumbnails;
   late final ObjectDownloader downloader;
   late final TransferEngineImpl transferEngine;
