@@ -2,15 +2,15 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/core/browser/photo_group.dart';
-import 'package:nikon_pill/data/settings_store.dart';
+import 'package:z_pill/core/browser/photo_group.dart';
+import 'package:z_pill/data/settings_store.dart';
 
 void main() {
   late Directory tmp;
   late FileSettingsStore store;
 
   setUp(() async {
-    tmp = await Directory.systemTemp.createTemp('nikonpill_settings');
+    tmp = await Directory.systemTemp.createTemp('zpill_settings');
     store = FileSettingsStore(dataDir: () async => tmp.path);
   });
 

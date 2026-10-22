@@ -3,11 +3,11 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/core/camera/camera_info.dart';
-import 'package:nikon_pill/data/paired_cameras_store.dart';
+import 'package:z_pill/core/camera/camera_info.dart';
+import 'package:z_pill/data/paired_cameras_store.dart';
 
 Future<String> _tempDataDir() async =>
-    (await Directory.systemTemp.createTemp('nikonpill_paired_test_')).path;
+    (await Directory.systemTemp.createTemp('zpill_paired_test_')).path;
 
 void main() {
   test('save/list 往返:全字段持久化(含 lastIp),最近连接排前', () async {

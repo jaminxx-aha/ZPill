@@ -5,13 +5,13 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 
-import 'package:nikon_pill/core/ptpip/object_format.dart' show ObjectKind;
-import 'package:nikon_pill/features/edit/edit_page.dart';
-import 'package:nikon_pill/platform/gallery_saver.dart';
+import 'package:z_pill/core/ptpip/object_format.dart' show ObjectKind;
+import 'package:z_pill/features/edit/edit_page.dart';
+import 'package:z_pill/platform/gallery_saver.dart';
 
 final class FakeGallerySaver implements GallerySaver {
   FakeGallerySaver()
-      : root = Directory.systemTemp.createTempSync('nikonpill_edit_test');
+      : root = Directory.systemTemp.createTempSync('zpill_edit_test');
 
   final Directory root;
   final List<List<GalleryImportRequest>> importCalls = [];

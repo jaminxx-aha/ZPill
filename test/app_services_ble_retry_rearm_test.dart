@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:nikon_pill/app_services.dart';
-import 'package:nikon_pill/core/ble/ble_camera_session.dart';
+import 'package:z_pill/app_services.dart';
+import 'package:z_pill/core/ble/ble_camera_session.dart';
 
 /// 重连循环重臂谓词(2026-10-17 全自动重连定案):无命中不即死 ——
 /// reconnecting(连上又掉)或 idle+有身份(冷启扫空/深睡闸门等唤醒)

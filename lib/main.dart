@@ -31,7 +31,7 @@ Future<void> main() async {
   // 在各自平台工程生成后落地,channel 命名见 lib/platform/services.dart。
   PlatformServices.bootstrap();
 
-  // 原生日志合流(USB bulk 失败/BLE 状态沿等经 nikonpill/log 反向通道
+  // 原生日志合流(USB bulk 失败/BLE 状态沿等经 zpill/log 反向通道
   // 汇入 AppLog native 域;尽早 install,免 native 早期上报落空)。
   NativeLogBridge.install();
 
@@ -60,5 +60,5 @@ Future<void> main() async {
     );
   });
 
-  runApp(const NikonPillApp());
+  runApp(const ZPillApp());
 }

@@ -2,8 +2,8 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/core/remote/config_snapshot.dart';
-import 'package:nikon_pill/data/config_snapshot_store.dart';
+import 'package:z_pill/core/remote/config_snapshot.dart';
+import 'package:z_pill/data/config_snapshot_store.dart';
 
 CameraConfigSnapshot _snap(String model) => CameraConfigSnapshot(
       model: model,
@@ -21,7 +21,7 @@ void main() {
   late ConfigSnapshotStore store;
 
   setUp(() async {
-    tmp = await Directory.systemTemp.createTemp('nikonpill_snapshots');
+    tmp = await Directory.systemTemp.createTemp('zpill_snapshots');
     store = ConfigSnapshotStore(dataDir: () async => tmp.path);
   });
 

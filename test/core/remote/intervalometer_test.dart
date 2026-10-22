@@ -3,7 +3,7 @@ import 'dart:collection';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/core/remote/intervalometer.dart';
+import 'package:z_pill/core/remote/intervalometer.dart';
 
 /// 假时钟:记录每次等待时长,手动放行(同 controller 测试 _GatedDelay
 /// 口径;被停止竞速废掉的门无副作用,release 照常走)。

@@ -3,8 +3,8 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/core/ptpip/channels.dart';
-import 'package:nikon_pill/core/ptpip/packet.dart';
+import 'package:z_pill/core/ptpip/channels.dart';
+import 'package:z_pill/core/ptpip/packet.dart';
 
 /// golden 十六进制 → 字节。
 Uint8List _hex(String hex) {

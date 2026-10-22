@@ -1,4 +1,4 @@
-/// 音量键快门通道件:`nikonpill/volume` 通道契约。
+/// 音量键快门通道件:`zpill/volume` 通道契约。
 ///
 /// 反向通道(原生主动推 Dart,本仓第一例):Dart → 原生仅
 /// 'setEnabled'(bool) —— 关/默认不拦,音量键归系统;命中沿原生
@@ -35,7 +35,7 @@ abstract interface class VolumeKeyHost {
 }
 
 final class MethodChannelVolumeKeys implements VolumeKeyHost {
-  static const MethodChannel _channel = MethodChannel('nikonpill/volume');
+  static const MethodChannel _channel = MethodChannel('zpill/volume');
 
   /// 共享单例(广播流可多订阅;构造即挂 handler,app 存活期恒在)。
   static final MethodChannelVolumeKeys instance = MethodChannelVolumeKeys._();

@@ -4,12 +4,12 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/core/ptp/operation_codes.dart';
-import 'package:nikon_pill/core/ptp/ptp_transport.dart';
-import 'package:nikon_pill/core/ptpip/channels.dart';
-import 'package:nikon_pill/core/ptpip/codec.dart';
-import 'package:nikon_pill/core/ptpip/packet.dart';
-import 'package:nikon_pill/core/ptpip/transport.dart';
+import 'package:z_pill/core/ptp/operation_codes.dart';
+import 'package:z_pill/core/ptp/ptp_transport.dart';
+import 'package:z_pill/core/ptpip/channels.dart';
+import 'package:z_pill/core/ptpip/codec.dart';
+import 'package:z_pill/core/ptpip/packet.dart';
+import 'package:z_pill/core/ptpip/transport.dart';
 
 /// 回放用假通道:记录已发帧,测试脚本用 emit* 模拟相机行为。
 final class FakePtpIpChannel implements PtpIpChannel {
@@ -189,14 +189,14 @@ void main() {
       final t = PtpIpTransport(
         createChannel: () => channels.removeAt(0),
         clientGuid: guid,
-        hostname: 'NikonPill',
+        hostname: 'ZPill',
       );
       final connecting = t.connect('192.168.1.1');
       await pumpEventQueue();
       expect(command.sent[0].body.sublist(0, 16), guid);
       expect(
           (codec.decode(command.sent[0]) as InitCommandRequestPacket).hostname,
-          'NikonPill');
+          'ZPill');
       command.emit(frameOf(InitCommandResponsePacket(
         connectionNumber: 1,
         cameraGuid: Uint8List(16),

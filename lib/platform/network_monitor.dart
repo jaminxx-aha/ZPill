@@ -24,14 +24,14 @@ abstract interface class NetworkMonitor {
   Future<WifiLinkInfo?> current();
 }
 
-/// native 侧经 `nikonpill/network` channel 上报:
+/// native 侧经 `zpill/network` channel 上报:
 /// - 方法 `current` → `{ssid, gateway}`(可缺省)
 /// - 事件  `linkChanged` → 同上
 ///
 /// TODO(P1): 实现 native 端。iOS 无法读 SSID:返回 gateway 探测结果即可,
 /// SSID 提示降级为「尝试直连 192.168.1.1」。
 final class MethodChannelNetworkMonitor implements NetworkMonitor {
-  static const MethodChannel channel = MethodChannel('nikonpill/network');
+  static const MethodChannel channel = MethodChannel('zpill/network');
 
   @override
   Stream<WifiLinkInfo?> get link => throw UnimplementedError();
@@ -55,7 +55,7 @@ final class WifiJoinResult {
   final String? gateway;
 }
 
-/// 程序化加入热点(`nikonpill/network` 方法 `join`/`release`)。
+/// 程序化加入热点(`zpill/network` 方法 `join`/`release`)。
 /// BLE→WiFi 交接用(SnapBridge 同款):0x2004 凭据 → 写 0x2005 断
 /// BLE → join → PTP/IP。Android = WifiNetworkSpecifier + requestNetwork
 /// + bindProcessToNetwork(specifier 网络无互联网,socket 须绑过去,
@@ -78,7 +78,7 @@ abstract interface class WifiJoiner {
 }
 
 final class MethodChannelWifiJoiner implements WifiJoiner {
-  static const MethodChannel _channel = MethodChannel('nikonpill/network');
+  static const MethodChannel _channel = MethodChannel('zpill/network');
 
   @override
   Future<WifiJoinResult> join({

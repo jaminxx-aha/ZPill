@@ -1,4 +1,4 @@
-// NikonPill USB 通道(iOS 平台,native 侧)—— ImageCaptureCore 实现。
+// ZPill USB 通道(iOS 平台,native 侧)—— ImageCaptureCore 实现。
 //
 // 路线抉择(2026-10-03/04 实证):DriverKit dext 需付费开发者账号;
 // 沙盒 App 直连 IOKit(IOServiceOpen USB 节点)被拒 kIOReturnNotPermitted。
@@ -6,7 +6,7 @@
 // (kTCCServiceExternalCameraMedia_iOS,Info.plist 的 NSCameraUsageDescription)
 // 即可枚举 USB 相机、收发原始 PTP 命令 —— 免费个人团队可用,真机已验证。
 //
-// 对应 Dart 契约 lib/platform/usb/usb_host.dart(`nikonpill/usb`):
+// 对应 Dart 契约 lib/platform/usb/usb_host.dart(`zpill/usb`):
 // - listCameras → ICDeviceBrowser 枚举 USB 相机,过滤 VID=0x04B0,
 //   identifier = ICDevice.uuidString(Dart 只透传);
 // - open(identifier) → requestContentsAuthorization(首次 TCC 弹窗,
@@ -532,7 +532,7 @@ private final class IcPtpSession {
 // ── Flutter 插件 ─────────────────────────────────────────────────
 
 public final class UsbHostPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
-  private let usbQueue = DispatchQueue(label: "nikonpill.usb")
+  private let usbQueue = DispatchQueue(label: "zpill.usb")
   private var session: IcPtpSession?
 
   /// 事件流出口(遥控拍摄:ObjectAdded/CaptureComplete)。
@@ -541,11 +541,11 @@ public final class UsbHostPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
 
   public static func register(with registrar: FlutterPluginRegistrar) {
     let channel = FlutterMethodChannel(
-      name: "nikonpill/usb", binaryMessenger: registrar.messenger())
+      name: "zpill/usb", binaryMessenger: registrar.messenger())
     let instance = UsbHostPlugin()
     registrar.addMethodCallDelegate(instance, channel: channel)
     let events = FlutterEventChannel(
-      name: "nikonpill/usb/events", binaryMessenger: registrar.messenger())
+      name: "zpill/usb/events", binaryMessenger: registrar.messenger())
     events.setStreamHandler(instance)
     // 启动即预热:浏览器先把设备枚举在后台跑起来(首次 TCC 授权弹窗
     // 也提前到启动期完成),用户点「连接」时快照多半已就绪 —— 无相机
@@ -639,7 +639,7 @@ public final class UsbHostPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
   ///    丢弃,双保险不断流)。
   private func forwardEvent(_ data: Data) {
     guard let normalized = normalizePtpEvent(data) else {
-      NSLog("nikonpill/usb: 无法归一的 PTP 事件(%ld B): %@",
+      NSLog("zpill/usb: 无法归一的 PTP 事件(%ld B): %@",
             data.count, data.map { String(format: "%02x", $0) }.joined())
       return
     }

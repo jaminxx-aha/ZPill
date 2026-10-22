@@ -1,4 +1,4 @@
-package com.aha.nikonpill.video
+package com.aha.zpill.video
 
 import android.content.Context
 import android.net.Uri
@@ -27,7 +27,7 @@ import java.nio.ByteOrder
 import kotlin.math.roundToInt
 
 /**
- * 视频 LUT 导出(`nikonpill/video_lut` 通道;Dart 契约
+ * 视频 LUT 导出(`zpill/video_lut` 通道;Dart 契约
  * lib/platform/video_lut_export.dart)。
  *
  * Media3 Transformer 硬件导出(借 Camera_Bridge 实证思路,API 面一致):
@@ -197,6 +197,6 @@ class VideoLutExportPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
     }
 
     companion object {
-        private const val CHANNEL = "nikonpill/video_lut"
+        private const val CHANNEL = "zpill/video_lut"
     }
 }

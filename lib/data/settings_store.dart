@@ -143,7 +143,7 @@ final class AppSettings {
   /// 下载 JPG 时把本地评分写入 xmp:Rating。
   final bool xmpInjectRating;
 
-  /// 下载 JPG 时把当前位置写入 EXIF GPS(经 nikonpill/location 通道)。
+  /// 下载 JPG 时把当前位置写入 EXIF GPS(经 zpill/location 通道)。
   final bool xmpInjectGps;
 
   /// 下载 JPG 合成水印:模板选择,off = 不合成。

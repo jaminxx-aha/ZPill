@@ -1,8 +1,8 @@
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:nikon_pill/core/ble/pairing_engine.dart';
-import 'package:nikon_pill/core/ble/pairing_message.dart';
+import 'package:z_pill/core/ble/pairing_engine.dart';
+import 'package:z_pill/core/ble/pairing_message.dart';
 
 void main() {
   // Z50_2 真机向量(HarmoNiLink NikonPairingEngine.ets 头注,博文同源)。

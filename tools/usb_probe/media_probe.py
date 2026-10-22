@@ -85,7 +85,7 @@ def try_thumb_ops(dev, ep_out, ep_in, txid, handle, label) -> int:
         print(f"      {name} <- 0x{rc:04X}  {len(data)}B"
               f"  SOI 偏移 {soi if soi >= 0 else '无(非 JPEG?)'}  尺寸 {dim_s}")
         if soi < 0 and data:
-            out = f"/tmp/nikonpill_{name.split()[0]}_nonjpeg_{handle:08X}.bin"
+            out = f"/tmp/zpill_{name.split()[0]}_nonjpeg_{handle:08X}.bin"
             Path(out).write_bytes(data)
             print(f"        非 JPEG 数据已存:{out} 前 32B:{data[:32].hex(' ')}")
     return txid
@@ -147,7 +147,7 @@ def walk_nef(dev, ep_out, ep_in, txid, handle, name: str) -> int:
     if rc != OK or len(head) < 16:
         print(f"      头读 <- 0x{rc:04X} {len(head)}B(结构走查作罢)")
         return txid
-    Path(f"/tmp/nikonpill_nef_head_{handle:08X}.bin").write_bytes(head)
+    Path(f"/tmp/zpill_nef_head_{handle:08X}.bin").write_bytes(head)
     print(f"      头读 <- 0x{rc:04X}  {len(head)}B(已存 /tmp)")
 
     if head[:2] not in (b"II", b"MM"):
@@ -234,7 +234,7 @@ def walk_nef(dev, ep_out, ep_in, txid, handle, name: str) -> int:
         print(f"        {label}: @{off} {ln}B(实回 {len(data)}B)"
               f"  SOI 偏移 {soi if soi >= 0 else '无'}  尺寸 {dim_s}")
         if dims:
-            out = f"/tmp/nikonpill_nef_preview_{handle:08X}_{off}.jpg"
+            out = f"/tmp/zpill_nef_preview_{handle:08X}_{off}.jpg"
             Path(out).write_bytes(data)
             print(f"          预览 JPEG 已存:{out}")
     return txid
@@ -291,7 +291,7 @@ def scan_nef_jpegs(dev, ep_out, ep_in, txid, handle, name: str, size: int) -> in
         return txid
     for off_j, ln, dims in jpegs:
         dim_s = f"{dims[0]}x{dims[1]}" if dims else "SOF 未见(伪?)"
-        out = f"/tmp/nikonpill_nef_scan_{handle:08X}_{off_j}.jpg"
+        out = f"/tmp/zpill_nef_scan_{handle:08X}_{off_j}.jpg"
         Path(out).write_bytes(whole[off_j:off_j + ln])
         print(f"        JPEG @{off_j}  {ln}B  {dim_s}  已存 {out}")
     real = [j for j in jpegs if j[2]]
@@ -304,7 +304,7 @@ def scan_nef_jpegs(dev, ep_out, ep_in, txid, handle, name: str, size: int) -> in
         else:
             print(f"      → 最大 JPEG {dims_b[0]}x{dims_b[1]} @{off_b}"
                   f" {len_b / 1e3:.0f}KB —— RAW 之外藏有预览!头读方案有救,"
-                  "回 NikonPill 重开 ①")
+                  "回 ZPill 重开 ①")
     else:
         print("      → 无可解析尺寸的 JPEG(伪命中或异常,人工看 /tmp)")
     return txid

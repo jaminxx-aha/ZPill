@@ -6,7 +6,7 @@
 /// 无→申请 / 集变→换装 / 最后释放→stop / 不变→跳过(native 不叠加)。
 /// 逻辑都在协调器,native 侧只做薄执行。
 ///
-/// 三端语义(`nikonpill/bg` channel,方法名不变):
+/// 三端语义(`zpill/bg` channel,方法名不变):
 /// - ohos:长时任务(ContinuousTask)。`ensureRunning` 携
 ///   `modes: string[]`(backgroundTaskManager 的 string[] 重载,API 12+),
 ///   已在运行则 in-place 换装(updateBackgroundRunning);
@@ -145,12 +145,12 @@ abstract interface class BackgroundTransferScheduler {
   Future<void> reassert();
 }
 
-/// 经 `nikonpill/bg` channel:方法 `ensureRunning`(携 modes 数组)/
+/// 经 `zpill/bg` channel:方法 `ensureRunning`(携 modes 数组)/
 /// `stop`。协调器决策 none 时不过通道;旧 native(Android/iOS 不读
 /// 参数)与未实现端(MissingPluginException)均静默降级。
 final class MethodChannelBackgroundScheduler
     implements BackgroundTransferScheduler {
-  static const MethodChannel channel = MethodChannel('nikonpill/bg');
+  static const MethodChannel channel = MethodChannel('zpill/bg');
 
   final BackgroundLeaseCoordinator coordinator =
       BackgroundLeaseCoordinator();

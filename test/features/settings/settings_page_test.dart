@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/app.dart';
-import 'package:nikon_pill/app_services.dart';
-import 'package:nikon_pill/data/settings_store.dart';
-import 'package:nikon_pill/l10n/l10n.dart';
+import 'package:z_pill/app.dart';
+import 'package:z_pill/app_services.dart';
+import 'package:z_pill/data/settings_store.dart';
+import 'package:z_pill/l10n/l10n.dart';
 
 /// 设置页:文本框散焦/落库(真机反馈:点开文本框后键盘收不起来)+
 /// 深色模式/语言分段切换即时落库(语言含 t() 经真实 scope 的翻转验证)。
@@ -15,7 +15,7 @@ void main() {
       ..physicalSize = const Size(800, 2400)
       ..devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
-    await tester.pumpWidget(const NikonPillApp());
+    await tester.pumpWidget(const ZPillApp());
     await tester.pumpAndSettle();
     await tester.tap(find.text('设置'));
     await tester.pumpAndSettle();

@@ -2,7 +2,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/core/remote/live_view_header.dart';
+import 'package:z_pill/core/remote/live_view_header.dart';
 
 /// 合成一帧 LiveViewObject:display-info 头(大端)+ SOI 开头的 JPEG 尾。
 /// 头长 [headerLen](三代 1024 / 一代 512 / 任意奇数头验 SOI 定长),

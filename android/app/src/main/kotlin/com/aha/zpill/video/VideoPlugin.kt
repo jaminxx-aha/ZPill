@@ -1,4 +1,4 @@
-package com.aha.nikonpill.video
+package com.aha.zpill.video
 
 import android.graphics.Bitmap
 import android.graphics.Matrix
@@ -9,10 +9,10 @@ import java.io.ByteArrayOutputStream
 import kotlin.math.max
 
 /**
- * NikonPill 视频(Android 平台,native 侧)。
+ * ZPill 视频(Android 平台,native 侧)。
  *
  * 对应 Dart 契约 lib/platform/video_player.dart(MethodChannel
- * `nikonpill/video`),本轮先落**抽帧与帧率探测**两方法(iOS
+ * `zpill/video`),本轮先落**抽帧与帧率探测**两方法(iOS
  * VideoPlugin.swift 已在产;全屏 play/内嵌播放 Android 待补 —— 调用方
  * MissingPluginException 回落路径只对 play/内嵌,thumbnail/frameRate
  * 现已可用):
@@ -30,7 +30,7 @@ import kotlin.math.max
  */
 class VideoPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
     companion object {
-        private const val CHANNEL = "nikonpill/video"
+        private const val CHANNEL = "zpill/video"
         private const val THUMB_TIME_US = 100_000L // 0.1s,避纯黑首帧
 
         /// 全屏播放的待交付通道结果(VideoActivity 关闭/出错时交付;

@@ -4,10 +4,10 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 
-import 'package:nikon_pill/core/remote/frame_analysis.dart';
-import 'package:nikon_pill/core/remote/frame_analyzer.dart';
-import 'package:nikon_pill/core/remote/peaking_engines.dart';
-import 'package:nikon_pill/core/remote/scopes.dart';
+import 'package:z_pill/core/remote/frame_analysis.dart';
+import 'package:z_pill/core/remote/frame_analyzer.dart';
+import 'package:z_pill/core/remote/peaking_engines.dart';
+import 'package:z_pill/core/remote/scopes.dart';
 
 /// 32×24 灰度渐变 JPEG(左黑右白),右端四分之一过曝。
 Uint8List _gradientJpeg() {

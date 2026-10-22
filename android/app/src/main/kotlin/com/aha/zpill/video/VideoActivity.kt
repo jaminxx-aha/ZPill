@@ -1,4 +1,4 @@
-package com.aha.nikonpill.video
+package com.aha.zpill.video
 
 import android.app.Activity
 import android.graphics.SurfaceTexture
@@ -14,7 +14,7 @@ import android.widget.ImageView
 import kotlin.math.roundToInt
 
 /**
- * 全屏视频播放(NikonPill Android,`nikonpill/video` play 的宿主)。
+ * 全屏视频播放(ZPill Android,`zpill/video` play 的宿主)。
  *
  * 对应 iOS VideoPlugin.swift 的 AVKit 全屏路径:黑底全屏 + 左上关闭钮
  * (点击 = finish → VideoPlugin 交付通道 result),播完自然收口。

@@ -1,8 +1,8 @@
 /**
- * NikonPill 后台长时任务保活(ohos 平台,native 侧)。
+ * ZPill 后台长时任务保活(ohos 平台,native 侧)。
  *
  * 对应 Dart 契约 lib/platform/background_transfer.dart(MethodChannel
- * `nikonpill/bg`):`ensureRunning`(携 `modes: string[]`)/ `stop`。
+ * `zpill/bg`):`ensureRunning`(携 `modes: string[]`)/ `stop`。
  * Dart 协调器把各业务持有者(传输 dataTransfer / BLE 会话
  * bluetoothInteraction [+ location,GPS 注入采样期])折成模式并集,只在
  * 并集变化沿过通道;native 本类做薄执行:
@@ -59,7 +59,7 @@ const KNOWN_MODES: string[] = ['dataTransfer', 'bluetoothInteraction', 'location
 /// cancel 监听是模块级单注册(重复 on() 报 401),引擎重挂沿只注册一次。
 let cancelListenerRegistered = false;
 
-/** `nikonpill/bg` 通道实现。 */
+/** `zpill/bg` 通道实现。 */
 export class BgPlugin implements FlutterPlugin, AbilityAware {
   private channel: MethodChannel | null = null;
   private context: common.Context | null = null;
@@ -83,7 +83,7 @@ export class BgPlugin implements FlutterPlugin, AbilityAware {
 
   onAttachedToEngine(binding: FlutterPluginBinding): void {
     this.context = binding.getApplicationContext();
-    this.channel = new MethodChannel(binding.getBinaryMessenger(), 'nikonpill/bg');
+    this.channel = new MethodChannel(binding.getBinaryMessenger(), 'zpill/bg');
     this.channel.setMethodCallHandler({
       onMethodCall: (call: MethodCall, result: MethodResult): void => {
         this.onMethodCall(call, result);

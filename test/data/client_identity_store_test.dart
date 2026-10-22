@@ -3,18 +3,18 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/data/client_identity_store.dart';
+import 'package:z_pill/data/client_identity_store.dart';
 
 /// 每测一目录:互不污染,留在系统临时区由 OS 回收。
 Future<String> _tempDataDir() async =>
-    (await Directory.systemTemp.createTemp('nikonpill_identity_test_')).path;
+    (await Directory.systemTemp.createTemp('zpill_identity_test_')).path;
 
 void main() {
-  test('首载生成:16B UUID + 智能设备模式码印记 + NikonPill 名,落盘', () async {
+  test('首载生成:16B UUID + 智能设备模式码印记 + ZPill 名,落盘', () async {
     final dir = await _tempDataDir();
     final identity = await ClientIdentityStore(dataDir: () async => dir).load();
 
-    expect(identity.name, 'NikonPill');
+    expect(identity.name, 'ZPill');
     expect(identity.uuid, hasLength(16));
     expect(identity.uuid[4], 0x61, reason: 'NiConn 约定的模式码 0x1E61 小端');
     expect(identity.uuid[5], 0x1E);
@@ -22,7 +22,7 @@ void main() {
     final file = File('$dir/client_identity.json');
     expect(await file.exists(), isTrue);
     final j = jsonDecode(await file.readAsString()) as Map<String, Object?>;
-    expect(j['name'], 'NikonPill');
+    expect(j['name'], 'ZPill');
     expect((j['uuid'] as String).length, 32); // 16B 十六进制
   });
 
@@ -51,7 +51,7 @@ void main() {
     await File('$dir/client_identity.json')
         .writeAsString('{"name":"x","uuid":"zz"}');
     final identity = await ClientIdentityStore(dataDir: () async => dir).load();
-    expect(identity.name, 'NikonPill'); // 回落生成默认名
+    expect(identity.name, 'ZPill'); // 回落生成默认名
     expect(identity.uuid, hasLength(16));
   });
 

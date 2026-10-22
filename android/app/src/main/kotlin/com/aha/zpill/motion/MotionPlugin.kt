@@ -1,4 +1,4 @@
-package com.aha.nikonpill.motion
+package com.aha.zpill.motion
 
 import android.content.Context
 import android.hardware.Sensor
@@ -10,10 +10,10 @@ import io.flutter.plugin.common.EventChannel
 import kotlin.math.atan2
 
 /**
- * NikonPill 水平仪姿态(Android 平台,native 侧)。
+ * ZPill 水平仪姿态(Android 平台,native 侧)。
  *
  * 对应 Dart 契约 lib/platform/motion_host.dart(EventChannel
- * `nikonpill/motion/attitude`):每条事件 = [pitch, roll](弧度,pitch
+ * `zpill/motion/attitude`):每条事件 = [pitch, roll](弧度,pitch
  * 抬头为正,roll 右倾为正)。
  *
  * Android SensorManager TYPE_GRAVITY:values = 施加在设备上的力
@@ -32,7 +32,7 @@ import kotlin.math.atan2
 class MotionPlugin : FlutterPlugin, EventChannel.StreamHandler {
     companion object {
         private const val TAG = "MotionPlugin"
-        private const val CHANNEL = "nikonpill/motion/attitude"
+        private const val CHANNEL = "zpill/motion/attitude"
     }
 
     private var channel: EventChannel? = null

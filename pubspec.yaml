@@ -1,5 +1,5 @@
-name: nikon_pill
-description: 尼康相机无线传输工具 —— iOS / Android / HarmonyOS 三端通用。
+name: z_pill
+description: 相机无线遥控与传输工具 —— iOS / Android / HarmonyOS 三端通用。
 publish_to: "none"
 version: 0.1.0
 

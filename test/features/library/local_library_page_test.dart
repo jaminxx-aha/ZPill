@@ -6,19 +6,19 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 
-import 'package:nikon_pill/core/browser/object_entry.dart';
-import 'package:nikon_pill/core/browser/photo_group.dart' show baseNameOf;
-import 'package:nikon_pill/core/media/cube_lut.dart';
-import 'package:nikon_pill/core/ptpip/object_format.dart';
-import 'package:nikon_pill/core/transfer/transfer_engine.dart';
-import 'package:nikon_pill/core/transfer/transfer_task.dart';
-import 'package:nikon_pill/core/utils/byte_writer.dart';
-import 'package:nikon_pill/features/library/local_library_page.dart';
-import 'package:nikon_pill/features/transfers/transfers_page.dart';
-import 'package:nikon_pill/platform/gallery_saver.dart';
-import 'package:nikon_pill/platform/raw_decoder.dart';
-import 'package:nikon_pill/platform/video_lut_export.dart';
-import 'package:nikon_pill/platform/video_player.dart';
+import 'package:z_pill/core/browser/object_entry.dart';
+import 'package:z_pill/core/browser/photo_group.dart' show baseNameOf;
+import 'package:z_pill/core/media/cube_lut.dart';
+import 'package:z_pill/core/ptpip/object_format.dart';
+import 'package:z_pill/core/transfer/transfer_engine.dart';
+import 'package:z_pill/core/transfer/transfer_task.dart';
+import 'package:z_pill/core/utils/byte_writer.dart';
+import 'package:z_pill/features/library/local_library_page.dart';
+import 'package:z_pill/features/transfers/transfers_page.dart';
+import 'package:z_pill/platform/gallery_saver.dart';
+import 'package:z_pill/platform/raw_decoder.dart';
+import 'package:z_pill/platform/video_lut_export.dart';
+import 'package:z_pill/platform/video_player.dart';
 
 /// 伪相册服务:downloadsDir 指向临时目录,importFiles 落账可断言;
 /// thumbsDir 用独立子目录(NEF 网格缩略落盘,不污染 downloadsDir 清单)。
@@ -291,7 +291,7 @@ void main() {
   late Directory dir;
 
   setUp(() {
-    dir = Directory.systemTemp.createTempSync('nikonpill_library');
+    dir = Directory.systemTemp.createTempSync('zpill_library');
     // AppServices 惰性装配(查看器 DeSqueezedImage 首触)会起 BLE 身份
     // 装载、传输页真单例会列下载目录,都走本通道:三个目录方法给个
     // 无害默认(临时目录),通道错误不落进任何用例的 runAsync 排水窗。

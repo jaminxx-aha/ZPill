@@ -1,7 +1,7 @@
 /**
- * NikonPill 原生日志上报(ohos 平台,native 侧)—— native → Dart 反向通道。
+ * ZPill 原生日志上报(ohos 平台,native 侧)—— native → Dart 反向通道。
  *
- * 对应 Dart 契约 lib/platform/log_bridge.dart(MethodChannel `nikonpill/log`):
+ * 对应 Dart 契约 lib/platform/log_bridge.dart(MethodChannel `zpill/log`):
  * native → Dart 调 'onNativeLog',参数 {level: "d"|"i"|"w"|"e", tag, line},
  * 由 Dart 合流进 AppLog 的 native 域。三端 native 在关键路径(USB bulk
  * 失败 / BLE 状态沿)显式上报、不做 hilog 抓流;iOS/Android 各有对等件
@@ -17,7 +17,7 @@
  */
 import { BinaryMessenger, MethodChannel } from '@ohos/flutter_ohos';
 
-const LOG_CHANNEL = 'nikonpill/log';
+const LOG_CHANNEL = 'zpill/log';
 
 /** 无实例命名空间:插桩点一行调用(e/w/i),别处零成本。 */
 export class NativeLog {

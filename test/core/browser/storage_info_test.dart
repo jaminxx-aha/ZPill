@@ -2,8 +2,8 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/core/browser/storage_info.dart';
-import 'package:nikon_pill/core/utils/byte_writer.dart';
+import 'package:z_pill/core/browser/storage_info.dart';
+import 'package:z_pill/core/utils/byte_writer.dart';
 
 /// 手搓 GetStorageInfo 数据集(ISO 15740 §13.5 布局)。
 Uint8List _storageDataset({

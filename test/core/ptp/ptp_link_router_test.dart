@@ -3,8 +3,8 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/core/ptp/ptp_link_router.dart';
-import 'package:nikon_pill/core/ptp/ptp_transport.dart';
+import 'package:z_pill/core/ptp/ptp_link_router.dart';
+import 'package:z_pill/core/ptp/ptp_transport.dart';
 
 /// 可脚本化的假传输层:execute 由队列供结果;事件流可随时推。
 final class FakeTransport implements PtpTransport {

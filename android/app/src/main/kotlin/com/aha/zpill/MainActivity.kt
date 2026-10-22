@@ -1,24 +1,24 @@
-package com.aha.nikonpill
+package com.aha.zpill
 
 import android.view.KeyEvent
-import com.aha.nikonpill.bg.BgPlugin
-import com.aha.nikonpill.ble.BlePlugin
-import com.aha.nikonpill.gallery.GalleryPlugin
-import com.aha.nikonpill.location.LocationPlugin
-import com.aha.nikonpill.log.NativeLog
-import com.aha.nikonpill.motion.MotionPlugin
-import com.aha.nikonpill.network.NetworkPlugin
-import com.aha.nikonpill.nsd.NsdPlugin
-import com.aha.nikonpill.usb.UsbHostPlugin
-import com.aha.nikonpill.video.VideoLutExportPlugin
-import com.aha.nikonpill.video.VideoPlugin
+import com.aha.zpill.bg.BgPlugin
+import com.aha.zpill.ble.BlePlugin
+import com.aha.zpill.gallery.GalleryPlugin
+import com.aha.zpill.location.LocationPlugin
+import com.aha.zpill.log.NativeLog
+import com.aha.zpill.motion.MotionPlugin
+import com.aha.zpill.network.NetworkPlugin
+import com.aha.zpill.nsd.NsdPlugin
+import com.aha.zpill.usb.UsbHostPlugin
+import com.aha.zpill.video.VideoLutExportPlugin
+import com.aha.zpill.video.VideoPlugin
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
     companion object {
-        private const val VOLUME_CHANNEL = "nikonpill/volume"
+        private const val VOLUME_CHANNEL = "zpill/volume"
     }
 
     /// 音量键快门反向通道(Dart 契约 lib/platform/volume_keys.dart):

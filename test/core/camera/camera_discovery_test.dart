@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:nikon_pill/core/camera/camera_discovery.dart';
+import 'package:z_pill/core/camera/camera_discovery.dart';
 
 void main() {
   group('相机 WiFi 启发式', () {

@@ -236,7 +236,7 @@ DateTime? _parseExifDate(String? raw) {
 
 // ---- 合成 ---------------------------------------------------------------
 
-/// 角标:右下角白字 + 投影;文本空时回落型号,再空回落 'NikonPill'。
+/// 角标:右下角白字 + 投影;文本空时回落型号,再空回落 'ZPill'。
 /// 图太小放不下 → null(调用方跳过重编码)。
 Future<img.Image?> _drawCornerBadge(img.Image photo, ExifCardData? card,
     WatermarkOptions options, TextRaster raster) async {
@@ -245,7 +245,7 @@ Future<img.Image?> _drawCornerBadge(img.Image photo, ExifCardData? card,
       ? custom
       : card?.titleLine.isNotEmpty == true
           ? card!.titleLine
-          : 'NikonPill';
+          : 'ZPill';
   final fontSize = (photo.width * 0.03).clamp(16.0, 96.0);
   var badge = await raster(text, fontSize, 0xFFFFFFFF);
   final margin = (fontSize * 0.7).round();

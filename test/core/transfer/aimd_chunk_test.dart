@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/core/transfer/aimd_chunk.dart';
+import 'package:z_pill/core/transfer/aimd_chunk.dart';
 
 void main() {
   const fast = Duration(milliseconds: 100); // < 400ms 阈值 = 快

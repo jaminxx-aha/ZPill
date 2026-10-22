@@ -3,14 +3,14 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/core/browser/object_entry.dart';
-import 'package:nikon_pill/core/browser/photo_group.dart';
-import 'package:nikon_pill/core/ptpip/object_format.dart';
-import 'package:nikon_pill/data/ratings_store.dart';
-import 'package:nikon_pill/features/browser/ratings_controller.dart';
+import 'package:z_pill/core/browser/object_entry.dart';
+import 'package:z_pill/core/browser/photo_group.dart';
+import 'package:z_pill/core/ptpip/object_format.dart';
+import 'package:z_pill/data/ratings_store.dart';
+import 'package:z_pill/features/browser/ratings_controller.dart';
 
 Future<String> _tempDataDir() async =>
-    (await Directory.systemTemp.createTemp('nikonpill_ratings_test_')).path;
+    (await Directory.systemTemp.createTemp('zpill_ratings_test_')).path;
 
 ObjectEntry _file(int handle, String name, {int size = 1000}) => ObjectEntry(
       handle: handle,

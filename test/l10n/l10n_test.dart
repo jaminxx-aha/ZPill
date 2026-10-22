@@ -1,7 +1,7 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/l10n/l10n.dart';
+import 'package:z_pill/l10n/l10n.dart';
 
 /// t() 抽象键制(i18n 二期):t('ns.key') 查词表;裸树落 zh 词表;
 /// en 未命中先落 zh 再直通键;运行期动态串(非键)原样透出;

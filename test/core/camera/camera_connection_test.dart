@@ -4,19 +4,19 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/core/camera/camera_connection.dart';
-import 'package:nikon_pill/core/camera/camera_info.dart';
-import 'package:nikon_pill/core/camera/reconnect_policy.dart';
-import 'package:nikon_pill/core/ptp/operation_codes.dart';
-import 'package:nikon_pill/core/ptp/ptp_link_router.dart';
-import 'package:nikon_pill/core/ptp/ptp_session.dart';
-import 'package:nikon_pill/core/ptp/ptp_transport.dart';
-import 'package:nikon_pill/core/ptpip/channels.dart';
-import 'package:nikon_pill/core/ptpip/codec.dart';
-import 'package:nikon_pill/core/ptpip/packet.dart';
-import 'package:nikon_pill/core/ptpip/transport.dart';
-import 'package:nikon_pill/data/paired_cameras_store.dart';
-import 'package:nikon_pill/platform/usb/usb_host.dart';
+import 'package:z_pill/core/camera/camera_connection.dart';
+import 'package:z_pill/core/camera/camera_info.dart';
+import 'package:z_pill/core/camera/reconnect_policy.dart';
+import 'package:z_pill/core/ptp/operation_codes.dart';
+import 'package:z_pill/core/ptp/ptp_link_router.dart';
+import 'package:z_pill/core/ptp/ptp_session.dart';
+import 'package:z_pill/core/ptp/ptp_transport.dart';
+import 'package:z_pill/core/ptpip/channels.dart';
+import 'package:z_pill/core/ptpip/codec.dart';
+import 'package:z_pill/core/ptpip/packet.dart';
+import 'package:z_pill/core/ptpip/transport.dart';
+import 'package:z_pill/data/paired_cameras_store.dart';
+import 'package:z_pill/platform/usb/usb_host.dart';
 
 import '../ptp/ptp_session_test.dart'
     show FakePtpTransport, buildDeviceInfoDataset;

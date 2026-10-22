@@ -1,7 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:nikon_pill/core/ble/pairing_message.dart';
+import 'package:z_pill/core/ble/pairing_message.dart';
 
 void main() {
   group('PairingMessage', () {

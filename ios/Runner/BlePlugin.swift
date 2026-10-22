@@ -1,7 +1,7 @@
-// NikonPill BLE 裸桥(iOS CoreBluetooth,native 侧)。
+// ZPill BLE 裸桥(iOS CoreBluetooth,native 侧)。
 //
 // 对应 Dart 契约 lib/platform/ble_scanner.dart(BleHost):
-// MethodChannel `nikonpill/ble` + EventChannel `nikonpill/ble/events`。
+// MethodChannel `zpill/ble` + EventChannel `zpill/ble/events`。
 // 协议逻辑(配对握手/GEO/TIME 载荷)全在 Dart(lib/core/ble/),
 // 本桥只做扫描/连接/GATT 读写订阅的搬运,零 Nikon 方言知识。
 //
@@ -21,10 +21,10 @@ public final class BlePlugin: NSObject, FlutterPlugin, CBCentralManagerDelegate,
   public static func register(with registrar: FlutterPluginRegistrar) {
     let instance = BlePlugin()
     let channel = FlutterMethodChannel(
-      name: "nikonpill/ble", binaryMessenger: registrar.messenger())
+      name: "zpill/ble", binaryMessenger: registrar.messenger())
     registrar.addMethodCallDelegate(instance, channel: channel)
     let events = FlutterEventChannel(
-      name: "nikonpill/ble/events", binaryMessenger: registrar.messenger())
+      name: "zpill/ble/events", binaryMessenger: registrar.messenger())
     events.setStreamHandler(instance)
   }
 

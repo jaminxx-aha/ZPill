@@ -24,7 +24,7 @@
     <uses-permission
         android:name="android.permission.BLUETOOTH_ADMIN"
         android:maxSdkVersion="30"/>
-    <!-- 程序化加入相机热点(nikonpill/network join:WifiNetworkSpecifier
+    <!-- 程序化加入相机热点(zpill/network join:WifiNetworkSpecifier
          + requestNetwork + bindProcessToNetwork;均 normal 级装即授) -->
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE"/>
@@ -35,7 +35,7 @@
         android:name="android.hardware.usb.host"
         android:required="false"/>
     <application
-        android:label="NikonPill"
+        android:label="ZPill"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
@@ -60,7 +60,7 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
-        <!-- 全屏视频播放(nikonpill/video play):黑底全屏,旋转不重建;
+        <!-- 全屏视频播放(zpill/video play):黑底全屏,旋转不重建;
              关闭钮/播完 finish → VideoPlugin 交付通道结果 -->
         <activity
             android:name=".video.VideoActivity"

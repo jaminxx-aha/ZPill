@@ -1,5 +1,5 @@
 /**
- * NikonPill 相册/文件通道(ohos 平台,native 侧)。
+ * ZPill 相册/文件通道(ohos 平台,native 侧)。
  *
  * 对应 Dart 契约 lib/platform/gallery_saver.dart:
  * - tempDir()/thumbsDir()/previewsDir():cacheDir 下专用子目录(缓存,
@@ -34,13 +34,13 @@ import { SaveRequest, SaveSession } from './SaveSession';
 
 const TAG = 'GalleryPlugin';
 
-const TEMP_SUBDIR = 'nikonpill';
-const THUMBS_SUBDIR = 'nikonpill-thumbs';
-const PREVIEWS_SUBDIR = 'nikonpill-previews';
-const DOWNLOADS_SUBDIR = 'nikonpill-downloads';
-const DATA_SUBDIR = 'nikonpill-data';
+const TEMP_SUBDIR = 'zpill';
+const THUMBS_SUBDIR = 'zpill-thumbs';
+const PREVIEWS_SUBDIR = 'zpill-previews';
+const DOWNLOADS_SUBDIR = 'zpill-downloads';
+const DATA_SUBDIR = 'zpill-data';
 
-/** `nikonpill/gallery` 通道实现。 */
+/** `zpill/gallery` 通道实现。 */
 export class GalleryPlugin implements FlutterPlugin, AbilityAware {
   private channel: MethodChannel | null = null;
   private context: common.Context | null = null;
@@ -52,7 +52,7 @@ export class GalleryPlugin implements FlutterPlugin, AbilityAware {
 
   onAttachedToEngine(binding: FlutterPluginBinding): void {
     this.context = binding.getApplicationContext();
-    this.channel = new MethodChannel(binding.getBinaryMessenger(), 'nikonpill/gallery');
+    this.channel = new MethodChannel(binding.getBinaryMessenger(), 'zpill/gallery');
     this.channel.setMethodCallHandler({
       onMethodCall: (call: MethodCall, result: MethodResult): void => {
         this.onMethodCall(call, result);

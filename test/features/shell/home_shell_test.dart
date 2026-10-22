@@ -6,21 +6,21 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 
-import 'package:nikon_pill/core/camera/camera_connection.dart';
-import 'package:nikon_pill/core/ptp/device_prop.dart';
-import 'package:nikon_pill/core/ptp/operation_codes.dart';
-import 'package:nikon_pill/core/ptp/ptp_session.dart';
-import 'package:nikon_pill/core/ptp/ptp_transport.dart';
-import 'package:nikon_pill/core/remote/live_view_engine.dart';
-import 'package:nikon_pill/core/utils/byte_writer.dart';
-import 'package:nikon_pill/features/connection/connection_page.dart';
-import 'package:nikon_pill/features/remote/live_view_overlays.dart';
-import 'package:nikon_pill/features/remote/remote_controller.dart';
-import 'package:nikon_pill/features/remote/remote_page.dart';
-import 'package:nikon_pill/features/remote/shooting_param_catalog.dart';
-import 'package:nikon_pill/features/settings/settings_page.dart';
-import 'package:nikon_pill/features/shell/home_shell.dart';
-import 'package:nikon_pill/l10n/message.dart';
+import 'package:z_pill/core/camera/camera_connection.dart';
+import 'package:z_pill/core/ptp/device_prop.dart';
+import 'package:z_pill/core/ptp/operation_codes.dart';
+import 'package:z_pill/core/ptp/ptp_session.dart';
+import 'package:z_pill/core/ptp/ptp_transport.dart';
+import 'package:z_pill/core/remote/live_view_engine.dart';
+import 'package:z_pill/core/utils/byte_writer.dart';
+import 'package:z_pill/features/connection/connection_page.dart';
+import 'package:z_pill/features/remote/live_view_overlays.dart';
+import 'package:z_pill/features/remote/remote_controller.dart';
+import 'package:z_pill/features/remote/remote_page.dart';
+import 'package:z_pill/features/remote/shooting_param_catalog.dart';
+import 'package:z_pill/features/settings/settings_page.dart';
+import 'package:z_pill/features/shell/home_shell.dart';
+import 'package:z_pill/l10n/message.dart';
 
 /// 假传输:双道应答回放。连接沿有两条独立链并发入队 —— 控制器链
 /// (参数读,走 FIFO 兜底道)与引擎链(0x9201/0x9428/0x9202,按 op

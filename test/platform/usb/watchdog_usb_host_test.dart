@@ -3,8 +3,8 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/platform/usb/usb_host.dart';
-import 'package:nikon_pill/platform/usb/watchdog_usb_host.dart';
+import 'package:z_pill/platform/usb/usb_host.dart';
+import 'package:z_pill/platform/usb/watchdog_usb_host.dart';
 
 const _dev = UsbDeviceHandle(
   vendorId: 0x04B0,

@@ -1,6 +1,6 @@
-// NikonPill 原生日志上报(iOS 平台,native 侧)—— native → Dart 反向通道。
+// ZPill 原生日志上报(iOS 平台,native 侧)—— native → Dart 反向通道。
 //
-// 对应 Dart 契约 lib/platform/log_bridge.dart(MethodChannel `nikonpill/log`):
+// 对应 Dart 契约 lib/platform/log_bridge.dart(MethodChannel `zpill/log`):
 // native → Dart 调 'onNativeLog',参数 {level: "d"|"i"|"w"|"e", tag, line},
 // 由 Dart 合流进 AppLog 的 native 域。三端 native 在关键路径(USB bulk
 // 失败 / BLE 状态沿)显式上报、不做系统日志抓流;android/ohos 各有对等件
@@ -29,7 +29,7 @@ enum NativeLog {
   /// 装配点:用引擎 binaryMessenger 建通道(幂等,重复 install 无副作用)。
   static func install(messenger: FlutterBinaryMessenger) {
     guard channel == nil else { return }
-    channel = FlutterMethodChannel(name: "nikonpill/log", binaryMessenger: messenger)
+    channel = FlutterMethodChannel(name: "zpill/log", binaryMessenger: messenger)
   }
 
   static func e(_ tag: String, _ line: String) { send("e", tag, line) }

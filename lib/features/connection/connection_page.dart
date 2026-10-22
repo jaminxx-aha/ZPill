@@ -172,7 +172,7 @@ class ConnectionController extends ChangeNotifier {
   final BleCameraSession? bleSession;
   final BleIdentityStore? bleIdentityStore;
 
-  /// 程序化加入相机热点(`nikonpill/network` join;Android 已实现,
+  /// 程序化加入相机热点(`zpill/network` join;Android 已实现,
   /// iOS/ohos 未装配 → joinCameraAp 走 skipped 手动指引)。
   final WifiJoiner? wifiJoiner;
   final SettingsController? settingsController;
@@ -1509,7 +1509,7 @@ class _ConnectionPageState extends State<ConnectionPage>
   }
 
   /// 系统设置深链通道(红卡手动按钮共用;蓝牙原有,Wi-Fi 为本次新增)。
-  static const MethodChannel _settingsChannel = MethodChannel('nikonpill/ble');
+  static const MethodChannel _settingsChannel = MethodChannel('zpill/ble');
 
   /// 打开系统 Wi-Fi 设置(红卡手动钮;不点不跳,深链失败静默 —— 用户
   /// 按引导手动进设置)。

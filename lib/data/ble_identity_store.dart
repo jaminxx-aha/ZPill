@@ -59,7 +59,7 @@ final class BlePairedIdentity {
       deviceId: deviceId,
       nonce: nonce,
       serial: json['serial'] as String? ?? '',
-      controllerName: json['controllerName'] as String? ?? 'NikonPill',
+      controllerName: json['controllerName'] as String? ?? 'ZPill',
       cameraName: json['cameraName'] as String? ?? '',
       pairedAt:
           pairedAtRaw == null ? DateTime.now() : DateTime.parse(pairedAtRaw),

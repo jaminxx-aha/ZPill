@@ -1,4 +1,4 @@
-/// 视频播放接口:`nikonpill/video` 通道契约。
+/// 视频播放接口:`zpill/video` 通道契约。
 ///
 /// 三个方法:
 /// - `play({path, rate})`:全屏播放本地视频文件,返回于播放器关闭时
@@ -19,7 +19,7 @@
 ///
 /// 另有**内嵌播放**一路(图库查看器视频页,2026-10-09):
 /// - `supportsEmbeddedView`:平台是否具备内嵌播放视图(= iOS 平台视图
-///   `nikonpill/video-view` 已注册;Android/ohos 待补 → 调用方回落
+///   `zpill/video-view` 已注册;Android/ohos 待补 → 调用方回落
 ///   海报帧 + 说明文案,不再走全屏 play)。
 /// - `loadEmbeddedView(viewId, path)`:内嵌视图装载档案。**路径不走
 ///   平台视图 creationParams**(引擎对工厂可选编解码钩子的挂接不可靠,
@@ -85,7 +85,7 @@ abstract interface class VideoPlayer {
   Future<void> seekEmbeddedView(int viewId, {required double position});
 }
 
-/// 生产内嵌视图:iOS 平台视图 `nikonpill/video-view`(VideoPlugin 注册,
+/// 生产内嵌视图:iOS 平台视图 `zpill/video-view`(VideoPlugin 注册,
 /// AVPlayerViewController)。不带 creationParams —— 档案路径由
 /// [VideoPlayer.loadEmbeddedView] 走方法通道装载(见类注释)。
 /// 仅 iOS 真机可用;其余平台调用方不得构建(以
@@ -93,12 +93,12 @@ abstract interface class VideoPlayer {
 Widget embeddedVideoViewBuilder(
         String path, void Function(int viewId) onCreated) =>
     UiKitView(
-      viewType: 'nikonpill/video-view',
+      viewType: 'zpill/video-view',
       onPlatformViewCreated: onCreated,
     );
 
 final class MethodChannelVideoPlayer implements VideoPlayer {
-  static const MethodChannel _channel = MethodChannel('nikonpill/video');
+  static const MethodChannel _channel = MethodChannel('zpill/video');
 
   @override
   bool get supportsEmbeddedView => Platform.isIOS;

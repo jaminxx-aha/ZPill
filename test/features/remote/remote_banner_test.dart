@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/features/remote/remote_banner.dart';
+import 'package:z_pill/features/remote/remote_banner.dart';
 
 /// 横幅长按复制(2026-10-17 用户需求:报错码要能贴回开发侧):
 /// 剪贴板进的是同屏文本(t() 翻译后原文/动态串直通),展开/提示态

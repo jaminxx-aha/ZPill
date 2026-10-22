@@ -6,23 +6,23 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/core/browser/object_entry.dart';
-import 'package:nikon_pill/core/browser/photo_group.dart';
-import 'package:nikon_pill/core/browser/thumbnail_cache.dart';
-import 'package:nikon_pill/core/media/watermark.dart' show ExifCardData;
-import 'package:nikon_pill/core/ptp/operation_codes.dart';
-import 'package:nikon_pill/core/ptp/ptp_session.dart';
-import 'package:nikon_pill/core/ptp/ptp_transport.dart';
-import 'package:nikon_pill/core/ptpip/object_format.dart';
-import 'package:nikon_pill/core/transfer/object_downloader.dart';
-import 'package:nikon_pill/core/transfer/transfer_engine.dart';
-import 'package:nikon_pill/core/transfer/transfer_task.dart';
-import 'package:nikon_pill/core/utils/byte_writer.dart';
-import 'package:nikon_pill/features/browser/photo_viewer_page.dart';
-import 'package:nikon_pill/features/common/widgets/embedded_video_player.dart';
-import 'package:nikon_pill/features/transfers/transfers_page.dart';
-import 'package:nikon_pill/platform/gallery_saver.dart';
-import 'package:nikon_pill/platform/video_player.dart';
+import 'package:z_pill/core/browser/object_entry.dart';
+import 'package:z_pill/core/browser/photo_group.dart';
+import 'package:z_pill/core/browser/thumbnail_cache.dart';
+import 'package:z_pill/core/media/watermark.dart' show ExifCardData;
+import 'package:z_pill/core/ptp/operation_codes.dart';
+import 'package:z_pill/core/ptp/ptp_session.dart';
+import 'package:z_pill/core/ptp/ptp_transport.dart';
+import 'package:z_pill/core/ptpip/object_format.dart';
+import 'package:z_pill/core/transfer/object_downloader.dart';
+import 'package:z_pill/core/transfer/transfer_engine.dart';
+import 'package:z_pill/core/transfer/transfer_task.dart';
+import 'package:z_pill/core/utils/byte_writer.dart';
+import 'package:z_pill/features/browser/photo_viewer_page.dart';
+import 'package:z_pill/features/common/widgets/embedded_video_player.dart';
+import 'package:z_pill/features/transfers/transfers_page.dart';
+import 'package:z_pill/platform/gallery_saver.dart';
+import 'package:z_pill/platform/video_player.dart';
 
 /// 假缩略图:即时返回路径(文件不存在 → Image.file 走占位,无动画挂起)。
 final class _FakeThumbs implements ThumbnailCache {
@@ -36,7 +36,7 @@ final class _FakeThumbs implements ThumbnailCache {
 
   @override
   Future<String> pathFor(ObjectEntry entry, ThumbSource source) async =>
-      '/tmp/nikonpill_test_preview_${entry.handle}.jpg';
+      '/tmp/zpill_test_preview_${entry.handle}.jpg';
 
   @override
   Future<ExifCardData?> exifCardOf(ObjectEntry entry) async =>
@@ -204,7 +204,7 @@ final class _StubVideoViewState extends State<_StubVideoView> {
 
 /// 假相册:视频播放只用到 tempDir,其余照抛。
 final class _FakeGallery implements GallerySaver {
-  final Directory temp = Directory.systemTemp.createTempSync('nikonpill_test_viewer');
+  final Directory temp = Directory.systemTemp.createTempSync('zpill_test_viewer');
 
   @override
   Future<String> tempDir() async => temp.path;

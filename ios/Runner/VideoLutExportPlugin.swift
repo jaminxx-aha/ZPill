@@ -4,7 +4,7 @@ import Flutter
 import Foundation
 import UIKit
 
-/// 视频 LUT 导出(`nikonpill/video_lut` 通道;Dart 契约
+/// 视频 LUT 导出(`zpill/video_lut` 通道;Dart 契约
 /// lib/platform/video_lut_export.dart)。
 ///
 /// AVFoundation 管线:AVAssetExportSession + AVVideoComposition
@@ -32,7 +32,7 @@ final class VideoLutExportPlugin: NSObject, FlutterPlugin {
   private var pending: ((Any?) -> Void)?
 
   static func register(with registrar: FlutterPluginRegistrar) {
-    let channel = FlutterMethodChannel(name: "nikonpill/video_lut",
+    let channel = FlutterMethodChannel(name: "zpill/video_lut",
                                        binaryMessenger: registrar.messenger())
     let instance = VideoLutExportPlugin()
     instance.channel = channel

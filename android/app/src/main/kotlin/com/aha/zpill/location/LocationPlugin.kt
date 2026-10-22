@@ -1,4 +1,4 @@
-package com.aha.nikonpill.location
+package com.aha.zpill.location
 
 import android.Manifest
 import android.app.Activity
@@ -20,10 +20,10 @@ import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.PluginRegistry
 
 /**
- * NikonPill 位置服务(Android 平台,native 侧)。
+ * ZPill 位置服务(Android 平台,native 侧)。
  *
  * 对应 Dart 契约 lib/platform/location_host.dart(MethodChannel
- * `nikonpill/location`):`current` → [lat, lon](double)或 null。
+ * `zpill/location`):`current` → [lat, lon](double)或 null。
  * null 语义 = 本次无定位,上层按「照片不加 GPS」降级,绝不给错的坐标。
  *
  * 定位策略与 iOS/ohos 对齐:只取新鲜定位(requestLocationUpdates 首回调
@@ -36,7 +36,7 @@ import io.flutter.plugin.common.PluginRegistry
  * 不引 androidx。
  *
  * 连续流(ble_pair GPS 注入驱动源,与 iOS/ohos 同契约):EventChannel
- * `nikonpill/location/stream` + `startStream`/`stopStream`(幂等,distanceFilter
+ * `zpill/location/stream` + `startStream`/`stopStream`(幂等,distanceFilter
  * 3m)/`requestAlways`(两段式:先 FINE 后 BACKGROUND,Android 11+ 后台
  * 须单独申请,同包发必被系统拒)/`authStatus`(always/whenInUse/denied)。
  * 未授权起流 = 静默无事件(上层按「无定位」降级),绝不给错的坐标。
@@ -47,8 +47,8 @@ class LocationPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHan
     EventChannel.StreamHandler {
     companion object {
         private const val TAG = "LocationPlugin"
-        private const val CHANNEL = "nikonpill/location"
-        private const val STREAM_EVENTS = "nikonpill/location/stream"
+        private const val CHANNEL = "zpill/location"
+        private const val STREAM_EVENTS = "zpill/location/stream"
         private const val LOCATE_TIMEOUT_MS = 8000L
         private const val REQUEST_CODE = 7001
         private const val REQUEST_CODE_ALWAYS = 7003

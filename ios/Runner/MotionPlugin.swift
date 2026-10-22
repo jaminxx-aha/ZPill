@@ -1,7 +1,7 @@
-// NikonPill 水平仪姿态通道(iOS 平台,native 侧)。
+// ZPill 水平仪姿态通道(iOS 平台,native 侧)。
 //
 // 对应 Dart 契约 lib/platform/motion_host.dart:
-// EventChannel `nikonpill/motion/attitude` 广播 [pitch, roll](弧度)。
+// EventChannel `zpill/motion/attitude` 广播 [pitch, roll](弧度)。
 //
 // 数据源 CoreMotion CMDeviceMotion.gravity(设备坐标系下重力方向,
 // 模长 1)。换算(手机竖持拍人像的相机视角,契约:抬头为正 / 右倾为正,
@@ -22,7 +22,7 @@ import UIKit
 public final class MotionPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
   public static func register(with registrar: FlutterPluginRegistrar) {
     let channel = FlutterEventChannel(
-      name: "nikonpill/motion/attitude", binaryMessenger: registrar.messenger())
+      name: "zpill/motion/attitude", binaryMessenger: registrar.messenger())
     let instance = MotionPlugin()
     channel.setStreamHandler(instance)
   }

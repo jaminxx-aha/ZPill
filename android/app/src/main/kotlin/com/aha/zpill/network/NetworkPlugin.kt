@@ -1,4 +1,4 @@
-package com.aha.nikonpill.network
+package com.aha.zpill.network
 
 import android.content.Context
 import android.net.ConnectivityManager
@@ -16,7 +16,7 @@ import io.flutter.plugin.common.MethodChannel
 import java.net.Inet4Address
 
 /**
- * 程序化加入 Wi-Fi(`nikonpill/network` 方法 join/release;Dart 契约
+ * 程序化加入 Wi-Fi(`zpill/network` 方法 join/release;Dart 契约
  * lib/platform/network_monitor.dart 的 WifiJoiner)。
  *
  * BLE→WiFi 交接用(SnapBridge 同款):0x2004 凭据 → 写 0x2005 断 BLE →
@@ -220,7 +220,7 @@ class NetworkPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
     }
 
     companion object {
-        private const val CHANNEL = "nikonpill/network"
+        private const val CHANNEL = "zpill/network"
         private const val TAG = "NetworkPlugin"
     }
 }

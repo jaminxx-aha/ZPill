@@ -76,7 +76,7 @@ class BlePairingException implements Exception {
 final class BleCameraSession {
   BleCameraSession({
     required BleHost host,
-    this.controllerName = 'NikonPill',
+    this.controllerName = 'ZPill',
     this.handshakeTimeout = const Duration(seconds: 15),
     this.writeGate = const Duration(milliseconds: 2500),
     DateTime Function()? now,

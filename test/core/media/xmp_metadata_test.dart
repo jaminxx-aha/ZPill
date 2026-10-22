@@ -3,7 +3,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/core/media/xmp_metadata.dart';
+import 'package:z_pill/core/media/xmp_metadata.dart';
 
 /// XMP APP1 段命名空间头(与实现同款:小端问题勿扰,这里是字节常量)。
 final List<int> kXmpHeader = [...'http://ns.adobe.com/xap/1.0/'.codeUnits, 0];

@@ -1,6 +1,6 @@
 // Blowfish 标准 P 数组/S 盒(与 HarmoNiLink/nsg 一致,提取自其真机验证过的源码
 // BlowfishHasher.ets,一次性机械提取,勿手改)
-// 注:配对 CLI(nikon_ble_pair 二进制)为本地构建产物,不入库。
+// 注:配对 CLI(z_ble_pair 二进制)为本地构建产物,不入库。
 
 let PBOX_INIT: [UInt32] = [
     0x243F6A88, 0x85A308D3, 0x13198A2E, 0x03707344, 0xA4093822, 0x299F31D0, 0x082EFA98, 0xEC4E6C89,

@@ -21,8 +21,8 @@ import 'l10n/l10n.dart';
 /// home 子树内,scope 若只包 home 会漏掉整条 push 栈。**scope 才是 t()
 /// 的唯一语言来源**;MaterialApp 的 locale/supportedLocales/delegates
 /// 只喂框架组件(菜单/日期选择等内置文案)。
-class NikonPillApp extends StatelessWidget {
-  const NikonPillApp({super.key});
+class ZPillApp extends StatelessWidget {
+  const ZPillApp({super.key});
 
   /// 语言设置 → t() 消费的语言码('zh'/'en',已解析,**不存在 system
   /// 态**)。跟随系统在此自解析(非 en 一律落中文,与 supportedLocales
@@ -45,7 +45,7 @@ class NikonPillApp extends StatelessWidget {
       builder: (context, _) => L10nScope(
         code: _l10nCodeOf(controller.settings.language),
         child: MaterialApp(
-          title: 'NikonPill',
+          title: 'ZPill',
           debugShowCheckedModeBanner: false,
           theme: AppTheme.light,
           darkTheme: AppTheme.dark,

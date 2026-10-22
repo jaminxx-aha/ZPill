@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace = "com.aha.nikonpill"
+    namespace = "com.aha.zpill"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -15,7 +15,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.aha.nikonpill"
+        applicationId = "com.aha.zpill"
         // minSdk 29(Android 10):相册导入走现代 MediaStore 免权限路径
         // (RELATIVE_PATH + IS_PENDING 自有贡献零弹窗);不兼容更旧机型
         // (2026-10-04 用户定)。

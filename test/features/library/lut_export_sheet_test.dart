@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/core/media/cube_lut.dart';
-import 'package:nikon_pill/features/edit/lut_presets.dart' show builtinLuts;
-import 'package:nikon_pill/features/library/lut_export_sheet.dart';
+import 'package:z_pill/core/media/cube_lut.dart';
+import 'package:z_pill/features/edit/lut_presets.dart' show builtinLuts;
+import 'package:z_pill/features/library/lut_export_sheet.dart';
 
 /// 选表纯件单测:内置 LUT 全列 + 剪贴板入口;点选项即回调。
 void main() {

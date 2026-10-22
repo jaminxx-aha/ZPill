@@ -2,14 +2,14 @@ import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/core/browser/album.dart';
-import 'package:nikon_pill/core/browser/object_entry.dart';
-import 'package:nikon_pill/core/browser/photo_group.dart';
-import 'package:nikon_pill/core/browser/object_repository.dart';
-import 'package:nikon_pill/core/camera/camera_connection.dart';
-import 'package:nikon_pill/core/ptpip/object_format.dart';
-import 'package:nikon_pill/features/browser/browser_controller.dart';
-import 'package:nikon_pill/l10n/message.dart';
+import 'package:z_pill/core/browser/album.dart';
+import 'package:z_pill/core/browser/object_entry.dart';
+import 'package:z_pill/core/browser/photo_group.dart';
+import 'package:z_pill/core/browser/object_repository.dart';
+import 'package:z_pill/core/camera/camera_connection.dart';
+import 'package:z_pill/core/ptpip/object_format.dart';
+import 'package:z_pill/features/browser/browser_controller.dart';
+import 'package:z_pill/l10n/message.dart';
 
 /// 手动驱动的伪仓库:块事件由测试逐个发,loadAlbums 挂在 Completer 上
 /// 由测试择机完成(模拟渐进枚举的时序)。updates 用 sync 广播(与真实现

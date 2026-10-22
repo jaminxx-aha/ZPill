@@ -1,9 +1,9 @@
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/core/ptp/device_prop.dart';
-import 'package:nikon_pill/core/ptp/operation_codes.dart';
-import 'package:nikon_pill/features/remote/remote_capture_strip.dart';
-import 'package:nikon_pill/features/remote/shooting_param_catalog.dart';
+import 'package:z_pill/core/ptp/device_prop.dart';
+import 'package:z_pill/core/ptp/operation_codes.dart';
+import 'package:z_pill/features/remote/remote_capture_strip.dart';
+import 'package:z_pill/features/remote/shooting_param_catalog.dart';
 
 ShootingParam _param(int code) =>
     kShootingParams.singleWhere((p) => p.code == code);

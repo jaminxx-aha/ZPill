@@ -4,13 +4,13 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/core/ptp/device_prop.dart';
-import 'package:nikon_pill/core/ptp/operation_codes.dart';
-import 'package:nikon_pill/core/ptp/ptp_session.dart';
-import 'package:nikon_pill/core/ptp/ptp_transport.dart';
-import 'package:nikon_pill/core/ptpusb/containers.dart';
-import 'package:nikon_pill/core/ptpusb/usb_transport.dart';
-import 'package:nikon_pill/core/utils/byte_writer.dart';
+import 'package:z_pill/core/ptp/device_prop.dart';
+import 'package:z_pill/core/ptp/operation_codes.dart';
+import 'package:z_pill/core/ptp/ptp_session.dart';
+import 'package:z_pill/core/ptp/ptp_transport.dart';
+import 'package:z_pill/core/ptpusb/containers.dart';
+import 'package:z_pill/core/ptpusb/usb_transport.dart';
+import 'package:z_pill/core/utils/byte_writer.dart';
 
 import '../ptpusb/fake_usb_byte_pipe.dart';
 
@@ -962,10 +962,10 @@ void main() {
       final req = fake.requests.single;
       expect(req.opcode, PtpOperationCode.setDevicePropValue);
       expect(req.params, [PtpDevicePropCode.sessionInitiatorInfo]);
-      // 'NikonPill' PTP 字符串:u8 计数(字符数,不含 NUL)+ UTF-16LE,
+      // 'ZPill' PTP 字符串:u8 计数(字符数,不含 NUL)+ UTF-16LE,
       // 无终止符 —— 与探针 ptp_str 同款(Zf USB 实证载荷,2026-10-07)。
-      final expected = <int>[9];
-      for (final cu in 'NikonPill'.codeUnits) {
+      final expected = <int>['ZPill'.length];
+      for (final cu in 'ZPill'.codeUnits) {
         expected.addAll([cu & 0xFF, cu >> 8]);
       }
       expect(req.dataOut, Uint8List.fromList(expected));

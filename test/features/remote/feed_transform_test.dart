@@ -3,7 +3,7 @@ import 'dart:ui' show Offset, Rect, Size;
 import 'package:flutter/material.dart' show Matrix4, MatrixUtils;
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/features/remote/feed_transform.dart';
+import 'package:z_pill/features/remote/feed_transform.dart';
 
 void main() {
   group('feedQuarterFromRotationRaw', () {

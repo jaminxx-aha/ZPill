@@ -690,7 +690,7 @@ const Map<String, String> zhCatalog = {
   'film.bw': '经典黑白',
   'film.cinema': '电影特色',
   'film.classicPicks': '经典精选',
-  'conn.errNoUsbCamera': '未发现尼康相机:请插好 USB 数据线并解锁相机后重试',
+  'conn.errNoUsbCamera': '未发现相机:请插好 USB 数据线并解锁相机后重试',
   'conn.errRestricted': '相机处于受限连接状态(数据操作被禁用):请关闭相机电源,重新开机后再连接',
   'conn.errReconnectPaused':
       '连接在短时间内反复中断,自动重连已暂停:请检查相机状态(电量/过热)与 Wi-Fi 链路,稍后手动重连',
@@ -747,7 +747,7 @@ const Map<String, String> zhCatalog = {
   'log.saved': '已写入 {path}',
   'log.saveFailed': '写入失败:{e}',
   'log.empty': '暂无日志',
-  'log.header': 'NikonPill 诊断日志\n导出于 {time}\n共 {n} 条\n',
+  'log.header': 'ZPill 诊断日志\n导出于 {time}\n共 {n} 条\n',
   // 真机 EN 抽查补漏(2026-10-16):主题分段/静照快门 label 此前中文
   // 原文直通,现补键(display 表外兜底同步改语言中性裸值)。
   'param.shutter': '快门',

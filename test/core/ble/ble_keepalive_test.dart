@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:nikon_pill/core/ble/ble_keepalive.dart';
-import 'package:nikon_pill/core/ble/geo_payload.dart';
+import 'package:z_pill/core/ble/ble_keepalive.dart';
+import 'package:z_pill/core/ble/geo_payload.dart';
 
 /// BleKeepalive 纯策略单元:档位间隔 / TIME 到点 / GEO 去重门 / 距离。
 /// 假时钟直排时间轴,不真等 45s。

@@ -1,15 +1,15 @@
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/platform/volume_keys.dart';
+import 'package:z_pill/platform/volume_keys.dart';
 
-/// `nikonpill/volume` 通道件单测:mock 拦截 Dart→原生('setEnabled'),
+/// `zpill/volume` 通道件单测:mock 拦截 Dart→原生('setEnabled'),
 /// handlePlatformMessage 反向推 'onVolumeKey' 模拟原生按键命中
 /// (Android onKeyUp 拦截 / iOS 音量沿回推,载荷同契约)。
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  const channel = MethodChannel('nikonpill/volume');
+  const channel = MethodChannel('zpill/volume');
   final messenger = TestWidgetsFlutterBinding.instance.defaultBinaryMessenger;
 
   late List<MethodCall> outbound;

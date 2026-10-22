@@ -10,7 +10,7 @@
 /// - 连接走系统 GATT 免 PIN 形态,不主动建 Classic bond
 /// - 协议方言(配对握手/0x2005/0x2007 载荷)全在 lib/core/ble/,本层零知识
 ///
-/// 事件流 `nikonpill/ble/events`(载荷见各类):
+/// 事件流 `zpill/ble/events`(载荷见各类):
 /// - BleStateChanged:蓝牙开关态(poweredOn/poweredOff/…)
 /// - BleDeviceFound:扫描发现(mfg = 厂商数据原始字节,重连匹配 0x0399+4B deviceId 用)
 /// - BleConnected:连接就绪(服务发现完成),带全特征表与无响应写 MTU
@@ -139,10 +139,10 @@ abstract interface class BleHost {
   Future<void> disconnect();
 }
 
-/// 经 `nikonpill/ble` + `nikonpill/ble/events`。
+/// 经 `zpill/ble` + `zpill/ble/events`。
 final class MethodChannelBleHost implements BleHost {
-  static const MethodChannel _methods = MethodChannel('nikonpill/ble');
-  static const EventChannel _events = EventChannel('nikonpill/ble/events');
+  static const MethodChannel _methods = MethodChannel('zpill/ble');
+  static const EventChannel _events = EventChannel('zpill/ble/events');
 
   Stream<BleEvent>? _stream;
 

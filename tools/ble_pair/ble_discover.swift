@@ -1,7 +1,7 @@
 // Nikon BLE GATT 全量发现(CLI):扫描 → 连接(复用已配对身份的广播)
 // → 枚举全部服务/特征(属性/句柄)→ 打印退出。
 // 用途:确认配对态下除 0xDE00(smart 模式)之外是否还有命令服务
-// (WiFi 激活 op 的候选面)。参考 tools/ble_pair/nikon_ble_pair(源码
+// (WiFi 激活 op 的候选面)。参考 tools/ble_pair/z_ble_pair(源码
 // 已失,本件独立重写,只做只读发现,不发任何写命令)。
 import Foundation
 import CoreBluetooth

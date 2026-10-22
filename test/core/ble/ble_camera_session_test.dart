@@ -3,15 +3,15 @@ import 'dart:typed_data';
 
 import 'package:flutter/services.dart' show PlatformException;
 import 'package:flutter_test/flutter_test.dart';
-import 'package:nikon_pill/core/ble/ble_camera_session.dart';
-import 'package:nikon_pill/core/ble/blowfish_hasher.dart';
-import 'package:nikon_pill/core/ble/gatt_uuids.dart';
-import 'package:nikon_pill/core/ble/geo_payload.dart';
-import 'package:nikon_pill/core/ble/pairing_engine.dart';
-import 'package:nikon_pill/core/ble/pairing_message.dart';
-import 'package:nikon_pill/l10n/message.dart';
-import 'package:nikon_pill/core/log/app_log.dart';
-import 'package:nikon_pill/platform/ble_scanner.dart';
+import 'package:z_pill/core/ble/ble_camera_session.dart';
+import 'package:z_pill/core/ble/blowfish_hasher.dart';
+import 'package:z_pill/core/ble/gatt_uuids.dart';
+import 'package:z_pill/core/ble/geo_payload.dart';
+import 'package:z_pill/core/ble/pairing_engine.dart';
+import 'package:z_pill/core/ble/pairing_message.dart';
+import 'package:z_pill/l10n/message.dart';
+import 'package:z_pill/core/log/app_log.dart';
+import 'package:z_pill/platform/ble_scanner.dart';
 
 import 'wifi_credentials_test.dart' show craftBlob;
 
@@ -254,11 +254,11 @@ void main() {
     expect(session.identity!.peripheralUuid, 'P1');
     expect(session.identity!.deviceId & 0xFF, 0x01);
     expect(session.identity!.serial, 'B123456');
-    expect(session.identity!.name, 'NikonPill');
+    expect(session.identity!.name, 'ZPill');
     final name = host.lastWrite(kNikonCharName);
     expect(name.length, 32);
-    expect(String.fromCharCodes(name.take(9)), 'NikonPill');
-    expect(name.skip(9).every((b) => b == 0), isTrue);
+    expect(String.fromCharCodes(name.take('ZPill'.length)), 'ZPill');
+    expect(name.skip('ZPill'.length).every((b) => b == 0), isTrue);
   });
 
   test('lastError 变化沿 errors 流实时发(同值不发,清空发 null)', () async {

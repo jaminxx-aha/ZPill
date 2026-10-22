@@ -1,8 +1,8 @@
 /**
- * NikonPill 视频(ohos 平台,native 侧)。
+ * ZPill 视频(ohos 平台,native 侧)。
  *
  * 对应 Dart 契约 lib/platform/video_player.dart(MethodChannel
- * `nikonpill/video`),本轮落**抽帧**方法(iOS VideoPlugin.swift 已在
+ * `zpill/video`),本轮落**抽帧**方法(iOS VideoPlugin.swift 已在
  * 产;全屏 play/内嵌播放 ohos 待补 —— 调用方回落路径不依赖它们):
  *
  * - `thumbnail({path, maxPixelSize})`:@ohos.multimedia.media 的
@@ -32,10 +32,10 @@ import {
 import { VideoSession } from './VideoSession';
 
 const TAG = 'VideoPlugin';
-const CHANNEL = 'nikonpill/video';
+const CHANNEL = 'zpill/video';
 const THUMB_TIME_US = 100000; // 0.1s,避纯黑首帧
 
-/** `nikonpill/video` 通道实现(抽帧;播放/内嵌 ohos 待补)。 */
+/** `zpill/video` 通道实现(抽帧;播放/内嵌 ohos 待补)。 */
 export class VideoPlugin implements FlutterPlugin {
   private channel: MethodChannel | null = null;
 

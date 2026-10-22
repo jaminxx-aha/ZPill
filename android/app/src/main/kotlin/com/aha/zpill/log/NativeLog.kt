@@ -1,4 +1,4 @@
-package com.aha.nikonpill.log
+package com.aha.zpill.log
 
 import android.os.Handler
 import android.os.Looper
@@ -6,9 +6,9 @@ import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodChannel
 
 /**
- * NikonPill 原生日志上报(Android 平台,native 侧)—— native → Dart 反向通道。
+ * ZPill 原生日志上报(Android 平台,native 侧)—— native → Dart 反向通道。
  *
- * 对应 Dart 契约 lib/platform/log_bridge.dart(MethodChannel `nikonpill/log`):
+ * 对应 Dart 契约 lib/platform/log_bridge.dart(MethodChannel `zpill/log`):
  * native → Dart 调 'onNativeLog',参数 {level: "d"|"i"|"w"|"e", tag, line},
  * 由 Dart 合流进 AppLog 的 native 域。三端 native 在关键路径(USB bulk
  * 失败 / BLE 状态沿)显式上报、不做 logcat 抓流;iOS/ohos 各有对等件
@@ -24,7 +24,7 @@ import io.flutter.plugin.common.MethodChannel
  *   在 configureFlutterEngine 最先装配,早于一切插桩点。
  */
 object NativeLog {
-    private const val CHANNEL = "nikonpill/log"
+    private const val CHANNEL = "zpill/log"
 
     private val mainHandler = Handler(Looper.getMainLooper())
 

@@ -1,4 +1,4 @@
-package com.aha.nikonpill.ble
+package com.aha.zpill.ble
 
 import android.Manifest
 import android.annotation.SuppressLint
@@ -20,7 +20,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
-import com.aha.nikonpill.log.NativeLog
+import com.aha.zpill.log.NativeLog
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
@@ -32,10 +32,10 @@ import io.flutter.plugin.common.PluginRegistry
 import java.util.UUID
 
 /**
- * NikonPill BLE 裸桥(Android 平台,native 侧)。
+ * ZPill BLE 裸桥(Android 平台,native 侧)。
  *
  * 对应 Dart 契约 lib/platform/ble_scanner.dart(BleHost):
- * MethodChannel `nikonpill/ble` + EventChannel `nikonpill/ble/events`。
+ * MethodChannel `zpill/ble` + EventChannel `zpill/ble/events`。
  * 协议逻辑(配对握手/GEO/TIME 载荷)全在 Dart(lib/core/ble/),本桥
  * 只做扫描/连接/GATT 搬运,零 Nikon 方言知识 —— 唯一例外:bondDevice
  * (程序化经典蓝牙绑定;Android createBond 公开 API 可为,首配注册用,
@@ -64,8 +64,8 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
     EventChannel.StreamHandler {
     companion object {
         private const val TAG = "BlePlugin"
-        private const val CHANNEL = "nikonpill/ble"
-        private const val EVENTS = "nikonpill/ble/events"
+        private const val CHANNEL = "zpill/ble"
+        private const val EVENTS = "zpill/ble/events"
         private const val NIKON_COMPANY_ID = 0x0399
         private const val PAIR_CHAR = "00002000-3dd4-4255-8d62-6dc7b9bd5561"
         private const val CCCD_UUID = "00002902-0000-1000-8000-00805f9b34fb"
@@ -219,7 +219,7 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
                         mainHandler.postDelayed({ discoverServices() }, DISCOVERY_RETRY_MS)
                         return@post
                     }
-                    settleConnect("discoveryFailed", "未发现 LSS 服务(链路未稳或非尼康机身)")
+                    settleConnect("discoveryFailed", "未发现 LSS 服务(链路未稳或非目标机身)")
                     return@post
                 }
                 discoveryDone = true

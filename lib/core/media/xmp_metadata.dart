@@ -63,7 +63,7 @@ String buildXmpPacket(XmpMetadata meta) {
     ],
   ];
   return '<?xpacket begin="﻿" id="W5M0MpCehiHzreSzNTczkc9d"?>\n'
-      '<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="NikonPill 1.0">\n'
+      '<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="ZPill 1.0">\n'
       ' <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">\n'
       '  <rdf:Description rdf:about=""\n'
       '    xmlns:dc="http://purl.org/dc/elements/1.1/"\n'

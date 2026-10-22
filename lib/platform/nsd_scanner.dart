@@ -1,4 +1,4 @@
-/// mDNS/Bonjour 相机发现(`nikonpill/nsd` channel)。
+/// mDNS/Bonjour 相机发现(`zpill/nsd` channel)。
 ///
 /// 相机「网络 → 连接至智能设备 → Wi-Fi 连接(STA)」加入局域网后广播
 /// Bonjour 服务 `_ptp._tcp.local.`:实例名 = 相机设备名(如 Z_f_8014411),
@@ -97,14 +97,14 @@ abstract interface class NsdScanner {
   Future<void> stopBrowsing();
 }
 
-/// 经 `nikonpill/nsd`(方法 start/stop)+ `nikonpill/nsd/events`
+/// 经 `zpill/nsd`(方法 start/stop)+ `zpill/nsd/events`
 /// (EventChannel,载荷 Map{event: found|lost, …})。
 ///
 /// native 未实现的平台(ohos/Android)调 start 会抛
 /// MissingPluginException —— 由上层捕获并降级为「手动输入 IP」。
 final class MethodChannelNsdScanner implements NsdScanner {
-  static const MethodChannel _methods = MethodChannel('nikonpill/nsd');
-  static const EventChannel _events = EventChannel('nikonpill/nsd/events');
+  static const MethodChannel _methods = MethodChannel('zpill/nsd');
+  static const EventChannel _events = EventChannel('zpill/nsd/events');
 
   Stream<NsdEvent>? _stream;
 

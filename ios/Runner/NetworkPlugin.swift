@@ -1,7 +1,7 @@
-// NikonPill 程序化加入 Wi-Fi 通道(iOS 平台,native 侧)。
+// ZPill 程序化加入 Wi-Fi 通道(iOS 平台,native 侧)。
 //
 // 对应 Dart 契约 lib/platform/network_monitor.dart 的 WifiJoiner:
-// - MethodChannel `nikonpill/network` 的 `join`(ssid/password/security)
+// - MethodChannel `zpill/network` 的 `join`(ssid/password/security)
 //   → {ok: Bool, reason: String?}:NEHotspotConfigurationManager.apply
 //   加入相机热点。已在该网络(alreadyAssociated)按成功收口 —— 重进
 //   页面再 join 是常态。userDenied / 其他错误如实回 reason,Dart 按
@@ -27,7 +27,7 @@ public final class NetworkPlugin: NSObject, FlutterPlugin {
   public static func register(with registrar: FlutterPluginRegistrar) {
     let instance = NetworkPlugin()
     let channel = FlutterMethodChannel(
-      name: "nikonpill/network", binaryMessenger: registrar.messenger())
+      name: "zpill/network", binaryMessenger: registrar.messenger())
     registrar.addMethodCallDelegate(instance, channel: channel)
   }
 

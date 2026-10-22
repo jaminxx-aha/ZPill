@@ -3,13 +3,13 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/core/browser/storage_info.dart';
-import 'package:nikon_pill/core/camera/camera_connection.dart';
-import 'package:nikon_pill/core/ptp/ptp_session.dart';
-import 'package:nikon_pill/features/browser/storage_overview_controller.dart';
-import 'package:nikon_pill/features/connection/connected_overview.dart';
-import 'package:nikon_pill/features/remote/remote_controller.dart';
-import 'package:nikon_pill/l10n/message.dart';
+import 'package:z_pill/core/browser/storage_info.dart';
+import 'package:z_pill/core/camera/camera_connection.dart';
+import 'package:z_pill/core/ptp/ptp_session.dart';
+import 'package:z_pill/features/browser/storage_overview_controller.dart';
+import 'package:z_pill/features/connection/connected_overview.dart';
+import 'package:z_pill/features/remote/remote_controller.dart';
+import 'package:z_pill/l10n/message.dart';
 
 import '../../core/ptp/ptp_session_test.dart' show FakePtpTransport;
 

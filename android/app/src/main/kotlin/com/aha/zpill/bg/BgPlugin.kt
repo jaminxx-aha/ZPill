@@ -1,4 +1,4 @@
-package com.aha.nikonpill.bg
+package com.aha.zpill.bg
 
 import android.content.Context
 import android.content.Intent
@@ -7,10 +7,10 @@ import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 
 /**
- * NikonPill 后台传输保活(Android 平台,native 侧)。
+ * ZPill 后台传输保活(Android 平台,native 侧)。
  *
  * 对应 Dart 契约 lib/platform/background_transfer.dart(MethodChannel
- * `nikonpill/bg`):`ensureRunning` / `stop`,native 幂等。
+ * `zpill/bg`):`ensureRunning` / `stop`,native 幂等。
  * ensureRunning → startForegroundService(TransferForegroundService);
  * 任一步失败(Android 12+ 后台启动限制、ROM 差异)不报错给 Dart ——
  * 按契约降级为「仅前台传输」,Log 留痕。
@@ -18,7 +18,7 @@ import io.flutter.plugin.common.MethodChannel
 class BgPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
     companion object {
         private const val TAG = "BgPlugin"
-        private const val CHANNEL = "nikonpill/bg"
+        private const val CHANNEL = "zpill/bg"
     }
 
     private var context: Context? = null

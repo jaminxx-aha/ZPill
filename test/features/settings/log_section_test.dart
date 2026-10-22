@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/core/log/app_log.dart';
-import 'package:nikon_pill/features/settings/log_section.dart';
+import 'package:z_pill/core/log/app_log.dart';
+import 'package:z_pill/features/settings/log_section.dart';
 
 void main() {
   setUp(AppLog.resetForTest);
@@ -56,7 +56,7 @@ void main() {
     await tester.pump(); // SnackBar 浮出
 
     expect(copied, isA<String>());
-    expect(copied as String, contains('NikonPill 诊断日志'));
+    expect(copied as String, contains('ZPill 诊断日志'));
     expect(copied as String, contains('[W/ble] BLE 断连'));
     expect(find.textContaining('已复制 1 条'), findsOneWidget);
   });

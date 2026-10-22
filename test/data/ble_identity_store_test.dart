@@ -1,7 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:nikon_pill/data/ble_identity_store.dart';
+import 'package:z_pill/data/ble_identity_store.dart';
 
 void main() {
   late Directory dir;
@@ -23,7 +23,7 @@ void main() {
       deviceId: 0x8014411,
       nonce: 0x1234ABCD,
       serial: '1641397',
-      controllerName: 'NikonPill',
+      controllerName: 'ZPill',
       cameraName: 'Z f_8014411',
       pairedAt: DateTime.utc(2026, 10, 13, 8, 0, 0),
     );
@@ -34,7 +34,7 @@ void main() {
     expect(back.deviceId, 0x8014411);
     expect(back.nonce, 0x1234ABCD);
     expect(back.serial, '1641397');
-    expect(back.controllerName, 'NikonPill');
+    expect(back.controllerName, 'ZPill');
     expect(back.cameraName, 'Z f_8014411');
     expect(back.displayName, 'Z f_8014411');
     expect(back.pairedAt, DateTime.utc(2026, 10, 13, 8, 0, 0));
@@ -51,9 +51,9 @@ void main() {
 {"peripheralUuid": "P2", "deviceId": 7, "nonce": 9, "pairedAt": "2026-10-13T08:00:00.000Z"}''');
     final back = await store.load();
     expect(back!.serial, isEmpty);
-    expect(back.controllerName, 'NikonPill');
+    expect(back.controllerName, 'ZPill');
     expect(back.cameraName, isEmpty);
-    expect(back.displayName, 'NikonPill',
+    expect(back.displayName, 'ZPill',
         reason: '旧档无相机名 → 展示名回落控制器名');
   });
 

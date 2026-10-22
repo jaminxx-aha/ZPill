@@ -1,8 +1,8 @@
 /**
- * NikonPill mDNS 相机发现(ohos 平台,native 侧)。
+ * ZPill mDNS 相机发现(ohos 平台,native 侧)。
  *
- * 对应 Dart 契约 lib/platform/nsd_scanner.dart(`nikonpill/nsd` +
- * `nikonpill/nsd/events`):浏览 `_ptp._tcp` 并解析出 IP/端口/TXT,
+ * 对应 Dart 契约 lib/platform/nsd_scanner.dart(`zpill/nsd` +
+ * `zpill/nsd/events`):浏览 `_ptp._tcp` 并解析出 IP/端口/TXT,
  * found/lost 事件经 EventChannel 上报。
  *
  * ohos API 要点(@ohos.net.mdns,API 10+,DevEco 6.1.1 / apiVersion 24):
@@ -49,7 +49,7 @@ const SERVICE_TYPE = '_ptp._tcp';
 /// Dart 契约的兜底端口(DiscoveredIpCamera.fromMap 的默认值同源)。
 const DEFAULT_PORT = 15740;
 
-/** `nikonpill/nsd` + `nikonpill/nsd/events` 通道实现。 */
+/** `zpill/nsd` + `zpill/nsd/events` 通道实现。 */
 export class NsdPlugin implements FlutterPlugin, AbilityAware {
   private channel: MethodChannel | null = null;
   private events: EventChannel | null = null;
@@ -67,13 +67,13 @@ export class NsdPlugin implements FlutterPlugin, AbilityAware {
 
   onAttachedToEngine(binding: FlutterPluginBinding): void {
     this.context = binding.getApplicationContext();
-    this.channel = new MethodChannel(binding.getBinaryMessenger(), 'nikonpill/nsd');
+    this.channel = new MethodChannel(binding.getBinaryMessenger(), 'zpill/nsd');
     this.channel.setMethodCallHandler({
       onMethodCall: (call: MethodCall, result: MethodResult): void => {
         this.onMethodCall(call, result);
       },
     });
-    this.events = new EventChannel(binding.getBinaryMessenger(), 'nikonpill/nsd/events');
+    this.events = new EventChannel(binding.getBinaryMessenger(), 'zpill/nsd/events');
     this.events.setStreamHandler({
       onListen: (args: ESObject, events: EventSink): void => {
         this.sink = events;

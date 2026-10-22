@@ -1,4 +1,4 @@
-package com.aha.nikonpill.nsd
+package com.aha.zpill.nsd
 
 import android.content.Context
 import android.net.nsd.NsdManager
@@ -14,10 +14,10 @@ import io.flutter.plugin.common.MethodChannel.MethodCallHandler
 import io.flutter.plugin.common.MethodChannel.Result
 
 /**
- * NikonPill mDNS 相机发现(Android 平台,native 侧)。
+ * ZPill mDNS 相机发现(Android 平台,native 侧)。
  *
- * 对应 Dart 契约 lib/platform/nsd_scanner.dart(`nikonpill/nsd` +
- * `nikonpill/nsd/events`):浏览 `_ptp._tcp` 并解析出 IP/端口/TXT,
+ * 对应 Dart 契约 lib/platform/nsd_scanner.dart(`zpill/nsd` +
+ * `zpill/nsd/events`):浏览 `_ptp._tcp` 并解析出 IP/端口/TXT,
  * found/lost 事件经 EventChannel 上报。
  *
  * Android API 要点(NsdManager,minSdk 29,真机待验证):
@@ -46,8 +46,8 @@ import io.flutter.plugin.common.MethodChannel.Result
 class NsdPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHandler {
     companion object {
         private const val TAG = "NsdPlugin"
-        private const val CHANNEL = "nikonpill/nsd"
-        private const val EVENTS_CHANNEL = "nikonpill/nsd/events"
+        private const val CHANNEL = "zpill/nsd"
+        private const val EVENTS_CHANNEL = "zpill/nsd/events"
 
         /// 浏览的服务类型(PTP/IP,SRV 端口 15740;带尾点,待真机核对)。
         private const val SERVICE_TYPE = "_ptp._tcp."

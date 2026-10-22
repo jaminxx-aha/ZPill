@@ -188,7 +188,7 @@ class BlePairPanelState extends State<BlePairPanel>
   bool _panelScanHeld = false;
   static const Duration _scanEntryTtl = Duration(seconds: 5);
 
-  static const MethodChannel _bleChannel = MethodChannel('nikonpill/ble');
+  static const MethodChannel _bleChannel = MethodChannel('zpill/ble');
 
   /// 会话解析:宿主注入优先(十二轮,生产 = 控制器/驱动同一只),回落
   /// AppServices 单例(独立挂面板)。

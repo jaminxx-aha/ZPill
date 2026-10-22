@@ -2,7 +2,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/core/remote/live_view_watchdog.dart';
+import 'package:z_pill/core/remote/live_view_watchdog.dart';
 
 void main() {
   final t0 = DateTime(2026, 10, 10, 12);

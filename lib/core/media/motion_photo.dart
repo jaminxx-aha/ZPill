@@ -133,7 +133,7 @@ bool _startsWith(Uint8List data, int offset, List<int> prefix) {
 Uint8List spliceMotionPhoto(Uint8List image, Uint8List video) {
   final packet =
       '<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>\n'
-      '<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="NikonPill 1.0">\n'
+      '<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="ZPill 1.0">\n'
       ' <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">\n'
       '  <rdf:Description rdf:about=""\n'
       '    xmlns:GCamera="http://ns.google.com/photos/1.0/camera/">\n'

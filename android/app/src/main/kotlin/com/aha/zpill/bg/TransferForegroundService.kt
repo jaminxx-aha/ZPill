@@ -1,4 +1,4 @@
-package com.aha.nikonpill.bg
+package com.aha.zpill.bg
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -11,7 +11,7 @@ import android.content.pm.ServiceInfo
 import android.os.IBinder
 
 /**
- * NikonPill 传输前台服务(Android 平台)。
+ * ZPill 传输前台服务(Android 平台)。
  *
  * BgPlugin.ensureRunning → startForegroundService 拉起本服务;服务立即
  * startForeground(dataSync 类型)挂常驻通知,让队列非空期间的批量传输
@@ -29,8 +29,8 @@ import android.os.IBinder
  */
 class TransferForegroundService : Service() {
     companion object {
-        const val ACTION_START = "com.aha.nikonpill.bg.START"
-        private const val CHANNEL_ID = "nikonpill_transfer"
+        const val ACTION_START = "com.aha.zpill.bg.START"
+        private const val CHANNEL_ID = "zpill_transfer"
         private const val NOTIF_ID = 42
     }
 
@@ -64,9 +64,9 @@ class TransferForegroundService : Service() {
             )
         }
         return Notification.Builder(this, CHANNEL_ID)
-            .setSmallIcon(com.aha.nikonpill.R.mipmap.ic_launcher)
+            .setSmallIcon(com.aha.zpill.R.mipmap.ic_launcher)
             .setContentTitle("正在传输照片")
-            .setContentText("NikonPill 正在后台接收相机照片")
+            .setContentText("ZPill 正在后台接收相机照片")
             .setOngoing(true)
             .setContentIntent(contentIntent)
             .build()

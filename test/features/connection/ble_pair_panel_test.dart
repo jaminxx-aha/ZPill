@@ -4,11 +4,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/app_services.dart';
-import 'package:nikon_pill/core/ble/ble_camera_session.dart';
-import 'package:nikon_pill/data/ble_identity_store.dart';
-import 'package:nikon_pill/features/connection/ble_pair_panel.dart';
-import 'package:nikon_pill/platform/ble_scanner.dart';
+import 'package:z_pill/app_services.dart';
+import 'package:z_pill/core/ble/ble_camera_session.dart';
+import 'package:z_pill/data/ble_identity_store.dart';
+import 'package:z_pill/features/connection/ble_pair_panel.dart';
+import 'package:z_pill/platform/ble_scanner.dart';
 
 /// 配对面板(2026-10-19 改版):「已配对 / 其它设备」两段列表 + 打开
 /// 沿自动扫描(静默 —— 无扫描钮、无「扫描中」指示)+ 打开沿**不自动
@@ -16,8 +16,8 @@ import 'package:nikon_pill/platform/ble_scanner.dart';
 /// iOS 首配自动跳系统蓝牙删除(onSystemBondNeeded 通知宿主)。
 ///
 /// 基建(最小):AppServices 单例照常构建(bleGpsInject 默认关 → 零注入
-/// 驱动,面板打开即挂起),只 mock nikonpill/ble 的 scan/scanForDeviceId
-/// (喂设备列表/喂空)与 nikonpill/ble/events 的 listen(事件通道空挂)。
+/// 驱动,面板打开即挂起),只 mock zpill/ble 的 scan/scanForDeviceId
+/// (喂设备列表/喂空)与 zpill/ble/events 的 listen(事件通道空挂)。
 /// 身份不走真盘档 —— File IO 在 fake-async 里永不落地,经 [BlePairPanel.
 /// savedIdentity] 注入(生产不传,行为不变)。
 ///
@@ -26,8 +26,8 @@ import 'package:nikon_pill/platform/ble_scanner.dart';
 /// 已内置),否则拆面板沿 resumeBleDriver 起重试 Timer,「树已拆仍有
 /// Timer」判死。
 void main() {
-  const ble = MethodChannel('nikonpill/ble');
-  const bleEvents = MethodChannel('nikonpill/ble/events');
+  const ble = MethodChannel('zpill/ble');
+  const bleEvents = MethodChannel('zpill/ble/events');
 
   Uint8List mfgOf(int deviceId, {int? status}) => Uint8List.fromList(<int>[
         0x99,
@@ -52,7 +52,7 @@ void main() {
         deviceId: deviceId,
         nonce: 0x70,
         serial: 'S',
-        controllerName: 'NikonPill',
+        controllerName: 'ZPill',
         cameraName: cameraName,
         pairedAt: DateTime(2026, 10, 15),
       );
@@ -186,7 +186,7 @@ void main() {
     await disposePage(tester);
 
     await boot(tester, scanResult: [], saved: identityOf(0x11223301));
-    expect(find.text('NikonPill'), findsOneWidget,
+    expect(find.text('ZPill'), findsOneWidget,
         reason: '旧档缺 cameraName → 展示名回落 controllerName');
     await disposePage(tester);
   });
@@ -210,14 +210,14 @@ void main() {
 
   testWidgets('解除配对点按先弹确认窗(对齐 STA 忘记这台相机):取消不动,确认才清',
       (tester) async {
-    // clear() 沿 dataDir 走 nikonpill/gallery 通道:mock 计数当「清档
+    // clear() 沿 dataDir 走 zpill/gallery 通道:mock 计数当「清档
     // 是否触达」的探针(路径不存在 → exists() 一发真 IO 收口)。
     var dataDirCalls = 0;
-    const gallery = MethodChannel('nikonpill/gallery');
+    const gallery = MethodChannel('zpill/gallery');
     final messenger = tester.binding.defaultBinaryMessenger;
     messenger.setMockMethodCallHandler(gallery, (call) async {
       dataDirCalls++;
-      return '/tmp/nikonpill_ble_unpair_test';
+      return '/tmp/zpill_ble_unpair_test';
     });
     addTearDown(() => messenger.setMockMethodCallHandler(gallery, null));
 
@@ -230,7 +230,7 @@ void main() {
         deviceId: 0x11223301,
         nonce: 0x70,
         serial: 'S',
-        name: 'NikonPill');
+        name: 'ZPill');
 
     // 点解除配对图标 → 确认弹窗(标题 + 正文点名相机 + 取消/确认)。
     await tester.tap(find.byIcon(Icons.link_off));
@@ -286,7 +286,7 @@ void main() {
       deviceId: 0x11223301,
       nonce: 0x70,
       serial: 'S',
-      name: 'NikonPill',
+      name: 'ZPill',
     );
     unawaited(AppServices.instance.bleSession.reconnectDirect());
     await tester.pump();

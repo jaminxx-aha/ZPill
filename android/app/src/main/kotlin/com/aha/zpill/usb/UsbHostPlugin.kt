@@ -1,4 +1,4 @@
-package com.aha.nikonpill.usb
+package com.aha.zpill.usb
 
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
@@ -16,7 +16,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
-import com.aha.nikonpill.log.NativeLog
+import com.aha.zpill.log.NativeLog
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
@@ -29,7 +29,7 @@ import kotlin.math.max
 import kotlin.math.min
 
 /**
- * NikonPill USB 主机通道(Android 平台,native 侧)。
+ * ZPill USB 主机通道(Android 平台,native 侧)。
  *
  * 对应 Dart 契约 lib/platform/usb/usb_host.dart(v2 字节管道):
  * - bulkRead(maxLen, timeoutMs):单次读、短读合法,native 不做容器重组
@@ -71,8 +71,8 @@ import kotlin.math.min
 class UsbHostPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHandler {
     companion object {
         private const val TAG = "UsbHostPlugin"
-        private const val CHANNEL = "nikonpill/usb"
-        private const val EVENTS_CHANNEL = "nikonpill/usb/events"
+        private const val CHANNEL = "zpill/usb"
+        private const val EVENTS_CHANNEL = "zpill/usb/events"
 
         /// 尼康 USB Vendor ID(USB-IF 分配)。
         private const val NIKON_VENDOR_ID = 0x04B0
@@ -728,7 +728,7 @@ class UsbHostPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHandl
             }
             Log.i(TAG, "interrupt 轮询退出")
         }.apply {
-            name = "nikonpill-usb-interrupt"
+            name = "zpill-usb-interrupt"
             start()
         }
     }

@@ -1,7 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/data/settings_store.dart';
-import 'package:nikon_pill/features/remote/monitor_toggles.dart';
+import 'package:z_pill/data/settings_store.dart';
+import 'package:z_pill/features/remote/monitor_toggles.dart';
 
 void main() {
   group('ScopeKind(示波器族档位,2026-10-15)', () {

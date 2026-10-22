@@ -2,10 +2,10 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/core/ptp/device_prop.dart';
-import 'package:nikon_pill/core/ptp/operation_codes.dart';
-import 'package:nikon_pill/core/utils/byte_reader.dart';
-import 'package:nikon_pill/core/utils/byte_writer.dart';
+import 'package:z_pill/core/ptp/device_prop.dart';
+import 'package:z_pill/core/ptp/operation_codes.dart';
+import 'package:z_pill/core/utils/byte_reader.dart';
+import 'package:z_pill/core/utils/byte_writer.dart';
 
 /// 表外假属性码(0xD0xx 老尼康区,现代表不在册;仅测长度嗅探路径)。
 const int kVendorProp = 0xD0F0;

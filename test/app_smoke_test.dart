@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:nikon_pill/app.dart';
+import 'package:z_pill/app.dart';
 
 /// 整棵 UI 树冒烟:真机上"屏幕只打一堆文字"疑似渲染异常,
 /// 此处先在本地复现/排除 Widget 层异常。
@@ -12,7 +12,7 @@ void main() {
       ..physicalSize = const Size(800, 2400)
       ..devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
-    await tester.pumpWidget(const NikonPillApp());
+    await tester.pumpWidget(const ZPillApp());
     await tester.pumpAndSettle();
   }
 

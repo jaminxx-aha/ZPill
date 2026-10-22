@@ -5,12 +5,12 @@ library;
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/platform/network_monitor.dart';
+import 'package:z_pill/platform/network_monitor.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  group('MethodChannelWifiJoiner(nikonpill/network):', () {
+  group('MethodChannelWifiJoiner(zpill/network):', () {
     test('通道缺失:join 如实 unsupported,不抛', () async {
       // native 未注册该 channel(测试环境无任何 handler)→
       // invokeMethod 抛 MissingPluginException → 收敛为 unsupported。
@@ -29,7 +29,7 @@ void main() {
 
   group('join 结果 gateway 透传(native 在 onAvailable 沿读 DHCP 网关):',
       () {
-    const channel = MethodChannel('nikonpill/network');
+    const channel = MethodChannel('zpill/network');
 
     tearDown(() {
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger

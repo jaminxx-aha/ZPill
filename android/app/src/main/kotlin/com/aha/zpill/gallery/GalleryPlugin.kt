@@ -1,4 +1,4 @@
-package com.aha.nikonpill.gallery
+package com.aha.zpill.gallery
 
 import android.content.ContentValues
 import android.content.Context
@@ -19,7 +19,7 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 /**
- * NikonPill 相册/文件通道(Android 平台,native 侧)。
+ * ZPill 相册/文件通道(Android 平台,native 侧)。
  *
  * 对应 Dart 契约 lib/platform/gallery_saver.dart:
  * - tempDir()/thumbsDir()/previewsDir():cacheDir 下专用子目录(缓存,
@@ -30,7 +30,7 @@ import java.util.concurrent.Executors
  *
  * Android 路径(minSdk 29,无系统对话框):
  * - 自有贡献(contentResolver.insert)免权限:RELATIVE_PATH 指定
- *   Pictures/NikonPill 或 Movies/NikonPill,IS_PENDING=1 → 拷字节 →
+ *   Pictures/ZPill 或 Movies/ZPill,IS_PENDING=1 → 拷字节 →
  *   IS_PENDING=0 原子可见,系统不会再弹「允许访问照片」;
  * - NEF 按官方 MIME image/x-nikon-nef 入 Images 集合(系统图库可能
  *   不渲染缩略图,但记录持久、可被其他应用读取;SnapBridge 同做法,
@@ -44,13 +44,13 @@ import java.util.concurrent.Executors
 class GalleryPlugin : FlutterPlugin, MethodCallHandler {
     companion object {
         private const val TAG = "GalleryPlugin"
-        private const val CHANNEL = "nikonpill/gallery"
+        private const val CHANNEL = "zpill/gallery"
 
-        private const val TEMP_SUBDIR = "nikonpill"
-        private const val THUMBS_SUBDIR = "nikonpill-thumbs"
-        private const val PREVIEWS_SUBDIR = "nikonpill-previews"
-        private const val DOWNLOADS_SUBDIR = "nikonpill-downloads"
-        private const val DATA_SUBDIR = "nikonpill-data"
+        private const val TEMP_SUBDIR = "zpill"
+        private const val THUMBS_SUBDIR = "zpill-thumbs"
+        private const val PREVIEWS_SUBDIR = "zpill-previews"
+        private const val DOWNLOADS_SUBDIR = "zpill-downloads"
+        private const val DATA_SUBDIR = "zpill-data"
 
         private const val COPY_BUF_BYTES = 64 * 1024
     }
@@ -172,14 +172,14 @@ class GalleryPlugin : FlutterPlugin, MethodCallHandler {
         val relativePath: String
         if (mime.startsWith("image/")) {
             collection = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
-            relativePath = Environment.DIRECTORY_PICTURES + "/NikonPill"
+            relativePath = Environment.DIRECTORY_PICTURES + "/ZPill"
         } else if (mime.startsWith("video/")) {
             collection = MediaStore.Video.Media.EXTERNAL_CONTENT_URI
-            relativePath = Environment.DIRECTORY_MOVIES + "/NikonPill"
+            relativePath = Environment.DIRECTORY_MOVIES + "/ZPill"
         } else {
             // 未知扩展名:入 Files 集合(任意 MIME),保持导入不断流
             collection = MediaStore.Files.getContentUri("external")
-            relativePath = Environment.DIRECTORY_DOCUMENTS + "/NikonPill"
+            relativePath = Environment.DIRECTORY_DOCUMENTS + "/ZPill"
         }
         val values = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, filename)

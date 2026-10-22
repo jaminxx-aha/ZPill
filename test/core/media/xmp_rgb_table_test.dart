@@ -4,8 +4,8 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/core/media/cube_lut.dart';
-import 'package:nikon_pill/core/media/xmp_rgb_table.dart';
+import 'package:z_pill/core/media/cube_lut.dart';
+import 'package:z_pill/core/media/xmp_rgb_table.dart';
 
 /// XMP RGBTable 解码链测试。向量全部独立合成:测试侧自带编码器
 /// (delta→zlib→base85),语义锚点是不依赖任何实现的手算 base85 向量。

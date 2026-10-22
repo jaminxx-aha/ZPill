@@ -1,7 +1,7 @@
-// NikonPill 音量键快门通道(iOS 平台,native 侧)。
+// ZPill 音量键快门通道(iOS 平台,native 侧)。
 //
 // 对应 Dart 契约 lib/platform/volume_keys.dart:
-// MethodChannel `nikonpill/volume`:Dart → 原生 'setEnabled'(bool),
+// MethodChannel `zpill/volume`:Dart → 原生 'setEnabled'(bool),
 // 原生 → Dart 'onVolumeKey'({'key': "up"|"down"})。
 //
 // iOS 系统不把音量键事件发给应用,唯一可观察面是系统音量本身:
@@ -37,7 +37,7 @@ import UIKit
 public final class VolumeKeyPlugin: NSObject, FlutterPlugin {
   public static func register(with registrar: FlutterPluginRegistrar) {
     let channel = FlutterMethodChannel(
-      name: "nikonpill/volume", binaryMessenger: registrar.messenger())
+      name: "zpill/volume", binaryMessenger: registrar.messenger())
     let instance = VolumeKeyPlugin(channel: channel)
     registrar.addMethodCallDelegate(instance, channel: channel)
   }
