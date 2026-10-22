@@ -15,7 +15,7 @@ import 'package:nikon_pill/core/transfer/object_downloader.dart';
 import 'package:nikon_pill/platform/gallery_saver.dart';
 import 'package:nikon_pill/platform/raw_decoder.dart';
 
-import '../ptp/ptp_session_test.dart' show FakePtpTransport;
+import '../ptp/ptp_session_harness.dart' show FakePtpTransport;
 
 /// 假相册服务:目录落在临时目录(每个用例独立,互不污染)。
 final class FakeGallerySaver implements GallerySaver {

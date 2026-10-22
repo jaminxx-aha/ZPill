@@ -11,7 +11,7 @@ import 'package:nikon_pill/features/connection/connected_overview.dart';
 import 'package:nikon_pill/features/remote/remote_controller.dart';
 import 'package:nikon_pill/l10n/message.dart';
 
-import '../../core/ptp/ptp_session_test.dart' show FakePtpTransport;
+import '../../core/ptp/ptp_session_harness.dart' show FakePtpTransport;
 
 final class _StubConnection implements CameraConnection {
   final statesCtrl = StreamController<CameraLinkState>.broadcast();

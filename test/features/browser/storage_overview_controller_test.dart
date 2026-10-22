@@ -11,7 +11,7 @@ import 'package:nikon_pill/core/utils/byte_writer.dart';
 import 'package:nikon_pill/features/browser/storage_overview_controller.dart';
 import 'package:nikon_pill/l10n/message.dart';
 
-import '../../core/ptp/ptp_session_test.dart' show FakePtpTransport;
+import '../../core/ptp/ptp_session_harness.dart' show FakePtpTransport;
 
 final class _FakeConnection implements CameraConnection {
   final statesCtrl = StreamController<CameraLinkState>.broadcast();
