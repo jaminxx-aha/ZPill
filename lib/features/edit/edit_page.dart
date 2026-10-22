@@ -3,12 +3,14 @@
 ///
 /// 交互模型:参数改动的重算都在预览小图上(见 [EditController]);
 /// 保存时 [compute] 把参数应用到原分辨率(重编码秒级,勿卡 UI)。
-/// 裁剪是独立模式:底图铺满 + 遮罩 + 角/边手柄,确认才落到参数。
-/// LUT 面板含内置风格 + 剪贴板导入 .cube/.xmp 文本(.cube 为 SpeedGrade
-/// 表;.xmp 为 Adobe 相机配置 RGBTable,见 core/media/xmp_rgb_table;
-/// 受系统剪贴板容量限制,偏大 LUT 建议先缩到 17³)。胶片面板是 4x5
-/// 色彩矩阵预设库(core/media/film_presets,数值出处 MIT 见该文件头),
-/// 按参考仓分组两级筛选,「无」= null、original 与其像素等价不单列。
+/// 引导解码与预览重渲染在子 isolate(见 EditController),页面用
+/// LoadingState 接住引导期与重渲染在途窗口。裁剪是独立模式:底图
+/// 铺满 + 遮罩 + 角/边手柄,确认才落到参数。LUT 面板含内置风格 +
+/// 剪贴板导入 .cube/.xmp 文本(.cube 为 SpeedGrade 表;.xmp 为 Adobe
+/// 相机配置 RGBTable,见 core/media/xmp_rgb_table;受系统剪贴板容量
+/// 限制,偏大 LUT 建议先缩到 17³)。胶片面板是 4x5 色彩矩阵预设库
+/// (core/media/film_presets,数值出处 MIT 见该文件头),按参考仓分组
+/// 两级筛选,「无」= null、original 与其像素等价不单列。
 ///
 /// 返回把关:脏态([EditController.edited])退页先弹丢弃确认(PopScope
 /// 拦 maybePop 路径的系统返回/顶栏返回),保存成功沿复位,干净退出不拦。
@@ -152,8 +154,15 @@ class _EditPageState extends State<EditPage> {
       _cropping = true;
       _workingCrop =
           _controller.cropRect ?? const Rect.fromLTRB(0.05, 0.05, 0.95, 0.95);
-      _cropBackdrop = _controller.renderCropBackdrop();
+      _cropBackdrop = null; // 底图子 isolate 异步烘(原同步烘卡主 isolate)
     });
+    unawaited(_loadCropBackdrop());
+  }
+
+  Future<void> _loadCropBackdrop() async {
+    final backdrop = await _controller.renderCropBackdrop();
+    if (!mounted || !_cropping) return; // 退页/退裁剪:迟到底图弃
+    setState(() => _cropBackdrop = backdrop);
   }
 
   void _exitCrop() {
@@ -296,18 +305,21 @@ class _EditPageState extends State<EditPage> {
               ),
             ],
           ),
-          body: !_controller.isReady
-              ? _statesOnMedia(EmptyState(
-                  icon: Icons.image_not_supported_outlined,
-                  // EmptyState 显示端已包 t(),此处再包属双重包裹(无害)
-                  message: context.t('edit.jpegOnly'),
-                ))
-              : Column(
-                  children: [
-                    Expanded(child: _previewArea()),
-                    _toolBar(),
-                  ],
-                ),
+          body: _controller.booting
+              ? _statesOnMedia(
+                  LoadingState(message: context.t('edit.loadingPreview')))
+              : !_controller.isReady
+                  ? _statesOnMedia(EmptyState(
+                      icon: Icons.image_not_supported_outlined,
+                      // EmptyState 显示端已包 t(),此处再包属双重包裹(无害)
+                      message: context.t('edit.jpegOnly'),
+                    ))
+                  : Column(
+                      children: [
+                        Expanded(child: _previewArea()),
+                        _toolBar(),
+                      ],
+                    ),
         ),
       ),
     );
@@ -334,8 +346,7 @@ class _EditPageState extends State<EditPage> {
           final backdrop = _cropBackdrop;
           final frame = _controller.frameSize;
           if (backdrop == null || frame == null) {
-            // 防御兜底(进裁剪前必已就绪,实际不可达);裸转圈接统一
-            // LoadingState,黑底适配走 [_statesOnMedia]。
+            // 底图子 isolate 渲染中的短暂窗口(进裁剪沿异步烘)。
             return _statesOnMedia(
                 LoadingState(message: context.t('edit.loadingPreview')));
           }
@@ -349,7 +360,7 @@ class _EditPageState extends State<EditPage> {
         }
         final preview = _controller.previewJpeg;
         if (preview == null) {
-          // 同上:预览未就绪的兜底(就绪态构造器同步烘出预览,不可达)。
+          // 引导/重渲染在途的短暂窗口(渲染产物异步落,见 EditController)。
           return _statesOnMedia(
               LoadingState(message: context.t('edit.loadingPreview')));
         }

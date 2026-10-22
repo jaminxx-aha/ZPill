@@ -87,6 +87,7 @@ Future<void> _pumpPage(
   required FakeGallerySaver gallery,
   Uint8List? jpeg,
   String filename = 'DSC_1234.jpg',
+  Finder? bootTerminus,
 }) async {
   await tester.pumpWidget(MaterialApp(
     home: EditPage(
@@ -96,6 +97,19 @@ Future<void> _pumpPage(
     ),
   ));
   await tester.pump();
+  await _drainBoot(tester, bootTerminus ?? find.byType(Image));
+}
+
+/// 引导/渲染完成回调只在 runAsync 窗口上浮(真异步出窗,见 _drainSave
+/// 注),逐窗循环到终态出现为止;50 窗预算防意外挂死。
+Future<void> _drainBoot(WidgetTester tester, Finder terminus) async {
+  for (var i = 0; i < 50; i++) {
+    if (terminus.evaluate().isNotEmpty) return;
+    await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 1)));
+    await tester.pump();
+  }
+  fail('编辑页引导未在窗口预算内落定: $terminus');
 }
 
 /// 返回保护用例的落地:根页 + push 编辑页(编辑页实际总是被 push 进
@@ -121,7 +135,11 @@ Future<void> _pumpPushed(WidgetTester tester,
     ),
   ));
   await tester.tap(find.text('打开编辑'));
-  await tester.pumpAndSettle();
+  // 引导期页面驻留 LoadingState(spinner 常动),pumpAndSettle 永不结算:
+  // 定帧过完页面过渡 + 排水等引导落定。
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 350));
+  await _drainBoot(tester, find.byType(Image));
 }
 
 /// compute 隔离 + 真实文件 IO 都挂在真实事件循环上,而 fake zone 的
@@ -158,7 +176,9 @@ void main() {
   testWidgets('非 JPEG:统一空态提示不可编辑,无预览', (tester) async {
     final gallery = FakeGallerySaver();
     await _pumpPage(tester,
-        gallery: gallery, jpeg: Uint8List.fromList([1, 2, 3, 4, 5]));
+        gallery: gallery,
+        jpeg: Uint8List.fromList([1, 2, 3, 4, 5]),
+        bootTerminus: find.byType(EmptyState));
     expect(find.byType(EmptyState), findsOneWidget);
     expect(find.text('无法编辑此文件(仅支持 JPEG)'), findsOneWidget);
     expect(find.byType(Image), findsNothing);
