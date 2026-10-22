@@ -8,7 +8,11 @@ import 'package:image/image.dart' as img;
 import 'package:nikon_pill/core/remote/frame_analysis.dart';
 import 'package:nikon_pill/core/remote/frame_analyzer.dart';
 import 'package:nikon_pill/core/remote/peaking_engines.dart';
+import 'package:nikon_pill/core/ptp/ptp_session.dart';
 import 'package:nikon_pill/core/remote/scopes.dart';
+import 'package:nikon_pill/features/remote/remote_controller.dart';
+
+import '../ptp/ptp_session_harness.dart';
 
 /// 32×24 灰度渐变 JPEG(左黑右白),右端四分之一过曝。
 Uint8List _gradientJpeg() {
@@ -693,6 +697,22 @@ void main() {
       frames.notifyListeners(); // 第 1 帧 → 跳过(_seen 1 % 2 != 0)
       await pumpEventQueue();
       expect(analyzer.analysis.value, same(first), reason: '中间帧不得重算');
+    });
+
+    test('全链装配(控制器引擎帧沿):isolate 信报可达 —— 实例方法里写 '
+        'Isolate.run 会沿闭包 context 链捕获 this(分析器 → 引擎通知器 → '
+        '监听闭包 → 控制器),控制器含 _AsyncCompleter(起景门)随信发送即 '
+        '「object is unsendable」,分析静默失败、叠层只余黑盒(2026-10-22 '
+        '真机实证);顶层入口函数构造性消除,本用例以生产装配图复现', () async {
+      final controller =
+          RemoteController(session: PtpSession(transport: FakePtpTransport()));
+      addTearDown(controller.dispose);
+      controller.analyzer.enabled.value = true;
+
+      controller.engine.frame.value = _whiteCornerJpeg();
+      controller.engine.frame.notifyListeners();
+      await waitUntil(() => controller.analyzer.analysis.value != null);
+      expect(controller.analyzer.analysis.value!.hasOverexposure, isTrue);
     });
 
     test('detach 清结果;在途结果弃;重挂后重新可用', () async {

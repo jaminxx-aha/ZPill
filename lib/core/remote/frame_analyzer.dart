@@ -11,8 +11,29 @@ import 'dart:isolate';
 
 import 'package:flutter/foundation.dart';
 
+import '../log/app_log.dart';
+
 import 'frame_analysis.dart';
 import 'peaking_engines.dart';
+
+/// 子 isolate 分析入口(**顶层函数**):闭包上下文只含纯值参数 ——
+/// 实例方法里写 [Isolate.run] 会沿闭包 context 链捕获 `this`(分析器 →
+/// 引擎通知器 → 监听闭包 → 控制器),控制器含 Completer 随信发送即炸
+///(2026-10-22 真机实证)。顶层函数无 this、无父链,构造性消除。
+Future<FrameAnalysis?> analyzeInIsolate(
+  Uint8List frame, {
+  required PeakingEngine peakingEngine,
+  required int peakingThreshold,
+  required double peakingRatioThreshold,
+  required int peakingNoiseGate,
+}) =>
+    Isolate.run(() => analyzeJpegFrame(
+          frame,
+          peakingEngine: peakingEngine,
+          peakingThreshold: peakingThreshold,
+          peakingRatioThreshold: peakingRatioThreshold,
+          peakingNoiseGate: peakingNoiseGate,
+        ));
 
 final class FrameAnalyzer {
   FrameAnalyzer({this.everyNth = 5});
@@ -89,14 +110,20 @@ final class FrameAnalyzer {
       // 级失败(spawn/消息异常),口径同前:不上抛、保持上次结果。
       FrameAnalysis? result;
       try {
-        result = await Isolate.run(() => analyzeJpegFrame(
-              frame,
-              peakingEngine: engine,
-              peakingThreshold: threshold,
-              peakingRatioThreshold: ratioThreshold,
-              peakingNoiseGate: noiseGate,
-            ));
-      } on Object {
+        result = await analyzeInIsolate(
+          frame,
+          peakingEngine: engine,
+          peakingThreshold: threshold,
+          peakingRatioThreshold: ratioThreshold,
+          peakingNoiseGate: noiseGate,
+        );
+      } on Object catch (e) {
+        // isolate 信报失败落盘(2026-10-22 真机实证:实例方法里写
+        // Isolate.run,闭包沿 context 链捕获 this → 引擎通知器 → 监听
+        // 闭包 → 控制器,其 _AsyncCompleter 随链入信即
+        // 「object is unsendable」,分析全程静默失败、叠层只余黑盒;
+        // 顶层函数入口构造性消除,此日志留作运营证据不再吞错无声)。
+        AppLog.e(AppLog.live, '帧分析失败: ${e.runtimeType} $e');
         result = null;
       }
       if (epoch != _epoch) return; // 已 detach/dispose(或重挂):迟到结果弃
