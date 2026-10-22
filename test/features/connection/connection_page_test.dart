@@ -26,6 +26,7 @@ import 'package:nikon_pill/data/paired_cameras_store.dart';
 import 'package:nikon_pill/data/settings_store.dart';
 import 'package:nikon_pill/design/app_colors.dart';
 import 'package:nikon_pill/features/connection/camera_overview_controller.dart';
+import 'package:nikon_pill/features/connection/connection_controller.dart';
 import 'package:nikon_pill/features/connection/connection_page.dart';
 import 'package:nikon_pill/features/remote/remote_controller.dart';
 import 'package:nikon_pill/features/remote/remote_page.dart';

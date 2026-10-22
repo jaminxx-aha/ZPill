@@ -42,7 +42,7 @@ import 'features/browser/browser_controller.dart';
 import 'features/browser/ratings_controller.dart';
 import 'features/browser/storage_overview_controller.dart';
 import 'features/connection/camera_overview_controller.dart';
-import 'features/connection/connection_page.dart';
+import 'features/connection/connection_controller.dart';
 import 'features/remote/remote_controller.dart';
 import 'features/settings/settings_page.dart';
 import 'features/settings/snapshot_controller.dart';
