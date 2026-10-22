@@ -1,6 +1,13 @@
 /// 帧分析调度(监看辅助):挂在 LiveViewEngine 的帧通知上,
-/// 每 N 帧算一次 [FrameAnalysis](直方图/斑马纹),禁用时零开销。
+/// 每 N 帧算一次 [FrameAnalysis](直方图/斑马纹),禁用时零开销;
+/// 解码+逐像素扫描走 [Isolate.run](image 包纯 Dart 解整帧 JPEG +
+/// 全帧采样 30-100ms/次,是取景期主 isolate 最大卡顿源,2026-10-22
+/// 迁出主 isolate;每次调用即起即收的短命 isolate,spawn 开销 ~ms
+/// 级,相对解码可接受,不设常驻 isolate)。
 library;
+
+import 'dart:async';
+import 'dart:isolate';
 
 import 'package:flutter/foundation.dart';
 
@@ -10,8 +17,8 @@ import 'peaking_engines.dart';
 final class FrameAnalyzer {
   FrameAnalyzer({this.everyNth = 5});
 
-  /// 抽帧间隔:基础 200ms 帧率下 = 每 ~1s 一算(image 包全帧解码在
-  /// 中端机 ~20-50ms,全帧算会挤 UI)。
+  /// 抽帧间隔:基础 200ms 帧率下 = 每 ~1s 一算。分析虽已迁子 isolate
+  /// (不再卡 UI),全帧解码仍吃整核 CPU —— 抽帧控的是 CPU 占用预算。
   final int everyNth;
 
   /// 分析开关(斑马纹/直方图任一开启时置 true;false 时帧到达即返回)。
@@ -37,13 +44,25 @@ final class FrameAnalyzer {
   ValueListenable<Uint8List?>? _frames;
   int _seen = 0;
 
+  /// 分析在途旗标:在途时后续触发直接丢(丢的是分析帧,取景帧照常走
+  /// UI)—— 防 Isolate.run 任务积压排队,结果回来后下一个抽帧沿恢复
+  /// 触发(最新帧优先,不补算积压的旧帧)。
+  bool _inFlight = false;
+
+  /// 世代号:attach/detach(dispose 内含)各翻一次。在途任务的结果
+  /// 回来世代不符即弃 —— detach 清态后不得被迟到结果复活,dispose 后
+  /// 不得写已 dispose 的 notifier。
+  int _epoch = 0;
+
   void attach(ValueListenable<Uint8List?> frames) {
     detach();
+    _inFlight = false; // 上一世代的在途任务与本世代无关(结果被世代闸弃)
     _frames = frames;
     frames.addListener(_onFrame);
   }
 
   void detach() {
+    _epoch++;
     _frames?.removeListener(_onFrame);
     _frames = null;
     _seen = 0;
@@ -53,15 +72,37 @@ final class FrameAnalyzer {
   void _onFrame() {
     if (!enabled.value) return;
     if (_seen++ % everyNth != 0) return;
+    if (_inFlight) return;
     final frame = _frames?.value;
     if (frame == null) return;
-    analysis.value = analyzeJpegFrame(
-      frame,
-      peakingEngine: peakingEngine,
-      peakingThreshold: peakingThreshold,
-      peakingRatioThreshold: peakingRatioThreshold,
-      peakingNoiseGate: peakingNoiseGate,
-    );
+    // 参数快照:isolate 闭包只捕获这些局部与帧字节,不捕获 this
+    //(ValueNotifier 不可跨 isolate 发送)。帧字节即使是 sublistView
+    //(头剥离路径)也按视图区间复制到子 isolate,实证无共享。
+    final engine = peakingEngine;
+    final threshold = peakingThreshold;
+    final ratioThreshold = peakingRatioThreshold;
+    final noiseGate = peakingNoiseGate;
+    final epoch = _epoch;
+    _inFlight = true;
+    unawaited(() async {
+      // analyzeJpegFrame 已把解码失败收编为 null;这里再兜 isolate 传输
+      // 级失败(spawn/消息异常),口径同前:不上抛、保持上次结果。
+      FrameAnalysis? result;
+      try {
+        result = await Isolate.run(() => analyzeJpegFrame(
+              frame,
+              peakingEngine: engine,
+              peakingThreshold: threshold,
+              peakingRatioThreshold: ratioThreshold,
+              peakingNoiseGate: noiseGate,
+            ));
+      } on Object {
+        result = null;
+      }
+      if (epoch != _epoch) return; // 已 detach/dispose(或重挂):迟到结果弃
+      _inFlight = false;
+      analysis.value = result;
+    }());
   }
 
   void dispose() {

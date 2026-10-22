@@ -1,3 +1,4 @@
+import 'dart:isolate';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
@@ -648,6 +649,21 @@ void main() {
   });
 
   group('FrameAnalyzer', () {
+    /// 分析已迁子 isolate(Isolate.run,2026-10-22):结果经端口消息回主
+    /// isolate,不是微任务/定时器 —— pumpEventQueue 的默认轮数对 isolate
+    /// spawn(~ms)不保证够,这里轮询到条件成立,限时兜底。
+    Future<void> waitUntil(bool Function() done,
+        {Duration limit = const Duration(seconds: 10)}) async {
+      final sw = Stopwatch()..start();
+      while (!done()) {
+        if (sw.elapsed > limit) {
+          fail('等待超时(${limit.inMilliseconds}ms):条件未成立 —— '
+              '分析结果未在限时内回主 isolate?');
+        }
+        await Future<void>.delayed(Duration.zero);
+      }
+    }
+
     test('禁用:帧到达零分析', () {
       final analyzer = FrameAnalyzer(everyNth: 2);
       final frames = _FakeFrames();
@@ -659,7 +675,7 @@ void main() {
       expect(analyzer.analysis.value, isNull);
     });
 
-    test('启用:每 N 帧一算,中间帧跳过', () {
+    test('启用:每 N 帧一算,中间帧跳过', () async {
       final analyzer = FrameAnalyzer(everyNth: 2);
       final frames = _FakeFrames();
       analyzer.attach(frames);
@@ -667,29 +683,93 @@ void main() {
       addTearDown(() => analyzer.dispose());
 
       frames.value = _whiteCornerJpeg();
-      frames.notifyListeners(); // 第 0 帧(_seen 0 % 2 == 0 → 算)
-      expect(analyzer.analysis.value, isNotNull);
+      frames.notifyListeners(); // 第 0 帧(_seen 0 % 2 == 0 → 触发分析)
+      // 异步化:结果回主 isolate 才可见,不再同步断言(见 waitUntil 注释)。
+      await waitUntil(() => analyzer.analysis.value != null);
       expect(analyzer.analysis.value!.hasOverexposure, isTrue);
 
       final first = analyzer.analysis.value;
       frames.value = _gradientJpeg();
-      frames.notifyListeners(); // 第 1 帧 → 跳过
+      frames.notifyListeners(); // 第 1 帧 → 跳过(_seen 1 % 2 != 0)
+      await pumpEventQueue();
       expect(analyzer.analysis.value, same(first), reason: '中间帧不得重算');
     });
 
-    test('detach 清结果;重挂后重新可用', () {
+    test('detach 清结果;在途结果弃;重挂后重新可用', () async {
       final analyzer = FrameAnalyzer();
       final frames = _FakeFrames();
       analyzer.attach(frames);
       analyzer.enabled.value = true;
+
+      final jpeg = _gradientJpeg();
+      frames.value = jpeg;
+      frames.notifyListeners(); // 触发分析(在途)
+      analyzer.detach(); // 世代翻:在途结果回来不得复活已清的 analysis
+      expect(analyzer.analysis.value, isNull);
+      // 等量任务见证:同帧字节直跑一次 Isolate.run —— 它完成即证明
+      // spawn+解码量级的往返在本时限内可完成,analyzer 的在途任务同理;
+      // 若世代闸缺失,迟到投递会把 analysis 从 null 复活成非 null。
+      await Isolate.run(() => analyzeJpegFrame(jpeg));
+      await pumpEventQueue();
+      expect(analyzer.analysis.value, isNull, reason: 'detach 世代后的迟到结果弃');
+
+      // 重挂后重新可用(在途闸随 attach 重建,不被上一世代卡死)。
+      analyzer.attach(frames);
       frames.value = _gradientJpeg();
       frames.notifyListeners();
+      await waitUntil(() => analyzer.analysis.value != null);
       expect(analyzer.analysis.value, isNotNull);
-      analyzer.detach();
-      expect(analyzer.analysis.value, isNull);
     });
 
-    test('引擎字段传参:缺省双尺度散景不亮;切经典引擎即亮', () {
+    test('dispose 后不投递:在途分析的结果被世代闸丢弃', () async {
+      final analyzer = FrameAnalyzer(everyNth: 1);
+      final frames = _FakeFrames();
+      analyzer.attach(frames);
+      analyzer.enabled.value = true;
+      var deliveries = 0;
+      analyzer.analysis.addListener(() => deliveries++);
+
+      final jpeg = _gradientJpeg();
+      frames.value = jpeg;
+      frames.notifyListeners(); // 触发在途分析
+      analyzer.dispose(); // 世代翻 + notifier dispose:迟到结果不得投递
+      // 等量任务见证(同上一用例):它完成即证明在途量级的往返可完成;
+      // 若世代闸缺失,迟到投递会写已 dispose 的 notifier(断言炸)。
+      await Isolate.run(() => analyzeJpegFrame(jpeg));
+      await pumpEventQueue();
+      expect(deliveries, 0, reason: 'dispose 后不得投递(notifier 已 dispose)');
+    });
+
+    test('在途跳过:分析在途时新触发丢弃,不积压;完成后恢复', () async {
+      final analyzer = FrameAnalyzer(everyNth: 1);
+      final frames = _FakeFrames();
+      analyzer.attach(frames);
+      analyzer.enabled.value = true;
+      addTearDown(() => analyzer.dispose());
+      var deliveries = 0;
+      analyzer.analysis.addListener(() => deliveries++);
+
+      // 同步突发 10 帧:第 0 帧触发分析(Isolate.run 必在途 —— 同步代码
+      // 期间不可能完成),后续 9 帧全部命中在途闸 —— 同一时刻至多一个
+      // 分析在跑,不排队不积压(丢分析帧,取景帧照常走 UI)。
+      for (var i = 0; i < 10; i++) {
+        frames.value = _whiteCornerJpeg();
+        frames.notifyListeners();
+      }
+      await waitUntil(() => analyzer.analysis.value != null);
+      await pumpEventQueue();
+      expect(deliveries, 1,
+          reason: '突发 10 帧只触发一次分析(在途时后续触发丢弃)');
+      expect(analyzer.analysis.value!.hasOverexposure, isTrue);
+
+      // 在途结束后:下一帧恢复触发(在途闸不得卡死分析通道)。
+      frames.value = _whiteCornerJpeg();
+      frames.notifyListeners();
+      await waitUntil(() => deliveries >= 2);
+      expect(deliveries, 2, reason: '在途结束后恢复节流分析');
+    });
+
+    test('引擎字段传参:缺省双尺度散景不亮;切经典引擎即亮', () async {
       final analyzer = FrameAnalyzer(everyNth: 1);
       final frames = _FakeFrames();
       analyzer.attach(frames);
@@ -698,14 +778,17 @@ void main() {
 
       frames.value = _softEdgeJpeg();
       frames.notifyListeners();
-      expect(analyzer.analysis.value, isNotNull);
+      await waitUntil(() => analyzer.analysis.value != null);
       expect(analyzer.analysis.value!.hasPeaking, isFalse,
           reason: '缺省引擎 = 双尺度,散景软边不亮');
 
       analyzer.peakingEngine = PeakingEngine.gradient;
       analyzer.peakingThreshold = 40; // 监看灵敏度中档
+      final first = analyzer.analysis.value;
       frames.value = _softEdgeJpeg();
       frames.notifyListeners();
+      // 新结果以对象身份区分(同帧内容,值可能相等但对象必新)。
+      await waitUntil(() => !identical(analyzer.analysis.value, first));
       expect(analyzer.analysis.value!.hasPeaking, isTrue,
           reason: '改引擎字段 = 改判定(页面「峰值算法」切档路径)');
     });
