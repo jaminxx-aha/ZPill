@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../design/app_haptics.dart';
 import '../../l10n/l10n.dart';
 import 'live_design.dart';
 import 'remote_controller.dart';
@@ -43,7 +44,12 @@ class CaptureModeStrip extends StatelessWidget {
       final selected = mode == m;
       final dimmed = !selected && !switchableTo.contains(m);
       return InkWell(
-        onTap: enabled && !selected ? () => onModeChanged(m) : null,
+        onTap: enabled && !selected
+            ? () {
+                AppHaptics.selection(); // 切档确认沿(轻点)
+                onModeChanged(m);
+              }
+            : null,
         customBorder:
             RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
         child: Container(

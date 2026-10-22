@@ -19,7 +19,6 @@ import '../ptp/operation_codes.dart';
 import '../ptp/ptp_session.dart';
 import '../ptp/ptp_transport.dart';
 import '../ptpip/object_format.dart';
-import '../../data/settings_store.dart';
 import 'transfer_engine.dart';
 import 'transfer_task.dart';
 
@@ -27,7 +26,7 @@ final class AutoTransferService {
   AutoTransferService({
     required this.session,
     required this.engine,
-    required this.settings,
+    required this.policyFor,
     this.destination = TransferDestination.gallery,
     void Function(Object error)? onSkip,
   }) : _onSkip = onSkip {
@@ -36,7 +35,11 @@ final class AutoTransferService {
 
   final PtpSession session;
   final TransferEngine engine;
-  final SettingsStore settings;
+
+  /// 速传策略供给(开关 + 照片格式;回调注入 —— core 不认 data 层
+  /// 设置店,AppServices 从 settingsStore.current() 投影)。
+  final Future<({bool enabled, PhotoDownloadFormat format})> Function()
+      policyFor;
   final TransferDestination destination;
   final void Function(Object error)? _onSkip;
 
@@ -56,12 +59,12 @@ final class AutoTransferService {
     }
     if (event.params.isEmpty) return;
     final handle = event.params.first;
-    final config = await settings.current();
-    if (!config.autoTransfer) return;
+    final policy = await policyFor();
+    if (!policy.enabled) return;
     try {
       final info = await session.getObjectInfo(handle);
       final entry = ObjectRepository.toEntry(info);
-      if (!formatAllows(entry, config.autoTransferFormat)) {
+      if (!formatAllows(entry, policy.format)) {
         return;
       }
       await engine.enqueue([entry], destination: destination);

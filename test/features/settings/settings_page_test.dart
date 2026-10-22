@@ -1,14 +1,52 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:nikon_pill/app.dart';
 import 'package:nikon_pill/app_services.dart';
 import 'package:nikon_pill/data/settings_store.dart';
 import 'package:nikon_pill/l10n/l10n.dart';
+import 'package:nikon_pill/platform/gallery_saver.dart';
 
 /// 设置页:文本框散焦/落库(真机反馈:点开文本框后键盘收不起来)+
 /// 深色模式/语言分段切换即时落库(语言含 t() 经真实 scope 的翻转验证)。
 void main() {
+  // 图库 tab 随首屏预建:首次目录扫描走真单例 + 真 dart:IO(2026-10-22
+  // refreshAppFiles 异步化)。mock 给真实临时目录(空),扫描链可在
+  // runAsync 排水窗内收口(与 app_smoke_test 同款)。
+  late Directory dir;
+  setUp(() {
+    dir = Directory.systemTemp.createTempSync('nikonpill_settings');
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(MethodChannelGallerySaver.channel,
+            (call) async => switch (call.method) {
+                  'dataDir' || 'previewsDir' || 'downloadsDir' => dir.path,
+                  _ => null,
+                });
+    // 同因:AppServices 装配即 ConnectionController 起 BLE/NSD 两个扫描
+    // 事件流,listen 无 mock 即 MissingPluginException,异步错在哪个用例
+    // 的排水窗上浮看运气 —— mock 成空应答(设置用例不发事件)钉死
+    // 顺序无关(local_library_page_test 同款)。
+    for (final name in const ['nikonpill/ble/events', 'nikonpill/nsd/events']) {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(MethodChannel(name),
+              (call) async => call.method == 'listen' ? '' : null);
+    }
+  });
+  tearDown(() {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(MethodChannelGallerySaver.channel, null);
+    for (final name in const ['nikonpill/ble/events', 'nikonpill/nsd/events']) {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(MethodChannel(name), null);
+    }
+    if (dir.existsSync()) {
+      dir.deleteSync(recursive: true);
+    }
+  });
+
   // 加高视口:ListView 懒构建,折线下控件未 build 不可断言/点按。
   Future<void> boot(WidgetTester tester) async {
     tester.view
@@ -16,6 +54,14 @@ void main() {
       ..devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
     await tester.pumpWidget(const NikonPillApp());
+    // 首扫排水:扫描未收口前图库 tab 在转圈,pumpAndSettle 会挂在动画
+    // 帧上 —— 逐窗排水到收口(单例跨用例保值,首用例排水后续直通)。
+    final transfers = AppServices.instance.transfersController;
+    for (var i = 0; i < 20 && !transfers.appFilesScanned; i++) {
+      await tester
+          .runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+      await tester.pump();
+    }
     await tester.pumpAndSettle();
     await tester.tap(find.text('设置'));
     await tester.pumpAndSettle();

@@ -18,7 +18,7 @@ import 'package:nikon_pill/core/transfer/transfer_task.dart';
 import 'package:nikon_pill/features/browser/browser_controller.dart';
 import 'package:nikon_pill/features/browser/photo_grid_page.dart';
 import 'package:nikon_pill/features/transfers/transfers_page.dart';
-import 'package:nikon_pill/l10n/message.dart';
+import '../../helpers/fake_connection.dart';
 
 /// 手动驱动的伪仓库(同 browser_controller_test:块事件逐个发,
 /// loadAlbums 挂在 Completer 上由测试择机完成)。
@@ -55,42 +55,7 @@ final class _FakeRepo implements ObjectRepository {
       removedHandles.addAll(handles);
 }
 
-final class _FakeConnection implements CameraConnection {
-  final statesCtrl = StreamController<CameraLinkState>.broadcast();
 
-  @override
-  Stream<CameraLinkState> get states => statesCtrl.stream;
-
-  @override
-  CameraLinkState get state => CameraLinkState.disconnected;
-
-  @override
-  L10nMessage? get error => null;
-
-  @override
-  String? get deviceName => null;
-
-  @override
-  String? get deviceModel => null;
-
-  @override
-  bool get isWireless => false;
-
-  @override
-  String? get pairingCode => null;
-
-  @override
-  Future<void> connect({String? ip, String? instanceName}) async {}
-
-  @override
-  Future<void> confirmPairing() async {}
-
-  @override
-  Future<void> cancelPairing() async {}
-
-  @override
-  Future<void> disconnect() async {}
-}
 
 /// 1×1 PNG(解码必成):缩略出图路径的真档替身。
 final _tinyPng = base64Decode(
@@ -185,6 +150,19 @@ PhotoGroup _rawPhoto(int handle) => PhotoGroup([
       ),
     ]);
 
+/// 单文件视频组(MOV,quickTime 容器码)。
+PhotoGroup _video(int handle) => PhotoGroup([
+      ObjectEntry(
+        handle: handle,
+        name: 'DSC_0099.MOV',
+        sizeInBytes: 100,
+        kind: ObjectKind.video,
+        parentHandle: 0x11,
+        capturedAt: DateTime.utc(2026, 10, 1, 12),
+        formatCode: 0x300D,
+      ),
+    ]);
+
 /// 记录入队调用的假引擎。
 final class _FakeEngine implements TransferEngine {
   final List<(List<ObjectEntry>, TransferDestination)> calls = [];
@@ -249,6 +227,43 @@ void main() {
 
     repo.completeLoad(
         [CameraAlbum.allPhotos([_photo(1), _photo(2), _photo(3), _photo(4)])]);
+    await loading;
+  });
+
+  testWidgets('视频角标带底色:黑半透明圆角小底,亮缩略上可辨', (tester) async {
+    final repo = _FakeRepo();
+    final controller = BrowserController(repository: repo);
+    await tester.pumpWidget(_host(PhotoGridPage(
+      controller: controller,
+      folderHandle: CameraAlbum.allPhotosHandle,
+      fallbackName: '全部照片',
+      thumbnails: _FakeThumbs(),
+    )));
+
+    final loading = controller.load();
+    repo.updatesCtrl.add(AlbumsUpdate(
+        albums: [CameraAlbum.allPhotos([_video(1), _photo(2)])],
+        loaded: 2,
+        total: 2,
+        complete: true));
+    await tester.pump();
+
+    // 角标图标最近的 DecoratedBox 祖先 = 底:黑 0.55 圆角矩形(与
+    // 左下类型角标同视觉语言),纯白图标不再裸叠缩略。
+    final iconEl = tester.element(find.byIcon(Icons.videocam));
+    late final Element badgeBase;
+    iconEl.visitAncestorElements((e) {
+      if (e.widget is DecoratedBox) {
+        badgeBase = e;
+        return false;
+      }
+      return true;
+    });
+    final deco = (badgeBase.widget as DecoratedBox).decoration as BoxDecoration;
+    expect(deco.color, Colors.black.withValues(alpha: 0.55));
+    expect(deco.borderRadius, BorderRadius.circular(4));
+
+    repo.completeLoad([CameraAlbum.allPhotos([_video(1), _photo(2)])]);
     await loading;
   });
 
@@ -390,7 +405,7 @@ void main() {
 
   testWidgets('断连:网格保留最后快照,标题取兜底名', (tester) async {
     final repo = _FakeRepo();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = BrowserController(repository: repo, connection: conn);
     await tester.pumpWidget(_host(PhotoGridPage(
       controller: controller,

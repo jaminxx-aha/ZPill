@@ -3,14 +3,20 @@
 ///
 /// 交互模型:参数改动的重算都在预览小图上(见 [EditController]);
 /// 保存时 [compute] 把参数应用到原分辨率(重编码秒级,勿卡 UI)。
-/// 裁剪是独立模式:底图铺满 + 遮罩 + 角/边手柄,确认才落到参数。
-/// LUT 面板含内置风格 + 剪贴板导入 .cube/.xmp 文本(.cube 为 SpeedGrade
-/// 表;.xmp 为 Adobe 相机配置 RGBTable,见 core/media/xmp_rgb_table;
-/// 受系统剪贴板容量限制,偏大 LUT 建议先缩到 17³)。胶片面板是 4x5
-/// 色彩矩阵预设库(core/media/film_presets,数值出处 MIT 见该文件头),
-/// 按参考仓分组两级筛选,「无」= null、original 与其像素等价不单列。
+/// 引导解码与预览重渲染在子 isolate(见 EditController),页面用
+/// LoadingState 接住引导期与重渲染在途窗口。裁剪是独立模式:底图
+/// 铺满 + 遮罩 + 角/边手柄,确认才落到参数。LUT 面板含内置风格 +
+/// 剪贴板导入 .cube/.xmp 文本(.cube 为 SpeedGrade 表;.xmp 为 Adobe
+/// 相机配置 RGBTable,见 core/media/xmp_rgb_table;受系统剪贴板容量
+/// 限制,偏大 LUT 建议先缩到 17³)。胶片面板是 4x5 色彩矩阵预设库
+/// (core/media/film_presets,数值出处 MIT 见该文件头),按参考仓分组
+/// 两级筛选,「无」= null、original 与其像素等价不单列。
+///
+/// 返回把关:脏态([EditController.edited])退页先弹丢弃确认(PopScope
+/// 拦 maybePop 路径的系统返回/顶栏返回),保存成功沿复位,干净退出不拦。
 library;
 
+import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
@@ -26,9 +32,13 @@ import '../../core/media/xmp_rgb_table.dart' show looksLikeXmp, parseXmpRgbTable
 import '../../core/ptpip/object_format.dart' show ObjectKind;
 import '../../core/transfer/object_downloader.dart' show ObjectDownloader;
 import '../../design/app_colors.dart';
+import '../../design/app_haptics.dart';
+import '../../design/app_theme.dart';
 import '../../l10n/l10n.dart';
 import '../../platform/gallery_saver.dart';
 import '../../platform/services.dart';
+import '../common/widgets/confirm_dialog.dart';
+import '../common/widgets/states.dart';
 import 'edit_controller.dart';
 import 'lut_presets.dart';
 
@@ -60,6 +70,12 @@ class _EditPageState extends State<EditPage> {
   _Tool _tool = _Tool.rotate;
   CubeLut? _importedLut;
   bool _saving = false;
+
+  /// 统一状态件(EmptyState/LoadingState)的黑底适配主题:它们的文字/
+  /// 图标/spinner 都取主题色,而本页钉 AppMedia 纯黑底,浅色主题下
+  /// (墨色正文 + 深灰图标)不可读 —— 借 AppTheme.dark(暖白文字 +
+  /// 黄 spinner)保证对比度,页面其余 UI 均为 AppMedia 白系不受影响。
+  late final ThemeData _statesTheme = AppTheme.dark;
 
   // 胶片面板当前分组(纯 UI 筛选态,不进编辑参数;重置不收回)。
   String _filmGroup = filmPresetGroups.first;
@@ -118,6 +134,12 @@ class _EditPageState extends State<EditPage> {
       }
       if (!mounted) return;
       _toast(saved ? 'edit.savedAlbum' : 'edit.notSaved');
+      if (saved) {
+        // 保存成功即收脏:回干净态(预览回原图、保存/重置复禁用、退出
+        // 不再弹确认);相册取消导入则保留参数供重试。
+        unawaited(AppHaptics.success()); // 保存成功确认沿
+        _reset();
+      }
     } on Exception {
       if (!mounted) return;
       _toast('edit.saveFailed');
@@ -132,8 +154,15 @@ class _EditPageState extends State<EditPage> {
       _cropping = true;
       _workingCrop =
           _controller.cropRect ?? const Rect.fromLTRB(0.05, 0.05, 0.95, 0.95);
-      _cropBackdrop = _controller.renderCropBackdrop();
+      _cropBackdrop = null; // 底图子 isolate 异步烘(原同步烘卡主 isolate)
     });
+    unawaited(_loadCropBackdrop());
+  }
+
+  Future<void> _loadCropBackdrop() async {
+    final backdrop = await _controller.renderCropBackdrop();
+    if (!mounted || !_cropping) return; // 退页/退裁剪:迟到底图弃
+    setState(() => _cropBackdrop = backdrop);
   }
 
   void _exitCrop() {
@@ -214,49 +243,84 @@ class _EditPageState extends State<EditPage> {
       ..showSnackBar(SnackBar(content: Text(context.t(message))));
   }
 
+  /// 统一状态件底座:AppMedia 黑底上套深色主题([_statesTheme]),否则
+  /// 浅色应用主题下 EmptyState/LoadingState 的主题色文字不可读;透明
+  /// Material 让 LoadingState 的无样式 Text 也吃到内层主题的
+  /// DefaultTextStyle(Material 以最近主题的 bodyMedium 建默认样式)。
+  Widget _statesOnMedia(Widget child) => Theme(
+        data: _statesTheme,
+        child: Material(color: Colors.transparent, child: child),
+      );
+
+  /// 脏态退页把关:PopScope 拦下的返回(maybePop 路径)在这里确认,
+  /// 确认丢弃后走直接 pop(Navigator.pop 不咨询 canPop,能真退出)。
+  Future<void> _confirmDiscard() async {
+    final discard = await showConfirmDialog(
+      context,
+      title: context.t('edit.discardTitle'),
+      content: context.t('edit.discardBody'),
+      confirmLabel: context.t('edit.discardConfirm'),
+      destructive: true,
+    );
+    if (discard && mounted) Navigator.of(context).pop();
+  }
+
   @override
   Widget build(BuildContext context) {
     // 整页订阅控制器:保存/重置按钮的可用性随 edited 变化,不能只让
     // 预览区刷新(旋转/LUT 走 notifyListeners,不触发本 State 的 setState)。
+    // PopScope 挂这层同理:canPop 随 edited 即时变(重置/保存成功复位后
+    // 干净退出不拦)。
     return ListenableBuilder(
       listenable: _controller,
-      builder: (context, _) => Scaffold(
-        backgroundColor: AppMedia.background,
-        appBar: AppBar(
-          backgroundColor: AppMedia.chrome,
-          foregroundColor: AppMedia.onMedia,
-          title: Text(widget.filename, style: const TextStyle(fontSize: 16)),
-          actions: [
-            IconButton(
-              tooltip: context.t('edit.reset'),
-              onPressed: _controller.edited ? _reset : null,
-              icon: const Icon(Icons.restart_alt),
-            ),
-            IconButton(
-              tooltip: context.t('edit.saveToAlbum'),
-              onPressed: (_controller.edited && !_saving) ? _save : null,
-              icon: _saving
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(
-                          strokeWidth: 2, color: AppMedia.onMedia),
-                    )
-                  : const Icon(Icons.save_outlined),
-            ),
-          ],
-        ),
-        body: !_controller.isReady
-            ? Center(
-                child: Text(context.t('edit.jpegOnly'),
-                    style: const TextStyle(color: AppMedia.onMediaMuted)),
-              )
-            : Column(
-                children: [
-                  Expanded(child: _previewArea()),
-                  _toolBar(),
-                ],
+      builder: (context, _) => PopScope(
+        canPop: !_controller.edited,
+        onPopInvokedWithResult: (didPop, _) {
+          if (didPop) return;
+          _confirmDiscard();
+        },
+        child: Scaffold(
+          backgroundColor: AppMedia.background,
+          appBar: AppBar(
+            backgroundColor: AppMedia.chrome,
+            foregroundColor: AppMedia.onMedia,
+            title: Text(widget.filename, style: const TextStyle(fontSize: 16)),
+            actions: [
+              IconButton(
+                tooltip: context.t('edit.reset'),
+                onPressed: _controller.edited ? _reset : null,
+                icon: const Icon(Icons.restart_alt),
               ),
+              IconButton(
+                tooltip: context.t('edit.saveToAlbum'),
+                onPressed: (_controller.edited && !_saving) ? _save : null,
+                icon: _saving
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: AppMedia.onMedia),
+                      )
+                    : const Icon(Icons.save_outlined),
+              ),
+            ],
+          ),
+          body: _controller.booting
+              ? _statesOnMedia(
+                  LoadingState(message: context.t('edit.loadingPreview')))
+              : !_controller.isReady
+                  ? _statesOnMedia(EmptyState(
+                      icon: Icons.image_not_supported_outlined,
+                      // EmptyState 显示端已包 t(),此处再包属双重包裹(无害)
+                      message: context.t('edit.jpegOnly'),
+                    ))
+                  : Column(
+                      children: [
+                        Expanded(child: _previewArea()),
+                        _toolBar(),
+                      ],
+                    ),
+        ),
       ),
     );
   }
@@ -282,8 +346,9 @@ class _EditPageState extends State<EditPage> {
           final backdrop = _cropBackdrop;
           final frame = _controller.frameSize;
           if (backdrop == null || frame == null) {
-            return const Center(
-                child: CircularProgressIndicator(color: AppMedia.onMedia));
+            // 底图子 isolate 渲染中的短暂窗口(进裁剪沿异步烘)。
+            return _statesOnMedia(
+                LoadingState(message: context.t('edit.loadingPreview')));
           }
           return CropView(
             backdrop: backdrop,
@@ -295,8 +360,9 @@ class _EditPageState extends State<EditPage> {
         }
         final preview = _controller.previewJpeg;
         if (preview == null) {
-          return const Center(
-              child: CircularProgressIndicator(color: AppMedia.onMedia));
+          // 引导/重渲染在途的短暂窗口(渲染产物异步落,见 EditController)。
+          return _statesOnMedia(
+              LoadingState(message: context.t('edit.loadingPreview')));
         }
         return InteractiveViewer(
           maxScale: 8,

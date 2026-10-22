@@ -12,7 +12,7 @@ import 'package:nikon_pill/core/ptp/ptp_session.dart';
 import 'package:nikon_pill/core/ptp/ptp_transport.dart';
 import 'package:nikon_pill/core/ptpip/object_format.dart';
 
-import '../ptp/ptp_session_test.dart' show FakePtpTransport;
+import '../ptp/ptp_session_harness.dart' show FakePtpTransport;
 
 ObjectEntry _file(int handle, String name,
         {int parent = 0x11, int format = 0x3801, required DateTime captured}) =>

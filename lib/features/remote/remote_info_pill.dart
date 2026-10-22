@@ -141,7 +141,9 @@ class RemoteInfoPill extends StatelessWidget {
             const SizedBox(width: 10),
             Icon(Icons.circle, size: 8, color: live.bad),
             const SizedBox(width: 4),
-            Text('REC ${recDurationLabel(controller.recordingSeconds)}',
+            Text(
+                '${context.t('remote.recPrefix')} '
+                '${recDurationLabel(controller.recordingSeconds)}',
                 style: TextStyle(
                     fontSize: 12,
                     color: live.bad,
@@ -202,8 +204,10 @@ class RemoteInfoPill extends StatelessWidget {
   }
 }
 
-/// 录制时长标签(m:ss;展示就近取值,事件/交互驱动刷新)。REC 显示
-/// 在胶囊里;拍摄页唯一直接消费方(2026-10-10 录制钮并入快门后)。
+/// 录制时长标签(m:ss;展示就近取值,事件/交互驱动刷新)。REC 前缀在
+/// 胶囊里经 remote.recPrefix 键化(zh/en 同值「REC」:录制指示通用
+/// 记号,键化为闸门完整与未来可调);拍摄页唯一直接消费方
+/// (2026-10-10 录制钮并入快门后)。
 String recDurationLabel(int? seconds) {
   final s = seconds ?? 0;
   final m = s ~/ 60;

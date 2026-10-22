@@ -195,10 +195,13 @@ final class PtpIpCodecImpl implements PtpIpCodec {
         return StartDataPacket(transactionId: tid, totalLength: total);
       case PtpIpPacketType.data:
         final tid = r.u32();
-        return DataPacket(transactionId: tid, payload: r.raw(r.remaining));
+        // 载荷视图(帧 body 本就是 splitter 的视图,链路到槽位全程
+        // 零拷贝);raw 的防御副本是取景帧流每帧一遍无谓整帧拷贝。
+        return DataPacket(transactionId: tid, payload: r.rawView(r.remaining));
       case PtpIpPacketType.endData:
         final tid = r.u32();
-        return EndDataPacket(transactionId: tid, payload: r.raw(r.remaining));
+        return EndDataPacket(
+            transactionId: tid, payload: r.rawView(r.remaining));
       case PtpIpPacketType.cancel:
         return CancelPacket(transactionId: r.u32());
       case PtpIpPacketType.probeRequest:

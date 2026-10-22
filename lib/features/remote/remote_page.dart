@@ -600,14 +600,16 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     return Stack(
       fit: StackFit.expand,
       children: [
-        // feed 区不能裸放:帧到达只写 ValueNotifier 不
-        // notifyListeners,没有这层 merge 监听,首帧永远停在
-        // 「等待首帧」。全幅铺底(不与底区两行分高):底区两行是
-        // 浮层,画面延伸到其下(2026-10-12「按钮整体往下移」)。
+        // feed 区不再监听 engine.frame(2026-10-22 帧沿收口):逐帧字节
+        // 更替只重建画面子树(RemoteFeedArea 内部 ValueListenableBuilder
+        // 自订),等待首帧↔画面的存在沿也由其 _onFramePresence 自理 ——
+        // 外层 merge 若留 frame,整个取景区(含全部叠层/浮层)随帧率
+        // 重建。controller/status 是低频沿(交互/起停景),照旧整树。
+        // 全幅铺底(不与底区两行分高):底区两行是浮层,画面延伸到其
+        // 下(2026-10-12「按钮整体往下移」)。
         AnimatedBuilder(
           animation: Listenable.merge([
             controller,
-            controller.engine.frame,
             controller.engine.status,
           ]),
           builder: (context, _) => RemoteFeedArea(
@@ -863,8 +865,9 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
             onTap: _chromeHidden ? _showChrome : _hideChrome,
           ),
         ),
-        // feed 区不能裸放:帧到达只写 ValueNotifier 不 notifyListeners,
-        // 没有这层 merge 监听,首屏永远停在「等待首帧」。取景盒**左缩 60
+        // feed 区不再监听 engine.frame(2026-10-22 帧沿收口,同竖屏):
+        // 逐帧更替与首帧存在沿都在 RemoteFeedArea 内部自理,外层只留
+        // controller/status 低频沿。取景盒**左缩 60
         // + 右缩 118**(右 = 快门柱让位:柱右距物理屏缘 30
         // ([kScreenEdgePadding] 手调值)、柱带宽 30+78=108 + 10 间隙;
         // 左 = 九轮「把取景往右侧移动一点」:盒左缩 60 → heightFill 画面
@@ -876,7 +879,6 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
           child: AnimatedBuilder(
             animation: Listenable.merge([
               controller,
-              controller.engine.frame,
               controller.engine.status,
             ]),
             builder: (context, _) => RemoteFeedArea(

@@ -814,6 +814,10 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
               return Image.file(
                 File(path),
                 fit: BoxFit.cover,
+                // 三列格宽约 130 逻辑像素(与本地图库网格同几何):0x90C4
+                // ~1024px 缩略按 300 降采样解码(同图库网格 cacheWidth
+                // 口径),免全尺寸解码白耗内存。
+                cacheWidth: 300,
                 errorBuilder: (context, error, stackTrace) {
                   _retryThumbAfterFileError(group); // 死路径/坏档:自愈
                   return ColoredBox(
@@ -851,11 +855,21 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
               ),
             ),
           if (group.isVideo)
-            const Align(
+            Align(
               alignment: Alignment.bottomRight,
               child: Padding(
-                padding: EdgeInsets.all(4),
-                child: Icon(Icons.videocam, size: 16, color: Colors.white),
+                padding: const EdgeInsets.all(4),
+                child: Container(
+                  // 黑半透明圆角小底(与左下类型角标同视觉语言):
+                  // 亮缩略上纯白图标不可辨。
+                  padding: const EdgeInsets.all(2),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.55),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: const Icon(Icons.videocam,
+                      size: 16, color: Colors.white),
+                ),
               ),
             ),
           // 评分角标(左上):有星才显示;星数并入角标文本。

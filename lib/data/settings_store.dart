@@ -9,12 +9,11 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../core/browser/photo_group.dart';
+import '../core/media/watermark.dart';
 
 enum TransferQuality { original, compressed }
 
 /// 水印模板:off 关闭;corner 角标;card 摄影卡片。
-enum WatermarkStyle { off, corner, card }
-
 /// 深浅模式(system = 跟随系统;light/dark = 锁定)。独立于 Material
 /// 的 ThemeMode 枚举 —— data 层不依赖 Flutter,app 根再做映射。
 enum AppThemeMode { system, light, dark }

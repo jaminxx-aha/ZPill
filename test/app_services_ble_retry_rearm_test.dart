@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:nikon_pill/app_services.dart';
+import 'package:nikon_pill/platform/ble_driver.dart';
 import 'package:nikon_pill/core/ble/ble_camera_session.dart';
 
 /// 重连循环重臂谓词(2026-10-17 全自动重连定案):无命中不即死 ——

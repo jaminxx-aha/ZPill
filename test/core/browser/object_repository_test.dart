@@ -11,7 +11,7 @@ import 'package:nikon_pill/core/ptp/ptp_transport.dart';
 import 'package:nikon_pill/core/ptpip/object_format.dart';
 import 'package:nikon_pill/core/utils/byte_writer.dart';
 
-import '../ptp/ptp_session_test.dart' show FakePtpTransport, PropListDataset;
+import '../ptp/ptp_session_harness.dart' show FakePtpTransport, PropListDataset;
 
 /// 手搓 ObjectInfo 数据集(布局独立于被测代码,ISO 15740 §13.3 的
 /// Zf 真机结构,同 object_info_test;浏览所需字段参数化)。

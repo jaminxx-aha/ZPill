@@ -7,7 +7,7 @@ library;
 import 'dart:async';
 import 'dart:io';
 
-import '../../data/paired_cameras_store.dart';
+import 'paired_cameras_store.dart';
 import '../../l10n/message.dart';
 import '../../platform/usb/usb_host.dart';
 import '../ptp/operation_codes.dart';
