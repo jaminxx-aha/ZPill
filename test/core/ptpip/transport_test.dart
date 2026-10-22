@@ -286,6 +286,56 @@ void main() {
       expect(result.data, payload);
     });
 
+    test('数据入预分配:Data 多块入槽,声明收满数据完整(取景帧形态)',
+        () async {
+      final (t, command, _) = await connectTransport();
+      final c1 = Uint8List.fromList(List.generate(6, (i) => i));
+      final c2 = Uint8List.fromList(List.generate(6, (i) => 10 + i));
+      final c3 = Uint8List.fromList(List.generate(4, (i) => 20 + i));
+      final future = t.execute(const PtpRequest(
+          opcode: PtpOperationCode.getObjectHandles,
+          params: [0xFFFFFFFF, 0, 0]));
+      await pumpEventQueue();
+      final req = codec.decode(command.sent.last) as OperationRequestPacket;
+      final tid = req.transactionId;
+
+      command.emit(frameOf(
+          StartDataPacket(transactionId: tid, totalLength: c1.length + c2.length + c3.length)));
+      command.emit(frameOf(DataPacket(transactionId: tid, payload: c1)));
+      command.emit(frameOf(DataPacket(transactionId: tid, payload: c2)));
+      command.emit(frameOf(EndDataPacket(transactionId: tid, payload: c3)));
+      command.emit(frameOf(OperationResponsePacket(
+          responseCode: PtpResponseCode.ok, transactionId: tid)));
+
+      final result = await future;
+      expect(result.responseCode, PtpResponseCode.ok);
+      // 预分配槽位:长度恰为声明值,三块顺序入槽无缝拼接。
+      expect(result.data, hasLength(16));
+      expect(result.data, [...c1, ...c2, ...c3]);
+    });
+
+    test('数据入实收超声明:回落聚合不炸,响应沿对账断链(病态流)',
+        () async {
+      final (t, command, _) = await connectTransport();
+      final future = t.execute(const PtpRequest(
+          opcode: PtpOperationCode.getObjectHandles,
+          params: [0xFFFFFFFF, 0, 0]));
+      await pumpEventQueue();
+      final req = codec.decode(command.sent.last) as OperationRequestPacket;
+      final tid = req.transactionId;
+
+      command.emit(frameOf(StartDataPacket(transactionId: tid, totalLength: 4)));
+      command.emit(
+          frameOf(DataPacket(transactionId: tid, payload: Uint8List.fromList([1, 2, 3, 4]))));
+      // 超声明续流:预分配槽位装不下,回落聚合保完整;响应沿对账断链。
+      command.emit(frameOf(
+          DataPacket(transactionId: tid, payload: Uint8List.fromList([5, 6, 7, 8, 9, 10]))));
+      command.emit(frameOf(OperationResponsePacket(
+          responseCode: PtpResponseCode.ok, transactionId: tid)));
+
+      await expectLater(future, throwsA(isA<PtpLinkException>()));
+    });
+
     test('流式 onData:Data 分块透传,空尾 EndData 不回调,data 为 null',
         () async {
       final (t, command, _) = await connectTransport();

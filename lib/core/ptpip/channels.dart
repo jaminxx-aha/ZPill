@@ -34,25 +34,41 @@ abstract interface class PtpIpChannel {
 /// 纯逻辑零 IO,单测即覆盖全部边界;[TcpPtpIpChannel] 内部使用。
 /// 帧错误(长度 < 8 / 超上限)抛 [FormatException] —— 调用方据此毒化
 /// 链路(晚到字节不得污染下一事务)。
+///
+/// 返回帧的 body 是**视图**:整帧随块到的常态直接切在来块上(零拷贝,
+/// 取景帧流的常客),半包拼接才落内部缓冲;两类缓冲后续 feed 都不会
+/// 使其失效(只读拼接,不复用来块内存),但调用方不得原地修改来块。
 final class PtpIpFrameSplitter {
   Uint8List _pending = Uint8List(0);
 
   /// 喂入任意大小的字节块,返回其中完整的帧(可能为空)。
-  ///
-  /// 返回帧的 body 是内部缓冲的**视图**;本类后续 feed 不会使其失效
-  /// (每轮 feed 生成新缓冲),但调用方不得原地修改。
   List<PtpIpFrame> feed(Uint8List bytes) {
     if (bytes.isEmpty) {
       return const [];
     }
+    if (_pending.isEmpty) {
+      // 常态:直接在来块上切,帧为来块视图(原路每轮把来块并进新
+      // 缓冲 = 每帧一遍整帧拷贝喂 GC)。
+      final (frames, off) = _parse(bytes, 0);
+      if (off < bytes.length) {
+        _pending = Uint8List.sublistView(bytes, off); // 半包尾巴
+      }
+      return frames;
+    }
     final combined = Uint8List(_pending.length + bytes.length);
     combined.setAll(0, _pending);
     combined.setAll(_pending.length, bytes);
+    final (frames, off) = _parse(combined, 0);
+    _pending = Uint8List.sublistView(combined, off);
+    return frames;
+  }
 
+  /// 自 [start] 起切分完整帧;返回(帧列表,消费截止偏移)。
+  static (List<PtpIpFrame>, int) _parse(Uint8List buf, int start) {
     final frames = <PtpIpFrame>[];
-    var off = 0;
-    while (combined.length - off >= kPtpIpHeaderLength) {
-      final header = ByteData.sublistView(combined, off, off + kPtpIpHeaderLength);
+    var off = start;
+    while (buf.length - off >= kPtpIpHeaderLength) {
+      final header = ByteData.sublistView(buf, off, off + kPtpIpHeaderLength);
       final length = header.getUint32(0, Endian.little);
       if (length < kPtpIpHeaderLength) {
         throw FormatException('PTP-IP 帧长度 $length < 8(流错位?)');
@@ -61,19 +77,18 @@ final class PtpIpFrameSplitter {
         // 巨值保护:先校验再分配,拒绝按乱序长度预分配大缓冲。
         throw FormatException('PTP-IP 帧长度 $length 超上限(流错位?)');
       }
-      if (combined.length - off < length) {
+      if (buf.length - off < length) {
         break; // 半包,留待下一轮
       }
       final type = header.getUint32(4, Endian.little);
       frames.add(PtpIpFrame(
         type: type,
         body: Uint8List.sublistView(
-            combined, off + kPtpIpHeaderLength, off + length),
+            buf, off + kPtpIpHeaderLength, off + length),
       ));
       off += length;
     }
-    _pending = Uint8List.sublistView(combined, off);
-    return frames;
+    return (frames, off);
   }
 }
 
