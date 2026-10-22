@@ -29,8 +29,8 @@ import 'package:nikon_pill/features/remote/remote_feed_area.dart';
 import 'package:nikon_pill/features/remote/remote_info_pill.dart';
 import 'package:nikon_pill/features/remote/remote_page.dart';
 import 'package:nikon_pill/features/remote/remote_settings_panel.dart';
-import 'package:nikon_pill/l10n/message.dart';
 import 'package:nikon_pill/platform/volume_keys.dart';
+import '../../helpers/fake_connection.dart';
 
 /// 按序回放假传输(同 remote_controller_test;脚本耗尽抛 StateError,
 /// 页面测试靠它兜住意外的多余请求)。
@@ -74,42 +74,7 @@ final class _ScriptTransport implements PtpTransport {
   Future<void> close() async {}
 }
 
-final class _FakeConnection implements CameraConnection {
-  final statesCtrl = StreamController<CameraLinkState>.broadcast();
 
-  @override
-  Stream<CameraLinkState> get states => statesCtrl.stream;
-
-  @override
-  CameraLinkState get state => CameraLinkState.disconnected;
-
-  @override
-  L10nMessage? get error => null;
-
-  @override
-  String? get deviceName => null;
-
-  @override
-  String? get deviceModel => null;
-
-  @override
-  bool get isWireless => false;
-
-  @override
-  String? get pairingCode => null;
-
-  @override
-  Future<void> connect({String? ip, String? instanceName}) async {}
-
-  @override
-  Future<void> confirmPairing() async {}
-
-  @override
-  Future<void> cancelPairing() async {}
-
-  @override
-  Future<void> disconnect() async {}
-}
 
 /// 音量键快门宿主假件:记录 setEnabled 推送,fire() 模拟原生 onKeyUp。
 final class _FakeVolumeKeys implements VolumeKeyHost {
@@ -289,7 +254,7 @@ Future<void> _parkedDelay(Duration _) => Completer<void>().future;
 /// 停摆 delay:进页自动起景的 0x9201 + 首帧两请求后一切驻停,真定时器
 /// 不泄漏,后续脚本全归被测路径)。
 RemoteController _directRemoteController(_ScriptTransport transport,
-        {required _FakeConnection conn, bool Function()? setPropGate}) =>
+        {required FakeConnection conn, bool Function()? setPropGate}) =>
     RemoteController(
         session: PtpSession(transport: transport),
         connection: conn,
@@ -397,7 +362,7 @@ void main() {
       (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
     _scriptAutoStart(transport); // 进页自动起景先吃 FIFO 头两位
@@ -447,7 +412,7 @@ void main() {
     PtpSession.kSetPropEnabled = false; // 生产已开,显式关断走分支
     addTearDown(() => PtpSession.kSetPropEnabled = true);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
     _scriptAutoStart(transport); // 进页自动起景先吃 FIFO 头两位
@@ -476,7 +441,7 @@ void main() {
     PtpSession.kSetPropEnabled = true; // 翻 session 总闸(controller 闸注入)
     addTearDown(() => PtpSession.kSetPropEnabled = true);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport,
         conn: conn, setPropGate: () => true);
     addTearDown(controller.dispose);
@@ -517,7 +482,7 @@ void main() {
     PtpSession.kSetPropEnabled = true;
     addTearDown(() => PtpSession.kSetPropEnabled = true);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport,
         conn: conn, setPropGate: () => true);
     addTearDown(controller.dispose);
@@ -568,7 +533,7 @@ void main() {
       '解除(0x90C2 [0];2026-10-17 自设置浮层芯片迁来)', (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
     _scriptAutoStart(transport); // 进页自动起景(0x9201 + 首帧)
@@ -608,7 +573,7 @@ void main() {
       (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
     _scriptAutoStart(transport); // 进页自动起景先吃 FIFO 头两位
@@ -638,7 +603,7 @@ void main() {
       '先过接管确认)', (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
     _scriptAutoStart(transport); // 进页自动起景先吃 FIFO 头两位
@@ -685,7 +650,7 @@ void main() {
     PtpSession.kSetPropEnabled = true;
     addTearDown(() => PtpSession.kSetPropEnabled = true);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport,
         conn: conn, setPropGate: () => true);
     addTearDown(controller.dispose);
@@ -723,7 +688,7 @@ void main() {
     PtpSession.kSetPropEnabled = true;
     addTearDown(() => PtpSession.kSetPropEnabled = true);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport,
         conn: conn, setPropGate: () => true);
     addTearDown(controller.dispose);
@@ -780,7 +745,7 @@ void main() {
   testWidgets('切回拍摄 tab / 回前台 → 参数对表刷新(机身侧改动兜底)',
       (tester) async {
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
     // 首挂 active:false 页面自身不自动起景,但 connected 沿串链照发
@@ -822,7 +787,7 @@ void main() {
       (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
 
@@ -880,7 +845,7 @@ void main() {
       (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
 
@@ -916,7 +881,7 @@ void main() {
       (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
 
@@ -1027,7 +992,7 @@ void main() {
       (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
 
@@ -1088,7 +1053,7 @@ void main() {
       (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
 
@@ -1162,7 +1127,7 @@ void main() {
       (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
 
@@ -1199,7 +1164,7 @@ void main() {
       (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
     final settings = ValueNotifier<AppSettings>(const AppSettings());
@@ -1234,7 +1199,7 @@ void main() {
       (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
     final settings = ValueNotifier<AppSettings>(const AppSettings());
@@ -1262,7 +1227,7 @@ void main() {
       (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
     final settings = ValueNotifier(const AppSettings());
@@ -1329,7 +1294,7 @@ void main() {
       (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
     final settings = ValueNotifier(const AppSettings());
@@ -1371,7 +1336,7 @@ void main() {
       (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
     _scriptAutoStart(transport);
@@ -1451,7 +1416,7 @@ void main() {
       (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
     _scriptAutoStart(transport);
@@ -1487,7 +1452,7 @@ void main() {
       (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
 
@@ -1511,7 +1476,7 @@ void main() {
       '(直方图无数据回归)', (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
     _scriptAutoStart(transport); // 进页自动起景(0x9201 + 首帧)
@@ -1538,7 +1503,7 @@ void main() {
       (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
 
@@ -1573,7 +1538,7 @@ void main() {
       (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
     _scriptAutoStart(transport); // 进页自动起景(0x9201 + 首帧)
@@ -1632,7 +1597,7 @@ void main() {
       (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
     _scriptAutoStart(transport); // 进页自动起景(0x9201 + 首帧)
@@ -1753,7 +1718,7 @@ void main() {
       '模式条同轴线、顶底同高 38 同距 6,设置浮层让位快门柱', (tester) async {
     _landscape(tester);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
     // 单 FIFO 按消费顺序入队:进页自动起景(0x9201+首帧)先于连接沿的
@@ -1924,7 +1889,7 @@ void main() {
       '淡出放行点击;再点任意处恢复(无恢复钮,2026-10-17)', (tester) async {
     _landscape(tester);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
     _scriptAutoStart(transport); // 进页自动起景(0x9201 + 首帧)
@@ -1985,7 +1950,7 @@ void main() {
     addTearDown(tester.view.reset);
 
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
     _scriptAutoStart(transport); // 进页自动起景(0x9201 + 首帧)
@@ -2076,7 +2041,7 @@ void main() {
     addTearDown(tester.view.reset);
 
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
     _scriptAutoStart(transport); // 进页自动起景(0x9201 + 首帧)
@@ -2093,7 +2058,7 @@ void main() {
   testWidgets('拍摄页随主题:深色暖黑/浅色白底,画面内容层恒用暗面'
       '(2026-10-08「改成跟随主题」)', (tester) async {
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
     _scriptAutoStart(transport); // 进页自动起景(0x9201 + 首帧)
@@ -2153,7 +2118,7 @@ void main() {
       (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
     _scriptAutoStart(transport); // 0x9201 + 首帧(本测的全部脚本)
@@ -2179,7 +2144,7 @@ void main() {
       '录制中锁模式', (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
     final haptics = spyHaptics(tester);
@@ -2268,7 +2233,7 @@ void main() {
       '(0xD1A6 镜像,2026-10-11 Zf 实证)', (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
     _scriptAutoStart(transport); // 进页自动起景先吃 FIFO 头两位
@@ -2309,7 +2274,7 @@ void main() {
     PtpSession.kSetPropEnabled = true;
     addTearDown(() => PtpSession.kSetPropEnabled = true);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport,
         conn: conn, setPropGate: () => true);
     addTearDown(controller.dispose);
@@ -2376,7 +2341,7 @@ void main() {
   testWidgets('照片模式快门:点按走快门码(0x9207),零录像请求', (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
     final haptics = spyHaptics(tester);
@@ -2416,7 +2381,7 @@ void main() {
     PtpSession.kSetPropEnabled = true;
     addTearDown(() => PtpSession.kSetPropEnabled = true);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport,
         conn: conn, setPropGate: () => true);
     addTearDown(controller.dispose);
@@ -2460,7 +2425,7 @@ void main() {
     PtpSession.kSetPropEnabled = true;
     addTearDown(() => PtpSession.kSetPropEnabled = true);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport,
         conn: conn, setPropGate: () => true);
     addTearDown(controller.dispose);
@@ -2507,7 +2472,7 @@ void main() {
       '(2026-10-12:对焦钮只负责对焦)', (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
     transport
@@ -2567,7 +2532,7 @@ void main() {
       '禁点」把提示路堵死 —— 点按哑掉,提示分支成死代码)', (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
     transport
@@ -2610,7 +2575,7 @@ void main() {
       'MF 步进盲按零流量,拉焦轮压暗保留姿态', (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
     transport
@@ -2667,7 +2632,7 @@ void main() {
       (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
     _scriptAutoStart(transport);
@@ -2703,7 +2668,7 @@ void main() {
       '重挂不自动起景;再开 = 0x9201 起景 + 持久开', (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
     _scriptAutoStart(transport);
@@ -2756,7 +2721,7 @@ void main() {
       (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
     transport
@@ -2804,7 +2769,7 @@ void main() {
       '底区两行之后),按钮照常不被挡', (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
     transport
@@ -2849,7 +2814,7 @@ void main() {
       '重连成功就地恢复;reconnecting→failed 才弹回根页', (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
     _scriptAutoStart(transport); // 进页自动起景(0x9201 + 首帧)
@@ -2927,7 +2892,7 @@ void main() {
       (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
     _scriptAutoStart(transport); // 进页自动起景(0x9201 + 首帧)
@@ -2954,7 +2919,7 @@ void main() {
       '与控制器,「跟随」回 null', (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
     _scriptAutoStart(transport);
@@ -2993,7 +2958,7 @@ void main() {
       '视频 tile', (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
     _scriptAutoStart(transport);
@@ -3017,7 +2982,7 @@ void main() {
       '不带「张」)', (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
     _scriptAutoStart(transport);
@@ -3036,7 +3001,7 @@ void main() {
       (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
     _scriptAutoStart(transport);
@@ -3059,7 +3024,7 @@ void main() {
   testWidgets('视频参数族面板:照片档不出现视频 tile(零噪声)', (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
     _scriptAutoStart(transport);
@@ -3080,7 +3045,7 @@ void main() {
       '不出行,宿主在出行', (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
     _scriptAutoStart(transport);
@@ -3103,7 +3068,7 @@ void main() {
 
     // 宿主在(Android / 单测注入):行出现(设置开着)
     final transport2 = _ScriptTransport();
-    final conn2 = _FakeConnection();
+    final conn2 = FakeConnection();
     final controller2 = _directRemoteController(transport2, conn: conn2);
     addTearDown(controller2.dispose);
     _scriptAutoStart(transport2);
@@ -3128,7 +3093,7 @@ void main() {
       '即时翻转', (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
     _scriptAutoStart(transport);
@@ -3167,7 +3132,7 @@ void main() {
       '同一守卫)', (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
     transport
@@ -3201,7 +3166,7 @@ void main() {
   testWidgets('音量键快门:离页退订 + setEnabled(false) 还系统', (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
     transport
@@ -3241,7 +3206,7 @@ void main() {
       '「在等」还是「在拍」)', (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     // 与 _directRemoteController 同构,唯控制器 delay 用真定时器:自拍/
     // 曝光两段秒针要能被测试假时钟推进(引擎/AE 仍驻停不抢脚本)。
     final controller = RemoteController(
@@ -3303,7 +3268,7 @@ void main() {
       (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
     _scriptAutoStart(transport); // 进页自动起景
@@ -3396,7 +3361,7 @@ void main() {
       (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
     transport
@@ -3434,7 +3399,7 @@ void main() {
       (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = _directRemoteController(transport, conn: conn);
     addTearDown(controller.dispose);
     transport

@@ -22,8 +22,8 @@ import 'package:nikon_pill/features/remote/remote_page.dart';
 import 'package:nikon_pill/features/remote/shooting_param_catalog.dart';
 import 'package:nikon_pill/features/settings/settings_page.dart';
 import 'package:nikon_pill/features/shell/home_shell.dart';
-import 'package:nikon_pill/l10n/message.dart';
 import 'package:nikon_pill/platform/gallery_saver.dart';
+import '../../helpers/fake_connection.dart';
 
 /// 假传输:双道应答回放。连接沿有两条独立链并发入队 —— 控制器链
 /// (参数读,走 FIFO 兜底道)与引擎链(0x9201/0x9428/0x9202,按 op
@@ -65,42 +65,7 @@ final class _ScriptTransport implements PtpTransport {
   Future<void> close() async {}
 }
 
-final class _FakeConnection implements CameraConnection {
-  final statesCtrl = StreamController<CameraLinkState>.broadcast();
 
-  @override
-  Stream<CameraLinkState> get states => statesCtrl.stream;
-
-  @override
-  CameraLinkState get state => CameraLinkState.disconnected;
-
-  @override
-  L10nMessage? get error => null;
-
-  @override
-  String? get deviceName => null;
-
-  @override
-  String? get deviceModel => null;
-
-  @override
-  bool get isWireless => false;
-
-  @override
-  String? get pairingCode => null;
-
-  @override
-  Future<void> connect({String? ip, String? instanceName}) async {}
-
-  @override
-  Future<void> confirmPairing() async {}
-
-  @override
-  Future<void> cancelPairing() async {}
-
-  @override
-  Future<void> disconnect() async {}
-}
 
 /// PropDesc 数据集(ISO 15740 标准布局:出厂默认值在前,当前值在后)。
 Uint8List _propDescDataset(int code, PtpDataType type, int current,
@@ -232,14 +197,14 @@ int _selectedIndex(WidgetTester tester) =>
 /// 控制器(引擎 delay 挂起:首帧后轮询驻停,测试不发无脚本的取帧)。
 typedef _Fakes = ({
   _ScriptTransport transport,
-  _FakeConnection conn,
+  FakeConnection conn,
   ConnectionController connCtrl,
   RemoteController remote,
 });
 
 _Fakes _fakes() {
   final transport = _ScriptTransport();
-  final conn = _FakeConnection();
+  final conn = FakeConnection();
   final connCtrl = ConnectionController(connection: conn);
   final remote = RemoteController(
       session: PtpSession(transport: transport),

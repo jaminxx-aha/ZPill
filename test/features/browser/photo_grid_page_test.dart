@@ -18,7 +18,7 @@ import 'package:nikon_pill/core/transfer/transfer_task.dart';
 import 'package:nikon_pill/features/browser/browser_controller.dart';
 import 'package:nikon_pill/features/browser/photo_grid_page.dart';
 import 'package:nikon_pill/features/transfers/transfers_page.dart';
-import 'package:nikon_pill/l10n/message.dart';
+import '../../helpers/fake_connection.dart';
 
 /// 手动驱动的伪仓库(同 browser_controller_test:块事件逐个发,
 /// loadAlbums 挂在 Completer 上由测试择机完成)。
@@ -55,42 +55,7 @@ final class _FakeRepo implements ObjectRepository {
       removedHandles.addAll(handles);
 }
 
-final class _FakeConnection implements CameraConnection {
-  final statesCtrl = StreamController<CameraLinkState>.broadcast();
 
-  @override
-  Stream<CameraLinkState> get states => statesCtrl.stream;
-
-  @override
-  CameraLinkState get state => CameraLinkState.disconnected;
-
-  @override
-  L10nMessage? get error => null;
-
-  @override
-  String? get deviceName => null;
-
-  @override
-  String? get deviceModel => null;
-
-  @override
-  bool get isWireless => false;
-
-  @override
-  String? get pairingCode => null;
-
-  @override
-  Future<void> connect({String? ip, String? instanceName}) async {}
-
-  @override
-  Future<void> confirmPairing() async {}
-
-  @override
-  Future<void> cancelPairing() async {}
-
-  @override
-  Future<void> disconnect() async {}
-}
 
 /// 1×1 PNG(解码必成):缩略出图路径的真档替身。
 final _tinyPng = base64Decode(
@@ -440,7 +405,7 @@ void main() {
 
   testWidgets('断连:网格保留最后快照,标题取兜底名', (tester) async {
     final repo = _FakeRepo();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = BrowserController(repository: repo, connection: conn);
     await tester.pumpWidget(_host(PhotoGridPage(
       controller: controller,

@@ -18,7 +18,7 @@ import 'package:nikon_pill/core/transfer/transfer_task.dart';
 import 'package:nikon_pill/core/utils/byte_writer.dart';
 import 'package:nikon_pill/features/remote/remote_controller.dart';
 import 'package:nikon_pill/features/remote/shooting_param_catalog.dart';
-import 'package:nikon_pill/l10n/message.dart';
+import '../../helpers/fake_connection.dart';
 
 final class _ScriptTransport implements PtpTransport {
   final requests = <PtpRequest>[];
@@ -57,42 +57,7 @@ final class _ScriptTransport implements PtpTransport {
   int count(int opcode) => requests.where((r) => r.opcode == opcode).length;
 }
 
-final class _FakeConnection implements CameraConnection {
-  final statesCtrl = StreamController<CameraLinkState>.broadcast();
 
-  @override
-  Stream<CameraLinkState> get states => statesCtrl.stream;
-
-  @override
-  CameraLinkState get state => CameraLinkState.disconnected;
-
-  @override
-  L10nMessage? get error => null;
-
-  @override
-  String? get deviceName => null;
-
-  @override
-  String? get deviceModel => null;
-
-  @override
-  bool get isWireless => false;
-
-  @override
-  String? get pairingCode => null;
-
-  @override
-  Future<void> connect({String? ip, String? instanceName}) async {}
-
-  @override
-  Future<void> confirmPairing() async {}
-
-  @override
-  Future<void> cancelPairing() async {}
-
-  @override
-  Future<void> disconnect() async {}
-}
 
 /// 手动放行的 delay(capture 的 DeviceReady 轮询节拍)。
 final class _GatedDelay {
@@ -370,7 +335,7 @@ Future<void> _parkedDelay(Duration _) => Completer<void>().future;
 /// 沿 + 模式读打头);引擎轮询首帧后驻停于门控/parked delay,不与后续
 /// 脚本抢位。0xD1A6 模式镜像应答([d1a6]:0=照片/1=视频)在链首 ——
 /// 测试追加的 0x90CC 等刷参中段应答仍按追加序被 refreshParams 消费。
-void _emitConnected(_ScriptTransport t, _FakeConnection c,
+void _emitConnected(_ScriptTransport t, FakeConnection c,
     {int d1a6 = 0, bool apTakeover = false}) {
   t.script
     ..addFirst(PtpResult(
@@ -509,13 +474,13 @@ final class _FakeTransferEngine implements TransferEngine {
 
 void main() {
   late _ScriptTransport transport;
-  late _FakeConnection conn;
+  late FakeConnection conn;
   late _GatedDelay delay;
   late RemoteController controller;
 
   setUp(() {
     transport = _ScriptTransport();
-    conn = _FakeConnection();
+    conn = FakeConnection();
     delay = _GatedDelay();
     controller = RemoteController(
       session: PtpSession(transport: transport),
@@ -900,7 +865,7 @@ void main() {
         '同意,2026-10-15 用户定案)', () async {
       // 独立假连接:setUp 的默认控制器也订阅 conn.states,共用会把两条
       // connected 链 interleaved 进同一份脚本(参读/起景错位,全假警报)。
-      final apConn = _FakeConnection();
+      final apConn = FakeConnection();
       final apController = RemoteController(
         session: PtpSession(transport: transport),
         connection: apConn,
@@ -933,7 +898,7 @@ void main() {
 
     test('AP 连接沿开闩被拒 → 不拦链:接管 OFF、起景照发、刷参照常'
         '(引导占位兜底)', () async {
-      final apConn = _FakeConnection();
+      final apConn = FakeConnection();
       final apController = RemoteController(
         session: PtpSession(transport: transport),
         connection: apConn,
@@ -1470,7 +1435,7 @@ void main() {
 
       // 模式读不到(desc 与裸值双拒 → 值 null):同样不锁
       final t2 = _ScriptTransport();
-      final conn2 = _FakeConnection();
+      final conn2 = FakeConnection();
       final c2 = RemoteController(
           session: PtpSession(transport: t2),
           connection: conn2,
@@ -2582,12 +2547,12 @@ void main() {
 
   group('触控对焦与对焦驱动(候选码,待真机核对)', () {
     late _ScriptTransport transport;
-    late _FakeConnection conn;
+    late FakeConnection conn;
     late RemoteController controller;
 
     setUp(() {
       transport = _ScriptTransport();
-      conn = _FakeConnection();
+      conn = FakeConnection();
       // 引擎帧轮询/AE 轮询驻停(不抢脚本);控制器 delay 保留门控
       // 供 0x2019 忙退避测试放行。
       controller = RemoteController(
@@ -3309,13 +3274,13 @@ void main() {
   group('官方指令书候选区接线·控制器(2026-10-13 批:AF 取消/主体追踪/'
       'AE 锁/0xD102/SDRAM 直拍)', () {
     late _ScriptTransport transport;
-    late _FakeConnection conn;
+    late FakeConnection conn;
     late _FakeTransferEngine gallery;
     late RemoteController controller;
 
     setUp(() {
       transport = _ScriptTransport();
-      conn = _FakeConnection();
+      conn = FakeConnection();
       gallery = _FakeTransferEngine();
       controller = RemoteController(
         session: PtpSession(transport: transport),

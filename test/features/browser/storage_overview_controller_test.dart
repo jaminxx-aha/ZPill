@@ -9,47 +9,11 @@ import 'package:nikon_pill/core/ptp/ptp_session.dart';
 import 'package:nikon_pill/core/ptp/ptp_transport.dart';
 import 'package:nikon_pill/core/utils/byte_writer.dart';
 import 'package:nikon_pill/features/browser/storage_overview_controller.dart';
-import 'package:nikon_pill/l10n/message.dart';
 
 import '../../core/ptp/ptp_session_harness.dart' show FakePtpTransport;
+import '../../helpers/fake_connection.dart';
 
-final class _FakeConnection implements CameraConnection {
-  final statesCtrl = StreamController<CameraLinkState>.broadcast();
 
-  /// 可变当前态(放行门用例;其余用例不触碰,恒 disconnected 同旧口径)。
-  @override
-  CameraLinkState state = CameraLinkState.disconnected;
-
-  @override
-  Stream<CameraLinkState> get states => statesCtrl.stream;
-
-  @override
-  L10nMessage? get error => null;
-
-  @override
-  String? get deviceName => null;
-
-  @override
-  String? get deviceModel => null;
-
-  @override
-  bool get isWireless => false;
-
-  @override
-  Future<void> connect({String? instanceName, String? ip}) async {}
-
-  @override
-  Future<void> disconnect() async {}
-
-  @override
-  String? get pairingCode => null;
-
-  @override
-  Future<void> confirmPairing() async {}
-
-  @override
-  Future<void> cancelPairing() async {}
-}
 
 Uint8List _idsDataset(List<int> ids) {
   final w = ByteWriter()..u32(ids.length);
@@ -88,7 +52,7 @@ void main() {
       ..reply(_ok(_infoDataset(description: 'Slot 1')))
       ..reply(_ok(_infoDataset(description: 'Slot 2')))
       ..reply(_ok(_slotDataset(3))); // 0xD1F2 双槽
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = StorageOverviewController(
         session: PtpSession(transport: fake), connection: conn);
     addTearDown(controller.dispose);
@@ -117,7 +81,7 @@ void main() {
       ..reply(const PtpResult(responseCode: 0x2009)) // Slot 1 拒答
       ..reply(_ok(_infoDataset(description: 'Slot 2')))
       ..reply(_ok(_slotDataset(2)));
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = StorageOverviewController(
         session: PtpSession(transport: fake), connection: conn);
     addTearDown(controller.dispose);
@@ -136,7 +100,7 @@ void main() {
       ..reply(_ok(_idsDataset([0x00010001])))
       ..reply(_ok(_infoDataset()))
       ..reply(_ok(_slotDataset(1)));
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = StorageOverviewController(
         session: PtpSession(transport: fake), connection: conn);
     addTearDown(controller.dispose);
@@ -158,7 +122,7 @@ void main() {
       ..reply(_ok(_idsDataset([0x00010001])))
       ..reply(_ok(_infoDataset()))
       ..reply(_ok(_slotDataset(0))); // 首轮:未插卡
-    final conn = _FakeConnection()..state = CameraLinkState.connected;
+    final conn = FakeConnection()..state = CameraLinkState.connected;
     final controller = StorageOverviewController(
         session: PtpSession(transport: fake), connection: conn);
     addTearDown(controller.dispose);
@@ -192,7 +156,7 @@ void main() {
       ..reply(_ok(_infoDataset(description: 'Slot 1')))
       ..reply(_ok(_infoDataset(description: 'Slot 2')))
       ..reply(_ok(_slotDataset(0)));
-    final conn = _FakeConnection()..state = CameraLinkState.connected;
+    final conn = FakeConnection()..state = CameraLinkState.connected;
     final controller = StorageOverviewController(
         session: PtpSession(transport: fake), connection: conn);
     addTearDown(controller.dispose);
@@ -220,7 +184,7 @@ void main() {
       ..reply(_ok(_idsDataset([0x00010001])))
       ..reply(_ok(_infoDataset(description: 'Slot 1')))
       ..reply(_ok(_slotDataset(0))); // 0xD1F2 尾读(0x9209 整链口径)
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final gate = Completer<void>();
     final controller = StorageOverviewController(
         session: PtpSession(transport: fake),

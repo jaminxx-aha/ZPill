@@ -10,7 +10,7 @@ import 'package:nikon_pill/core/ptp/ptp_session.dart';
 import 'package:nikon_pill/core/ptp/ptp_transport.dart';
 import 'package:nikon_pill/core/utils/byte_writer.dart';
 import 'package:nikon_pill/features/connection/camera_overview_controller.dart';
-import 'package:nikon_pill/l10n/message.dart';
+import '../../helpers/fake_connection.dart';
 
 /// 按序回放的假传输层(session 方法测试模板,见 ptp_session_test)。
 final class FakePtpTransport implements PtpTransport {
@@ -80,44 +80,7 @@ Uint8List buildDataset(
   return w.takeBytes();
 }
 
-final class _FakeConnection implements CameraConnection {
-  final statesCtrl = StreamController<CameraLinkState>.broadcast();
 
-  /// 可变当前态(放行门用例模拟放行时点与「等窗里翻篇」;其余用例不触
-  /// 碰,恒 disconnected 与旧口径同形)。
-  @override
-  CameraLinkState state = CameraLinkState.disconnected;
-
-  @override
-  L10nMessage? get error => null;
-
-  @override
-  String? get deviceName => null;
-
-  @override
-  String? get deviceModel => null;
-
-  @override
-  bool get isWireless => false;
-
-  @override
-  String? get pairingCode => null;
-
-  @override
-  Stream<CameraLinkState> get states => statesCtrl.stream;
-
-  @override
-  Future<void> connect({String? ip, String? instanceName}) async {}
-
-  @override
-  Future<void> confirmPairing() async {}
-
-  @override
-  Future<void> cancelPairing() async {}
-
-  @override
-  Future<void> disconnect() async {}
-}
 
 /// 镜头规格五连读(0xD0E0 + 0xD0E3-E6,连接沿/换镜沿各一轮;Zf 实证
 /// 不在声明表但应答,40 SE 回 25/4000/4000/200/200)。默认 ID 99 不在
@@ -153,7 +116,7 @@ void main() {
   test('属性在册才读:电池/焦距/光圈逐码 0x1015,裸值解码', () async {
     final transport = FakePtpTransport();
     final session = PtpSession(transport: transport);
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = CameraOverviewController(
         session: session, connection: conn);
 
@@ -202,7 +165,7 @@ void main() {
   test('连接沿放行门:门挂住概览零请求,放行即上路', () async {
     final transport = FakePtpTransport();
     final session = PtpSession(transport: transport);
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final gate = Completer<void>();
     CameraOverviewController(
         session: session,
@@ -237,7 +200,7 @@ void main() {
   test('连接沿放行门:等窗里翻篇(断开),放行后不追', () async {
     final transport = FakePtpTransport();
     final session = PtpSession(transport: transport);
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final gate = Completer<void>();
     CameraOverviewController(
         session: session,
@@ -255,7 +218,7 @@ void main() {
   test('渐进刷新:数据点赋值沿即 notify,不等整链跑完', () async {
     final transport = FakePtpTransport();
     final session = PtpSession(transport: transport);
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = CameraOverviewController(
         session: session, connection: conn);
 
@@ -287,7 +250,7 @@ void main() {
   test('裸值方言偏离回 string:安全取整退 null,整链照走不中断', () async {
     final transport = FakePtpTransport();
     final session = PtpSession(transport: transport);
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = CameraOverviewController(
         session: session, connection: conn);
 
@@ -313,7 +276,7 @@ void main() {
   test('标准属性全不在册:只发 GetDeviceInfo,规格五连读绕声明表照发', () async {
     final transport = FakePtpTransport();
     final session = PtpSession(transport: transport);
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = CameraOverviewController(
         session: session, connection: conn);
 
@@ -337,7 +300,7 @@ void main() {
   test('断连清态;门闩挡住迟到的属性事件(不再发请求)', () async {
     final transport = FakePtpTransport();
     final session = PtpSession(transport: transport);
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = CameraOverviewController(
         session: session, connection: conn);
 
@@ -378,7 +341,7 @@ void main() {
       () async {
     final transport = FakePtpTransport();
     final session = PtpSession(transport: transport);
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = CameraOverviewController(
         session: session, connection: conn);
 
@@ -416,7 +379,7 @@ void main() {
   test('规格拒答降级:lensSpec 保持 null,镜头行回 --', () async {
     final transport = FakePtpTransport();
     final session = PtpSession(transport: transport);
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = CameraOverviewController(
         session: session, connection: conn);
 
@@ -440,7 +403,7 @@ void main() {
   test('0x4006 实时追平:拨轮改光圈行即变(不拍照),同窗事件去抖收敛', () async {
     final transport = FakePtpTransport();
     final session = PtpSession(transport: transport);
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = CameraOverviewController(
         session: session, connection: conn,
         propResyncDebounce: const Duration(milliseconds: 20));
@@ -474,7 +437,7 @@ void main() {
   test('0x4006 焦距在规格区间内(变焦):行即变,规格不重读', () async {
     final transport = FakePtpTransport();
     final session = PtpSession(transport: transport);
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = CameraOverviewController(
         session: session, connection: conn,
         propResyncDebounce: const Duration(milliseconds: 20));
@@ -514,7 +477,7 @@ void main() {
       () async {
     final transport = FakePtpTransport();
     final session = PtpSession(transport: transport);
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = CameraOverviewController(
         session: session, connection: conn,
         propResyncDebounce: const Duration(milliseconds: 20));
@@ -562,7 +525,7 @@ void main() {
   test('0x4006 能力门禁:焦距/光圈不在声明表,事件零动作', () async {
     final transport = FakePtpTransport();
     final session = PtpSession(transport: transport);
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = CameraOverviewController(
         session: session, connection: conn,
         propResyncDebounce: const Duration(milliseconds: 20));
@@ -587,7 +550,7 @@ void main() {
   test('LensID 映射命中:不拍照出营销名全称,换镜即跟新名', () async {
     final transport = FakePtpTransport();
     final session = PtpSession(transport: transport);
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = CameraOverviewController(
         session: session, connection: conn,
         propResyncDebounce: const Duration(milliseconds: 20));
@@ -632,7 +595,7 @@ void main() {
       () async {
     final transport = FakePtpTransport();
     final session = PtpSession(transport: transport);
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = CameraOverviewController(
         session: session, connection: conn,
         propResyncDebounce: const Duration(milliseconds: 20));
@@ -684,7 +647,7 @@ void main() {
   test('未挂镜:lensId 回 0,规格值官方明说不固定,一个都不读', () async {
     final transport = FakePtpTransport();
     final session = PtpSession(transport: transport);
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = CameraOverviewController(
         session: session, connection: conn);
 
@@ -709,7 +672,7 @@ void main() {
       () async {
     final transport = FakePtpTransport();
     final session = PtpSession(transport: transport);
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = CameraOverviewController(
         session: session, connection: conn);
 
