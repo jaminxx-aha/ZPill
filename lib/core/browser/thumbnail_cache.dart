@@ -36,6 +36,8 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
+
 import '../../platform/gallery_saver.dart';
 import '../../platform/raw_decoder.dart';
 import '../log/app_log.dart';
@@ -94,6 +96,26 @@ class ThumbnailCache {
   /// LRU 索引:Dart Map 即 LinkedHashMap,插入序 = 访问序(命中重插刷新)。
   final Map<String, _CachedThumb> _grid = {};
   final Map<String, _CachedThumb> _preview = {};
+
+  /// LRU 字节账(与索引同序维护,O(1) 驱逐记账):旧版 [_evictIfNeeded]
+  /// 每次全表求和,大相册每取一格 O(n) 扫一遍。账随索引走 —— 索引的
+  /// 全部变更收口在 [_remember]/[_forget]/[_evictIfNeeded]/[reset]
+  /// (插入/覆盖加、出表减、清空归零),账恒等于索引在册字节和,按
+  /// 构造保证账实相符,无需周期性全表重算兜底;索引是按访问惰性建
+  /// (无冷启动批量建账点),构造从零起。
+  int _gridBytes = 0;
+  int _previewBytes = 0;
+
+  int _bytesOf(ThumbSource source) =>
+      source == ThumbSource.grid ? _gridBytes : _previewBytes;
+
+  void _addBytes(ThumbSource source, int delta) {
+    if (source == ThumbSource.grid) {
+      _gridBytes += delta;
+    } else {
+      _previewBytes += delta;
+    }
+  }
   final Map<(ThumbSource, String), Future<String>> _pending = {};
 
   /// 原文件 EXIF 方向(内容键 → 1-8;0 = 未知/无转正含义)。取一次
@@ -201,11 +223,11 @@ class ThumbnailCache {
       final c = lru[k];
       if (c == null) return null;
       if (!File(c.path).existsSync()) {
-        lru.remove(k);
+        // 盘档已无:出表出账当未命中(账随索引,不走全表重算)
+        _forget(source, k);
         return null;
       }
-      lru.remove(k);
-      lru[k] = c;
+      _remember(source, k, c.path, c.bytes); // 命中移尾(字节不变,账净零)
       return c;
     }
 
@@ -274,9 +296,12 @@ class ThumbnailCache {
 
   /// 断连时清内存索引;缓存键是内容键(文件名+大小),跨会话稳定,
   /// 磁盘缓存保留,重连后直接命中。FHD 席位降级旗标同复位(新链重探)。
+  /// 字节账随索引归零(账实相符的清空沿)。
   void reset() {
     _grid.clear();
     _preview.clear();
+    _gridBytes = 0;
+    _previewBytes = 0;
     _fhdPictureDegraded = false;
   }
 
@@ -392,7 +417,8 @@ class ThumbnailCache {
         _remember(source, ltKey, ltPath, data.length);
         await _evictIfNeeded(source);
         // 高清档就位,同键旧小图档成了不进 LRU 账的孤儿档:顺手清掉
-        _lruFor(source).remove(key);
+        // (出表出账走 [_forget])
+        _forget(source, key);
         try {
           await File('$dir/$key.jpg').delete();
         } on FileSystemException {
@@ -506,26 +532,38 @@ class ThumbnailCache {
     }
   }
 
+  /// 入表+入账(先摘旧键再插 = 移到最新端;同键覆盖先减旧账再加新)。
   void _remember(ThumbSource source, String key, String path, int bytes) {
-    _lruFor(source)[key] = (path: path, bytes: bytes);
+    final lru = _lruFor(source);
+    final old = lru.remove(key);
+    if (old != null) {
+      _addBytes(source, -old.bytes);
+    }
+    lru[key] = (path: path, bytes: bytes);
+    _addBytes(source, bytes);
+  }
+
+  /// 出表+出账(键不在册则无事)。
+  void _forget(ThumbSource source, String key) {
+    final old = _lruFor(source).remove(key);
+    if (old != null) {
+      _addBytes(source, -old.bytes);
+    }
   }
 
   Future<void> _evictIfNeeded(ThumbSource source) async {
     final lru = _lruFor(source);
     final limit =
         source == ThumbSource.grid ? gridLimitBytes : previewLimitBytes;
-    var total = 0;
-    for (final c in lru.values) {
-      total += c.bytes;
-    }
-    while (total > limit && lru.isNotEmpty) {
+    // O(1):字节账现成(增减收口见类注),不再全表求和。
+    while (_bytesOf(source) > limit && lru.isNotEmpty) {
       final oldestKey = lru.keys.first;
       final oldest = lru.remove(oldestKey)!;
-      total -= oldest.bytes;
+      _addBytes(source, -oldest.bytes);
       try {
         await File(oldest.path).delete();
       } on FileSystemException {
-        // 盘上已无此文件:索引清掉即可
+        // 盘上已无此文件:索引与账已清,账实仍相符
       }
     }
   }
@@ -536,4 +574,19 @@ class ThumbnailCache {
     final safe = entry.name.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
     return '${safe}_${entry.sizeInBytes}';
   }
+}
+
+/// 仅测试:[cache] 某档位字节账 + 索引在册条目快照(键 → 在册字节)。
+/// 记账测试的对照面 —— 全表重算(旧版每次驱逐前的逐条求和)对着
+/// 增量账断言「账实相符」。顶层函数而非实例成员:测试替身对
+/// [ThumbnailCache] 是 implements(仅 pathFor/reset),加实例成员会破
+/// 它们;同库可及私有字段。生产不可达。
+@visibleForTesting
+({int account, Map<String, int> entries}) debugLruAccount(
+    ThumbnailCache cache, ThumbSource source) {
+  final lru = cache._lruFor(source);
+  return (
+    account: cache._bytesOf(source),
+    entries: {for (final e in lru.entries) e.key: e.value.bytes},
+  );
 }

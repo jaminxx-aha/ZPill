@@ -307,6 +307,85 @@ void main() {
     expect(File(p2).existsSync(), isFalse);
   });
 
+  // ── 字节账 O(1) 记账(2026-10-22:驱逐沿增量账,不再每次全表求和)──
+
+  test('字节账:插入/命中提升/驱逐/盘档落空各沿,账恒等于全表重算', () async {
+    final gallery = FakeGallerySaver();
+    final fake = FakePtpTransport();
+    // SOI 开头的 60B(0x90C4 高清档收下的最小 JPEG 形状,同上 LRU 用例)
+    final bytes =
+        Uint8List.fromList([0xFF, 0xD8, ...List.generate(58, (i) => i)]);
+    // 每张 60B、上限 130B:两张恰好,第三张起必须驱逐
+    final cache = ThumbnailCache(
+        session: PtpSession(transport: fake),
+        gallery: gallery,
+        gridLimitBytes: 130);
+    Future<String> fetch(String name) {
+      fake.reply(_okData(bytes)); // 0x90C4 高清
+      fake.reply(_okData(_jpgHead(1))); // 头读(横拍不注入,60B 不变)
+      return cache.pathFor(
+          _entry(0x12, name: name, size: 60), ThumbSource.grid);
+    }
+
+    /// 检查点:增量字节账 == 索引在册字节全表求和(重算是旧版每次驱逐
+    /// 前的逐条求和 —— 与增量维护相互独立的对照路径,漂移即翻)。
+    void check(ThumbSource source) {
+      final a = debugLruAccount(cache, source);
+      expect(a.account, a.entries.values.fold(0, (p, b) => p + b),
+          reason: '$source 档字节账 == 全表重算(在册 ${a.entries.length} 张)');
+    }
+
+    // ① 插入两张:账 120 ≤ 130,无驱逐
+    final pa = await fetch('A.JPG');
+    final pb = await fetch('B.JPG');
+    expect(File(pa).existsSync(), isTrue);
+    expect(File(pb).existsSync(), isTrue);
+    check(ThumbSource.grid);
+
+    // ② 命中提升 ×2:移尾不动字节 —— 若命中误入账,120 涨破 130 会
+    // 假性驱逐(B 盘档还在即账未漂移)
+    await cache.pathFor(
+        _entry(0x12, name: 'A.JPG', size: 60), ThumbSource.grid);
+    await cache.pathFor(
+        _entry(0x12, name: 'A.JPG', size: 60), ThumbSource.grid);
+    expect(File(pb).existsSync(), isTrue, reason: '命中不加账:未假性驱逐');
+    check(ThumbSource.grid);
+
+    // ③ 第三张:180 > 130,逐最旧 —— A 刚被回访提升,逐的是 B
+    final pc = await fetch('C.JPG');
+    expect(File(pb).existsSync(), isFalse); // B(最久未访问)被逐
+    expect(File(pa).existsSync(), isTrue);
+    expect(File(pc).existsSync(), isTrue);
+    check(ThumbSource.grid); // 在册 A + C = 120
+
+    // ④ 预览档入账:两档账各自独立(grid 账与在册条目原样不动)
+    final gridBefore = debugLruAccount(cache, ThumbSource.grid);
+    fake.reply(_okData(bytes)); // 0x920F FHD(preview 席位)
+    fake.reply(_okData(_jpgHead(1))); // 头读
+    await cache.pathFor(
+        _entry(0x13, name: 'D.JPG', size: 60), ThumbSource.preview);
+    final gridAfter = debugLruAccount(cache, ThumbSource.grid);
+    expect(gridAfter.account, gridBefore.account,
+        reason: '预览档入账不搅 grid 账');
+    check(ThumbSource.grid);
+    check(ThumbSource.preview);
+
+    // ⑤ 盘档落空边界:手删 C 的盘档后回访 —— 命中沿 existsSync 落空,
+    // 出表出账当未命中重拉(方向已按内容键记忆,免头读:仅一笔
+    // 0x90C4);回位后账 == 重算,且未假性驱逐 A
+    File(pc).deleteSync();
+    final requestsBefore = fake.requests.length;
+    fake.reply(_okData(bytes));
+    final pcAgain = await cache.pathFor(
+        _entry(0x12, name: 'C.JPG', size: 60), ThumbSource.grid);
+    expect(pcAgain, pc);
+    expect(fake.requests.length, requestsBefore + 1, reason: '只重拉缩略');
+    expect(fake.requests.last.opcode, NikonOperationCode.getLargeThumb);
+    expect(File(pc).existsSync(), isTrue, reason: '重拉回位');
+    expect(File(pa).existsSync(), isTrue, reason: '回位时未假性驱逐');
+    check(ThumbSource.grid);
+  });
+
   // ── 方向规整(2026-10-09:相机缩略是裸 JPEG,注入原文件头方向)──
 
   test('网格缩略:竖拍裸 JPEG 注入原文件头方向(落盘即转正)', () async {

@@ -1,11 +1,13 @@
 import 'dart:async';
 import 'dart:collection';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 
+import 'package:nikon_pill/app_services.dart';
 import 'package:nikon_pill/core/camera/camera_connection.dart';
 import 'package:nikon_pill/core/ptp/device_prop.dart';
 import 'package:nikon_pill/core/ptp/operation_codes.dart';
@@ -21,6 +23,7 @@ import 'package:nikon_pill/features/remote/shooting_param_catalog.dart';
 import 'package:nikon_pill/features/settings/settings_page.dart';
 import 'package:nikon_pill/features/shell/home_shell.dart';
 import 'package:nikon_pill/l10n/message.dart';
+import 'package:nikon_pill/platform/gallery_saver.dart';
 
 /// 假传输:双道应答回放。连接沿有两条独立链并发入队 —— 控制器链
 /// (参数读,走 FIFO 兜底道)与引擎链(0x9201/0x9428/0x9202,按 op
@@ -253,6 +256,56 @@ _Fakes _fakes() {
 }
 
 void main() {
+  // 图库 tab 随首屏预建(allowImplicitScrolling),LocalLibraryPage 走
+  // AppServices 真单例列下载目录(2026-10-22 refreshAppFiles 异步化后是
+  // 真 dart:IO)。mock 给真实临时目录(空):通道错误不落进 runAsync
+  // 排水窗(与 local_library_page_test 同款),扫描链可在窗内收口。
+  late Directory dir;
+  setUp(() {
+    dir = Directory.systemTemp.createTempSync('nikonpill_shell');
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(MethodChannelGallerySaver.channel,
+            (call) async => switch (call.method) {
+                  'dataDir' || 'previewsDir' || 'downloadsDir' => dir.path,
+                  _ => null,
+                });
+    // 同因:AppServices 装配即 ConnectionController 起 BLE/NSD 两个扫描
+    // 事件流,listen 无 mock 即 MissingPluginException,异步错在哪个用例
+    // 的排水窗上浮看运气 —— mock 成空应答(壳用例注入假控制器,事件流
+    // 本就不该发事件)钉死顺序无关(local_library_page_test 同款)。
+    for (final name in const ['nikonpill/ble/events', 'nikonpill/nsd/events']) {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(MethodChannel(name),
+              (call) async => call.method == 'listen' ? '' : null);
+    }
+  });
+  tearDown(() {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(MethodChannelGallerySaver.channel, null);
+    for (final name in const ['nikonpill/ble/events', 'nikonpill/nsd/events']) {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(MethodChannel(name), null);
+    }
+    if (dir.existsSync()) {
+      dir.deleteSync(recursive: true);
+    }
+  });
+
+  /// 泵外壳 + 首扫排水:图库 tab 预建即起首次目录扫描(真 IO),未收口
+  /// 前页面在扫描转圈 —— 直接 pumpAndSettle 会挂在转圈动画帧上。逐窗
+  /// 排水到扫描收口(AppServices 单例跨用例保值:首个用例排水,后续
+  /// 直通;统一走此助手保持对用例顺序不敏感)。
+  Future<void> pumpShell(WidgetTester tester, Widget app) async {
+    await tester.pumpWidget(app);
+    final transfers = AppServices.instance.transfersController;
+    for (var i = 0; i < 20 && !transfers.appFilesScanned; i++) {
+      await tester
+          .runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+      await tester.pump();
+    }
+    await tester.pumpAndSettle();
+  }
+
   testWidgets('连接转正沿:不切 tab、连接即取景;切 tab 不停取景'
       '(取景生命周期跟连接走)', (tester) async {
     tester.view
@@ -268,10 +321,9 @@ void main() {
       ..okFor(NikonOperationCode.startLiveView) // 0x9201 连接即取景(引擎道)
       ..okFor(NikonOperationCode.getLiveViewImageEx,
           data: _realJpeg()); // 首帧 0x9428(轮询首拍,此后 delay 挂起)
-    await tester.pumpWidget(MaterialApp(
+    await pumpShell(tester, MaterialApp(
         home: HomeShell(
             connectionController: f.connCtrl, remoteController: f.remote)));
-    await tester.pumpAndSettle();
     expect(_selectedIndex(tester), 0, reason: '初始在相机 tab');
 
     // 连接转正(有线/无线同一状态机):留在原 tab,相机侧照进取景。
@@ -341,10 +393,9 @@ void main() {
     addTearDown(f.remote.dispose);
 
     _scriptParams(f.transport); // connected → 控制器沿参数刷新(照常,FIFO 道)
-    await tester.pumpWidget(MaterialApp(
+    await pumpShell(tester, MaterialApp(
         home: HomeShell(
             connectionController: f.connCtrl, remoteController: f.remote)));
-    await tester.pumpAndSettle();
     await tester.tap(_navTab('图库'));
     await tester.pumpAndSettle();
     expect(_selectedIndex(tester), 1);
@@ -390,10 +441,9 @@ void main() {
       ..okFor(NikonOperationCode.startLiveView) // 0x9201 连接即取景(引擎道)
       ..okFor(NikonOperationCode.getLiveViewImageEx,
           data: _realJpeg()); // 首帧(引擎道)
-    await tester.pumpWidget(MaterialApp(
+    await pumpShell(tester, MaterialApp(
         home: HomeShell(
             connectionController: f.connCtrl, remoteController: f.remote)));
-    await tester.pumpAndSettle();
     f.conn.statesCtrl.add(CameraLinkState.connected);
     await tester.pumpAndSettle();
     expect(f.remote.liveViewActive, isTrue);
@@ -449,10 +499,9 @@ void main() {
     f.transport
       ..okFor(NikonOperationCode.startLiveView)
       ..okFor(NikonOperationCode.getLiveViewImageEx, data: _realJpeg());
-    await tester.pumpWidget(MaterialApp(
+    await pumpShell(tester, MaterialApp(
         home: HomeShell(
             connectionController: f.connCtrl, remoteController: f.remote)));
-    await tester.pumpAndSettle();
     f.conn.statesCtrl.add(CameraLinkState.connected);
     await tester.pumpAndSettle();
 
@@ -513,10 +562,9 @@ void main() {
     f.transport
       ..okFor(NikonOperationCode.startLiveView)
       ..okFor(NikonOperationCode.getLiveViewImageEx, data: _realJpeg());
-    await tester.pumpWidget(MaterialApp(
+    await pumpShell(tester, MaterialApp(
         home: HomeShell(
             connectionController: f.connCtrl, remoteController: f.remote)));
-    await tester.pumpAndSettle();
     f.conn.statesCtrl.add(CameraLinkState.connected);
     await tester.pumpAndSettle();
 
@@ -550,10 +598,9 @@ void main() {
     addTearDown(f.connCtrl.dispose);
     addTearDown(f.remote.dispose);
 
-    await tester.pumpWidget(MaterialApp(
+    await pumpShell(tester, MaterialApp(
         home: HomeShell(
             connectionController: f.connCtrl, remoteController: f.remote)));
-    await tester.pumpAndSettle();
     expect(find.byType(NavigationRail), findsOneWidget, reason: '横屏换 rail');
     expect(find.byType(NavigationBar), findsNothing,
         reason: '底栏退位(80px 高度还给监看画面)');
@@ -589,10 +636,9 @@ void main() {
       ..okFor(NikonOperationCode.startLiveView) // 0x9201 连接即取景(引擎道)
       ..okFor(NikonOperationCode.getLiveViewImageEx,
           data: _realJpeg()); // 首帧(引擎道,此后 delay 挂起)
-    await tester.pumpWidget(MaterialApp(
+    await pumpShell(tester, MaterialApp(
         home: HomeShell(
             connectionController: f.connCtrl, remoteController: f.remote)));
-    await tester.pumpAndSettle();
     f.conn.statesCtrl.add(CameraLinkState.connected);
     await tester.pumpAndSettle();
     expect(f.remote.liveViewActive, isTrue);
@@ -651,10 +697,9 @@ void main() {
       ..okFor(NikonOperationCode.startLiveView) // 0x9201(引擎道)
       ..okFor(NikonOperationCode.getLiveViewImageEx,
           data: _realJpeg()); // 首帧(引擎道)
-    await tester.pumpWidget(MaterialApp(
+    await pumpShell(tester, MaterialApp(
         home: HomeShell(
             connectionController: f.connCtrl, remoteController: f.remote)));
-    await tester.pumpAndSettle();
     f.conn.statesCtrl.add(CameraLinkState.connected);
     await tester.pumpAndSettle();
 
@@ -719,10 +764,9 @@ void main() {
     addTearDown(f.connCtrl.dispose);
     addTearDown(f.remote.dispose);
 
-    await tester.pumpWidget(MaterialApp(
+    await pumpShell(tester, MaterialApp(
         home: HomeShell(
             connectionController: f.connCtrl, remoteController: f.remote)));
-    await tester.pumpAndSettle();
     expect(_selectedIndex(tester), 0, reason: '初始在相机 tab');
 
     // 左滑向深:相机→图库→设置(一次拖拽恰好跨一页:PageScrollPhysics
@@ -768,10 +812,9 @@ void main() {
       ..okFor(NikonOperationCode.startLiveView) // 0x9201 连接即取景(引擎道)
       ..okFor(NikonOperationCode.getLiveViewImageEx,
           data: _realJpeg()); // 首帧(引擎道,此后 delay 挂起)
-    await tester.pumpWidget(MaterialApp(
+    await pumpShell(tester, MaterialApp(
         home: HomeShell(
             connectionController: f.connCtrl, remoteController: f.remote)));
-    await tester.pumpAndSettle();
     f.conn.statesCtrl.add(CameraLinkState.connected);
     await tester.pumpAndSettle();
     expect(f.remote.liveViewActive, isTrue);
@@ -819,10 +862,9 @@ void main() {
     addTearDown(f.connCtrl.dispose);
     addTearDown(f.remote.dispose);
 
-    await tester.pumpWidget(MaterialApp(
+    await pumpShell(tester, MaterialApp(
         home: HomeShell(
             connectionController: f.connCtrl, remoteController: f.remote)));
-    await tester.pumpAndSettle();
 
     // 相机→图库→设置:首次建设置页,记下 element。
     await tester.drag(find.byType(PageView), const Offset(-500, 0));

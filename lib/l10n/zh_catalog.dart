@@ -634,6 +634,8 @@ const Map<String, String> zhCatalog = {
   'libpage.deleteSelected': '批量删除',
   'libpage.deleteBody': '将删除 {n} 个文件。\n此操作不可恢复(相机上的原件不受影响)。',
   'libpage.empty': '应用内还没有文件\n(在相机相册里选择「下载到应用」)',
+  'libpage.scanning': '正在扫描文件…',
+  'libpage.clearFilter': '清除筛选',
   'libpage.noFormatFiles': '没有{label}格式的文件',
   'libpage.noMatching': '没有符合条件的文件',
   'transfers.title': '传输',

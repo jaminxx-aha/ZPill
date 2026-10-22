@@ -750,6 +750,8 @@ const Map<String, String> enCatalog = {
       'This will delete {n} files.\nThis cannot be undone (the originals on the camera are unaffected).',
   'libpage.empty':
       'No files in the app yet\n(choose "Download to App" in the camera album)',
+  'libpage.scanning': 'Scanning files…',
+  'libpage.clearFilter': 'Clear Filter',
   'libpage.noFormatFiles': 'No {label} files',
   'libpage.noMatching': 'No matching files',
   'transfers.title': 'Transfers',
