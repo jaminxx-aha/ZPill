@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 
 import '../../app_services.dart';
 import '../../core/browser/photo_group.dart';
+import '../../core/media/watermark.dart';
 import '../../data/settings_store.dart';
 import '../../l10n/l10n.dart';
 import '../../platform/services.dart';

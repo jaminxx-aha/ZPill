@@ -12,7 +12,7 @@ import 'package:nikon_pill/core/ptpip/object_format.dart';
 import 'package:nikon_pill/core/transfer/aimd_chunk.dart';
 import 'package:nikon_pill/core/transfer/object_downloader.dart';
 
-import '../ptp/ptp_session_test.dart'
+import '../ptp/ptp_session_harness.dart'
     show FakePtpTransport, buildDeviceInfoDataset;
 
 ObjectEntry _entry(String name, int size, {int handle = 0x12}) => ObjectEntry(

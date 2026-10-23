@@ -44,6 +44,15 @@ final class ByteReader {
     return Uint8List.fromList(view);
   }
 
+  /// 读 [length] 字节(返回**视图**,与源共享缓冲):大块载荷用
+  /// (整帧转发免一遍拷贝),调用方不得原地修改、须自行保证源存活;
+  /// 小字段仍用 [raw](副本,源释放后仍可持有)。
+  Uint8List rawView(int length) {
+    final view = Uint8List.sublistView(bytes, offset, offset + length);
+    offset += length;
+    return view;
+  }
+
   /// 读 UTF-16LE 字符串([byteLength] 必须为偶数)。
   String utf16le(int byteLength) {
     final units = <int>[];

@@ -30,10 +30,11 @@ abstract final class ObjectFormatCode {
 
   // ── MTP 扩展(0xB9xx) ──
   static const int mp4 = 0xB982; // Zf 实测在册(MTP 标准码)
+  static const int heif = 0xB200; // HEIF(§6.6.3.3 评级适用表在册;Zf .HIF)
 
   // 2026-09-27 Zf 真机落定(GetObjectInfo 实测):NEF 报 0x3000(Undefined),
-  // 尼康不给专用码 —— 浏览层必须按 .nef 扩展名兜底识别。0xB200 在 Zf 格式
-  // 表在册但未拍样张,疑为 HEIF;0xB101 是 Canon/Sony 的码,勿用。
+  // 尼康不给专用码 —— 浏览层必须按 .nef 扩展名兜底识别。0xB101 是
+  // Canon/Sony 的码,勿用。
 }
 
 /// 格式码 → 分类。无法识别的码走 [ObjectKind.other],
@@ -50,6 +51,7 @@ ObjectKind kindForFormatCode(int formatCode) {
     case ObjectFormatCode.png:
     case ObjectFormatCode.bmp:
     case ObjectFormatCode.gif:
+    case ObjectFormatCode.heif: // HEIF(.HIF):图像语义,Zf 表在册
       return ObjectKind.image;
     case ObjectFormatCode.quickTime:
     case ObjectFormatCode.mpeg:
@@ -81,6 +83,7 @@ ObjectKind kindForFilename(String filename) {
     case 'bmp':
     case 'gif':
     case 'heic':
+    case 'hif': // 尼康 HEIF 扩展名
       return ObjectKind.image;
     case 'mp4':
     case 'mov':

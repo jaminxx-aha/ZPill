@@ -26,6 +26,7 @@ import 'package:flutter/material.dart';
 
 import '../../app_services.dart';
 import '../../l10n/l10n.dart';
+import '../connection/connection_controller.dart';
 import '../connection/connection_page.dart';
 import '../library/local_library_page.dart';
 import '../remote/remote_controller.dart';

@@ -5,7 +5,6 @@ import 'package:image/image.dart' as img;
 
 import 'package:nikon_pill/core/media/watermark.dart';
 import 'package:nikon_pill/core/utils/byte_writer.dart';
-import 'package:nikon_pill/data/settings_store.dart' show WatermarkStyle;
 
 /// 小端 TIFF EXIF 载荷:IFD0(Make/Model/DateTime + Exif 指针)+
 /// Exif 子表(FNumber/曝光/ISO/焦距)。偏移手工排布:
@@ -23,25 +22,56 @@ Uint8List _exifPayload() {
     ..u32(8)
     // IFD0
     ..u16(4)
-    ..u16(0x010F)..u16(ascii)..u32(18)..u32(makeOff)
-    ..u16(0x0110)..u16(ascii)..u32(10)..u32(modelOff)
-    ..u16(0x0132)..u16(ascii)..u32(20)..u32(dateOff)
-    ..u16(0x8769)..u16(long)..u32(1)..u32(exifIfdOff)
+    ..u16(0x010F)
+    ..u16(ascii)
+    ..u32(18)
+    ..u32(makeOff)
+    ..u16(0x0110)
+    ..u16(ascii)
+    ..u32(10)
+    ..u32(modelOff)
+    ..u16(0x0132)
+    ..u16(ascii)
+    ..u32(20)
+    ..u32(dateOff)
+    ..u16(0x8769)
+    ..u16(long)
+    ..u32(1)
+    ..u32(exifIfdOff)
     ..u32(0)
     // Exif 子表
     ..u16(4)
-    ..u16(0x829D)..u16(rational)..u32(1)..u32(fNumOff)
-    ..u16(0x829A)..u16(rational)..u32(1)..u32(expOff)
-    ..u16(0x8827)..u16(short)..u32(1)..u16(100)..u16(0)
-    ..u16(0x920A)..u16(rational)..u32(1)..u32(focalOff)
+    ..u16(0x829D)
+    ..u16(rational)
+    ..u32(1)
+    ..u32(fNumOff)
+    ..u16(0x829A)
+    ..u16(rational)
+    ..u32(1)
+    ..u32(expOff)
+    ..u16(0x8827)
+    ..u16(short)
+    ..u32(1)
+    ..u16(100)
+    ..u16(0)
+    ..u16(0x920A)
+    ..u16(rational)
+    ..u32(1)
+    ..u32(focalOff)
     ..u32(0)
     // 数据区
-    ..raw('NIKON CORPORATION'.codeUnits)..u8(0)
-    ..raw('NIKON Z f'.codeUnits)..u8(0)
-    ..raw('2026:10:02 09:05:33'.codeUnits)..u8(0)
-    ..u32(18)..u32(10) // ƒ/1.8
-    ..u32(1)..u32(250) // 1/250s
-    ..u32(85)..u32(1); // 85mm
+    ..raw('NIKON CORPORATION'.codeUnits)
+    ..u8(0)
+    ..raw('NIKON Z f'.codeUnits)
+    ..u8(0)
+    ..raw('2026:10:02 09:05:33'.codeUnits)
+    ..u8(0)
+    ..u32(18)
+    ..u32(10) // ƒ/1.8
+    ..u32(1)
+    ..u32(250) // 1/250s
+    ..u32(85)
+    ..u32(1); // 85mm
   return w.takeBytes();
 }
 
@@ -77,9 +107,51 @@ Future<img.Image> _fakeRaster(String text, double fontSizePx, int color) async {
   final h = fontSizePx.round();
   final image = img.Image(width: h * text.length ~/ 2 + 4, height: h);
   img.fillRect(image,
-      x1: 0, y1: 0, x2: image.width - 1, y2: image.height - 1,
+      x1: 0,
+      y1: 0,
+      x2: image.width - 1,
+      y2: image.height - 1,
       color: img.ColorRgba8(200, 30, 30, 255));
   return image;
+}
+
+/// 含 Model + Orientation 两项的极简 EXIF 载荷(IFD0:Model 走偏移路径,
+/// Orientation SHORT 内联;Model 是为了剥离方向标签后 EXIF 仍非空 ——
+/// image 包对空 EXIF 不写 APP1,输出会整体无 EXIF)。
+Uint8List _orientationPayload(int o) {
+  const modelOff = 38; // 头 8 + 项数 2 + 两项 24 + next 4
+  final w = ByteWriter()
+    ..u16(0x4949) // 'II'
+    ..u16(42)
+    ..u32(8)
+    ..u16(2)
+    ..u16(0x0110)
+    ..u16(2)
+    ..u32(10)
+    ..u32(modelOff)
+    ..u16(0x0112)
+    ..u16(3)
+    ..u32(1)
+    ..u16(o)
+    ..u16(0)
+    ..u32(0)
+    ..raw('NIKON Z f'.codeUnits)
+    ..u8(0);
+  return w.takeBytes();
+}
+
+/// 带 Orientation 的 600×800 渐变 JPEG(SOI 后插 Exif APP1)。
+Uint8List _orientedJpeg(int orientation) {
+  final jpeg = img.encodeJpg(_gradient(600, 800));
+  final payload = _orientationPayload(orientation);
+  final segLen = 2 + 6 + payload.length;
+  return Uint8List.fromList([
+    0xFF, 0xD8, //
+    0xFF, 0xE1, (segLen >> 8) & 0xFF, segLen & 0xFF,
+    ...'Exif'.codeUnits, 0, 0,
+    ...payload,
+    ...jpeg.sublist(2),
+  ]);
 }
 
 void main() {
@@ -130,7 +202,8 @@ void main() {
     // XMP APP1 声明 70000B、头读只有 200B:Exif APP1 在头读之外,
     // 跨不过截断段(2026-10-09 修的另一半语义:截断仅对 Exif 本段宽容)。
     final xmp = Uint8List.fromList([
-      ...'http://ns.adobe.com/xap/1.0/'.codeUnits, 0,
+      ...'http://ns.adobe.com/xap/1.0/'.codeUnits,
+      0,
       ...List.filled(150, 0x20),
     ]);
     const segLen = 70000;
@@ -166,8 +239,8 @@ void main() {
       expect(exifCardFromHead(Uint8List.fromList([0, 1, 2])), isNull);
       // MOV:ftyp 盒头
       expect(
-          exifCardFromHead(Uint8List.fromList(
-              [0, 0, 0, 0x14, ...'ftypqt  '.codeUnits])),
+          exifCardFromHead(
+              Uint8List.fromList([0, 0, 0, 0x14, ...'ftypqt  '.codeUnits])),
           isNull);
       // 单 'I' 不是 TIFF(II 对校验)
       expect(
@@ -178,8 +251,7 @@ void main() {
   });
 
   test('格式化:厂牌去重、整档光圈、秒级快门、焦段取整', () {
-    expect(
-        const ExifCardData(make: 'NIKON', model: 'NIKON Z f').titleLine,
+    expect(const ExifCardData(make: 'NIKON', model: 'NIKON Z f').titleLine,
         'NIKON Z f');
     expect(
         const ExifCardData(
@@ -221,7 +293,12 @@ void main() {
     expect(decoded!.width, greaterThan(60));
     expect(decoded.height, greaterThan(40 + 20)); // 照片 + 至少三行文字区
     // 四角是白衬纸
-    for (final (x, y) in [(0, 0), (decoded.width - 1, 0), (0, decoded.height - 1), (decoded.width - 1, decoded.height - 1)]) {
+    for (final (x, y) in [
+      (0, 0),
+      (decoded.width - 1, 0),
+      (0, decoded.height - 1),
+      (decoded.width - 1, decoded.height - 1)
+    ]) {
       final c = decoded.getPixel(x, y);
       expect(c.r, greaterThan(235));
       expect(c.g, greaterThan(235));
@@ -239,13 +316,13 @@ void main() {
   test('off / 非 JPEG:原实例直返;小图放不下角标也直返', () async {
     final jpeg = _exifJpeg();
     expect(
-        await applyWatermark(jpeg,
-            const WatermarkOptions(style: WatermarkStyle.off)),
+        await applyWatermark(
+            jpeg, const WatermarkOptions(style: WatermarkStyle.off)),
         same(jpeg));
     final notJpeg = Uint8List.fromList([0x89, 0x50, 0x4E, 0x47]);
     expect(
-        await applyWatermark(notJpeg,
-            const WatermarkOptions(style: WatermarkStyle.corner)),
+        await applyWatermark(
+            notJpeg, const WatermarkOptions(style: WatermarkStyle.corner)),
         same(notJpeg));
 
     // 20×15 小图:fontSize 钳 16 → margin 11 → maxW ≤ 0,放不下。
@@ -255,5 +332,94 @@ void main() {
             const WatermarkOptions(style: WatermarkStyle.corner, text: 'Aha'),
             raster: _fakeRaster),
         same(tiny));
+  });
+
+  test('SOI 后无 SOF(垃圾字节):原实例直返,不进子 isolate', () async {
+    final junk = Uint8List.fromList([0xFF, 0xD8, 0x00, 0x01, 0x02, 0x03]);
+    expect(
+        await applyWatermark(junk,
+            const WatermarkOptions(style: WatermarkStyle.corner, text: 'Aha'),
+            raster: _fakeRaster),
+        same(junk));
+  });
+
+  test('文本光栅抛异常:原实例直返(水印不拖垮传输)', () async {
+    final jpeg = _exifJpeg();
+    Future<img.Image> boom(String text, double fontSizePx, int color) async =>
+        throw Exception('raster boom');
+    expect(
+        await applyWatermark(jpeg,
+            const WatermarkOptions(style: WatermarkStyle.corner, text: 'Aha'),
+            raster: boom),
+        same(jpeg));
+  });
+
+  test('orientation 6:显示宽取烘焙后宽(帧高),字号随显示宽', () async {
+    // 编码 600×800(竖),烘焙后 800×600(横);displayWidth=800 →
+    // fontSize 24 → margin 17,假角标 40×24 → 落点 (743, 559)。
+    // 若显示宽误取编码宽 600(fontSize 18 → 角标 31×18 @ (756, 569)),
+    // 断言点 (748, 567) 落在错位角标之外,断言即翻。
+    final jpeg = _orientedJpeg(6);
+    final out = await applyWatermark(
+        jpeg, const WatermarkOptions(style: WatermarkStyle.corner, text: 'Aha'),
+        raster: _fakeRaster);
+    final decoded = img.decodeJpg(out);
+    expect(decoded, isNotNull);
+    expect(decoded!.width, 800);
+    expect(decoded.height, 600);
+    final p = decoded.getPixel(748, 567);
+    expect(p.r, greaterThan(150));
+    expect(p.g, lessThan(90));
+    expect(p.b, lessThan(90)); // 假红块 (200,30,30);照片渐变恒 b=128
+    final q = decoded.getPixel(729, 567); // 角标左沿外:仍是照片像素
+    expect(q.b, greaterThan(100));
+    // bakeOrientation 把方向烘进像素后剥除 Orientation 标签,其余 EXIF 随行。
+    final outExif = readJpegExif(out);
+    expect(outExif, isNotNull);
+    expect(outExif!.imageIfd.hasOrientation, isFalse);
+    expect(outExif.imageIfd[0x0110]?.toString(), 'NIKON Z f');
+  });
+
+  test('orientation 1:解码直通画幅不变,标签剥除,字号随编码宽', () async {
+    // 600×800;displayWidth=600 → fontSize 18 → margin 13,假角标 31×18
+    // → 落点 (556, 769)。
+    final jpeg = _orientedJpeg(1);
+    final out = await applyWatermark(
+        jpeg, const WatermarkOptions(style: WatermarkStyle.corner, text: 'Aha'),
+        raster: _fakeRaster);
+    final decoded = img.decodeJpg(out);
+    expect(decoded!.width, 600);
+    expect(decoded.height, 800);
+    final p = decoded.getPixel(560, 772);
+    expect(p.r, greaterThan(150));
+    expect(p.g, lessThan(90));
+    expect(readJpegExif(out)!.imageIfd.hasOrientation, isFalse);
+  });
+
+  group('jpegEncodedCanvasSize:帧头嗅探画幅', () {
+    test('基线 SOF0(APP1 在前):600×800', () {
+      expect(jpegEncodedCanvasSize(_orientedJpeg(1)), (600, 800));
+    });
+
+    test('渐进式 SOF2(DHT 在前照段长跳过):40×60', () {
+      // SOI + DHT(占位)+ SOF2(precision 8,h 40,w 60,单分量)+ EOI。
+      final jpeg = Uint8List.fromList([
+        0xFF, 0xD8, //
+        0xFF, 0xC4, 0x00, 0x03, 0x00,
+        0xFF, 0xC2, 0x00, 0x0B, 0x08, 0x00, 0x28, 0x00, 0x3C, 0x01, 0x00,
+        0xFF, 0xD9,
+      ]);
+      expect(jpegEncodedCanvasSize(jpeg), (60, 40));
+    });
+
+    test('无 SOF / 非 SOI / 太短 → null', () {
+      expect(
+          jpegEncodedCanvasSize(Uint8List.fromList([0xFF, 0xD8, 0x00, 0x01])),
+          isNull);
+      expect(
+          jpegEncodedCanvasSize(Uint8List.fromList([0x89, 0x50, 0x4E, 0x47])),
+          isNull);
+      expect(jpegEncodedCanvasSize(Uint8List.fromList([0xFF, 0xD8])), isNull);
+    });
   });
 }

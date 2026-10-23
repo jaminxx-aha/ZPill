@@ -240,6 +240,8 @@ const Map<String, String> enCatalog = {
       'Tapping "Connect to camera" takes over the camera: its screen shows "Connected to Computer" and the dials lock; released on disconnect.',
   'conn.hotspotCred': 'Camera Hotspot Credentials (decoded via Bluetooth)',
   'conn.password': 'Password',
+  // SSID is a technical term, same as zh on purpose.
+  'conn.ssid': 'SSID',
   'conn.security':
       'Security: {s} · join the hotspot, then tap "Connect to camera" on the connection page',
   'common.empty': '(empty)',
@@ -415,6 +417,8 @@ const Map<String, String> enCatalog = {
   'remote.autofocus': 'Autofocus',
   'common.autoSuffix': '(auto)',
   'remote.notConnected': 'Camera not connected',
+  // REC prefix: universal recording mark, same as zh on purpose.
+  'remote.recPrefix': 'REC',
   'remote.shootingMode': 'Shooting Mode',
   'param.mode': 'Mode',
   'param.wb': 'White Balance',
@@ -713,6 +717,10 @@ const Map<String, String> enCatalog = {
   'grid.download': 'Download',
   'grid.albums': 'Albums',
   'grid.downloadFormat': 'Download Format',
+  'grid.rating': 'Rating',
+  'grid.ratingNone': 'Unrated',
+  'grid.ratingTrash': 'Reject',
+  'grid.ratingRated': 'Rated',
   'viewer.protect': 'Protect in Camera (Lock)',
   'viewer.unprotect': 'Remove Camera Protection',
   'viewer.protected': 'Protected in camera (read-only)',
@@ -722,6 +730,8 @@ const Map<String, String> enCatalog = {
   'viewer.edit': 'Edit',
   'viewer.rating': 'Rating',
   'viewer.clearRating': 'Clear Rating',
+  'viewer.ratingFail':
+      "Couldn't save the rating to the camera; check the connection and retry",
   'viewer.burstCount': 'Burst ×{n}',
   'viewer.downloadStarted':
       'Download started {where} {tag}; see "Gallery" for progress',
@@ -755,7 +765,10 @@ const Map<String, String> enCatalog = {
       'This will delete {n} files.\nThis cannot be undone (the originals on the camera are unaffected).',
   'libpage.empty':
       'No files in the app yet\n(choose "Download to App" in the camera album)',
+  'libpage.scanning': 'Scanning files…',
+  'libpage.clearFilter': 'Clear Filter',
   'libpage.noFormatFiles': 'No {label} files',
+  'libpage.noRatingFiles': 'No files with this rating',
   'libpage.noMatching': 'No matching files',
   'transfers.title': 'Transfers',
   'libpage.deleteAppTitle': 'Delete In-App File?',
@@ -808,6 +821,10 @@ const Map<String, String> enCatalog = {
   'edit.untitled': 'Untitled',
   'edit.importedTitle': 'Imported "{title}" ({size}³)',
   'edit.importFailed': 'Import failed: {e}',
+  'edit.discardTitle': 'Discard Changes?',
+  'edit.discardBody': 'Unsaved changes will be lost',
+  'edit.discardConfirm': 'Discard',
+  'edit.loadingPreview': 'Loading preview…',
   'film.title': 'Film',
   'film.fuji': 'Fuji Film',
   'film.kodak': 'Kodak Film',
@@ -888,6 +905,9 @@ const Map<String, String> enCatalog = {
   'log.header': 'NikonPill diagnostic log\nExported at {time}\n{n} entries\n',
   // EN 抽查补漏(2026-10-16)。
   'param.shutter': 'Shutter',
+  // 相机信息 sheet(已连接状态行弹层):快门数现读最新照片 MakerNote。
   'theme.light': 'Light',
   'theme.dark': 'Dark',
+  'conn.camInfoShutter': 'Shutter count',
+  'conn.camInfoReading': 'Reading…',
 };

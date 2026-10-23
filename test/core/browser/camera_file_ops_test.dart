@@ -12,7 +12,7 @@ import 'package:nikon_pill/core/ptp/ptp_session.dart';
 import 'package:nikon_pill/core/ptp/ptp_transport.dart';
 import 'package:nikon_pill/core/ptpip/object_format.dart';
 
-import '../ptp/ptp_session_test.dart' show FakePtpTransport;
+import '../ptp/ptp_session_harness.dart' show FakePtpTransport;
 
 ObjectEntry _file(int handle, String name,
         {int parent = 0x11, int format = 0x3801, required DateTime captured}) =>
@@ -50,6 +50,38 @@ final class _RecordingRepo implements ObjectRepository {
 
   @override
   void reset() {}
+
+  // ── 评级面(删除编排不消费,空实现)──
+  @override
+  bool get ratingsLoaded => false;
+
+  @override
+  void requestRating(int handle) {}
+
+  @override
+  int ratingForHandle(int handle) => 0;
+
+  @override
+  int ratingForGroup(PhotoGroup group) => 0;
+
+  @override
+  bool ratedUnknownFor(int handle) => false;
+
+  @override
+  bool groupRatedUnknown(PhotoGroup group) => false;
+
+  @override
+  bool trashMarkedFor(int handle) => false;
+
+  @override
+  bool groupTrashStar(PhotoGroup group) => false;
+
+  @override
+  PhotoGroup? groupOf(int handle) => null;
+
+  @override
+  Future<void> rateGroup(PhotoGroup group, int stars) async =>
+      throw UnimplementedError();
 }
 
 PtpResult _ok() => const PtpResult(responseCode: PtpResponseCode.ok);

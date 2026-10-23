@@ -36,6 +36,7 @@ import '../../core/transfer/object_downloader.dart';
 import '../../core/transfer/transfer_engine.dart';
 import '../../core/transfer/transfer_task.dart';
 import '../../design/app_colors.dart';
+import '../../design/app_haptics.dart';
 import '../../l10n/l10n.dart';
 import '../../platform/gallery_saver.dart';
 import '../../platform/services.dart';
@@ -46,7 +47,7 @@ import '../common/widgets/embedded_video_player.dart';
 import '../common/widgets/loading_overlay.dart';
 import '../common/widgets/photo_info_sheet.dart';
 import '../edit/edit_page.dart';
-import 'ratings_controller.dart';
+import 'album_ratings_controller.dart';
 
 class PhotoViewerPage extends StatefulWidget {
   const PhotoViewerPage({
@@ -79,8 +80,9 @@ class PhotoViewerPage extends StatefulWidget {
   /// 测试注入;缺省用 AppServices 单例。
   final TransferEngine? engine;
 
-  /// 测试注入;缺省用 AppServices 单例(与网格页共享同一评分状态)。
-  final RatingsController? ratings;
+  /// 测试注入;缺省用 AppServices 单例(与网格页共享同一评分状态;
+  /// 真源 = 相机 MTP 0xDC8A)。
+  final AlbumRatingsController? ratings;
 
   /// 测试注入(编辑:拉原图;视频:拉临时档);缺省用 AppServices 单例。
   final ObjectDownloader? downloader;
@@ -132,7 +134,7 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
       widget.thumbnails ?? AppServices.instance.thumbnails;
   TransferEngine get _engine =>
       widget.engine ?? AppServices.instance.transferEngine;
-  RatingsController get _ratings =>
+  AlbumRatingsController get _ratings =>
       widget.ratings ?? AppServices.instance.ratings;
   ObjectDownloader get _downloader =>
       widget.downloader ?? AppServices.instance.downloader;
@@ -206,6 +208,8 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
     super.initState();
     _warmCurrent();
     _readProtectState(widget.items[_index]);
+    // 当前组评级即时补读(后台补读未到的先拉,已问过空转)。
+    _ratings.ensure(widget.items[_index]);
   }
 
   /// 当前页预览预热(高清席位):小图已先显,后台拉整档解码换高清;
@@ -248,7 +252,8 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
         .catchError((Object _) {});
   }
 
-  /// 打星面板:1-5 星 + 清除评分(0)。乐观上屏由控制器负责。
+  /// 打星面板:1-5 星 + 清除评分(0)。乐观上屏由仓库负责;写相机
+  /// 失败(链路断/相机拒)回滚后 SnackBar 提示。
   Future<void> _rate(PhotoGroup group) async {
     await showModalBottomSheet<void>(
       context: context,
@@ -281,8 +286,9 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
                           ? AppColors.brandYellow
                           : Theme.of(context).disabledColor,
                       onPressed: () {
-                        _ratings.rate(group, stars);
+                        AppHaptics.selection(); // 逐星轻震(选择确认沿)
                         Navigator.of(context).pop();
+                        _applyRating(group, stars);
                       },
                       icon: const Icon(Icons.star),
                     ),
@@ -293,14 +299,28 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
               leading: const Icon(Icons.star_border),
               title: Text(context.t('viewer.clearRating')),
               onTap: () {
-                _ratings.rate(group, 0);
                 Navigator.of(context).pop();
+                _applyRating(group, 0);
               },
             ),
           ],
         ),
       ),
     );
+  }
+
+  /// 打星落相机(0xDC8A):失败回滚由仓库负责,这里只提示。
+  Future<void> _applyRating(PhotoGroup group, int stars) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await _ratings.rate(group, stars);
+    } on Object {
+      if (!mounted) return;
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(
+            content: Text(context.t('viewer.ratingFail'))));
+    }
   }
 
   /// 照片信息底单:文件级信息立显(名称/大小/连拍/时间),EXIF(机身/
@@ -525,6 +545,7 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
               });
               _warmCurrent();
               _readProtectState(widget.items[i]);
+              _ratings.ensure(widget.items[i]); // 评级即时补读
               // 全屏是视频语境:滑到非视频页自动退出(还原方向与栏)
               if (_fullscreen && !widget.items[i].isVideo) {
                 _setFullscreen(false);

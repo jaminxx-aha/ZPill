@@ -26,12 +26,12 @@ import 'package:nikon_pill/data/paired_cameras_store.dart';
 import 'package:nikon_pill/data/settings_store.dart';
 import 'package:nikon_pill/design/app_colors.dart';
 import 'package:nikon_pill/features/connection/camera_overview_controller.dart';
+import 'package:nikon_pill/features/connection/connection_controller.dart';
 import 'package:nikon_pill/features/connection/connection_page.dart';
 import 'package:nikon_pill/features/remote/remote_controller.dart';
 import 'package:nikon_pill/features/remote/remote_page.dart';
 import 'package:nikon_pill/features/settings/settings_page.dart';
 import 'package:nikon_pill/l10n/l10n.dart';
-import 'package:nikon_pill/l10n/message.dart';
 import 'package:nikon_pill/platform/ble_scanner.dart';
 import 'package:nikon_pill/platform/network_monitor.dart';
 import 'package:nikon_pill/platform/nsd_scanner.dart';
@@ -39,6 +39,7 @@ import 'package:nikon_pill/platform/nsd_scanner.dart';
 import '../../core/ble/ble_camera_session_test.dart'
     show FakeBleHost, buildStage2, buildStage4;
 import '../../core/ble/wifi_credentials_test.dart' show craftBlob;
+import '../../helpers/fake_connection.dart';
 
 /// 内存设置库(落账 update;流直推)—— 蓝牙 GPS 注入开关落库断言用。
 class _FakeSettingsStore implements SettingsStore {
@@ -94,59 +95,7 @@ final class _FakeWifiJoiner implements WifiJoiner {
 }
 
 /// 记账假连接:connect/disconnect/配对确认落账,states 流由测试驱动。
-final class _FakeConnection implements CameraConnection {
-  final statesCtrl = StreamController<CameraLinkState>.broadcast();
 
-  String? connectIp;
-  String? connectInstanceName;
-  int disconnectCalls = 0;
-  bool wireless = false;
-  String? code;
-  int confirmCalls = 0;
-  int cancelCalls = 0;
-
-  /// 连接层动态文案(reconnecting 期恢复循环逐拍更新;failed 的终态):
-  /// 直通串(非键)原样透出,与连接层取证串口径一致。errArgs = 键的
-  /// 占位参数(测 EN 渲染用)。
-  String? err;
-  Map<String, Object>? errArgs;
-
-  @override
-  String? deviceName;
-
-  @override
-  String? deviceModel;
-
-  @override
-  CameraLinkState get state => CameraLinkState.disconnected;
-
-  @override
-  Stream<CameraLinkState> get states => statesCtrl.stream;
-
-  @override
-  L10nMessage? get error => err == null ? null : (key: err!, args: errArgs);
-
-  @override
-  bool get isWireless => wireless;
-
-  @override
-  String? get pairingCode => code;
-
-  @override
-  Future<void> connect({String? ip, String? instanceName}) async {
-    connectIp = ip;
-    connectInstanceName = instanceName;
-  }
-
-  @override
-  Future<void> confirmPairing() async => confirmCalls++;
-
-  @override
-  Future<void> cancelPairing() async => cancelCalls++;
-
-  @override
-  Future<void> disconnect() async => disconnectCalls++;
-}
 
 /// 记账假扫描器:事件流由测试驱动。
 final class _FakeScanner implements NsdScanner {
@@ -247,7 +196,7 @@ const _zfCamera =
 void main() {
   group('ConnectionController', () {
     test('connectWireless:候选序 mDNS 发现 > join 网关 > 默认 192.168.1.1', () async {
-      final conn = _FakeConnection();
+      final conn = FakeConnection();
       final scanner = _FakeScanner();
       final controller =
           ConnectionController(connection: conn, scanner: scanner);
@@ -283,7 +232,7 @@ void main() {
     });
 
     test('joinCameraAp ok 带网关:自动连接直达网关 IP(不再硬编码默认)', () async {
-      final conn = _FakeConnection();
+      final conn = FakeConnection();
       final joiner = _FakeWifiJoiner(gateway: '192.168.100.1');
       final controller =
           ConnectionController(connection: conn, wifiJoiner: joiner)
@@ -301,7 +250,7 @@ void main() {
     });
 
     test('joinCameraAp ok 无网关:回落默认 192.168.1.1(现状不变)', () async {
-      final conn = _FakeConnection();
+      final conn = FakeConnection();
       final controller =
           ConnectionController(connection: conn, wifiJoiner: _FakeWifiJoiner())
             ..cameraApCredentials = const WifiCredentials(
@@ -317,7 +266,7 @@ void main() {
     });
 
     test('STA 路不吃网关:apGateway 在手,connectManualIp 仍只认手填(空不动作)', () async {
-      final conn = _FakeConnection();
+      final conn = FakeConnection();
       final controller = ConnectionController(connection: conn)
         ..apGateway = '192.168.100.1';
       // 空输入不动作 —— STA 网关是路由器,绝不让 AP 网关顶上
@@ -331,7 +280,7 @@ void main() {
     test('selectMethod 切进 AP 清 mDNS 旧网结果(旧网段发现连相机热点只会超时)', () async {
       final scanner = _FakeScanner();
       final controller =
-          ConnectionController(connection: _FakeConnection(), scanner: scanner);
+          ConnectionController(connection: FakeConnection(), scanner: scanner);
       await controller.startScan();
       scanner.eventsCtrl.add(const NsdCameraFound(_zfCamera));
       await pumpEventQueue();
@@ -349,7 +298,7 @@ void main() {
           ..value = const AppSettings().copyWith(connectionMethod: 'sta');
         final settings = SettingsController(store: settingsStore);
         final controller = ConnectionController(
-          connection: _FakeConnection(),
+          connection: FakeConnection(),
           settingsController: settings,
         );
         expect(controller.method, ConnectionMethod.usb, reason: '装载沿前保持默认有线');
@@ -362,7 +311,7 @@ void main() {
           ..value = const AppSettings().copyWith(connectionMethod: 'bogus');
         final settings = SettingsController(store: settingsStore);
         final controller = ConnectionController(
-          connection: _FakeConnection(),
+          connection: FakeConnection(),
           settingsController: settings,
         );
         await pumpEventQueue();
@@ -373,7 +322,7 @@ void main() {
         final settingsStore = _FakeSettingsStore();
         final settings = SettingsController(store: settingsStore);
         final controller = ConnectionController(
-          connection: _FakeConnection(),
+          connection: FakeConnection(),
           settingsController: settings,
         );
         await pumpEventQueue(); // 先让装载沿走完(默认档不动作)
@@ -389,7 +338,7 @@ void main() {
           ..value = const AppSettings().copyWith(connectionMethod: 'ap');
         final settings = SettingsController(store: settingsStore);
         final controller = ConnectionController(
-          connection: _FakeConnection(),
+          connection: FakeConnection(),
           settingsController: settings,
         );
         // 装载在途(构造沿已发起)用户先选:落库且随后到货的旧档不覆盖。
@@ -401,7 +350,7 @@ void main() {
     });
 
     test('hint:connected 无提示(信息视图自释);pairing/failed 保留', () async {
-      final conn = _FakeConnection()..deviceName = 'NIKON ZF';
+      final conn = FakeConnection()..deviceName = 'NIKON ZF';
       final controller = ConnectionController(connection: conn);
 
       conn.statesCtrl.add(CameraLinkState.connected);
@@ -421,7 +370,7 @@ void main() {
     test(
         'hint:reconnecting 读连接层动态文案(恢复循环逐拍更新),'
         'error 缺席回落「正在自动重连…」', () async {
-      final conn = _FakeConnection()..err = '正在等待相机重新接入 USB(重新插好数据线后自动续连)';
+      final conn = FakeConnection()..error = (key: '正在等待相机重新接入 USB(重新插好数据线后自动续连)', args: null);
       final controller = ConnectionController(connection: conn);
 
       conn.statesCtrl.add(CameraLinkState.reconnecting);
@@ -429,7 +378,7 @@ void main() {
       expect(controller.state, CameraLinkState.reconnecting);
       expect(controller.hint?.key, '正在等待相机重新接入 USB(重新插好数据线后自动续连)');
 
-      conn.err = null;
+      conn.error = null;
       conn.statesCtrl.add(CameraLinkState.reconnecting); // 重复 notify 重读
       await pumpEventQueue();
       expect(controller.hint?.key, 'conn.reconnectAuto');
@@ -438,9 +387,11 @@ void main() {
     testWidgets('EN 环境:连接层失败消息(key+args)按英文词表渲染,'
         '异常细节原样随行(2026-10-20 用户报告:英文界面提示仍是中文)',
         (tester) async {
-      final conn = _FakeConnection()
-        ..err = 'conn.recoverGiveUpNormal'
-        ..errArgs = {'n': 9, 'e': 'SocketException: Connection timed out'};
+      final conn = FakeConnection()
+        ..error = (
+          key: 'conn.recoverGiveUpNormal',
+          args: {'n': 9, 'e': 'SocketException: Connection timed out'}
+        );
       final controller = ConnectionController(connection: conn);
       await tester.pumpWidget(L10nScope(
         code: 'en',
@@ -460,7 +411,7 @@ void main() {
     });
 
     test('activeIp:各连接方式落账(USB null / 发现 / 档案 / 手动)', () async {
-      final conn = _FakeConnection();
+      final conn = FakeConnection();
       final controller = ConnectionController(connection: conn);
 
       await controller.connect(); // USB:无 IP
@@ -489,7 +440,7 @@ void main() {
     });
 
     test('扫描:found/lost 驱动列表;无 IP 不上榜;点选连接 = IP + 实例名 + 停扫', () async {
-      final conn = _FakeConnection();
+      final conn = FakeConnection();
       final scanner = _FakeScanner();
       final controller =
           ConnectionController(connection: conn, scanner: scanner);
@@ -532,7 +483,7 @@ void main() {
 
     test('扫描未装配平台(start 抛 MissingPluginException):静默降级回手动', () async {
       final controller = ConnectionController(
-          connection: _FakeConnection(), scanner: _FailingScanner());
+          connection: FakeConnection(), scanner: _FailingScanner());
 
       await controller.startScan();
 
@@ -542,7 +493,7 @@ void main() {
     test('rescanIfScanning:扫描中停→起重启浏览;未扫描时不动', () async {
       final scanner = _FakeScanner();
       final controller =
-          ConnectionController(connection: _FakeConnection(), scanner: scanner);
+          ConnectionController(connection: FakeConnection(), scanner: scanner);
 
       // 未在扫描:后台恢复不触发浏览
       await controller.rescanIfScanning();
@@ -562,7 +513,7 @@ void main() {
     test('selectMethod:离开 STA 自动停扫;同方式空转不多发', () async {
       final scanner = _FakeScanner();
       final controller =
-          ConnectionController(connection: _FakeConnection(), scanner: scanner);
+          ConnectionController(connection: FakeConnection(), scanner: scanner);
 
       await controller.startScan();
       expect(controller.scanning, isTrue);
@@ -594,7 +545,7 @@ void main() {
           name: 'B',
           lastIp: '2.2.2.2',
           lastConnectedAt: DateTime(2026, 2, 1)));
-      final conn = _FakeConnection();
+      final conn = FakeConnection();
       final controller =
           ConnectionController(connection: conn, pairedCameras: store);
 
@@ -617,7 +568,7 @@ void main() {
           },
         );
         final nsd = _FakeScanner();
-        final conn = _FakeConnection();
+        final conn = FakeConnection();
         final controller = ConnectionController(
             connection: conn, scanner: nsd, subnetScanner: subnet);
 
@@ -658,7 +609,7 @@ void main() {
           },
         );
         final controller = ConnectionController(
-            connection: _FakeConnection(), subnetScanner: subnet);
+            connection: FakeConnection(), subnetScanner: subnet);
         final first = controller.scanSubnet();
         await pumpEventQueue();
         expect(controller.scanningSubnet, isTrue);
@@ -673,7 +624,7 @@ void main() {
       });
 
       test('结果落账 + connectProbed:名字透传实例名;被拒相机 IP 展示', () async {
-        final conn = _FakeConnection();
+        final conn = FakeConnection();
         final subnet = SubnetCameraScanner(
           interfaceIps: () async => ['192.168.0.5'],
           connectCheck: (host, port, timeout) async =>
@@ -714,7 +665,7 @@ void main() {
               host: host, name: 'NIKON Z f', cameraGuid: Uint8List(16)),
         );
         final controller = ConnectionController(
-            connection: _FakeConnection(), subnetScanner: subnet);
+            connection: FakeConnection(), subnetScanner: subnet);
         await controller.scanSubnet();
         expect(controller.subnetCameras, hasLength(1));
 
@@ -727,7 +678,7 @@ void main() {
 
   group('ConnectionPage', () {
     testWidgets('未连接主视图:方式行 + hero 点按直连;说明收进方式行 ⓘ', (WidgetTester tester) async {
-      final conn = _FakeConnection();
+      final conn = FakeConnection();
       final controller = ConnectionController(connection: conn);
       await tester.pumpWidget(MaterialApp(
         home: ConnectionPage(controller: controller),
@@ -780,7 +731,7 @@ void main() {
     });
 
     testWidgets('右上角模式选择弹层:方式条目 + 当前打勾;选中仅切换不连接', (tester) async {
-      final conn = _FakeConnection();
+      final conn = FakeConnection();
       final controller = ConnectionController(connection: conn);
       await tester.pumpWidget(
           MaterialApp(home: ConnectionPage(controller: controller)));
@@ -805,12 +756,56 @@ void main() {
       expect(find.text('当前方式:AP 模式'), findsNothing, reason: '「当前方式」字样整删');
     });
 
+    testWidgets('AP 凭据卡(EN):标签列自适应,Password 不折行不省略;'
+        '整卡两行共用一宽列对齐', (tester) async {
+      // EN + 测试字体(Ahem 宽度夸张)下 AP 视图在默认 600 高视口本就
+      // 垂直溢出(与标签列无关的既有形态,真机字体紧凑不触)—— 加高
+      // 视口让页面放得下,聚焦标签列本身。
+      tester.view
+        ..physicalSize = const Size(800, 2400)
+        ..devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      final controller = ConnectionController(connection: FakeConnection());
+      await tester.pumpWidget(L10nScope(
+        code: 'en',
+        child: MaterialApp(home: ConnectionPage(controller: controller)),
+      ));
+      await tester.pumpAndSettle();
+      controller.selectMethod(ConnectionMethod.ap);
+      controller.cameraApCredentials = const WifiCredentials(
+          ssid: 'Zf_80114411',
+          password: 'wpa2pass99',
+          security: 0x02,
+          keySource: kWifiKeyFixed);
+      await tester.pumpAndSettle();
+
+      // EN 长词根治(旧 44 钉宽下 Password 折行):标签列按最长标签
+      // 实测放行 —— 渲染宽 ≥ 自然宽即单行全显(不折行也不省略)。
+      expect(tester.takeException(), isNull);
+      final element = tester.element(find.text('Password'));
+      final natural = TextPainter(
+        text: TextSpan(
+            text: 'Password', style: DefaultTextStyle.of(element).style),
+        textScaler: MediaQuery.textScalerOf(element),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      final naturalWidth = natural.width;
+      natural.dispose();
+      expect(tester.getSize(find.text('Password')).width,
+          greaterThanOrEqualTo(naturalWidth),
+          reason: '标签列 ≥ 标签自然宽 → 单行全显');
+      expect(tester.getSize(find.text('SSID')).width,
+          tester.getSize(find.text('Password')).width,
+          reason: '卡内 SSID/密码两行标签列同宽(整卡列对齐)');
+      expect(find.text('wpa2pass99'), findsOneWidget);
+    });
+
     testWidgets('STA 视图:进页自动扫描(静默),两段列表点行连接', (tester) async {
       tester.view
         ..physicalSize = const Size(800, 2400)
         ..devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
-      final conn = _FakeConnection();
+      final conn = FakeConnection();
       final scanner = _FakeScanner();
       final controller =
           ConnectionController(connection: conn, scanner: scanner);
@@ -850,7 +845,7 @@ void main() {
         ..physicalSize = const Size(800, 2400)
         ..devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
-      final conn = _FakeConnection();
+      final conn = FakeConnection();
       final store = InMemoryPairedCamerasStore();
       await store.save(const CameraInfo(
           id: '012345678901', name: 'Z_f_8014411', lastIp: '192.168.1.4'));
@@ -886,7 +881,7 @@ void main() {
         ..physicalSize = const Size(800, 2400)
         ..devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
-      final conn = _FakeConnection();
+      final conn = FakeConnection();
       final store = InMemoryPairedCamerasStore();
       await store.save(CameraInfo(
           id: '012345678901',
@@ -928,7 +923,7 @@ void main() {
     });
 
     testWidgets('connecting 态:点图标取消连接;方式选择禁用', (tester) async {
-      final conn = _FakeConnection();
+      final conn = FakeConnection();
       final controller = ConnectionController(connection: conn);
       await tester.pumpWidget(
           MaterialApp(home: ConnectionPage(controller: controller)));
@@ -956,8 +951,8 @@ void main() {
     testWidgets(
         'reconnecting 态:状态行「正在重连…」+ 错误位动态文案 + '
         '点图标取消', (tester) async {
-      final conn = _FakeConnection()
-        ..err = '相机被占用(可能被 SnapBridge/尼享连接),每 5 秒慢速重试,可点「取消」';
+      final conn = FakeConnection()
+        ..error = (key: '相机被占用(可能被 SnapBridge/尼享连接),每 5 秒慢速重试,可点「取消」', args: null);
       final controller = ConnectionController(connection: conn);
       await tester.pumpWidget(
           MaterialApp(home: ConnectionPage(controller: controller)));
@@ -992,7 +987,7 @@ void main() {
     });
 
     testWidgets('无感配对:进 pairing 态自动确认,全程不弹窗', (tester) async {
-      final conn = _FakeConnection()..code = '5077';
+      final conn = FakeConnection()..pairingCode = '5077';
       final controller = ConnectionController(connection: conn);
       await tester.pumpWidget(
           MaterialApp(home: ConnectionPage(controller: controller)));
@@ -1011,7 +1006,7 @@ void main() {
     });
 
     testWidgets('无感配对:等待期间断链 → 状态收口,无弹窗可滞留', (tester) async {
-      final conn = _FakeConnection()..code = '5077';
+      final conn = FakeConnection()..pairingCode = '5077';
       final controller = ConnectionController(connection: conn);
       await tester.pumpWidget(
           MaterialApp(home: ConnectionPage(controller: controller)));
@@ -1025,7 +1020,7 @@ void main() {
     });
 
     testWidgets('配对后等待机身确认:专属状态卡/提示 + 可取消;耗尽转失败撤下', (tester) async {
-      final conn = _FakeConnection()..code = '5077';
+      final conn = FakeConnection()..pairingCode = '5077';
       final controller = ConnectionController(connection: conn);
       await tester.pumpWidget(
           MaterialApp(home: ConnectionPage(controller: controller)));
@@ -1063,7 +1058,7 @@ void main() {
         ..physicalSize = const Size(800, 2400)
         ..devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
-      final conn = _FakeConnection();
+      final conn = FakeConnection();
       final store = InMemoryPairedCamerasStore();
       await store.save(const CameraInfo(
           id: '012345678901',
@@ -1099,7 +1094,7 @@ void main() {
         ..physicalSize = const Size(800, 2400)
         ..devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
-      final conn = _FakeConnection()..deviceName = 'NIKON ZF';
+      final conn = FakeConnection()..deviceName = 'NIKON ZF';
       final transport = _ScriptTransport();
       final session = PtpSession(transport: transport);
       // refresh() 脚本:GetDeviceInfo + 电池/焦距/光圈(全在册)。
@@ -1220,6 +1215,68 @@ void main() {
       await tester.pumpAndSettle();
       expect(conn.disconnectCalls, 1);
     });
+
+    testWidgets('拍摄模式跟随走 0x4006 事件通道(页内无轮询,节拍内零事务)',
+        (WidgetTester tester) async {
+      // 2026-10-22 撤页内 2s 单读 0xD1A6 轮询:AppServices 级事件轮询器
+      // (GetEventEx 0x941C)把 0x4006(0xD1A6)并入 session.events →
+      // RemoteController 定向重读 → notifyListeners → 页面 merge 监听
+      // (_connectedView)重建。emitPolledEvents 即轮询器的注入口,注入
+      // 一枚事件验证全链;再推进假时钟越过旧 2s 节拍两拍,确认 0xD1A6
+      // 读事务只有事件触发的这一笔(页内不再自读)。
+      tester.view
+        ..physicalSize = const Size(800, 2400)
+        ..devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      final conn = FakeConnection();
+      final controller = ConnectionController(connection: conn);
+      // overview 不接 conn:已连接视图渲染用(读数占位),免整链脚本。
+      final overview = CameraOverviewController(
+          session: PtpSession(transport: _ScriptTransport()),
+          connection: FakeConnection());
+      // remote 同款不接 connection:无连接沿初读链,模式只随事件走
+      // (连接沿初读归 _onConnectedChain,remote 系测试覆盖)。
+      final remoteTransport = _ScriptTransport();
+      final remoteSession = PtpSession(transport: remoteTransport);
+      final remote = RemoteController(
+          session: remoteSession,
+          engine: LiveViewEngine(session: remoteSession, delay: _parkedDelay),
+          delay: _parkedDelay,
+          aeDelay: _parkedDelay);
+      addTearDown(remote.dispose);
+      await tester.pumpWidget(MaterialApp(
+        home: ConnectionPage(
+            controller: controller,
+            overview: overview,
+            remoteController: remote),
+      ));
+
+      conn.statesCtrl.add(CameraLinkState.connected);
+      await tester.pumpAndSettle();
+      expect(remote.cameraMode, isNull, reason: '未发事件前模式未知');
+
+      // 拨杆拨到视频档:0x4006(0xD1A6)→ 定向重读(u8=1 视频)→ 跟随。
+      remoteTransport.reply(PtpResult(
+          responseCode: PtpResponseCode.ok,
+          data: Uint8List.fromList([1])));
+      remoteSession.emitPolledEvents(const [
+        PtpEvent(
+            code: PtpEventCode.devicePropChanged,
+            transactionId: 0xFFFFFFFF,
+            params: [PtpDevicePropCode.liveViewSelector]),
+      ]);
+      await tester.pumpAndSettle();
+      expect(remote.cameraMode, CaptureMode.video);
+
+      // 页内零轮询:推进 5s(旧 2s 节拍已越两拍),0xD1A6 读事务仅此一笔
+      //(轮询若在,脚本早已耗尽抛 StateError,读数也翻倍)。
+      await tester.pump(const Duration(seconds: 5));
+      expect(
+          remoteTransport.requests.where((r) =>
+              r.opcode == PtpOperationCode.getDevicePropValue &&
+              r.params.first == PtpDevicePropCode.liveViewSelector),
+          hasLength(1));
+    });
   });
 
   group('ConnectionPage 蓝牙工具通道:', () {
@@ -1244,7 +1301,7 @@ void main() {
           _FakeSettingsStore settingsStore,
           ConnectionController controller,
         })> readyFixture({
-      _FakeConnection? connection,
+      FakeConnection? connection,
       _FakeWifiJoiner? joiner,
     }) async {
       final host = FakeBleHost();
@@ -1309,7 +1366,7 @@ void main() {
     }
 
     testWidgets('未装配 BLE:方式弹层无蓝牙条目,默认有线主视图照常', (tester) async {
-      final conn = _FakeConnection();
+      final conn = FakeConnection();
       await tester.pumpWidget(MaterialApp(
           home: ConnectionPage(
               controller: ConnectionController(connection: conn))));
@@ -1862,7 +1919,7 @@ void main() {
 
     testWidgets('唤醒沿 joiner ok:自动加入热点 + 发射 AP 连接(连接层收到 connect)',
         (tester) async {
-      final conn = _FakeConnection();
+      final conn = FakeConnection();
       final joiner = _FakeWifiJoiner();
       final f = (await tester
           .runAsync(() => readyFixture(connection: conn, joiner: joiner)))!;
@@ -1887,7 +1944,7 @@ void main() {
     });
 
     testWidgets('唤醒沿 joiner fail:不发射连接,终态含手动指引与原因', (tester) async {
-      final conn = _FakeConnection();
+      final conn = FakeConnection();
       final joiner = _FakeWifiJoiner(ok: false, reason: 'unavailable');
       final f = (await tester
           .runAsync(() => readyFixture(connection: conn, joiner: joiner)))!;

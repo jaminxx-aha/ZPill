@@ -114,7 +114,10 @@ void main() {
     service = AutoTransferService(
       session: session,
       engine: engine,
-      settings: store,
+      policyFor: () async {
+        final config = await store.current();
+        return (enabled: config.autoTransfer, format: config.autoTransferFormat);
+      },
       onSkip: skipped.add,
     );
     await store.update(const AppSettings().copyWith(autoTransfer: true));

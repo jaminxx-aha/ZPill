@@ -1,22 +1,20 @@
-/// 本地评分仓库:`<dataDir>/ratings.json`,
-/// 「照片身份键 → 1-5 星」。相机侧评级(MTP Rating 属性)是 Zf 死路
-/// (MTP 专有,Zf 拒答),评分只存本地、不回写相机。
+/// 本地文件级评分快照:`<dataDir>/ratings.json`,`文件名|字节 → 1-5 星`。
 ///
-/// 身份键见 [groupKeyOf]:基名 + 组总字节 —— 双格式组在渐进配对前后
-/// (代表文件 JPG↔NEF 切换)与重连后句柄变化下都稳定。
+/// 评级真源 = 相机(MTP 0xDC8A Rating,官方 §6.6.3.3 Get/Set —— 旧注
+/// 「Zf 拒答」系误断,规格书明文支持,未见真发反证):相机相册的打星
+/// 走 0x9804/0x9803 直写相机,不经本仓。本仓只管**应用内文件**(图库)
+/// 的评级快照 —— 下载落盘沿按所在组评级写入([fileRatingKey]),相册
+/// 改评沿按基名传播,图库的评级徽标与筛选读这里。
+///
+/// 键含字节长:重拍同名(换卡重编号)文件不串评;旧版组键
+///(`基名|组总字节`)遗留条目因文件必带扩展名而天然不命中,无需迁移。
 library;
 
 import 'dart:convert';
 import 'dart:io';
 
-import '../core/browser/photo_group.dart';
-
-/// 相册条目的评分身份键:`基名|组总字节`。
-///
-/// 句柄跨会话不稳定、代表文件会随配对切换,基名 + 字节数才是跨启动
-/// 稳定的组合;同基名不同体积(换卡重拍)不会串评。
-String photoGroupKey(PhotoGroup group) =>
-    '${baseNameOf(group.primary.name)}|${group.totalBytes}';
+/// 图库文件条目的评分身份键:`文件名|字节数`。
+String fileRatingKey(String name, int bytes) => '$name|$bytes';
 
 abstract interface class RatingsStore {
   /// 键 → 星(1-5);0/未评分不入表。

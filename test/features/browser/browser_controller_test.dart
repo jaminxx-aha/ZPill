@@ -9,7 +9,7 @@ import 'package:nikon_pill/core/browser/object_repository.dart';
 import 'package:nikon_pill/core/camera/camera_connection.dart';
 import 'package:nikon_pill/core/ptpip/object_format.dart';
 import 'package:nikon_pill/features/browser/browser_controller.dart';
-import 'package:nikon_pill/l10n/message.dart';
+import '../../helpers/fake_connection.dart';
 
 /// 手动驱动的伪仓库:块事件由测试逐个发,loadAlbums 挂在 Completer 上
 /// 由测试择机完成(模拟渐进枚举的时序)。updates 用 sync 广播(与真实现
@@ -49,45 +49,42 @@ final class _FakeRepo implements ObjectRepository {
 
   @override
   void removeHandles(Iterable<int> handles) {}
+
+  // ── 评级面(控制器只透传仓库发布,测试不消费,空实现)──
+  @override
+  bool get ratingsLoaded => false;
+
+  @override
+  void requestRating(int handle) {}
+
+  @override
+  int ratingForHandle(int handle) => 0;
+
+  @override
+  int ratingForGroup(PhotoGroup group) => 0;
+
+  @override
+  bool ratedUnknownFor(int handle) => false;
+
+  @override
+  bool groupRatedUnknown(PhotoGroup group) => false;
+
+  @override
+  bool trashMarkedFor(int handle) => false;
+
+  @override
+  bool groupTrashStar(PhotoGroup group) => false;
+
+  @override
+  PhotoGroup? groupOf(int handle) => null;
+
+  @override
+  Future<void> rateGroup(PhotoGroup group, int stars) async =>
+      throw UnimplementedError();
 }
 
 /// 伪连接:只驱动 states 流(控制器只订阅它)。
-final class _FakeConnection implements CameraConnection {
-  final statesCtrl = StreamController<CameraLinkState>.broadcast();
 
-  @override
-  Stream<CameraLinkState> get states => statesCtrl.stream;
-
-  @override
-  CameraLinkState get state => CameraLinkState.disconnected;
-
-  @override
-  L10nMessage? get error => null;
-
-  @override
-  String? get deviceName => null;
-
-  @override
-  String? get deviceModel => null;
-
-  @override
-  bool get isWireless => false;
-
-  @override
-  String? get pairingCode => null;
-
-  @override
-  Future<void> connect({String? ip, String? instanceName}) async {}
-
-  @override
-  Future<void> confirmPairing() async {}
-
-  @override
-  Future<void> cancelPairing() async {}
-
-  @override
-  Future<void> disconnect() async {}
-}
 
 ObjectEntry _entry(int handle) => ObjectEntry(
       handle: handle,
@@ -177,7 +174,7 @@ void main() {
 
   test('断连竞态:迟到的块被丢弃,断连引发的在途异常不上屏', () async {
     final repo = _FakeRepo();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = BrowserController(repository: repo, connection: conn);
 
     final loading = controller.load();
@@ -211,7 +208,7 @@ void main() {
   test('连接沿不自动枚举:connected 只翻门闩,枚举随页面 load() 触发',
       () async {
     final repo = _FakeRepo();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = BrowserController(repository: repo, connection: conn);
 
     conn.statesCtrl.add(CameraLinkState.connected);
@@ -231,7 +228,7 @@ void main() {
 
   test('断连沿 load 静默不上屏,重连后页面 load 恢复新枚举', () async {
     final repo = _FakeRepo();
-    final conn = _FakeConnection();
+    final conn = FakeConnection();
     final controller = BrowserController(repository: repo, connection: conn);
 
     conn.statesCtrl.add(CameraLinkState.disconnected);

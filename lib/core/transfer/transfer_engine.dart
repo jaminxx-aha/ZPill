@@ -20,7 +20,6 @@ import '../media/motion_photo.dart' show splitMotionPhoto;
 import '../media/watermark.dart';
 import '../media/xmp_metadata.dart';
 import '../ptpip/object_format.dart' show ObjectKind;
-import '../../data/settings_store.dart' show WatermarkStyle;
 import '../../platform/gallery_saver.dart';
 import 'object_downloader.dart';
 import 'transfer_task.dart';
@@ -77,6 +76,7 @@ final class TransferEngineImpl implements TransferEngine {
     this.metadataFor,
     this.watermarkFor,
     this.watermarkRaster,
+    this.onAppFileSaved,
     Duration Function(int retry)? backoffFor,
   }) : _backoffFor = backoffFor ?? _defaultBackoff;
 
@@ -91,6 +91,10 @@ final class TransferEngineImpl implements TransferEngine {
   /// 水印提供器:JPG 下载落盘后、XMP 注入前合成水印
   ///(重编码会丢段,顺序不能反);null 或返回 null = 不合成。
   final Future<WatermarkOptions?> Function(ObjectEntry entry)? watermarkFor;
+
+  /// app 目的地单文件落盘收尾回调(评级快照等扩展点;mtime 回写后、
+  /// 任务置 completed 前调用);null = 无。异常吞掉不影响传输结果。
+  final Future<void> Function(ObjectEntry entry, String path)? onAppFileSaved;
 
   /// 水印文本光栅注入(测试用色块假实现);null = 生产 dart:ui 渲染。
   final TextRaster? watermarkRaster;
@@ -216,6 +220,13 @@ final class TransferEngineImpl implements TransferEngine {
         }
       } on Exception {
         // 部分文件系统拒绝改 mtime:排序/聚合回落落盘时刻,不挡传输
+      }
+      if (job.task.destination == TransferDestination.app) {
+        try {
+          await onAppFileSaved?.call(_entryOf(job), dl.path);
+        } on Exception {
+          // 收尾扩展点失败(评级快照等)不挡传输
+        }
       }
       job.task =
           job.task.copyWith(state: TransferState.completed, receivedBytes: dl.bytes);

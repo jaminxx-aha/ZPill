@@ -29,6 +29,17 @@ void main() {
       expect(frames[0].body, [0x02, 0x00, 0x00, 0x00, 0x41, 0x42]);
     });
 
+    test('整帧随块到:body 是来块的视图(零拷贝路径)', () {
+      final s = PtpIpFrameSplitter();
+      final input = Uint8List.fromList(_endDataFrame);
+      final frames = s.feed(input);
+      expect(frames, hasLength(1));
+      // 共享缓冲断言:原地改来块,视图同步可见(若实现退回整帧拷贝即翻;
+      // buffer getter 每次访问返回新包装,identical 断言不可用)。
+      input[8] = 0x7E;
+      expect(frames[0].body[0], 0x7E);
+    });
+
     test('半包:先 4B 头、再 4B 头、再体分两截', () {
       final s = PtpIpFrameSplitter();
       final f = _endDataFrame;

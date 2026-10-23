@@ -36,6 +36,13 @@ final class TransfersController extends ChangeNotifier {
   List<TransferTask> tasks = const [];
   List<File> appFiles = const [];
 
+  /// 首次「应用内文件」扫描是否已回(含失败落空):false 期间图库页显
+  /// 扫描态,与「真空库」区分(异步化后存在真实的扫描窗)。
+  bool appFilesScanned = false;
+
+  /// 刷新纪元:并发在途的旧结果不覆盖新结果(见 [refreshAppFiles])。
+  int _refreshEpoch = 0;
+
   final Map<String, SpeedEstimator> _speeds = {};
   final Map<String, double?> _lastSpeed = {};
   final Set<String> _seenAppDone = {};
@@ -59,15 +66,27 @@ final class TransfersController extends ChangeNotifier {
 
   /// 「应用内文件」列表(downloadsDir);平台通道不可用时静默留空
   /// (非 ohos 平台/测试环境)。
+  ///
+  /// 列目录走 `d.list()` 异步(旧 `listSync()` 在首帧装配期同步扫盘:
+  /// HomeShell PageView 预建图库 tab,首帧就被目录枚举占住)。异步化
+  /// 带来乱序完成窗口(删除沿刷新 vs 任务完成沿刷新可能并发在途):
+  /// 单调纪元闸兜底,旧结果晚到即弃,不覆盖新结果;调用方
+  /// (initState/fire-and-forget)无需新增守卫,notify 收口在此。
   Future<void> refreshAppFiles() async {
+    final epoch = ++_refreshEpoch;
     try {
       final dir = await gallery.downloadsDir();
       final d = Directory(dir);
-      appFiles = d.existsSync()
-          ? d.listSync().whereType<File>().toList(growable: false)
+      final files = await d.exists()
+          ? await d.list().where((e) => e is File).cast<File>().toList()
           : const <File>[];
+      if (epoch != _refreshEpoch) return; // 更新的刷新已接管:旧结果弃
+      appFiles = files;
+      appFilesScanned = true;
     } on Exception {
+      if (epoch != _refreshEpoch) return;
       appFiles = const [];
+      appFilesScanned = true;
     }
     notifyListeners();
   }

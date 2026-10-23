@@ -139,11 +139,23 @@ final class _Pending {
   /// StartData 声明的总字节数;null = 纯响应事务(无数据相)。
   int? declaredLength;
   int receivedLength = 0;
+
+  /// 非流式预分配缓冲(按 [declaredLength] 一次到位,分块直接入槽)。
+  /// null = 未启用(声明未到/已回落聚合)。大文件走流式不在此列,
+  /// 非流式事务只有取景帧/属性值/对象信息这类小数据,预分配有界。
+  Uint8List? _buffer;
+  int _filled = 0;
+
+  /// 回落聚合(声明缺失或实收将超声明的病态流 —— 对账必断链)。
   final _chunks = <Uint8List>[];
 
   bool get isStreaming => onData != null;
 
-  /// 数据相分块(流式回调透传 / 非流式暂存,大文件不整体驻留内存)。
+  /// 数据相分块(流式回调透传 / 非流式预分配入槽)。
+  ///
+  /// 非流式按 StartData 声明预分配单缓冲、分块直接入槽 —— 原
+  /// 「暂存 + takeData 聚合」每帧多一遍整帧拷贝(取景 20fps 下每秒
+  /// 数十 MB 喂 GC);收满由响应沿对账保证(声明≠实收即断链)。
   ///
   /// 排水期([cancelRequested])只记账:既不回调也不暂存 —— 调用方已按
   /// 取消收场,字节吸掉即丢。
@@ -151,15 +163,42 @@ final class _Pending {
     receivedLength += chunk.length;
     if (cancelRequested) return;
     final sink = onData;
-    if (sink == null) {
-      _chunks.add(chunk);
-    } else {
+    if (sink != null) {
       sink(chunk); // 回调抛异常(盘满等)由 dispatcher 兜住 → 毒化
+      return;
     }
+    final buffer = _buffer;
+    if (buffer != null) {
+      if (_filled + chunk.length <= buffer.length) {
+        buffer.setAll(_filled, chunk);
+        _filled += chunk.length;
+      } else {
+        // 实收将超声明:回落聚合保完整(不因 setAll 越界提前炸)。
+        _chunks
+          ..add(Uint8List.sublistView(buffer, 0, _filled))
+          ..add(chunk);
+        _buffer = null;
+      }
+      return;
+    }
+    final declared = declaredLength;
+    if (declared != null &&
+        _chunks.isEmpty &&
+        chunk.length <= declared) {
+      // 首块即预分配(StartData 先于数据块,声明必已到)。
+      final out = Uint8List(declared);
+      out.setAll(0, chunk);
+      _buffer = out;
+      _filled = chunk.length;
+      return;
+    }
+    _chunks.add(chunk); // 声明未到/为空/首块即超声明:原路聚合
   }
 
   /// 非流式事务聚合出的数据相(流式返回 null,data 已随回调交出)。
   Uint8List takeData() {
+    final buffer = _buffer;
+    if (buffer != null) return buffer; // 预分配直返,零聚合
     final out = Uint8List(receivedLength);
     var off = 0;
     for (final c in _chunks) {

@@ -13,6 +13,8 @@ import 'package:nikon_pill/core/ptpip/object_format.dart';
 import 'package:nikon_pill/core/transfer/transfer_engine.dart';
 import 'package:nikon_pill/core/transfer/transfer_task.dart';
 import 'package:nikon_pill/core/utils/byte_writer.dart';
+import 'package:nikon_pill/data/ratings_store.dart';
+import 'package:nikon_pill/features/library/library_ratings.dart';
 import 'package:nikon_pill/features/library/local_library_page.dart';
 import 'package:nikon_pill/features/transfers/transfers_page.dart';
 import 'package:nikon_pill/platform/gallery_saver.dart';
@@ -295,17 +297,31 @@ void main() {
     // AppServices 惰性装配(查看器 DeSqueezedImage 首触)会起 BLE 身份
     // 装载、传输页真单例会列下载目录,都走本通道:三个目录方法给个
     // 无害默认(临时目录),通道错误不落进任何用例的 runAsync 排水窗。
+    Future<Object?> galleryHandler(MethodCall call) async => switch (call.method) {
+          'dataDir' || 'previewsDir' || 'downloadsDir' => dir.path,
+          _ => null,
+        };
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(MethodChannelGallerySaver.channel,
-            (call) async => switch (call.method) {
-                  'dataDir' || 'previewsDir' || 'downloadsDir' => dir.path,
-                  _ => null,
-                });
+        .setMockMethodCallHandler(
+            MethodChannelGallerySaver.channel, galleryHandler);
+    // 同因:AppServices 装配即 ConnectionController 起两个事件流
+    // (BLE/NSD 扫描),listen 回 null 是 MissingPluginException ——
+    // 异步错在哪个用例的排水窗上浮看运气(单跑/全跑不同),mock 成
+    // 空应答(事件流本就不该在图库用例里发事件)钉死顺序无关。
+    for (final name in const ['nikonpill/ble/events', 'nikonpill/nsd/events']) {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(MethodChannel(name),
+              (call) async => call.method == 'listen' ? '' : null);
+    }
   });
 
   tearDown(() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(MethodChannelGallerySaver.channel, null);
+    for (final name in const ['nikonpill/ble/events', 'nikonpill/nsd/events']) {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(MethodChannel(name), null);
+    }
     if (dir.existsSync()) {
       dir.deleteSync(recursive: true);
     }
@@ -324,7 +340,8 @@ void main() {
           {RawDecoder? rawDecoder,
           VideoPlayer? videoPlayer,
           EmbeddedVideoViewBuilder? embeddedView,
-          VideoLutExportHost? videoLut}) =>
+          VideoLutExportHost? videoLut,
+          LibraryRatings? ratings}) =>
       MaterialApp(
           home: LocalLibraryPage(
         controller: controller,
@@ -333,6 +350,7 @@ void main() {
         videoPlayer: videoPlayer ?? _FakeVideoPlayer(),
         embeddedVideoView: embeddedView,
         videoLutExport: videoLut,
+        ratings: ratings,
       ));
 
   /// 内嵌播放人设:embedded 播放器 + 假视图(onCreated 回固定 viewId 7)。
@@ -345,15 +363,85 @@ void main() {
               _StubVideoView(onCreated: onCreated),
           videoLut: videoLut);
 
+  /// refreshAppFiles 异步列目录(2026-10-22 改制)后的首屏排水:目录
+  /// 枚举是 dart:io 真异步,FakeAsync 域里完成回调只在 runAsync 出窗
+  /// 上浮(每窗约一个,工程既证规律 —— 删除用例同款),逐窗排水到首扫
+  /// 收口且文件列表达预期数(上限兜底防死循环)。期间页面在扫描转圈
+  /// (动画帧不停),循环内 pump() 单帧推进即可,收口后才 pumpAndSettle
+  /// (旧版 pumpWidget 后直接 pumpAndSettle 依赖的是同步列目录时序)。
+  Future<void> drainAppFiles(WidgetTester tester, TransfersController c,
+      [int? expectCount]) async {
+    for (var i = 0;
+        i < 20 &&
+            (!c.appFilesScanned ||
+                (expectCount != null && c.appFiles.length != expectCount));
+        i++) {
+      await tester
+          .runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+      await tester.pump();
+    }
+    expect(c.appFilesScanned, isTrue, reason: '首扫收口(排水窗内目录枚举完成)');
+    if (expectCount != null) {
+      expect(c.appFiles.length, expectCount, reason: '文件列表就位');
+    }
+    await tester.pumpAndSettle();
+  }
+
   testWidgets('空态:应用内还没有文件', (tester) async {
     final gallery = _FakeGallery(dir);
     final controller =
         TransfersController(engine: _FakeEngine(), gallery: gallery);
     await tester.pumpWidget(host(gallery, controller));
-    await tester.pumpAndSettle();
+    await drainAppFiles(tester, controller);
 
     expect(find.text('图库'), findsOneWidget); // AppBar
     expect(find.text('应用内还没有文件\n(在相机相册里选择「下载到应用」)'), findsOneWidget);
+  });
+
+  // ── 首扫扫描态/筛后空态(2026-10-22:refreshAppFiles 异步化 + 状态分流)──
+
+  testWidgets('首扫扫描态:未收口转圈,收口后落空态(与真空库可分)', (tester) async {
+    final gallery = _FakeGallery(dir);
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    await tester.pumpWidget(host(gallery, controller));
+    // 目录枚举是真 dart:IO:未开窗前扫描未回 —— 扫描态在场,空态文案
+    // 不出现(旧版 files.isEmpty 直接落空态,扫描中/真空库不可分)。
+    await tester.pump();
+    expect(controller.appFilesScanned, isFalse);
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    expect(find.text('正在扫描文件…'), findsOneWidget);
+    expect(find.text('应用内还没有文件\n(在相机相册里选择「下载到应用」)'),
+        findsNothing);
+
+    await drainAppFiles(tester, controller);
+    expect(controller.appFilesScanned, isTrue);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+    expect(find.text('应用内还没有文件\n(在相机相册里选择「下载到应用」)'),
+        findsOneWidget);
+    // 真空库(未筛过)不出「清除筛选」:那是筛后空的专属动作。
+    expect(find.text('清除筛选'), findsNothing);
+  });
+
+  testWidgets('筛后空态:带「清除筛选」动作,点按回全部恢复网格', (tester) async {
+    writeFile('a.jpg', modified: DateTime(2026, 10, 1));
+    final gallery = _FakeGallery(dir);
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    await tester.pumpWidget(host(gallery, controller));
+    await drainAppFiles(tester, controller, 1);
+
+    await pickFilter(tester, '视频');
+    // 筛后空:文案 + 「清除筛选」动作(EmptyState 动作位),不再是裸 Text。
+    expect(find.text('没有视频格式的文件'), findsOneWidget);
+    final clear = find.widgetWithText(FilledButton, '清除筛选');
+    expect(clear, findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+
+    await tester.tap(clear);
+    await tester.pumpAndSettle();
+    expect(find.byType(Image), findsOneWidget); // 回「全部」:网格恢复
+    expect(find.text('清除筛选'), findsNothing);
   });
 
   testWidgets('网格:修改时间倒序;可解码图片铺格,NEF 落图标格', (tester) async {
@@ -365,7 +453,7 @@ void main() {
     final controller =
         TransfersController(engine: _FakeEngine(), gallery: gallery);
     await tester.pumpWidget(host(gallery, controller));
-    await tester.pumpAndSettle();
+    await drainAppFiles(tester, controller);
 
     // 两张可解码图片(Image.file;内容非图走 errorBuilder,组件仍在)
     expect(find.byType(Image), findsNWidgets(2));
@@ -385,7 +473,7 @@ void main() {
     final controller =
         TransfersController(engine: _FakeEngine(), gallery: gallery);
     await tester.pumpWidget(host(gallery, controller));
-    await tester.pumpAndSettle();
+    await drainAppFiles(tester, controller);
 
     // 全部:一张可解码图 + NEF 图标格 + MOV 图标格(摄像机图标)
     expect(find.byType(Image), findsOneWidget);
@@ -413,13 +501,43 @@ void main() {
     expect(find.byIcon(Icons.videocam_outlined), findsOneWidget);
   });
 
+  testWidgets('视频缩略格角标带底色:黑半透明圆角小底,亮帧上可辨',
+      (tester) async {
+    writeFile('c.mov', modified: DateTime(2026, 10, 3));
+    final gallery = _FakeGallery(dir);
+    final player = _FakeVideoPlayer(failThumbs: false); // 抽帧出小档路径
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    await tester.pumpWidget(host(gallery, controller, videoPlayer: player));
+    await drainAppFiles(tester, controller);
+
+    // 抽帧小档就位:缩略铺图格 + 摄像机角标(非图标格的 outlined)。
+    expect(find.byIcon(Icons.videocam), findsOneWidget);
+    expect(find.byIcon(Icons.videocam_outlined), findsNothing);
+
+    // 角标图标最近的 DecoratedBox 祖先 = 底:黑 0.55 圆角矩形(与
+    // 相机相册网格同款视觉语言)。
+    final iconEl = tester.element(find.byIcon(Icons.videocam));
+    late final Element badgeBase;
+    iconEl.visitAncestorElements((e) {
+      if (e.widget is DecoratedBox) {
+        badgeBase = e;
+        return false;
+      }
+      return true;
+    });
+    final deco = (badgeBase.widget as DecoratedBox).decoration as BoxDecoration;
+    expect(deco.color, Colors.black.withValues(alpha: 0.55));
+    expect(deco.borderRadius, BorderRadius.circular(4));
+  });
+
   testWidgets('过滤无匹配:提示该格式暂无,切回全部即恢复', (tester) async {
     writeFile('a.jpg', modified: DateTime(2026, 10, 1));
     final gallery = _FakeGallery(dir);
     final controller =
         TransfersController(engine: _FakeEngine(), gallery: gallery);
     await tester.pumpWidget(host(gallery, controller));
-    await tester.pumpAndSettle();
+    await drainAppFiles(tester, controller);
 
     await pickFilter(tester, '视频');
     expect(find.text('没有视频格式的文件'), findsOneWidget);
@@ -429,13 +547,68 @@ void main() {
     expect(find.byType(Image), findsOneWidget);
   });
 
+  testWidgets('评级:徽标上屏;评级档(快照装载后)收窄网格,筛空走专用文案',
+      (tester) async {
+    // a.jpg ★3(3 字节档,见 writeFile)/ b.jpg 未评。
+    writeFile('a.jpg', modified: DateTime(2026, 10, 1));
+    writeFile('b.jpg', modified: DateTime(2026, 10, 2));
+    final gallery = _FakeGallery(dir);
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    final store = InMemoryRatingsStore();
+    await store.set(fileRatingKey('a.jpg', 3), 3);
+    final ratings = LibraryRatings(store: store);
+    addTearDown(ratings.dispose);
+    await tester.pumpWidget(host(gallery, controller, ratings: ratings));
+    // refreshAppFiles 异步列目录(9a66323 改制):runAsync 排水窗等首扫
+    // 收口(不 await 则与 pumpAndSettle 的假时钟泵赛跑,IO 上浮晚于断言)。
+    await drainAppFiles(tester, controller, 2);
+    await tester.pumpAndSettle();
+
+    // 徽标:a.jpg 左上黄底星标;两格照常。
+    expect(find.byType(Image), findsNWidgets(2));
+    expect(find.text('3'), findsOneWidget);
+
+    // 评级分区在(快照装载且非空;图库无垃圾星/未知档,星档键 = 4-8)。
+    await openFilterMenu(tester);
+    expect(find.text('评级'), findsOneWidget);
+    expect(find.text('无评级'), findsOneWidget);
+    expect(find.text('已评级'), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('ratingFilter-6')));
+    await tester.pumpAndSettle();
+    expect(find.byType(Image), findsOneWidget); // 只剩 a.jpg
+    expect(find.text('3'), findsOneWidget);
+
+    // 无评级:只剩 b.jpg,星标消失。(评级区「全部」与格式区重名,
+    // 评级行一律按键点。)
+    await openFilterMenu(tester);
+    await tester.tap(find.byKey(const ValueKey('ratingFilter-1')));
+    await tester.pumpAndSettle();
+    expect(find.byType(Image), findsOneWidget);
+    expect(find.text('3'), findsNothing);
+
+    // ★4 筛空:专用文案(格式档不背锅)。
+    await openFilterMenu(tester);
+    await tester.tap(find.byKey(const ValueKey('ratingFilter-7')));
+    await tester.pumpAndSettle();
+    expect(find.text('没有该评级的文件'), findsOneWidget);
+    expect(find.byType(Image), findsNothing);
+
+    // 切回全部:两格与星标复原。
+    await openFilterMenu(tester);
+    await tester.tap(find.byKey(const ValueKey('ratingFilter-0')));
+    await tester.pumpAndSettle();
+    expect(find.byType(Image), findsNWidgets(2));
+    expect(find.text('3'), findsOneWidget);
+  });
+
   testWidgets('查看器:导入系统相册(kind 按扩展名)→ 相册服务落账', (tester) async {
     writeFile('b.jpg', modified: DateTime(2026, 10, 2));
     final gallery = _FakeGallery(dir);
     final controller =
         TransfersController(engine: _FakeEngine(), gallery: gallery);
     await tester.pumpWidget(host(gallery, controller));
-    await tester.pumpAndSettle();
+    await drainAppFiles(tester, controller);
 
     await tester.tap(find.byType(Image).first);
     await tester.pumpAndSettle();
@@ -467,7 +640,8 @@ void main() {
     final lut = _FakeVideoLut(outPath);
     await tester.pumpWidget(
         embeddedHost(gallery, controller, player, videoLut: lut));
-    await tester.pumpAndSettle();
+    // 扫描转圈期 pumpAndSettle 挂帧:先排水到首扫收口(其余用例同款)。
+    await drainAppFiles(tester, controller);
 
     await tester.tap(find.byKey(const ValueKey('c.mov')));
     await tester.pumpAndSettle();
@@ -504,7 +678,7 @@ void main() {
     final controller =
         TransfersController(engine: _FakeEngine(), gallery: gallery);
     await tester.pumpWidget(host(gallery, controller));
-    await tester.pumpAndSettle();
+    await drainAppFiles(tester, controller);
 
     // JPG 页(修改时间倒序,exif.jpg 最新在前)
     await tester.tap(find.byType(Image).first);
@@ -548,7 +722,7 @@ void main() {
     final controller =
         TransfersController(engine: _FakeEngine(), gallery: gallery);
     await tester.pumpWidget(host(gallery, controller));
-    await tester.pumpAndSettle();
+    await drainAppFiles(tester, controller);
     expect(find.byType(Image), findsNWidgets(2));
 
     await tester.longPress(find.byType(Image).first); // b.jpg(最新在前)
@@ -566,11 +740,11 @@ void main() {
 
     expect(File('${dir.path}/b.jpg').existsSync(), isFalse);
     expect(File('${dir.path}/a.jpg').existsSync(), isTrue); // 相邻不受牵连
-    // file.delete() 是真异步 I/O:FakeAsync 域里完成回调不上浮(文件已
-    // 删但 refreshAppFiles 不会跑),runAsync 放行真实事件循环后网格才收。
-    await tester
-        .runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
-    await tester.pumpAndSettle();
+    // 删除与 refreshAppFiles 的目录枚举都是真异步 I/O:FakeAsync 域里
+    // 完成回调不上浮(文件已删但 Dart 侧刷新链没跑),开窗排水到网格
+    // 收缩(旧版单窗够 —— 刷新链里只有同步列目录;异步化后 exists+list
+    // 各占窗,须逐窗排水)。
+    await drainAppFiles(tester, controller, 1);
     expect(find.byType(Image), findsOneWidget);
     expect(find.text('图库'), findsOneWidget); // 删后退出多选,标题复原
 
@@ -589,7 +763,7 @@ void main() {
     final controller =
         TransfersController(engine: _FakeEngine(), gallery: gallery);
     await tester.pumpWidget(host(gallery, controller));
-    await tester.pumpAndSettle();
+    await drainAppFiles(tester, controller);
 
     await openFilterMenu(tester);
     // 排序分区头在场;排序 = 单行「时间+方向箭头」(默认 ↓ 新→旧)
@@ -631,7 +805,7 @@ void main() {
     final controller =
         TransfersController(engine: _FakeEngine(), gallery: gallery);
     await tester.pumpWidget(host(gallery, controller));
-    await tester.pumpAndSettle();
+    await drainAppFiles(tester, controller);
 
     await tester.longPress(find.byType(Image).first); // b(最新在前)预选
     await tester.pumpAndSettle();
@@ -667,7 +841,7 @@ void main() {
     final controller =
         TransfersController(engine: _FakeEngine(), gallery: gallery);
     await tester.pumpWidget(host(gallery, controller));
-    await tester.pumpAndSettle();
+    await drainAppFiles(tester, controller);
 
     await tester.longPress(find.byType(Image).first); // b(最新在前)预选
     await tester.pumpAndSettle();
@@ -693,7 +867,7 @@ void main() {
     final controller =
         TransfersController(engine: _FakeEngine(), gallery: gallery);
     await tester.pumpWidget(host(gallery, controller));
-    await tester.pumpAndSettle();
+    await drainAppFiles(tester, controller);
 
     await tester.longPress(find.byType(Image).first);
     await tester.pumpAndSettle();
@@ -718,7 +892,7 @@ void main() {
     final controller =
         TransfersController(engine: _FakeEngine(), gallery: gallery);
     await tester.pumpWidget(host(gallery, controller));
-    await tester.pumpAndSettle();
+    await drainAppFiles(tester, controller);
 
     await tester.longPress(find.byType(Image).first); // v.mov(最新在前)预选
     await tester.pumpAndSettle();
@@ -753,7 +927,7 @@ void main() {
     final controller =
         TransfersController(engine: _FakeEngine(), gallery: gallery);
     await tester.pumpWidget(host(gallery, controller));
-    await tester.pumpAndSettle();
+    await drainAppFiles(tester, controller);
 
     await tester.longPress(find.byType(Image).first);
     await tester.pumpAndSettle();
@@ -774,7 +948,7 @@ void main() {
     final engine = _FakeEngine();
     final controller = TransfersController(engine: engine, gallery: gallery);
     await tester.pumpWidget(host(gallery, controller));
-    await tester.pumpAndSettle();
+    await drainAppFiles(tester, controller);
     expect(find.text('1'), findsNothing); // 无任务无角标
 
     engine.tasksCtrl.add([
@@ -806,7 +980,7 @@ void main() {
     final controller =
         TransfersController(engine: _FakeEngine(), gallery: gallery);
     await tester.pumpWidget(host(gallery, controller, rawDecoder: decoder));
-    await tester.pumpAndSettle();
+    await drainAppFiles(tester, controller);
 
     // 网格缩略:512px 解码一次(会话内合并),落盘 thumbsDir
     // (内容键 + lib_ 前缀,不与相机侧缩略键串台)。
@@ -831,7 +1005,7 @@ void main() {
         TransfersController(engine: _FakeEngine(), gallery: gallery);
     // host 缺省注入 failing 解码器。
     await tester.pumpWidget(host(gallery, controller));
-    await tester.pumpAndSettle();
+    await drainAppFiles(tester, controller);
 
     expect(find.text('NEF'), findsOneWidget); // 图标格
     expect(find.byType(Image), findsNothing);
@@ -851,7 +1025,7 @@ void main() {
     final controller =
         TransfersController(engine: _FakeEngine(), gallery: gallery);
     await tester.pumpWidget(embeddedHost(gallery, controller, player));
-    await tester.pumpAndSettle();
+    await drainAppFiles(tester, controller);
 
     await tester.tap(find.byKey(const ValueKey('c.mov')));
     await tester.pumpAndSettle();
@@ -885,7 +1059,7 @@ void main() {
     final controller =
         TransfersController(engine: _FakeEngine(), gallery: gallery);
     await tester.pumpWidget(embeddedHost(gallery, controller, player));
-    await tester.pumpAndSettle();
+    await drainAppFiles(tester, controller);
 
     await tester.tap(find.byKey(const ValueKey('c.mov')));
     await tester.pumpAndSettle();
@@ -912,7 +1086,7 @@ void main() {
     final controller =
         TransfersController(engine: _FakeEngine(), gallery: gallery);
     await tester.pumpWidget(embeddedHost(gallery, controller, player));
-    await tester.pumpAndSettle();
+    await drainAppFiles(tester, controller);
 
     await tester.tap(find.byKey(const ValueKey('c.mov')));
     await tester.pumpAndSettle();
@@ -955,7 +1129,7 @@ void main() {
     final controller =
         TransfersController(engine: _FakeEngine(), gallery: gallery);
     await tester.pumpWidget(embeddedHost(gallery, controller, player));
-    await tester.pumpAndSettle();
+    await drainAppFiles(tester, controller);
 
     await tester.tap(find.byKey(const ValueKey('c.mov')));
     await tester.pumpAndSettle();
@@ -996,7 +1170,7 @@ void main() {
       return null;
     });
     await tester.pumpWidget(embeddedHost(gallery, controller, player));
-    await tester.pumpAndSettle();
+    await drainAppFiles(tester, controller);
 
     await tester.tap(find.byKey(const ValueKey('c.mov')));
     await tester.pumpAndSettle();
@@ -1037,7 +1211,7 @@ void main() {
     final controller =
         TransfersController(engine: _FakeEngine(), gallery: gallery);
     await tester.pumpWidget(host(gallery, controller, videoPlayer: player));
-    await tester.pumpAndSettle();
+    await drainAppFiles(tester, controller);
 
     // 抽帧一次(会话内合并),落盘 thumbsDir(lib_ 前缀内容键,与
     // NEF 同管线)。
@@ -1079,7 +1253,7 @@ void main() {
     final controller =
         TransfersController(engine: _FakeEngine(), gallery: gallery);
     await tester.pumpWidget(host(gallery, controller));
-    await tester.pumpAndSettle();
+    await drainAppFiles(tester, controller);
 
     // 倒序 c,b,a;打开第一张(c)
     await tester.tap(find.byType(Image).first);
@@ -1117,7 +1291,7 @@ void main() {
     final controller =
         TransfersController(engine: _FakeEngine(), gallery: gallery);
     await tester.pumpWidget(host(gallery, controller));
-    await tester.pumpAndSettle();
+    await drainAppFiles(tester, controller);
 
     // 倒序 c,b,a;开在中间张(b):两侧邻居都在预热射程
     await tester.tap(find.byKey(const ValueKey('b.jpg')));
@@ -1150,7 +1324,7 @@ void main() {
     final controller =
         TransfersController(engine: _FakeEngine(), gallery: gallery);
     await tester.pumpWidget(host(gallery, controller, rawDecoder: decoder));
-    await tester.pumpAndSettle();
+    await drainAppFiles(tester, controller);
 
     // 小档解码一次、落盘 thumbsDir(与 NEF/MOV 同管线同键式)
     expect(decoder.calls, [('${dir.path}/a.jpg', 512)]);
@@ -1173,7 +1347,7 @@ void main() {
     final controller =
         TransfersController(engine: _FakeEngine(), gallery: gallery);
     await tester.pumpWidget(embeddedHost(gallery, controller, player));
-    await tester.pumpAndSettle();
+    await drainAppFiles(tester, controller);
 
     // 倒序 b.mov, a.jpg;开在图片(a)上,右滑到视频(b)
     await tester.tap(find.byKey(const ValueKey('a.jpg')));
@@ -1196,20 +1370,19 @@ void main() {
     final controller =
         TransfersController(engine: _FakeEngine(), gallery: gallery);
     await tester.pumpWidget(host(gallery, controller));
-    await tester.pumpAndSettle();
+    await drainAppFiles(tester, controller);
 
     // 倒序 c,b,a;打开 c
     await tester.tap(find.byType(Image).first);
     await tester.pumpAndSettle();
 
-    // 删当前页 c → b 滑入(页位不变,下一张补上)
+    // 删当前页 c → b 滑入(页位不变,下一张补上)。删除+异步列目录刷新
+    // 链逐窗排水(见 drainAppFiles 注)。
     await tester.tap(find.byTooltip('删除'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('删除'));
     await tester.pumpAndSettle();
-    await tester
-        .runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
-    await tester.pumpAndSettle();
+    await drainAppFiles(tester, controller, 2);
     expect(File('${dir.path}/c.jpg').existsSync(), isFalse);
     expect(find.text('b.jpg'), findsWidgets);
 
@@ -1220,9 +1393,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('删除'));
     await tester.pumpAndSettle();
-    await tester
-        .runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
-    await tester.pumpAndSettle();
+    await drainAppFiles(tester, controller, 1);
     expect(File('${dir.path}/a.jpg').existsSync(), isFalse);
     expect(find.text('b.jpg'), findsWidgets); // 尾页删除后落回 b
     expect(find.byType(PageView), findsOneWidget); // 查看器还在
@@ -1239,7 +1410,7 @@ void main() {
     final controller =
         TransfersController(engine: _FakeEngine(), gallery: gallery);
     await tester.pumpWidget(host(gallery, controller));
-    await tester.pumpAndSettle();
+    await drainAppFiles(tester, controller);
 
     // 默认新→旧:首格 c(既有默认,行为不变)
     await tester.tap(find.byType(Image).first);
@@ -1383,7 +1554,7 @@ void main() {
     final controller =
         TransfersController(engine: _FakeEngine(), gallery: gallery);
     await tester.pumpWidget(host(gallery, controller));
-    await tester.pumpAndSettle();
+    await drainAppFiles(tester, controller);
 
     // 默认平铺:4 格,无角标
     expect(find.byType(Image), findsNWidgets(4));
@@ -1414,16 +1585,14 @@ void main() {
 
   testWidgets('连拍格长按:整段成员一次全选,批量删除整段', (tester) async {
     final base = DateTime(2026, 10, 1, 10, 0, 0);
-    final b1 = writeFile('b1.jpg', modified: base);
-    final b2 =
-        writeFile('b2.jpg', modified: base.add(const Duration(milliseconds: 100)));
-    final b3 =
-        writeFile('b3.jpg', modified: base.add(const Duration(milliseconds: 200)));
+    writeFile('b1.jpg', modified: base);
+    writeFile('b2.jpg', modified: base.add(const Duration(milliseconds: 100)));
+    writeFile('b3.jpg', modified: base.add(const Duration(milliseconds: 200)));
     final gallery = _FakeGallery(dir);
     final controller =
         TransfersController(engine: _FakeEngine(), gallery: gallery);
     await tester.pumpWidget(host(gallery, controller));
-    await tester.pumpAndSettle();
+    await drainAppFiles(tester, controller);
     await pickFilter(tester, '连拍聚合');
     expect(find.text('×3'), findsOneWidget);
 
@@ -1439,15 +1608,10 @@ void main() {
     await tester.tap(find.text('删除'));
     await tester.pumpAndSettle();
     // 真异步 IO 的完成回调在 runAsync 出窗时才上浮(单删一个窗够,
-    // 批量要逐窗排水):开窗直到三文件全消失(上限兜底防死循环)。
-    for (var i = 0; i < 5; i++) {
-      await tester
-          .runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
-      await tester.pumpAndSettle();
-      if ([b1, b2, b3].every((f) => !f.existsSync())) {
-        break;
-      }
-    }
+    // 批量要逐窗排水):开窗直到三文件全消失 + 异步列目录刷新链收口
+    // (refreshAppFiles 异步化后 exists+list 再各占窗)。整段全删,
+    // 列表归零(expectCount = 0)。
+    await drainAppFiles(tester, controller, 0);
     await tester.pumpAndSettle();
 
     // 整段删除:三文件全消失
@@ -1457,5 +1621,94 @@ void main() {
 
     await tester.pump(const Duration(seconds: 5));
     await tester.pumpAndSettle();
+  });
+
+  // ── NEF 解码缓存 LRU 封顶(2026-10-22:16 张上限,访问即提升)──
+  // 查看器序 = 网格倒序(新→旧):p0 = f16(最新)… p16 = f0(最旧)。
+  // 大图解码(maxPixelSize 2560)与网格缩略(512)共用假解码器,计数
+  // 只认 2560 档(查看器会话缓存 _decodes 的进出)。
+
+  testWidgets('NEF 解码缓存 LRU:塞 17 张最旧被逐(首开张翻回须重解)',
+      (tester) async {
+    for (var i = 0; i <= 16; i++) {
+      writeFile('f$i.nef', modified: DateTime(2026, 10, 1, 0, i));
+    }
+    final gallery = _FakeGallery(dir);
+    final decoder = _FakeRawDecoder();
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    await tester.pumpWidget(host(gallery, controller, rawDecoder: decoder));
+    await drainAppFiles(tester, controller, 17);
+
+    int bigDecodes(String name) => decoder.calls
+        .where((c) => c.$1 == '${dir.path}/$name' && c.$2 == 2560)
+        .length;
+
+    // 开最新张 f16(p0),正向翻到尾 f00(p16):17 张全进缓存,第 17 张
+    // 落位时逐最久未访问的 f16(首开张,之后只被 p1 预热碰过一次)。
+    await tester.tap(find.byKey(const ValueKey('f16.nef')));
+    await tester.pumpAndSettle();
+    for (var i = 0; i < 16; i++) {
+      await dragLikeFinger(
+          tester, find.byType(PageView), const Offset(-600, 0));
+    }
+    expect(
+        decoder.calls.where((c) => c.$2 == 2560).length, 17,
+        reason: '全程恰 17 次大图解码(每张一次)');
+    expect(bigDecodes('f16.nef'), 1);
+
+    // 翻回首张:f16 被逐过,重解(其余 16 张都还驻留,不重解)。
+    for (var i = 0; i < 16; i++) {
+      await dragLikeFinger(
+          tester, find.byType(PageView), const Offset(600, 0));
+    }
+    expect(bigDecodes('f16.nef'), 2, reason: '最旧被逐:翻回须重解');
+    for (var i = 0; i <= 15; i++) {
+      expect(bigDecodes('f$i.nef'), 1, reason: 'f$i 全程驻留不该重解');
+    }
+  });
+
+  testWidgets('NEF 解码缓存 LRU:访问即提升(逐访问最旧,不按插入序)',
+      (tester) async {
+    for (var i = 0; i <= 16; i++) {
+      writeFile('f$i.nef', modified: DateTime(2026, 10, 1, 0, i));
+    }
+    final gallery = _FakeGallery(dir);
+    final decoder = _FakeRawDecoder();
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    await tester.pumpWidget(host(gallery, controller, rawDecoder: decoder));
+    await drainAppFiles(tester, controller, 17);
+
+    int bigDecodes(String name) => decoder.calls
+        .where((c) => c.$1 == '${dir.path}/$name' && c.$2 == 2560)
+        .length;
+
+    await tester.tap(find.byKey(const ValueKey('f16.nef')));
+    await tester.pumpAndSettle();
+    // ① 正向到尾(p16=f0):f16(插入最旧)被逐。
+    for (var i = 0; i < 16; i++) {
+      await dragLikeFinger(
+          tester, find.byType(PageView), const Offset(-600, 0));
+    }
+    // ② 翻回首张(p0=f16):f16 重解回缓存。回程把 f15…f01 全部重新
+    // 访问过 —— f16 落位时按访问序逐的是 f00(回程第一触、之后不再
+    // 碰),而不是插入序最旧的 f15:提升语义的判别点。
+    for (var i = 0; i < 16; i++) {
+      await dragLikeFinger(
+          tester, find.byType(PageView), const Offset(600, 0));
+    }
+    // ③ 再正向到尾:f00 被逐过须重解;f15(插入次旧)两段回看都在访
+    // 问,驻留不重解 —— 若无访问提升(FIFO),②里被逐的会是 f15。
+    for (var i = 0; i < 16; i++) {
+      await dragLikeFinger(
+          tester, find.byType(PageView), const Offset(-600, 0));
+    }
+    expect(bigDecodes('f0.nef'), 2, reason: '访问最旧:②被逐③重解');
+    expect(bigDecodes('f16.nef'), 2, reason: '插入最旧:①被逐②重解');
+    expect(bigDecodes('f15.nef'), 1, reason: '插入次旧但访问新:提升驻留');
+    for (var i = 1; i <= 14; i++) {
+      expect(bigDecodes('f$i.nef'), 1, reason: 'f$i 全程驻留');
+    }
   });
 }
