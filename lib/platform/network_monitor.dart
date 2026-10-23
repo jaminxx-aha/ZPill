@@ -55,6 +55,17 @@ final class WifiJoinResult {
   final String? gateway;
 }
 
+/// 周边扫描到的 AP(scanAps 结果;security 已归一到 0x2004 字节约定:
+/// 0x01 开放 / 0x02 WPA2 / 0x03 WPA3 —— join 消费同约定)。
+final class WifiApScan {
+  const WifiApScan(
+      {required this.ssid, required this.security, required this.rssi});
+
+  final String ssid;
+  final int security;
+  final int rssi;
+}
+
 /// 程序化加入热点(`nikonpill/network` 方法 `join`/`release`)。
 /// BLE→WiFi 交接用(SnapBridge 同款):0x2004 凭据 → 写 0x2005 断
 /// BLE → join → PTP/IP。Android = WifiNetworkSpecifier + requestNetwork
@@ -62,9 +73,10 @@ final class WifiJoinResult {
 /// [release] 解绑);iOS = NEHotspotConfiguration(代码已就位,真机
 /// 调用要求 Network Extensions capability —— 免费签名签发被拒,
 /// 2026-10-15 实验:profile 不含该 entitlement,build 拒;未挂时
-/// apply 运行时报错走回落,付费账号挂上即插即用);ohos wifiManager
-/// 属 system_basic 权限,同回落 —— 通道缺失时 [join] 返回
-/// unsupported 不抛,调用点按手动指引降级。
+/// apply 运行时报错走回落,付费账号挂上即插即用);ohos = wifiManager
+/// 候选配置族(addCandidateConfig + connectToCandidateConfig,只要
+/// normal 级 SET_WIFI_INFO,2026-10-22 实装真机验证)—— 通道缺失时
+/// [join] 返回 unsupported 不抛,调用点按手动指引降级。
 abstract interface class WifiJoiner {
   /// [security] 传 0x2004 原始字节(0-4),映射在各 native。
   Future<WifiJoinResult> join({
@@ -75,6 +87,11 @@ abstract interface class WifiJoiner {
 
   /// 释放持有的网络并恢复进程默认路由;幂等,未持有无操作。
   Future<void> release();
+
+  /// 扫描周边 AP(0x2004 解密未中时的 B 路:相机热点 SSID 靠扫描锁定,
+  /// 密码由用户从相机屏幕录入一次)。返回 SSID 非空的全部可见网络,
+  /// 过滤在 Dart 侧;通道缺失(平台未实现)返回空表不抛。
+  Future<List<WifiApScan>> scanAps();
 }
 
 final class MethodChannelWifiJoiner implements WifiJoiner {
@@ -101,7 +118,7 @@ final class MethodChannelWifiJoiner implements WifiJoiner {
         gateway: map?['gateway'] as String?,
       );
     } on MissingPluginException {
-      // iOS/ohos 未落地(见类注):如实 unsupported,UI 回手动指引。
+      // iOS 未落地(entitlement,见类注):如实 unsupported,UI 回手动指引。
       return const WifiJoinResult(ok: false, reason: 'unsupported');
     } on PlatformException catch (e) {
       return WifiJoinResult(ok: false, reason: e.message ?? e.code);
@@ -116,6 +133,27 @@ final class MethodChannelWifiJoiner implements WifiJoiner {
       // 平台未实现:本就没持网络,无妨
     } on PlatformException {
       // 释放失败不致命(进程退出自然解绑)
+    }
+  }
+
+  @override
+  Future<List<WifiApScan>> scanAps() async {
+    try {
+      final r = await _channel.invokeMethod<Object?>('scanAps');
+      final list = r as List<Object?>? ?? const [];
+      return list
+          .map((e) => e as Map<Object?, Object?>)
+          .map((m) => WifiApScan(
+                ssid: m['ssid'] as String? ?? '',
+                security: m['security'] as int? ?? 0x02,
+                rssi: m['rssi'] as int? ?? -100,
+              ))
+          .toList(growable: false);
+    } on MissingPluginException {
+      // 平台未实现:如实空表(调用点按无相机热点降级)
+      return const [];
+    } on PlatformException {
+      return const [];
     }
   }
 }

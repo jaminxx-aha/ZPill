@@ -71,7 +71,9 @@
           "when": "inuse"
         }
       },
-      {"name": "ohos.permission.KEEP_BACKGROUND_RUNNING"}
+      {"name": "ohos.permission.KEEP_BACKGROUND_RUNNING"},
+      {"name" :  "ohos.permission.GET_WIFI_INFO"},
+      {"name" :  "ohos.permission.SET_WIFI_INFO"}
     ]
   }
 }

@@ -40,8 +40,8 @@ final class PlatformServices {
 
   static late final NetworkMonitor network;
 
-  /// 程序化加入热点(`nikonpill/network` join/release;Android 已实现,
-  /// iOS/ohos 未落地,调用返回 unsupported 按手动指引降级)。
+  /// 程序化加入热点(`nikonpill/network` join/release;Android/ohos 已
+  /// 实现,iOS 未落地 entitlement,调用返回 unsupported 按手动指引降级)。
   /// BLE→WiFi 交接用,见 ConnectionController.joinCameraAp。
   static late final WifiJoiner wifiJoiner;
   static late final GallerySaver gallery;

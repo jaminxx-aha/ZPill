@@ -47,6 +47,7 @@ import '../../core/browser/album.dart';
 import '../../core/camera/camera_connection.dart';
 import '../../core/camera/camera_discovery.dart';
 import '../../core/camera/camera_info.dart';
+import '../../core/log/app_log.dart';
 import '../../core/ptpip/probe.dart';
 import '../../core/ptpip/subnet_scan.dart';
 import '../../data/ble_identity_store.dart';
@@ -173,7 +174,7 @@ class ConnectionController extends ChangeNotifier {
   final BleIdentityStore? bleIdentityStore;
 
   /// 程序化加入相机热点(`nikonpill/network` join;Android 已实现,
-  /// iOS/ohos 未装配 → joinCameraAp 走 skipped 手动指引)。
+  /// iOS 未装配 → joinCameraAp 走 skipped 手动指引)。
   final WifiJoiner? wifiJoiner;
   final SettingsController? settingsController;
 
@@ -256,10 +257,10 @@ class ConnectionController extends ChangeNotifier {
   /// / 切离蓝牙方式即清。
   bool bleAwaitSystemBond = false;
 
-  /// 唤起 Wi-Fi 成功但本平台无程序化入热能力(iOS/ohos):蓝牙页红卡
+  /// 唤起 Wi-Fi 成功但本平台无程序化入热能力(iOS):蓝牙页红卡
   /// 等用户手动入网(2026-10-19 用户裁定③④:红卡只限无法直连的情形,
-  /// Android joiner 直达不动)。显式「已加入热点,开始连接」或切离
-  /// 蓝牙方式即清。
+  /// Android/ohos joiner 直达不动)。显式「已加入热点,开始连接」或
+  /// 切离蓝牙方式即清。
   bool wifiAwakePending = false;
 
   /// 唤醒成功沿置红卡(无 joiner 才走此路,见 [_wakeWifiWithCredentials])。
@@ -293,11 +294,39 @@ class ConnectionController extends ChangeNotifier {
     final saved = await bleIdentityStore?.load();
     if (saved == null) {
       bleAwaitSystemBond = false;
+      savedWifiPassword = '';
     }
     if (bleIdentity != saved) {
       bleIdentity = saved;
+      savedWifiPassword = saved?.wifiPassword ?? '';
       notifyListeners();
     }
+  }
+
+  /// 相机热点密码(0x2004 解密未中的 B 路凭据;身份档持久化,一次录
+  /// 入之后一键直达)。装载见 [loadBleIdentity]。
+  String savedWifiPassword = '';
+
+  /// 密码落档(扫描+用户录入的 join 成功沿调用;凭据随机身配置不轮
+  /// 换,一次管到解除配对/重配为止)。
+  Future<void> saveWifiPassword(String password) async {
+    final saved = bleIdentity;
+    final store = bleIdentityStore;
+    if (saved == null || store == null || password.isEmpty) return;
+    final updated = BlePairedIdentity(
+      peripheralUuid: saved.peripheralUuid,
+      deviceId: saved.deviceId,
+      nonce: saved.nonce,
+      serial: saved.serial,
+      controllerName: saved.controllerName,
+      cameraName: saved.cameraName,
+      wifiPassword: password,
+      pairedAt: saved.pairedAt,
+    );
+    await store.save(updated);
+    bleIdentity = updated;
+    savedWifiPassword = password;
+    notifyListeners();
   }
 
   /// ready 沿旧档相机名回填(2026-10-19):cameraName 自配对沿起才落
@@ -373,7 +402,7 @@ class ConnectionController extends ChangeNotifier {
 
   /// 断链后程序化加入相机热点并自动接续 AP 连接(BLE→WiFi 交接最后
   /// 一段,SnapBridge 全程:0x2004 凭据 → 写 0x2005 断 BLE → join →
-  /// PTP/IP)。凭据缺 / joiner 未装配(iOS/ohos/测试)→ skipped,UI
+  /// PTP/IP)。凭据缺 / joiner 未装配(iOS/测试)→ skipped,UI
   /// 维持手动指引;join 成功沿切到 AP 分段并**发射** connectWireless
   /// (不等待 —— 连接进度/失败/重试全走既定连接卡状态机,与手点
   /// 「AP 连接」同路;进程路由已由 native 在 onAvailable 沿绑到相机
@@ -1216,6 +1245,21 @@ class _ConnectionPageState extends State<ConnectionPage>
     }
   }
 
+  /// AP hero 点按(2026-10-22 用户定稿「一键直达已连接」):ohos 且
+  /// BLE 在链 → 走 BLE→WiFi 交接全链([_wakeWifiWithCredentials]:
+  /// 0x2004 凭据 → 0x2005 唤醒断链 → 程序化加入相机热点 → 自动发射
+  /// AP 连接,connected 沿连接卡自动翻已连接总览,不再手点 AP 方式);
+  /// 其余(非 ohos / BLE 不在链 / 手机已在相机网)照旧直发
+  /// connectWireless(既有语义)。
+  static Future<void> _apHeroConnect(
+      BuildContext context, ConnectionController controller) async {
+    if (Platform.operatingSystem == 'ohos' && controller.bleReady) {
+      await _wakeWifiWithCredentials(context, controller);
+      return;
+    }
+    unawaited(controller.connectWireless());
+  }
+
   void _ptpHeroPressed(ConnectionController controller) {
     final inFlight = controller.state == CameraLinkState.connecting ||
         controller.state == CameraLinkState.reconnecting;
@@ -1230,7 +1274,7 @@ class _ConnectionPageState extends State<ConnectionPage>
       case ConnectionMethod.usb:
         unawaited(controller.connect());
       case ConnectionMethod.ap:
-        unawaited(controller.connectWireless());
+        unawaited(_apHeroConnect(context, controller));
       case ConnectionMethod.sta:
         // 八轮:连最近 —— 档案最近优先,首条即最近(与列表行同路
         // connectSaved;无档案不动作,列表行点按仍是主入口)。
@@ -1580,10 +1624,10 @@ class _ConnectionPageState extends State<ConnectionPage>
   /// 唤醒相机 WiFi(BLE→WiFi 交接):[ConnectionController.wakeCameraWifi]
   /// 全程 = 读 0x2004(SnapBridge 序)→ 写 0x2005=0x01 → 成功沿断 BLE
   /// (相机等链路释放才开热点)。后续按平台能力分流(2026-10-19 裁定
-  /// ③④:红卡只限无法直连的情形):joiner 装配(Android)→ 程序化加
-  /// 入热点并自动发射 AP 连接([ConnectionController.joinCameraAp],
-  /// 成功直达连接页,现状直连路径保留);无 joiner(iOS/ohos)且凭据
-  /// 解出 → 留蓝牙页弹红卡引导手动入网;凭据未解出 → 不弹提示条,置
+  /// ③④:红卡只限无法直连的情形):joiner 装配(Android/ohos)→ 程序
+  /// 化加入热点并自动发射 AP 连接([ConnectionController.joinCameraAp],
+  /// 成功直达连接页,现状直连路径保留);无 joiner(iOS)且凭据解出 →
+  /// 留蓝牙页弹红卡引导手动入网;凭据未解出 → 不弹提示条,置
   /// wifiAwakePending 让错误位出红字「去系统连 Wi-Fi」提醒(十七轮,
   /// 解密未中改写 AppLog)。GPS 注入随断链暂停。
   static Future<void> _wakeWifiWithCredentials(
@@ -1602,14 +1646,22 @@ class _ConnectionPageState extends State<ConnectionPage>
     }
     final creds = controller.cameraApCredentials;
     if (creds == null) {
-      // 十七轮:凭据未解出(读失败/空/解密未中)—— 下方 SnackBar 提醒
-      // 撤(用户裁定),置 wifiAwakePending:错误位出红字「去系统连
-      // Wi-Fi」固定提醒(解密未中细节已改写 AppLog,不上屏)。
+      // 凭据未解出(读失败/空/解密未中 —— 0x2004 解密是挂账研究项,
+      // 2026-10-22 离线穷举固定键+会话派生键 12k 发全灭,真机 blob 还
+      // 是 102B 非文档 97B)。ohos 走 B 路:扫描锁定相机热点 SSID +
+      // 相机屏幕密码一次录入永久保存;其余平台维持红卡手动指引。
+      if (Platform.operatingSystem == 'ohos') {
+        await _joinOhosByScan(context, controller);
+        return;
+      }
+      // 十七轮:下方 SnackBar 提醒撤(用户裁定),置 wifiAwakePending:
+      // 错误位出红字「去系统连 Wi-Fi」固定提醒(解密未中细节已改写
+      // AppLog,不上屏)。
       controller.markWifiAwakePending();
       return;
     }
     if (controller.wifiJoiner == null) {
-      // 无程序化入热能力(iOS/ohos):留蓝牙页弹红卡,用户手动入网后
+      // 无程序化入热能力(iOS):留蓝牙页弹红卡,用户手动入网后
       // 显式点「已加入热点,开始连接」(App 不主动跳 Wi-Fi 设置)。
       controller.markWifiAwakePending();
       return;
@@ -1636,6 +1688,141 @@ class _ConnectionPageState extends State<ConnectionPage>
       // skipped:防御路(joiner 在 wake 后被置空等)—— 红卡兜底。
       controller.markWifiAwakePending();
     }
+  }
+
+  /// ohos B 路 join(0x2004 解密未中):扫描锁定相机热点 → 密码(已存
+  /// 用存档;没有则弹一次录入框,见相机屏幕)→ 凭据就位走
+  /// [ConnectionController.joinCameraAp] 既定路(成功沿密码落档,下次
+  /// 免录入)。相机匹配 = 尼康启发式或含相机广播名(空格/下划线归一,
+  /// BLE 名与 AP SSID 同族但分隔符不定);多台取最强 RSSI。
+  ///
+  /// 扫描轮询:相机热点在 BLE 释放后要数秒才开播(真机实证),单轮
+  /// 2.5s 常扑空 —— 最多 5 轮 × 3s;每轮列表落 AppLog(SSID 真名取证,
+  /// 匹配启发式失配时好补)。
+  static Future<ApJoinOutcome> _joinOhosByScan(
+      BuildContext context, ConnectionController controller) async {
+    final joiner = controller.wifiJoiner;
+    if (joiner == null) {
+      controller.markWifiAwakePending();
+      return ApJoinOutcome.skipped;
+    }
+    _showHintStatic(context, controller, context.t('conn.scanningHotspot'),
+        duration: const Duration(seconds: 30));
+    final camName = controller.bleIdentity?.cameraName ?? '';
+    String norm(String s) =>
+        s.replaceAll(RegExp(r'[\s_]+'), '').toUpperCase();
+    final camNorm = norm(camName);
+    WifiApScan? pick;
+    for (var round = 1; round <= 5 && pick == null; round++) {
+      final aps = await joiner.scanAps();
+      if (!context.mounted) return ApJoinOutcome.skipped;
+      AppLog.d(AppLog.ble,
+          'Wi-Fi 扫描轮 $round:${aps.map((a) => '${a.ssid}(${a.rssi},0x${a.security.toRadixString(16)})').join(' ')}');
+      var bestRssi = -999;
+      for (final ap in aps) {
+        final hit = isLikelyCameraSsid(ap.ssid) ||
+            (camNorm.isNotEmpty && norm(ap.ssid).contains(camNorm));
+        if (!hit || ap.rssi <= bestRssi) continue;
+        bestRssi = ap.rssi;
+        pick = ap;
+      }
+      if (pick == null && round < 5) {
+        await Future<void>.delayed(const Duration(seconds: 3));
+        if (!context.mounted) return ApJoinOutcome.skipped;
+      }
+    }
+    if (pick == null) {
+      _showHintStatic(context, controller, context.t('conn.noCameraAp'),
+          duration: const Duration(seconds: 5));
+      controller.markWifiAwakePending();
+      return ApJoinOutcome.failed;
+    }
+    // 密码策略(2026-10-23 真机定案):Zf 热点是**开放网络**(相机屏
+    // 幕虽有提示密码,系统直连免输)—— 扫描安全类型即真相:开放
+    // (0x01)直接连,零弹框;加密 AP 才要密码(已存用存档,没有弹
+    // 一次录入框)。
+    String? password = '';
+    if (pick.security != 0x01) {
+      password = controller.savedWifiPassword;
+      if (password.isEmpty) {
+        password =
+            await _promptWifiPassword(context, controller, pick.ssid);
+        if (!context.mounted) return ApJoinOutcome.skipped;
+        if (password == null || password.isEmpty) {
+          controller.markWifiAwakePending();
+          return ApJoinOutcome.skipped;
+        }
+      }
+    }
+    // 凭据就位(借 controller 既有 joinCameraAp 路:join → 网关落账 →
+    // 切 AP 方式 → 发射 connectWireless)。
+    controller.cameraApCredentials = WifiCredentials(
+      ssid: pick.ssid,
+      password: password,
+      security: pick.security,
+      keySource: 'scan',
+    );
+    final outcome = await controller.joinCameraAp();
+    if (!context.mounted) return outcome;
+    if (outcome == ApJoinOutcome.joined) {
+      if (password.isNotEmpty && controller.savedWifiPassword.isEmpty) {
+        await controller.saveWifiPassword(password);
+        if (!context.mounted) return outcome;
+      }
+      _showHintStatic(
+          context,
+          controller,
+          context.t('conn.joinedHotspot', {'ssid': pick.ssid}),
+          duration: const Duration(seconds: 5));
+    } else if (outcome == ApJoinOutcome.failed) {
+      _showHintStatic(
+        context,
+        controller,
+        context.t('conn.autoJoinFailed',
+            {'e': controller.apJoinError ?? context.t('common.unknown')}),
+        duration: const Duration(seconds: 5),
+      );
+    }
+    return outcome;
+  }
+
+  /// 相机热点密码录入框(一次;密码显示在相机屏幕的 Wi-Fi 连接画面)。
+  static Future<String?> _promptWifiPassword(BuildContext context,
+      ConnectionController controller, String ssid) async {
+    final field = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(dialogContext.t('conn.wifiPasswordTitle')),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(ssid, style: Theme.of(dialogContext).textTheme.titleSmall),
+            const SizedBox(height: AppSpacing.sm),
+            TextField(
+              controller: field,
+              obscureText: true,
+              autofocus: true,
+              decoration: InputDecoration(
+                hintText: dialogContext.t('conn.wifiPasswordHint'),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: Text(dialogContext.t('common.cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: Text(dialogContext.t('conn.wifiPasswordSave')),
+          ),
+        ],
+      ),
+    );
+    return ok == true ? field.text.trim() : null;
   }
 
   /// 提示收口的静态面(整页组件共用):先撤在场提示再显 ——

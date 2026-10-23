@@ -88,6 +88,9 @@ final class _FakeWifiJoiner implements WifiJoiner {
 
   @override
   Future<void> release() async => releaseCalls++;
+
+  @override
+  Future<List<WifiApScan>> scanAps() async => const [];
 }
 
 /// 记账假连接:connect/disconnect/配对确认落账,states 流由测试驱动。

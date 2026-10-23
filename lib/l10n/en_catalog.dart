@@ -222,6 +222,13 @@ const Map<String, String> enCatalog = {
       'Bluetooth released; joining camera hotspot "{ssid}"…',
   'conn.joinedHotspot':
       'Joined camera hotspot "{ssid}"; connecting to the camera…',
+  'conn.scanningHotspot': 'Searching for the camera hotspot…',
+  'conn.noCameraAp':
+      'Camera hotspot not found — make sure the camera Wi-Fi is on',
+  'conn.wifiPasswordTitle': 'Enter the camera hotspot password',
+  'conn.wifiPasswordHint':
+      'Shown on the camera screen (Wi-Fi connection view)',
+  'conn.wifiPasswordSave': 'Connect',
   'conn.autoJoinFailed':
       'Auto-join failed: {e} — join via system Wi-Fi manually (password on the camera screen), then choose "AP Hotspot" on the connection page and tap "Connect to camera"',
   'conn.wifiManualConnectHint':

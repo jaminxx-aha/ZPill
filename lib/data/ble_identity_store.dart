@@ -15,6 +15,7 @@ final class BlePairedIdentity {
     required this.serial,
     required this.controllerName,
     this.cameraName = '',
+    this.wifiPassword = '',
     required this.pairedAt,
   });
 
@@ -32,6 +33,11 @@ final class BlePairedIdentity {
   /// (相机「已配对设备」菜单里代表这部手机),别混。旧档无此字段
   /// 为空,显示沿回落 [displayName]。
   final String cameraName;
+
+  /// 相机热点密码(用户从相机屏幕录入一次;凭据随机身配置不轮换,
+  /// 一次录入之后一键直达)。0x2004 解密未中时的 B 路凭据,见
+  /// ConnectionController.saveWifiPassword。空 = 未录入。
+  final String wifiPassword;
   final DateTime pairedAt;
 
   /// 展示名:相机名优先,旧档(未存相机名)回落控制器名。
@@ -45,6 +51,7 @@ final class BlePairedIdentity {
         'serial': serial,
         'controllerName': controllerName,
         'cameraName': cameraName,
+        'wifiPassword': wifiPassword,
         'pairedAt': pairedAt.toIso8601String(),
       };
 
@@ -61,6 +68,7 @@ final class BlePairedIdentity {
       serial: json['serial'] as String? ?? '',
       controllerName: json['controllerName'] as String? ?? 'NikonPill',
       cameraName: json['cameraName'] as String? ?? '',
+      wifiPassword: json['wifiPassword'] as String? ?? '',
       pairedAt:
           pairedAtRaw == null ? DateTime.now() : DateTime.parse(pairedAtRaw),
     );
