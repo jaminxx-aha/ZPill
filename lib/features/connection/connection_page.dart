@@ -17,11 +17,14 @@
 /// 唤起 Wi-Fi 手动入网均以页内红色引导卡承接(App 不主动跳系统设置,
 /// 手动按钮不点不跳 —— 2026-10-19 裁定;能程序化直连的平台直达:
 /// ohos 绑定、Android 入热)。已连接(2026-10-17 bento 卡片风 v24
-/// 交付稿定样):状态行(绿点 + 电池 + 链路纯图标 pill,点按弹详情/
-/// 断开弹层)+ 机身整行卡(竖线居中:型号 pill | 固件/序列号裸值)+
-/// 镜头信息|存储双列卡 + 底部双钮(左相册灰右进入拍摄黄;「进入拍摄」
-/// 全屏 push 遥控监看页 —— 2026-10-08 拍摄页从底栏 tab 改制;断开连
-/// 接在弹层)。图标扛语义(固件/序列号/焦距/光圈沿用原 info 行图标)。
+/// 交付稿定样):状态行(绿点 + 电池 + 链路纯图标 pill)+ 机身整行
+/// 卡(竖线居中:型号 pill | 固件/序列号裸值)+ 镜头信息|存储双列
+/// 卡 + 底部双钮(左相册灰右进入拍摄黄;「进入拍摄」全屏 push 遥控
+/// 监看页 —— 2026-10-08 拍摄页从底栏 tab 改制)。详情与断开分家
+/// (2026-10-23 定稿):状态行只有「已连接」状态词可点 = 弹确认框、
+/// 确认才断开,行其余部分(电池壳/链路 pill)不吃点按;连接详情弹层
+/// (设备名/型号/链路/快门数,纯信息无断开钮)由机身卡型号 pill 点
+/// 按弹出。图标扛语义(固件/序列号/焦距/光圈沿用原 info 行图标)。
 ///
 /// Controller = ViewModel(ChangeNotifier);**所有按钮必须绑定到
 /// Controller 方法**,禁止 UI 层直连协议层。
@@ -1250,19 +1253,22 @@ class _ConnectionPageState extends State<ConnectionPage>
       builder: (context, _) => ListView(
         padding: AppSpacing.screenPadding,
         children: [
-          // 状态行:绿点已连接 + 电池 + 链路纯图标 pill;整行可点弹
-          // 详情/断开弹层(设备名/链路串随迁,2026-10-17 定稿)。
+          // 状态行:绿点已连接 + 电池 + 链路纯图标 pill;只有「已连接」
+          // 状态词可点 = 弹确认框,确认才断开(2026-10-23 定稿,详情
+          // 弹层迁机身卡)。
           ConnectedHeader(
             batteryPercent: _overview.batteryPercent,
             linkIcon: wireless ? Icons.wifi : Icons.usb,
-            onTap: () => _showConnectionSheet(context, controller),
+            onDisconnect: () => unawaited(_confirmDisconnect(context, controller)),
           ),
           const SizedBox(height: AppSpacing.md),
-          // 整行:机身卡(竖线居中:型号 pill | 固件/序列号裸值)。
+          // 整行:机身卡(竖线居中:型号 pill | 固件/序列号裸值);
+          // 型号 pill 可点 → 连接详情弹层(2026-10-23 自状态行迁此)。
           CameraCard(
             model: _overview.deviceInfo?.model,
             firmware: _overview.deviceInfo?.deviceVersion,
             serial: _overview.deviceInfo?.serialNumber,
+            onModelTap: () => _showConnectionSheet(context, controller),
           ),
           const SizedBox(height: AppSpacing.md),
           // 双列:镜头信息卡(名+焦距+光圈)| 存储卡(卡型/已用条)。
@@ -1290,7 +1296,7 @@ class _ConnectionPageState extends State<ConnectionPage>
           ),
           const SizedBox(height: AppSpacing.lg),
           // 底部双钮:左相册(灰底次级)右进入拍摄(黄主钮);断开
-          // 连接移入状态行弹层(2026-10-17 定稿)。
+          // 连接收状态行「已连接」状态词点按(2026-10-23 定稿)。
           Row(
             children: [
               Expanded(
@@ -1327,9 +1333,27 @@ class _ConnectionPageState extends State<ConnectionPage>
     );
   }
 
-  /// 状态行点按 → 连接详情弹层:设备名/型号/链路/电池四行 + 红色
-  /// 「断开连接」。设备名与链路串从主页面收编至此(2026-10-17)。
-  /// 快门数千分位分组:15963 → '15,963'。
+  /// 点「已连接」状态词 → 确认弹框,确认才断开(2026-10-23 用户裁定:
+  /// 直断一步误触代价高,补确认 —— 与「忘记这台相机」同一确认框语言,
+  /// 确认钮红底接旧弹层红色断开的视觉)。
+  Future<void> _confirmDisconnect(
+      BuildContext context, ConnectionController controller) async {
+    final confirmed = await showConfirmDialog(
+      context,
+      title: context.t('conn.disconnectConfirm'),
+      content: context.t('conn.disconnectBody'),
+      confirmLabel: context.t('conn.disconnectConn'),
+      destructive: true,
+    );
+    if (confirmed) {
+      await controller.disconnect();
+    }
+  }
+
+  /// 机身卡型号 pill 点按 → 连接详情弹层(2026-10-23 自状态行迁此):
+  /// 设备名/型号/链路/快门数四行,纯信息 —— 断开走状态行「已连接」
+  /// 状态词点按,弹层内不再放断开钮。设备名与链路串从主页面收编至此
+  /// (2026-10-17)。快门数千分位分组:15963 → '15,963'。
   static String _groupShutter(int v) {
     final s = v.toString();
     final b = StringBuffer();
@@ -1439,24 +1463,6 @@ class _ConnectionPageState extends State<ConnectionPage>
                     }
                     return row('conn.camInfoShutter', value);
                   },
-                ),
-                const SizedBox(height: AppSpacing.sm),
-                Divider(color: scheme.outlineVariant, height: 1),
-                const SizedBox(height: AppSpacing.sm),
-                SizedBox(
-                  width: double.infinity,
-                  height: 48,
-                  child: TextButton(
-                    onPressed: () {
-                      Navigator.of(sheetContext).pop();
-                      controller.disconnect();
-                    },
-                    style: TextButton.styleFrom(foregroundColor: scheme.error),
-                    child: Text(
-                      sheetContext.t('conn.disconnectConn'),
-                      style: const TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                  ),
                 ),
               ],
             ),

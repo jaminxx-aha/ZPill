@@ -275,6 +275,8 @@ const Map<String, String> enCatalog = {
       'Delete the connection record for "{name}". Paired cameras also get a new pairing identity, so the next connection pairs again (auto-confirmed, no action needed).',
   'conn.enterShooting': 'Remote Shooting',
   'conn.album': 'Gallery',
+  'conn.disconnectConfirm': 'Disconnect?',
+  'conn.disconnectBody': 'Disconnects from the camera.',
   'conn.disconnectConn': 'Disconnect',
   'conn.usbCable': 'USB Cable',
   'conn.cameraAlbum': 'Camera Album',

@@ -1088,7 +1088,7 @@ void main() {
 
     testWidgets(
         '已连接视图:bento 卡 v24(状态行/机身/镜头信息/存储)+ 底部双钮'
-        '+ 状态行弹层(详情/断开)', (WidgetTester tester) async {
+        '+ 型号弹层(详情)+ 点状态词断开', (WidgetTester tester) async {
       // 加高视口:卡片网格较长,底部双钮在折线下(点空)。
       tester.view
         ..physicalSize = const Size(800, 2400)
@@ -1175,11 +1175,11 @@ void main() {
       expect(find.text('ƒ/2.8'), findsOneWidget);
       expect(find.textContaining('· '), findsNothing,
           reason: '出处小标注(· 规格 等)已整删');
-      // 底部双钮:左相册右进入拍摄;断开连接不在主页面(弹层里)。
+      // 底部双钮:左相册右进入拍摄;断开连接不在主页面(状态词点按)。
       expect(find.text('进入拍摄'), findsOneWidget);
       expect(find.text('相册'), findsOneWidget);
       expect(find.text('断开连接'), findsNothing,
-          reason: '断开连接移入状态行弹层');
+          reason: '断开收状态词点按,全程无断开按钮');
 
       // 进入拍摄:全屏 push 遥控监看页;信息胶囊带返回钮,pop 即回。
       await tester.tap(find.text('进入拍摄'));
@@ -1198,8 +1198,9 @@ void main() {
       expect(find.byType(RemotePage), findsNothing, reason: '返回即回相机页');
       expect(find.text('进入拍摄'), findsOneWidget);
 
-      // 状态行点按 → 详情弹层:四行读数 + 红色断开连接。
-      await tester.tap(find.text('已连接'));
+      // 型号 pill 点按 → 详情弹层:四行读数,纯信息(无断开钮 ——
+      // 断开走状态词点按,2026-10-23 拆散)。
+      await tester.tap(find.text('TestModel'));
       await tester.pumpAndSettle();
       expect(find.text('设备名'), findsOneWidget);
       expect(find.text('NIKON ZF'), findsOneWidget);
@@ -1210,7 +1211,37 @@ void main() {
       expect(find.text('USB 数据线'), findsOneWidget, reason: '详情收进弹层');
       expect(find.text('电池'), findsNothing,
           reason: '电池行已删(电量只在状态行电池壳)');
+      expect(find.text('断开连接'), findsNothing,
+          reason: '弹层纯信息,断开收状态词点按');
+      // 弹层无按钮可点:点屏障收层。
+      await tester.tapAt(const Offset(10, 10));
+      await tester.pumpAndSettle();
+      expect(find.text('设备名'), findsNothing, reason: '屏障点按收层');
 
+      // 行尾电池壳/链路 pill 点空不响应(不弹层不断开)—— 只有
+      // 「已连接」状态词可点(2026-10-23 定稿)。
+      await tester.tap(find.text('80'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byIcon(Icons.usb));
+      await tester.pumpAndSettle();
+      expect(conn.disconnectCalls, 0);
+      expect(find.text('设备名'), findsNothing, reason: '行尾点按不开弹层');
+
+      // 点「已连接」状态词 → 确认弹框;取消 = 不断开(2026-10-23
+      // 裁定:直断补确认)。
+      await tester.tap(find.text('已连接'));
+      await tester.pumpAndSettle();
+      expect(find.text('断开连接?'), findsOneWidget);
+      expect(find.text('断开连接'), findsOneWidget,
+          reason: '确认钮红底 = 旧弹层红色断开的视觉');
+      await tester.tap(find.text('取消'));
+      await tester.pumpAndSettle();
+      expect(conn.disconnectCalls, 0);
+      expect(find.text('断开连接?'), findsNothing, reason: '取消即收框');
+
+      // 再点状态词 → 确认「断开连接」= 断开。
+      await tester.tap(find.text('已连接'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('断开连接'));
       await tester.pumpAndSettle();
       expect(conn.disconnectCalls, 1);

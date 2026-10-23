@@ -234,6 +234,8 @@ const Map<String, String> zhCatalog = {
   'conn.forgetBody': '删除「{name}」的连接记录。已配对的相机会同时换新配对身份,下次连接重新配对(自动确认,无需操作)。',
   'conn.enterShooting': '进入拍摄',
   'conn.album': '相册',
+  'conn.disconnectConfirm': '断开连接?',
+  'conn.disconnectBody': '断开与相机的当前连接。',
   'conn.disconnectConn': '断开连接',
   'conn.usbCable': 'USB 数据线',
   'conn.cameraAlbum': '相机相册',
