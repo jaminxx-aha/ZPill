@@ -37,6 +37,7 @@ import '../../core/transfer/transfer_task.dart';
 import '../../l10n/l10n.dart';
 import '../common/format.dart';
 import '../common/rating_filter.dart';
+import '../common/trash_rating_icon.dart';
 import '../common/widgets/confirm_dialog.dart';
 import '../common/widgets/states.dart';
 import '../../design/app_colors.dart';
@@ -705,7 +706,7 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
               leadingIcon: switch (r) {
                 RatingFilter.all => const Icon(Icons.apps),
                 RatingFilter.none => const Icon(Icons.star_border),
-                RatingFilter.trash => const Icon(Icons.delete_outline),
+                RatingFilter.trash => const TrashRatingIcon(size: 18),
                 RatingFilter.rated => const Icon(Icons.star_half),
                 _ => _ratingStars(r.stars),
               },
@@ -930,8 +931,8 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
                 ),
               ),
             ),
-          // 评级角标(左上):有星显星+数;垃圾星显垃圾桶;档位未知
-          //(NEF 位图有星)只显星。
+          // 评级角标(左上):有星显星+数;删除候选显深底胶囊+黄桶黑星
+          //(机身「垃圾桶」同形,用户定稿 2026-10-23);档位未知只显星。
           if (_ratings.ratingOf(group) > 0 ||
               _ratings.ratedUnknown(group) ||
               _ratings.trashStar(group))
@@ -939,39 +940,44 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
               alignment: Alignment.topLeft,
               child: Padding(
                 padding: const EdgeInsets.all(4),
-                child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                  decoration: BoxDecoration(
-                    // 品牌黄底深字(不随主题 —— 角标盖在照片上,黄底在
-                    // 深浅主题下同形)
-                    color: AppColors.brandYellow,
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (_ratings.trashStar(group))
-                        const Icon(Icons.delete_outline,
-                            size: 10, color: AppColors.onBrandYellow)
-                      else ...[
-                        const Icon(Icons.star,
-                            size: 9, color: AppColors.onBrandYellow),
-                        if (_ratings.ratingOf(group) > 0) ...[
-                          const SizedBox(width: 2),
-                          Text(
-                            '${_ratings.ratingOf(group)}',
-                            style: const TextStyle(
-                              color: AppColors.onBrandYellow,
-                              fontSize: 9,
-                              height: 1.3,
-                            ),
-                          ),
-                        ],
-                      ],
-                    ],
-                  ),
-                ),
+                child: _ratings.trashStar(group)
+                    ? Container(
+                        padding: const EdgeInsets.all(3),
+                        decoration: BoxDecoration(
+                          color: trashChipColor,
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: const TrashRatingIcon(
+                            size: 14, onDarkChip: true),
+                      )
+                    : Container(
+                        padding:
+                            const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                        decoration: BoxDecoration(
+                          // 品牌黄底深字(不随主题 —— 角标盖在照片上,黄底在
+                          // 深浅主题下同形)
+                          color: AppColors.brandYellow,
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.star,
+                                size: 9, color: AppColors.onBrandYellow),
+                            if (_ratings.ratingOf(group) > 0) ...[
+                              const SizedBox(width: 2),
+                              Text(
+                                '${_ratings.ratingOf(group)}',
+                                style: const TextStyle(
+                                  color: AppColors.onBrandYellow,
+                                  fontSize: 9,
+                                  height: 1.3,
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
               ),
             ),
           if (_selecting)
