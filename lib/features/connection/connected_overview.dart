@@ -4,8 +4,10 @@
 /// 镜头信息|存储双列卡(镜头卡合并焦距/光圈实况;存储卡每槽卡型
 /// 图标 + 记录槽绿点 + 已用/总量 + 6px 胶囊条,填充 = 已用量、百分
 /// 比居中条内)。图标扛语义(固件/序列号/焦距/光圈沿用改造前 info
-/// 行的原图标),设备名/链路详情收进状态行点按弹层。数据全来自既
-/// 有控制器,零新增协议读。
+/// 行的原图标)。详情与断开分家(2026-10-23 定稿):状态行只有
+/// 「已连接」状态词可点 = 弹确认框、确认才断开(电池壳/链路 pill
+/// 不吃点按),设备名/链路/快门数详情收进机身卡型号 pill 点按弹层。
+/// 数据全来自既有控制器,零新增协议读。
 library;
 
 import 'dart:async';
@@ -107,13 +109,15 @@ class _IconTextRow extends StatelessWidget {
 }
 
 /// 状态行:绿点 + 已连接(w700)| 电池 chip + 链路纯图标 pill。
-/// 整行可点 → 详情/断开弹层(设备名、链路串随迁,2026-10-17 定稿)。
+/// **只有「已连接」状态词可点 = 弹确认框、确认才断开**(2026-10-23
+/// 定稿:详情弹层迁机身卡型号 pill,断开收状态词;行其余部分不吃
+/// 点按)。
 class ConnectedHeader extends StatelessWidget {
   const ConnectedHeader({
     super.key,
     this.batteryPercent,
     required this.linkIcon,
-    this.onTap,
+    this.onDisconnect,
   });
 
   final int? batteryPercent;
@@ -121,46 +125,55 @@ class ConnectedHeader extends StatelessWidget {
   /// 链路图标(页面按无线/有线给 wifi/usb;详情串在弹层)。
   final IconData linkIcon;
 
-  /// 点按状态行:打开连接详情弹层。
-  final VoidCallback? onTap;
+  /// 点按「已连接」状态词:弹断开确认框(确认沿由页面执行断开)。
+  final VoidCallback? onDisconnect;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final battery = batteryPercent;
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(AppRadius.sm),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 2),
-        // 行高钉 [kConnStatusRowHeight](pill 26 本就是全行最高件):
-        // 与未连接侧状态行共常量,尾部内容增减不牵动左簇位置。
-        child: SizedBox(
-          height: kConnStatusRowHeight,
-          child: Row(
-            children: [
-              Container(
-                width: 9,
-                height: 9,
-                decoration: BoxDecoration(
-                  color: AppColors.success(context),
-                  shape: BoxShape.circle,
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      // 行高钉 [kConnStatusRowHeight](pill 26 本就是全行最高件):
+      // 与未连接侧状态行共常量,尾部内容增减不牵动左簇位置。
+      child: SizedBox(
+        height: kConnStatusRowHeight,
+        child: Row(
+          children: [
+            Container(
+              width: 9,
+              height: 9,
+              decoration: BoxDecoration(
+                color: AppColors.success(context),
+                shape: BoxShape.circle,
+              ),
+            ),
+            const SizedBox(width: AppSpacing.sm),
+            // 只有状态词可点(断开):命中区沿词盒上下撑满行高、横向
+            // 即词盒 —— 视觉位置与未连接侧状态词严格同位,行内其余
+            // 件(电池壳/链路 pill)点空不响应(2026-10-23 定稿)。
+            InkWell(
+              onTap: onDisconnect,
+              borderRadius: BorderRadius.circular(AppRadius.sm),
+              child: SizedBox(
+                height: double.infinity,
+                child: Align(
+                  alignment: AlignmentDirectional.centerStart,
+                  child: Text(
+                    context.t('conn.connected'),
+                    style: theme.textTheme.titleMedium
+                        ?.copyWith(fontWeight: FontWeight.w700),
+                  ),
                 ),
               ),
-              const SizedBox(width: AppSpacing.sm),
-              Text(
-                context.t('conn.connected'),
-                style: theme.textTheme.titleMedium
-                    ?.copyWith(fontWeight: FontWeight.w700),
-              ),
-              const Spacer(),
-              if (battery != null) ...[
-                _BatteryGauge(level: battery),
-                const SizedBox(width: AppSpacing.md),
-              ],
-              _LinkPill(icon: linkIcon),
+            ),
+            const Spacer(),
+            if (battery != null) ...[
+              _BatteryGauge(level: battery),
+              const SizedBox(width: AppSpacing.md),
             ],
-          ),
+            _LinkPill(icon: linkIcon),
+          ],
         ),
       ),
     );
@@ -281,7 +294,8 @@ class _BentoCard extends StatelessWidget {
   }
 }
 
-/// 机身卡(整行):竖线居中分割 —— 左 = 相机图标 + 型号 pill;
+/// 机身卡(整行):竖线居中分割 —— 左 = 相机图标 + 型号 pill(可点
+/// → 连接详情弹层,2026-10-23 自状态行迁此);
 /// 右 = 固件/序列号裸值(改造前 info 行原图标 system_update_alt/tag,
 /// 黄色 18px;13 号 w700 与存储卡槽行同字号同列位)。
 class CameraCard extends StatelessWidget {
@@ -290,11 +304,16 @@ class CameraCard extends StatelessWidget {
     required this.model,
     required this.firmware,
     required this.serial,
+    this.onModelTap,
   });
 
   final String? model;
   final String? firmware;
   final String? serial;
+
+  /// 点按型号 pill:打开连接详情弹层(设备名/型号/链路/快门数);
+  /// null = 不可点。
+  final VoidCallback? onModelTap;
 
   @override
   Widget build(BuildContext context) {
@@ -311,19 +330,23 @@ class CameraCard extends StatelessWidget {
                     size: 22, color: AppColors.accentYellow),
                 const SizedBox(width: AppSpacing.sm),
                 Flexible(
-                  child: Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(AppRadius.sm),
-                      border: Border.all(color: scheme.outlineVariant),
-                    ),
-                    child: Text(
-                      model ?? '--',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.bodySmall
-                          ?.copyWith(fontWeight: FontWeight.w700),
+                  child: InkWell(
+                    onTap: onModelTap,
+                    borderRadius: BorderRadius.circular(AppRadius.sm),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(AppRadius.sm),
+                        border: Border.all(color: scheme.outlineVariant),
+                      ),
+                      child: Text(
+                        model ?? '--',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.bodySmall
+                            ?.copyWith(fontWeight: FontWeight.w700),
+                      ),
                     ),
                   ),
                 ),
