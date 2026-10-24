@@ -295,13 +295,24 @@ class _SettingsPageState extends State<SettingsPage> {
                     'settings.quickFormatSubtitle')),
               ),
               Padding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                // 行留白 16→8:抬高均分上限(可用宽/3 ≈ 119),给 'JPG+RAW'
+                // 单行换余量(按钮自身按内容取宽,行留白在装得下时不可见)。
+                padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
                 child: SegmentedButton<PhotoDownloadFormat>(
                   showSelectedIcon: false,
+                  // 段标签钉单行:鸿蒙文本引擎在 "+" 处也给断行机会,不禁
+                  // 则窄屏被腰斩;段留白收到 M3 窄窗档(horizontal 4,默认
+                  // 12)再让一档 —— 字体字号不动(4afef1e 显式两行方案经
+                  // 用户改判回单行)。
+                  style: const ButtonStyle(
+                    padding: WidgetStatePropertyAll<EdgeInsetsGeometry>(
+                        EdgeInsets.symmetric(horizontal: 4, vertical: 8)),
+                  ),
                   segments: [
                     for (final f in PhotoDownloadFormat.values)
                       ButtonSegment(
-                          value: f, label: Text(context.t(f.short))),
+                          value: f,
+                          label: Text(context.t(f.short), maxLines: 1)),
                   ],
                   selected: {
                     controller.settings.autoTransferFormat,
