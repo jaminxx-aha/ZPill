@@ -14,7 +14,8 @@
 /// 清空后重解的也是毫秒级小档,2026-10-20「看大图返回缩略重刷新」根治;
 /// NEF 原生解码缺席时回内嵌 160×120 缩略兜底 nef_thumb.dart)。
 /// 点任意可看件进黑底查看器:PageView 左右滑翻页(网格过滤序同源),
-/// 图片双指缩放、NEF/HIF 原生解码长边 ≤2560(会话缓存,翻回不重解)。视频
+/// 图片双指缩放、NEF/HIF 原生解码长边 ≤2560(会话缓存,翻回不重解;
+/// NEF 在无原生解码平台回内嵌缩略兜底可看,见 [nefEmbeddedJpeg])。视频
 /// 在页面内直接播放(2026-10-09:点开即播,不再「海报帧 + 播放钮 +
 /// 弹全屏新页」三步走;iOS 平台视图嵌 AVPlayerViewController,播放控制
 /// 在 Flutter 侧自绘 —— 原生传输条关掉,横滑才归 PageView 翻页不抢手势;
@@ -1150,12 +1151,29 @@ class _LibraryViewerState extends State<_LibraryViewer> {
       _decodes[key] = cached;
       return cached;
     }
-    final fresh = widget.rawDecoder.decodeJpeg(file.path, maxPixelSize: 2560);
+    final fresh = _decodeWithFallback(file);
     _decodes[key] = fresh;
     while (_decodes.length > _decodeCacheLimit) {
       _decodes.remove(_decodes.keys.first); // LinkedHashMap 首位 = 最旧
     }
     return fresh;
+  }
+
+  /// 原生解码,NEF 失败回内嵌缩略兜底:无原生 RAW 解码器平台(ohos/
+  /// Android,`nikonpill/raw` 缺席或扩展名闸拒绝)查看 NEF 不再死在
+  /// 「解码失败」—— 回 IFD0 内嵌 160×120 缩略([nefEmbeddedJpeg]:
+  /// 方向注入 + 黑边裁剪,与网格缩略同源同质;撑满全屏糊,可看而不够
+  /// 清晰,真清晰仍须原生 RAW 解码器,见 raw_decoder.dart 库注)。非
+  /// RAW(HIF 解码失败等)或无内嵌缩略原样上抛,报错占位不变。
+  Future<Uint8List> _decodeWithFallback(File file) async {
+    try {
+      return await widget.rawDecoder.decodeJpeg(file.path, maxPixelSize: 2560);
+    } on Object {
+      if (!isRawFilename(_nameOf(file))) rethrow;
+      final jpeg = await nefEmbeddedJpeg(file.path);
+      if (jpeg == null) rethrow;
+      return jpeg;
+    }
   }
 
   /// 邻页预解码(i±1,视频跳过):滑到前把邻居解好,上屏即缓存命中
