@@ -10,6 +10,13 @@ import 'package:flutter/foundation.dart';
 import '../../core/browser/object_repository.dart';
 import '../../core/browser/photo_group.dart';
 
+/// 评分设置 UI 总闸:评分功能现存问题待修,先只藏「设置评级」入口
+/// (查看器顶栏打星钮,唯一设评沿;photo_viewer_page)。评级展示与
+/// 筛选(网格角标、筛选弹层评级分区、显示·评级行、图库评分)不受
+/// 此闸,数据层 0xDC8A 读取照常。修复后置 true 恢复(守闸用例在
+/// photo_viewer_page_test,翻闸时改回 findsOneWidget)。
+const kRatingUiEnabled = false;
+
 final class AlbumRatingsController extends ChangeNotifier {
   AlbumRatingsController({required this.repository, this.onPropagate}) {
     _sub = repository.updates.listen((_) => notifyListeners());
