@@ -1058,6 +1058,24 @@ void main() {
     expect(children[2], isA<GestureDetector>()); // 点按层盖上
   });
 
+  testWidgets('评分设置闸:顶栏无打星钮,信息/编辑钮照常(守 kRatingUiEnabled)',
+      (tester) async {
+    await _openViewer(
+        tester,
+        PhotoViewerPage(
+          items: [PhotoGroup([_file(0x1234, 'DSC_0001.JPG')])],
+          initialIndex: 0,
+          thumbnails: _FakeThumbs(),
+        ));
+    // 闸翻回 true 时,下面 findsNothing 全部改回 findsOneWidget
+    expect(find.byTooltip('评分'), findsNothing,
+        reason: 'kRatingUiEnabled=false 藏唯一设评沿');
+    expect(find.byIcon(Icons.star), findsNothing);
+    expect(find.byIcon(Icons.star_border), findsNothing);
+    expect(find.byTooltip('照片信息'), findsOneWidget);
+    expect(find.byTooltip('编辑'), findsOneWidget); // 组内有 JPG 才有调参钮
+  });
+
   group('相机内保护(SetObjectProtection 0x1012,2026-10-12 官方 §6.2.1.14)',
       () {
     testWidgets('开页读回真值:GetObjectInfo ProtectionStatus=1 → 图标直亮锁',

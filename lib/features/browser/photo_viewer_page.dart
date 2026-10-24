@@ -542,14 +542,17 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
                         onPressed: () => _edit(group),
                         icon: const Icon(Icons.tune),
                       ),
-                    IconButton(
-                      tooltip: context.t('viewer.rating'),
-                      onPressed: () => _rate(group),
-                      icon: Icon(
-                        rating > 0 ? Icons.star : Icons.star_border,
-                        color: rating > 0 ? AppColors.brandYellow : null,
+                    // 评分设置总闸(kRatingUiEnabled=false):先藏设评
+                    // 入口,面板与落相机代码保留,翻闸即回。
+                    if (kRatingUiEnabled)
+                      IconButton(
+                        tooltip: context.t('viewer.rating'),
+                        onPressed: () => _rate(group),
+                        icon: Icon(
+                          rating > 0 ? Icons.star : Icons.star_border,
+                          color: rating > 0 ? AppColors.brandYellow : null,
+                        ),
                       ),
-                    ),
                   ],
                 ),
           body: PageView.builder(
