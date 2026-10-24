@@ -12,12 +12,18 @@
 /// **不自动播**,首帧 + 播放钮常驻,点了才起播);相机路径下载完成
 /// 后以 autoplay = true 装载(用户点播放钮即是意图)。
 ///
+/// 海报垫底([poster]):ohos 的 XComponent 面未起播时是纯黑面(iOS
+/// AVPlayerViewController 待播自带首帧),未播时不建视图、海报顶上
+/// —— 首次起播意图才挂载平台视图(暂停/播完保留已挂面,尾帧不丢);
+/// iOS 恒挂视图,海报被首帧盖住无感。
+///
 /// 全屏走 [fullscreen]/[onToggleFullscreen](查看器**原地旋转**,同一
 /// 播放器:平台视图不能搬家,但查看器自身布局可以 —— 锁横屏 + 沉浸
-/// + 收 AppBar,同一 UiKitView 随布局转横零跳变);本页只换角钮图样。
+/// + 收 AppBar,同一平台视图随布局转横);本页只换角钮图样。
 library;
 
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 
@@ -41,6 +47,7 @@ class EmbeddedVideoPlayer extends StatefulWidget {
     required this.fullscreen,
     required this.onToggleFullscreen,
     this.autoplay = false,
+    this.poster,
   });
 
   /// 本地档案路径(图库 = 应用内文件;相机相册 = 临时目录下载件)。
@@ -64,6 +71,9 @@ class EmbeddedVideoPlayer extends StatefulWidget {
   /// 点开不自动播)。
   final bool autoplay;
 
+  /// 海报帧垫底(ohos 未起播时顶黑面;iOS 恒被首帧盖住无感)。可空。
+  final Widget? poster;
+
   @override
   State<EmbeddedVideoPlayer> createState() => _EmbeddedVideoPlayerState();
 }
@@ -72,10 +82,17 @@ class _EmbeddedVideoPlayerState extends State<EmbeddedVideoPlayer> {
   static const _pollInterval = Duration(milliseconds: 250);
   static const _controlsHideDelay = Duration(seconds: 3);
 
+  /// ohos 的 XComponent 面未起播 = 纯黑:未播不建视图(懒挂载),
+  /// 首次起播意图才上屏(见库注释);其余平台恒挂。
+  bool get _needsLazyMount => Platform.operatingSystem == 'ohos';
+
   int? _viewId;
   double? _fps; // 标称帧率(未知/≤30.5 = 无顺帧开关)
   bool _conform = false;
   bool _controlsVisible = true;
+  // 平台视图挂载闩:懒挂载平台首次起播意图置位,此后恒真(暂停/播完
+  // 保留画面 —— 面拆了尾帧就没了)。
+  bool _viewMounted = false;
   // 起播意图:autoplay/点播放才 true;暂停/播完跟随翻 false。滑走保持
   // 原意图,翻回继续(没点过播放的翻回仍停)。
   bool _playingIntent = false;
@@ -91,6 +108,9 @@ class _EmbeddedVideoPlayerState extends State<EmbeddedVideoPlayer> {
   void initState() {
     super.initState();
     _playingIntent = widget.autoplay;
+    if (_playingIntent) {
+      _viewMounted = true; // autoplay = 起播意图已在:随页挂载
+    }
     _probeFps();
     if (widget.active) {
       _startPolling();
@@ -221,7 +241,17 @@ class _EmbeddedVideoPlayerState extends State<EmbeddedVideoPlayer> {
 
   Future<void> _togglePlay() async {
     final id = _viewId;
-    if (id == null) return;
+    if (id == null) {
+      // 懒挂载平台首播:闩置位 → 本帧建视图,onCreated 链装载起播。
+      if (!_viewMounted) {
+        setState(() {
+          _viewMounted = true;
+          _playingIntent = true;
+        });
+        return;
+      }
+      return;
+    }
     setState(() => _playingIntent = !_playingIntent);
     // 播到底再按播放:回开头重放
     if (_playingIntent && _duration > 0 && _position >= _duration - 0.05) {
@@ -246,9 +276,12 @@ class _EmbeddedVideoPlayerState extends State<EmbeddedVideoPlayer> {
     return Stack(
       fit: StackFit.expand,
       children: [
+        // 海报垫底:ohos 懒挂载未播时顶纯黑面;iOS 恒被首帧盖住(见库注)。
+        if (widget.poster != null) widget.poster!,
         // 裸视频面(底层):平台视图本体。原生传输条关闭,原生侧没有
-        // 任何需要触摸的东西。
-        widget.viewBuilder(widget.path, _onViewCreated),
+        // 任何需要触摸的东西。ohos 未播不建(XComponent 纯黑面,懒挂载)。
+        if (!_needsLazyMount || _viewMounted)
+          widget.viewBuilder(widget.path, _onViewCreated),
         // 点按层:必须**盖在**平台视图上(Stack 后位者画在上),不能
         // 包在它外面 —— 引擎对「直接落在平台视图上」的触摸走手势竞技场
         // 异步仲裁,父级 tap 识别器在抬手结算时竞争不过原生视图(拖动类

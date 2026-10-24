@@ -105,8 +105,10 @@ final class _FakeVideoPlayer implements VideoPlayer {
   bool get supportsEmbeddedView => embedded;
 
   @override
-  Future<void> play(String path, {double rate = 1.0}) async {
+  Future<double?> play(String path,
+      {double rate = 1.0, double? position}) async {
     played.add((path, rate));
+    return null;
   }
 
   @override
@@ -1548,19 +1550,17 @@ void main() {
     expect(chromeCalls.any((c) => c.method.contains('SystemUIMode')),
         isTrue); // 沉浸
 
-    // 退全屏:顶栏回来,方向还原成应用方向集
+    // 退全屏:顶栏回来,方向**钉回竖屏**(查看器竖排 UI,交还传感器
+    // 集会在设备横放时滞留横屏 —— 2026-10-24 真机复报)
     await tester.tap(find.byIcon(Icons.fullscreen_exit));
     await tester.pumpAndSettle();
     expect(find.text('c.mov'), findsWidgets);
     expect(find.byIcon(Icons.fullscreen), findsOneWidget);
-    expect(orientationCalls().last, [
-      'DeviceOrientation.portraitUp',
-      'DeviceOrientation.landscapeLeft',
-      'DeviceOrientation.landscapeRight'
-    ]);
+    expect(orientationCalls().last, ['DeviceOrientation.portraitUp']);
   });
 
-  testWidgets('MOV:无内嵌视图平台(Android/ohos)回落海报帧 + 说明文案', (tester) async {
+  testWidgets('MOV:无内嵌视图平台(Android)回落海报帧 + 播放钮'
+      '(点了走原生全屏播放)', (tester) async {
     writeFile('c.mov', modified: DateTime(2026, 10, 3));
     final gallery = _FakeGallery(dir);
     final player = _FakeVideoPlayer(failThumbs: false);
@@ -1578,10 +1578,13 @@ void main() {
 
     await tester.tap(find.byKey(const ValueKey('c.mov')));
     await tester.pumpAndSettle();
-    // 查看器海报帧走页面级缓存:不重复抽帧;说明文案在场,无播放钮。
+    // 查看器海报帧走页面级缓存:不重复抽帧;播放钮在场(原生全屏路)。
     expect(player.thumbs, hasLength(1));
-    expect(find.text('该平台暂不支持视频播放'), findsOneWidget);
-    expect(find.byIcon(Icons.play_arrow), findsNothing);
+    expect(find.byIcon(Icons.play_arrow), findsOneWidget);
+
+    await tester.tap(find.byIcon(Icons.play_arrow));
+    await tester.pumpAndSettle();
+    expect(player.played, [('${dir.path}/c.mov', 1.0)]); // 原生全屏播放
   });
 
   /// 真机手指式拖动:多帧小步位移。单步大位移(tester.drag)会一步

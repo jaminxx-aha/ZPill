@@ -20,14 +20,16 @@ import { Log } from '@ohos/flutter_ohos';
 
 const TAG = 'VideoSession';
 
-/** 播放请求。 */
+/** 播放请求。[position] = 起播位置(秒,续播;0 = 从头)。 */
 export interface VideoRequest {
   path: string;
   rate: number;
+  position: number;
 }
 
-/** 播放结束回调:用户关闭或播完时调用一次(错误经 result.error 交付)。 */
-export type VideoFinish = () => void;
+/** 播放结束回调:用户关闭或播完时调用一次;[positionSec] = 关闭时刻
+ *  的播放位置(秒,供 Dart 侧续播;拿不到为 null,错误收口亦然)。 */
+export type VideoFinish = (positionSec: number | null) => void;
 
 /** 面板可见性监听(Index.ets 注册;注册时回放当前态)。 */
 export type VideoVisibilityListener = (visible: boolean) => void;
@@ -65,8 +67,9 @@ export class VideoSession {
     return true;
   }
 
-  /** 播放页关闭(关闭钮/播完/返回键):交回结果并熄层。 */
-  static close(): void {
+  /** 播放页关闭(关闭钮/播完/返回键):交回结果并熄层。[positionSec]
+   *  = 关闭时刻播放位置(秒),拿不到传 null。 */
+  static close(positionSec: number | null = null): void {
     if (VideoSession.closed) {
       return;
     }
@@ -75,7 +78,7 @@ export class VideoSession {
     VideoSession.finishCallback = null;
     VideoSession.request = null;
     VideoSession.visibilityListener?.(false);
-    Log.i(TAG, 'close:交付结果');
-    finish?.();
+    Log.i(TAG, `close:交付结果 pos=${positionSec}`);
+    finish?.(positionSec);
   }
 }

@@ -637,7 +637,7 @@ const Map<String, String> zhCatalog = {
   'viewer.tapPlay': '点按播放键观看',
   'viewer.previewUnavailable': '预览不可用',
   'viewer.preparingPlay': '准备播放',
-  'viewer.videoUnsupported': '该平台暂不支持视频播放',
+  'viewer.playFailed': '视频播放失败',
   'fmt.jpgOnly': '仅 JPG',
   'fmt.rawOnly': '仅 RAW',
   'fmt.videoOnly': '仅视频',

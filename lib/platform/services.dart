@@ -15,7 +15,7 @@
 /// | `nikonpill/motion`   | SensorManager 重力     | CoreMotion             | @ohos.sensor          |
 /// | `nikonpill/location` | LocationManager        | CoreLocation           | geoLocationManager    |
 /// | `nikonpill/raw`      | (待补 libraw)         | ImageIO RAW            | (待补)               |
-/// | `nikonpill/video`    | (待补 ExoPlayer)       | AVKit                  | (待补)               |
+/// | `nikonpill/video`    | VideoActivity 全屏播放 | AVKit+平台视图         | VideoSheet+平台视图   |
 ///
 /// *iOS 普通应用拿不到当前 WiFi SSID(需 entitlement 且大多被拒),
 /// 实际策略:直接尝试默认网关直连,详见 docs/ARCHITECTURE.md。

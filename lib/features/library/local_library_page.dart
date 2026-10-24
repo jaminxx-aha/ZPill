@@ -1097,13 +1097,6 @@ class _LibraryViewerState extends State<_LibraryViewer> {
   /// (对比旧法:推新路由自建第二个播放器,装载黑闪 + 位置来回搬运)。
   bool _fullscreen = false;
 
-  /// 应用全局方向集(main.dart 启动即设,传感器跟随);退出全屏还原。
-  static const _appOrientations = [
-    DeviceOrientation.portraitUp,
-    DeviceOrientation.landscapeLeft,
-    DeviceOrientation.landscapeRight,
-  ];
-
   /// NEF/HIF 大图解码缓存(会话内合并:页滑出视口被 dispose 后 future
   /// 仍在,翻回不重解 —— 整档原生解码是秒级重活)。
   ///
@@ -1131,7 +1124,9 @@ class _LibraryViewerState extends State<_LibraryViewer> {
 
   void _setChrome({required bool fullscreen}) {
     // 沉浸(隐状态栏/指示条)+ 钉/放方向;ohos fork 通道缺失时静默
-    // 兜住(与 remote_page 方向锁同一手法)。
+    // 兜住(与 remote_page 方向锁同一手法)。退出**钉回竖屏**而非交还
+    // 传感器集:查看器是竖排 UI,横屏只存在于全屏视频里 —— 交还
+    // [竖,横左,横右] 会在设备横放时滞留横屏(2026-10-24 真机复报)。
     SystemChrome.setEnabledSystemUIMode(
             fullscreen ? SystemUiMode.immersiveSticky : SystemUiMode.edgeToEdge)
         .catchError((Object _) {});
@@ -1140,7 +1135,7 @@ class _LibraryViewerState extends State<_LibraryViewer> {
                 DeviceOrientation.landscapeLeft,
                 DeviceOrientation.landscapeRight,
               ]
-            : _appOrientations)
+            : const [DeviceOrientation.portraitUp])
         .catchError((Object _) {});
   }
 
@@ -1279,8 +1274,10 @@ class _LibraryViewerState extends State<_LibraryViewer> {
               viewBuilder: widget.embeddedVideoView ?? embeddedVideoViewBuilder,
               fullscreen: _fullscreen,
               onToggleFullscreen: () => _setFullscreen(!_fullscreen),
+              poster: _VideoPoster(file: file, thumbFor: widget.thumbFor),
             )
-          : _VideoFallbackPage(file: file, thumbFor: widget.thumbFor);
+          : _VideoPlayPage(
+              file: file, thumbFor: widget.thumbFor, player: widget.videoPlayer);
     }
     if (isRawFilename(name) || isHeifFilename(name)) {
       // HIF 与 NEF 同走原生解码通道(≤2560,会话缓存):iOS ImageIO /
@@ -1548,42 +1545,94 @@ class _LibraryViewerState extends State<_LibraryViewer> {
   }
 }
 
-/// 无内嵌播放视图的平台(Android/ohos 通道待补):海报帧打底 + 说明
-/// 文案(不再给播放钮 —— play 通道同样未实现,点了也是报错)。
-class _VideoFallbackPage extends StatelessWidget {
-  const _VideoFallbackPage({required this.file, required this.thumbFor});
+/// 视频海报帧(与网格格共用缓存,不重复抽帧):查看器未播垫底与
+/// Android 全屏路(_VideoPlayPage)共用。
+class _VideoPoster extends StatelessWidget {
+  const _VideoPoster({required this.file, required this.thumbFor});
+
+  final File file;
+
+  final Future<String?> Function(File file) thumbFor;
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<String?>(
+      future: thumbFor(file),
+      builder: (context, snap) => snap.hasData && snap.data != null
+          ? Image.file(
+              File(snap.data!),
+              fit: BoxFit.contain,
+              errorBuilder: (context, error, stackTrace) =>
+                  const SizedBox.shrink(),
+            )
+          : const SizedBox.shrink(),
+    );
+  }
+}
+
+/// 无内嵌播放视图的平台(Android):海报帧打底 + 播放钮,点了走
+/// **原生全屏播放**(`play` 通道 3bb32c5 三端补齐:Android VideoActivity /
+/// ohos VideoSheet,关闭 = Future 完成)。本页留守海报供重播;失败弹
+/// 提示(Android 报错道上见;ohos 已对齐 iOS 走内嵌平台视图,不经此路)。
+class _VideoPlayPage extends StatefulWidget {
+  const _VideoPlayPage({
+    required this.file,
+    required this.thumbFor,
+    required this.player,
+  });
 
   final File file;
 
   /// 海报帧缓存查询(与网格格共用,不重复抽帧)。
   final Future<String?> Function(File file) thumbFor;
 
+  final VideoPlayer player;
+
+  @override
+  State<_VideoPlayPage> createState() => _VideoPlayPageState();
+}
+
+class _VideoPlayPageState extends State<_VideoPlayPage> {
+  /// 播放在途(原生层收口才复位):防连点重复 play(原生 busy 拒答
+  /// 会折成一次无谓的错误提示)。
+  bool _playing = false;
+
+  void _play() {
+    if (_playing) return;
+    // 展示时刻捕获:messenger/文案取自点按语境,不跨异步用 context。
+    final messenger = ScaffoldMessenger.of(context);
+    final failText = context.t('viewer.playFailed');
+    setState(() => _playing = true);
+    unawaited(widget.player.play(widget.file.path).whenComplete(() {
+      if (mounted) setState(() => _playing = false);
+    }).catchError((Object _) {
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(failText)));
+      return null;
+    }));
+  }
+
   @override
   Widget build(BuildContext context) {
     return Stack(
       fit: StackFit.expand,
       children: [
-        FutureBuilder<String?>(
-          future: thumbFor(file),
-          builder: (context, snap) => snap.hasData && snap.data != null
-              ? Image.file(
-                  File(snap.data!),
-                  fit: BoxFit.contain,
-                  errorBuilder: (context, error, stackTrace) =>
-                      const SizedBox.shrink(),
-                )
-              : const SizedBox.shrink(),
-        ),
+        _VideoPoster(file: widget.file, thumbFor: widget.thumbFor),
+        // 播放钮:与相机相册视频页未播态同款中键圆钮。
         Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.movie_outlined,
-                  color: AppMedia.onMediaSubtle, size: 48),
-              const SizedBox(height: 8),
-              Text(context.t('viewer.videoUnsupported'),
-                  style: const TextStyle(color: AppMedia.onMediaMuted)),
-            ],
+          child: Material(
+            color: AppMedia.onMediaDim,
+            shape: const CircleBorder(),
+            child: InkWell(
+              customBorder: const CircleBorder(),
+              onTap: _playing ? null : _play,
+              child: const Padding(
+                padding: EdgeInsets.all(20),
+                child: Icon(Icons.play_arrow,
+                    color: AppMedia.onMedia, size: 48),
+              ),
+            ),
           ),
         ),
       ],

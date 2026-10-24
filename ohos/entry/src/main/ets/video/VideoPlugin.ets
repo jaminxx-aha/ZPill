@@ -15,6 +15,12 @@
  * - `frameRate({path})`:AVImageGenerator 无帧率元数据,AVMetadataHelper
  *   的帧数键在部分档不全 —— 先回 null(调用方不设顺帧门直放,契约
  *   合法),真机核对后如需再补。
+ * - `play({path, rate})`:全屏播放(VideoSheet 覆盖层 + AVPlayer/
+ *   XComponent,2026-10-13)。
+ * - `viewLoad/viewControl/viewStatus/viewSeek`:内嵌播放平台视图
+ *   (`nikonpill/video-view`,2026-10-24 对齐 iOS 页内播放)—— 实例
+ *   在 video/VideoView.ets,本类只按 viewId 分发;工厂在
+ *   onAttachedToEngine 注册。
  *
  * 通道调用在平台线程,解码重活全异步(await 链),result 回调在完成
  * 时交付(与 iOS 后台队列 + 主线程回投同语义)。
@@ -31,12 +37,13 @@ import {
   Log,
 } from '@ohos/flutter_ohos';
 import { VideoSession } from './VideoSession';
+import { VideoViewFactory, VideoViewRegistry } from './VideoView';
 
 const TAG = 'VideoPlugin';
 const CHANNEL = 'nikonpill/video';
 const THUMB_TIME_US = 100000; // 0.1s,避纯黑首帧
 
-/** `nikonpill/video` 通道实现(抽帧;播放/内嵌 ohos 待补)。 */
+/** `nikonpill/video` 通道实现(抽帧/全屏播放/内嵌视图分发)。 */
 export class VideoPlugin implements FlutterPlugin {
   private channel: MethodChannel | null = null;
 
@@ -51,6 +58,8 @@ export class VideoPlugin implements FlutterPlugin {
         this.onMethodCall(call, result);
       },
     });
+    binding.getPlatformViewRegistry().registerViewFactory(
+      'nikonpill/video-view', new VideoViewFactory());
   }
 
   onDetachedFromEngine(binding: FlutterPluginBinding): void {
@@ -86,17 +95,20 @@ export class VideoPlugin implements FlutterPlugin {
     if (call.method === 'play') {
       const path = call.argument('path') as string | null;
       const rate = (call.argument('rate') as number) ?? 1.0;
+      const position = (call.argument('position') as number) ?? 0;
       if (path === null || path === undefined || path.length === 0) {
         result.error('bad_args', 'play 需要 path', null);
         return;
       }
-      const started = VideoSession.play({ path: path, rate: rate }, () => {
-        try {
-          result.success(null);
-        } catch (_) {
-          // 回调已交付过(双关闭护栏在 VideoSession)
-        }
-      });
+      const started = VideoSession.play(
+        { path: path, rate: rate, position: position },
+        (positionSec: number | null) => {
+          try {
+            result.success(positionSec); // 关闭时刻位置(续播);null = 未知
+          } catch (_) {
+            // 回调已交付过(双关闭护栏在 VideoSession)
+          }
+        });
       if (!started) {
         result.error('busy', '已有全屏播放在进行', null);
       }
@@ -104,6 +116,48 @@ export class VideoPlugin implements FlutterPlugin {
     }
     if (call.method === 'frameRate') {
       // 帧率探测暂无可靠元数据源:回 null = 调用方不设顺帧门直放。
+      result.success(null);
+      return;
+    }
+    if (call.method === 'viewLoad') {
+      // 视图未创建/已销毁静默忽略(iOS loadEmbeddedView 同语义)
+      const id = (call.argument('id') as number) ?? -1;
+      const path = call.argument('path') as string | null;
+      const view = VideoViewRegistry.get(id);
+      if (view === null || path === null || path === undefined ||
+        path.length === 0) {
+        result.success(null);
+        return;
+      }
+      view.load(path);
+      result.success(null);
+      return;
+    }
+    if (call.method === 'viewControl') {
+      const id = (call.argument('id') as number) ?? -1;
+      const playing = (call.argument('playing') as boolean) ?? false;
+      const rate = (call.argument('rate') as number) ?? 1.0;
+      VideoViewRegistry.get(id)?.control(playing, rate);
+      result.success(null);
+      return;
+    }
+    if (call.method === 'viewStatus') {
+      const id = (call.argument('id') as number) ?? -1;
+      const view = VideoViewRegistry.get(id);
+      if (view === null) {
+        const idle: Record<string, Object> = {
+          'position': 0, 'duration': 0, 'playing': false,
+        };
+        result.success(idle);
+        return;
+      }
+      result.success(view.status());
+      return;
+    }
+    if (call.method === 'viewSeek') {
+      const id = (call.argument('id') as number) ?? -1;
+      const position = (call.argument('position') as number) ?? 0;
+      VideoViewRegistry.get(id)?.seek(position);
       result.success(null);
       return;
     }

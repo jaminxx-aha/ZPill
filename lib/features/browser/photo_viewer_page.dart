@@ -123,13 +123,6 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
   /// 填满屏幕,零跳变(与图库查看器同款机制)。
   bool _fullscreen = false;
 
-  /// 应用全局方向集(main.dart 启动即设,传感器跟随);退出全屏还原。
-  static const _appOrientations = [
-    DeviceOrientation.portraitUp,
-    DeviceOrientation.landscapeLeft,
-    DeviceOrientation.landscapeRight,
-  ];
-
   ThumbnailCache get _thumbnails =>
       widget.thumbnails ?? AppServices.instance.thumbnails;
   TransferEngine get _engine =>
@@ -239,7 +232,9 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
 
   void _setChrome({required bool fullscreen}) {
     // 沉浸(隐状态栏/指示条)+ 钉/放方向;ohos fork 通道缺失时静默
-    // 兜住(与图库查看器/remote_page 方向锁同一手法)。
+    // 兜住(与图库查看器/remote_page 方向锁同一手法)。退出**钉回竖屏**
+    // 而非交还传感器集:查看器是竖排 UI,横屏只存在于全屏视频里 ——
+    // 交还传感器集会在设备横放时滞留横屏(2026-10-24 真机复报)。
     SystemChrome.setEnabledSystemUIMode(
             fullscreen ? SystemUiMode.immersiveSticky : SystemUiMode.edgeToEdge)
         .catchError((Object _) {});
@@ -248,7 +243,7 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
                 DeviceOrientation.landscapeLeft,
                 DeviceOrientation.landscapeRight,
               ]
-            : _appOrientations)
+            : const [DeviceOrientation.portraitUp])
         .catchError((Object _) {});
   }
 
@@ -443,8 +438,9 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
     }
   }
 
-  /// 播放视频:整档下载到临时目录(进度对话框,可取消)→ **页内**
-  /// 内嵌播放(EmbeddedVideoPlayer,与图库查看器同款)。PTP 相机没有
+  /// 播放视频:整档下载到临时目录(进度对话框,可取消)→ iOS/ohos
+  /// **页内**内嵌播放(EmbeddedVideoPlayer,与图库查看器同款),Android
+  /// 交原生全屏播放(onDownloaded 分支)。PTP 相机没有
   /// 流式播放(Nikon moov 原子位置未验,亦无 HTTP range 语义),大文件
   /// 需等下载;取消 = 删半成品。临时档随视频页存活(翻回不重拉),
   /// 页面销毁(查看器关闭)时交给 [_PlayedVideoCache] 会话级持有
@@ -899,14 +895,15 @@ class _VideoDownloadDialog extends StatelessWidget {
 ///
 /// 三态:① 未播放 —— 海报(查看器的预览管线垫底)+ 播放钮;② 拉取中
 /// —— 进度对话框由宿主 [_PhotoViewerPageState._startPlayback] 弹,
-/// 播放钮转菊花防重复点;③ 已就绪 —— [EmbeddedVideoPlayer] 页内播放
-/// (autoplay:用户点播放钮已是意图),控制浮层/顺帧开关/原地旋转
-/// 全屏与图库查看器同款。
+/// 播放钮转菊花防重复点;③ 已就绪 —— iOS/ohos 内嵌 [EmbeddedVideoPlayer]
+/// 页内播放(autoplay:用户点播放钮已是意图),控制浮层/顺帧开关/
+/// 原地旋转全屏与图库查看器同款;Android 拉完后交**原生全屏播放**
+/// (play 通道 3bb32c5;ohos 走内嵌平台视图,2026-10-24 对齐 iOS),
+/// 海报留守供重播(重开走会话缓存)。
 ///
 /// keep-alive:视频临时档(可能几十 MB)随本页存活 —— PageView 滑走
-/// 页不销毁、翻回不重拉;页面真正销毁(查看器关闭)时删档。无内嵌
-/// 播放视图的平台(Android/ohos 通道待补)点播放直接提示,不再先拉
-/// 整档再报错。
+/// 页不销毁、翻回不重拉;页面真正销毁(查看器关闭)时删档(iOS 内嵌
+/// 路;原生全屏路的临时档恒交 [_PlayedVideoCache] 会话级持有)。
 class _CameraVideoPage extends StatefulWidget {
   const _CameraVideoPage({
     super.key,
@@ -948,9 +945,14 @@ class _CameraVideoPage extends StatefulWidget {
 
 class _CameraVideoPageState extends State<_CameraVideoPage>
     with AutomaticKeepAliveClientMixin {
-  /// 已就绪的本地临时档(下载完成即有);null = 未播放/拉取中。
+  /// 已就绪的本地临时档(下载完成即有);null = 未播放/拉取中。原生
+  /// 全屏路(Android)恒 null —— 档案交原生层,海报留守供重播。
   String? _localPath;
   bool _fetching = false;
+
+  /// 原生全屏播放在途(关闭才复位):防在途重复点(native busy 拒答
+  /// 会折成一次无谓的错误提示)。
+  bool _playing = false;
 
   @override
   bool get wantKeepAlive => true;
@@ -979,8 +981,29 @@ class _CameraVideoPageState extends State<_CameraVideoPage>
   }
 
   /// 宿主拉取完成的回投([_PhotoViewerPageState._startPlayback] 调)。
+  /// iOS/ohos 装内嵌视图页内播;Android 交原生全屏播放(拉档已完成,
+  /// 失败弹提示不占页面态,海报留守可重播)。
   void onDownloaded(String path) {
     if (!mounted) return;
+    if (!widget.player.supportsEmbeddedView) {
+      if (_playing) return;
+      // 展示时刻捕获:messenger/文案取自回投语境,不跨异步用 context。
+      final messenger = ScaffoldMessenger.of(context);
+      final failText = context.t('viewer.playFailed');
+      setState(() {
+        _fetching = false;
+        _playing = true;
+      });
+      unawaited(widget.player.play(path).whenComplete(() {
+        if (mounted) setState(() => _playing = false);
+      }).catchError((Object _) {
+        messenger
+          ..hideCurrentSnackBar()
+          ..showSnackBar(SnackBar(content: Text(failText)));
+        return null;
+      }));
+      return;
+    }
     setState(() {
       _localPath = path;
       _fetching = false;
@@ -988,14 +1011,7 @@ class _CameraVideoPageState extends State<_CameraVideoPage>
   }
 
   void _startPlayback() {
-    if (_fetching || _localPath != null) return;
-    if (!widget.player.supportsEmbeddedView) {
-      // 无内嵌播放视图的平台:不拉整档,直接说明。
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(SnackBar(content: Text(context.t('viewer.videoUnsupported'))));
-      return;
-    }
+    if (_fetching || _localPath != null || _playing) return;
     setState(() => _fetching = true);
     widget.onStartPlayback(this); // 完成回投 onDownloaded;失败弹 snack
   }
@@ -1013,6 +1029,7 @@ class _CameraVideoPageState extends State<_CameraVideoPage>
         fullscreen: widget.fullscreen,
         onToggleFullscreen: widget.onToggleFullscreen,
         autoplay: true, // 点播放钮已是意图:装载即起播
+        poster: widget.poster, // ohos 懒挂载未播垫底(iOS 被首帧盖住)
       );
     }
     // 海报 + 播放钮(浮层在 InteractiveViewer 之外:不随缩放/拖动移位);

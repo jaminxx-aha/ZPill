@@ -752,8 +752,7 @@ const Map<String, String> enCatalog = {
   'viewer.tapPlay': 'Tap play to watch',
   'viewer.previewUnavailable': 'Preview Unavailable',
   'viewer.preparingPlay': 'Preparing to Play',
-  'viewer.videoUnsupported':
-      'Video playback is not yet supported on this platform',
+  'viewer.playFailed': 'Video playback failed',
   'fmt.jpgOnly': 'JPG Only',
   'fmt.rawOnly': 'RAW Only',
   'fmt.videoOnly': 'Video Only',

@@ -122,9 +122,9 @@ final class _FakeDownloader implements ObjectDownloader {
   }
 }
 
-/// 伪播放器(内嵌人设 = iOS):load/viewControl 落账,viewStatus 由
+/// 伪播放器:load/viewControl 落账,viewStatus 由
 /// viewControl 驱动像真播放器 —— 值不变才不重绘,FakeAsync 里
-/// pumpAndSettle 才能收。play 老路留落账(新实现不应再调)。
+/// pumpAndSettle 才能收。play 落账 = 原生全屏路(embedded: false 人设)。
 final class _FakeVideoPlayer implements VideoPlayer {
   _FakeVideoPlayer({this.frameRateOf, this.embedded = true});
 
@@ -142,8 +142,10 @@ final class _FakeVideoPlayer implements VideoPlayer {
   bool get supportsEmbeddedView => embedded;
 
   @override
-  Future<void> play(String path, {double rate = 1.0}) async {
+  Future<double?> play(String path,
+      {double rate = 1.0, double? position}) async {
     played.add((path, rate));
+    return null;
   }
 
   @override
@@ -750,7 +752,7 @@ void main() {
     expect(player.loads, [(7, '${gallery.temp.path}/DSC_0001.MOV')]);
     expect(player.viewControls, isNotEmpty);
     expect(player.viewControls.last, (7, true, 1.0)); // autoplay + 实时
-    expect(player.played, isEmpty); // 旧全屏播放路不再走
+    expect(player.played, isEmpty); // 内嵌路不调 play(那是无内嵌视图平台的路)
     // 播放中:临时档还在(keep-alive 页持有)
     expect(File(player.loads.single.$2).existsSync(), isTrue);
 
@@ -879,8 +881,8 @@ void main() {
     await _drainSnackBar(tester);
   });
 
-  testWidgets('视频组:无内嵌视图平台(Android/ohos)点播放直接提示,不拉整档',
-      (tester) async {
+  testWidgets('视频组:无内嵌视图平台(Android)拉整档后原生全屏播放'
+      '(不装内嵌视图,海报留守,重播走会话缓存)', (tester) async {
     final gallery = _FakeGallery();
     addTearDown(() => gallery.temp.deleteSync(recursive: true));
     final downloader = _FakeDownloader();
@@ -899,11 +901,16 @@ void main() {
     await tester.tap(find.byIcon(Icons.play_arrow));
     await tester.pumpAndSettle();
 
-    expect(downloader.calls, isEmpty); // 不拉整档再报错
-    expect(player.loads, isEmpty);
-    expect(find.text('该平台暂不支持视频播放'), findsOneWidget);
+    expect(player.played, hasLength(1)); // 原生全屏播放路
+    expect(player.played.single.$2, 1.0); // 常速
+    expect(player.loads, isEmpty); // 不装内嵌视图
+    expect(find.byIcon(Icons.play_arrow), findsOneWidget); // 海报留守
 
-    await _drainSnackBar(tester);
+    // 再点:临时档在会话缓存,秒重播不重拉
+    await tester.tap(find.byIcon(Icons.play_arrow));
+    await tester.pumpAndSettle();
+    expect(player.played, hasLength(2));
+    expect(downloader.calls, hasLength(1));
   });
 
   testWidgets('视频组:滑走翻回不重拉(keep-alive 持临时档),收看视器档留会话缓存',
@@ -999,12 +1006,11 @@ void main() {
     expect(player.loads, hasLength(1));
     expect(find.byTooltip('退出全屏'), findsOneWidget);
 
-    // 滑到照片页:自动退出全屏(还原方向三态 + 顶栏回)
+    // 滑到照片页:自动退出全屏(**钉回竖屏** + 顶栏回;交还传感器集
+    // 会在设备横放时滞留横屏 —— 2026-10-24 真机复报)
     await _dragLikeFinger(tester, const Offset(-600, 0));
     expect(orientationCalls().last, const [
       'DeviceOrientation.portraitUp',
-      'DeviceOrientation.landscapeLeft',
-      'DeviceOrientation.landscapeRight',
     ]);
     expect(find.text('2 / 2'), findsOneWidget); // AppBar 回
 
@@ -1030,9 +1036,10 @@ void main() {
     await tester.tap(find.byIcon(Icons.play_arrow));
     await tester.pumpAndSettle();
 
-    // 沿内嵌视图向上第一层 Stack = 播放页本体:平台视图必须是首子
-    // (底层),点按层(GestureDetector)其后(盖上)—— 引擎的同步
-    // 命中拦截只认「盖在上面的 Flutter 件」,父级包装不在此列。
+    // 沿内嵌视图向上第一层 Stack = 播放页本体:海报垫底,平台视图
+    // 其次(ohos 懒挂载未播时顶黑面;iOS 被首帧盖住无感),点按层
+    // (GestureDetector)再盖上 —— 引擎的同步命中拦截只认「盖在上面
+    // 的 Flutter 件」,父级包装不在此列。
     Stack? playerStack;
     tester
         .element(find.byType(_StubVideoView))
@@ -1045,9 +1052,10 @@ void main() {
     });
     expect(playerStack, isNotNull);
     final children = playerStack!.children;
-    expect(children, hasLength(3));
-    expect(children[0], isA<_StubVideoView>()); // 平台视图打底
-    expect(children[1], isA<GestureDetector>()); // 点按层盖上
+    expect(children, hasLength(4));
+    expect(children[0], isNotNull); // 海报垫底
+    expect(children[1], isA<_StubVideoView>()); // 平台视图
+    expect(children[2], isA<GestureDetector>()); // 点按层盖上
   });
 
   group('相机内保护(SetObjectProtection 0x1012,2026-10-12 官方 §6.2.1.14)',
