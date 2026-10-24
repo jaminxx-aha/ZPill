@@ -37,6 +37,7 @@ import 'data/client_identity_store.dart';
 import 'data/config_snapshot_store.dart';
 import 'data/paired_cameras_store.dart';
 import 'data/ratings_store.dart';
+import 'data/transfer_history_store.dart';
 import 'data/ui_prefs_store.dart';
 import 'data/settings_store.dart';
 import 'debug/nikon_exif_probe.dart';
@@ -166,6 +167,10 @@ final class AppServices {
     transferEngine = TransferEngineImpl(
       downloader: downloader,
       gallery: PlatformServices.gallery,
+      // 传输历史持久化(终态落盘,重启后传输页仍有账;左滑删/清空历史
+      // 同账)。
+      history: FileTransferHistoryStore(
+          dataDir: PlatformServices.gallery.dataDir),
       // 水印合成:设置选模板;off / 异常 → 不处理。
       watermarkFor: (entry) async {
         try {

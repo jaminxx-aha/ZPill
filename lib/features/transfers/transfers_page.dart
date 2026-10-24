@@ -57,6 +57,9 @@ final class TransfersController extends ChangeNotifier {
 
   Future<void> cancel(String taskId) => engine.cancel(taskId);
 
+  /// 左滑单独删除一条历史记录(引擎侧仅终态响应)。
+  Future<void> removeRecord(String taskId) => engine.removeRecord(taskId);
+
   Future<void> clearHistory() async {
     await engine.clearHistory();
     _speeds.clear();
@@ -139,16 +142,19 @@ final class TransfersController extends ChangeNotifier {
 }
 
 class TransfersPage extends StatefulWidget {
-  const TransfersPage({super.key});
+  const TransfersPage({super.key, this.controller});
+
+  /// 注入面(widget 测试);null = 应用级共享实例(AppServices 持有,
+  /// 本页不持有、不 dispose)。
+  final TransfersController? controller;
 
   @override
   State<TransfersPage> createState() => _TransfersPageState();
 }
 
 class _TransfersPageState extends State<TransfersPage> {
-  // 应用级共享实例;本页不持有、不 dispose。
   TransfersController get _controller =>
-      AppServices.instance.transfersController;
+      widget.controller ?? AppServices.instance.transfersController;
 
   @override
   void initState() {
@@ -178,6 +184,7 @@ class _TransfersPageState extends State<TransfersPage> {
   }
 
   Widget _body() {
+    final theme = Theme.of(context);
     final tasks = _controller.tasks;
     if (tasks.isEmpty) {
       // EmptyState 显示端已包 t(),此处再包属双重包裹(无害,见 states.dart)
@@ -185,10 +192,41 @@ class _TransfersPageState extends State<TransfersPage> {
           icon: Icons.download_outlined,
           message: context.t('transfers.empty'));
     }
+    // 排序:进行中在前(入队序),历史按下载时间倒序(持久化记录一并
+    // 由引擎快照给出)。
+    final actives = [for (final t in tasks) if (!t.isTerminal) t];
+    final history = [
+      for (final t in tasks)
+        if (t.isTerminal) t,
+    ]..sort((a, b) {
+        final epoch0 = DateTime.fromMillisecondsSinceEpoch(0);
+        final fa = a.finishedAt ?? epoch0;
+        final fb = b.finishedAt ?? epoch0;
+        return fb.compareTo(fa);
+      });
+    final display = [...actives, ...history];
     return ListView.builder(
       padding: const EdgeInsets.only(bottom: 16),
-      itemCount: tasks.length,
-      itemBuilder: (_, i) => _TaskTile(task: tasks[i], controller: _controller),
+      itemCount: display.length,
+      itemBuilder: (_, i) {
+        final task = display[i];
+        final tile = _TaskTile(task: task, controller: _controller);
+        if (!task.isTerminal) return tile; // 进行中:取消走行尾 ✕,不滑删
+        // 左滑单独删除该记录(历史行);删除沿引擎同步出快照,行即消失。
+        return Dismissible(
+          key: ValueKey('transfer-${task.id}'),
+          direction: DismissDirection.endToStart,
+          background: Container(
+            color: theme.colorScheme.error,
+            alignment: Alignment.centerRight,
+            padding: const EdgeInsets.only(right: 24),
+            child: Icon(Icons.delete_outline,
+                color: theme.colorScheme.onError),
+          ),
+          onDismissed: (_) => _controller.removeRecord(task.id),
+          child: tile,
+        );
+      },
     );
   }
 }
@@ -199,6 +237,16 @@ class _TaskTile extends StatelessWidget {
 
   final TransferTask task;
   final TransfersController controller;
+
+  /// 耗时文案:分秒模板(m/n 占位序两语种一致,词表闸口径)。
+  static String _durationLabel(BuildContext context, Duration d) {
+    if (d.inMinutes >= 1) {
+      return context.t('transfers.durationMinSec',
+          {'m': d.inMinutes, 'n': d.inSeconds % 60});
+    }
+    return context.t(
+        'transfers.durationSec', {'n': (d.inMilliseconds / 1000).toStringAsFixed(1)});
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -246,6 +294,25 @@ class _TaskTile extends StatelessWidget {
       TransferState.cancelled => context.t('common.cancelled'),
     };
 
+    // 历史行补充数据(下载时间 · 大小 · 耗时 · 速度):下载速度只对
+    // completed 设口径(失败/取消半程速度失真不显),耗时缺首跑(排队
+    // 即取消)不显。数字格式产物不进词表,耗时单位走键。
+    final meta = switch (task.state) {
+      TransferState.completed => [
+          formatRecentDateTime(task.finishedAt),
+          if (task.receivedBytes > 0) formatBytes(task.receivedBytes),
+          if (task.elapsed case final d?) _durationLabel(context, d),
+          if (task.downloadSpeed case final s?)
+            '${(s / 1024 / 1024).toStringAsFixed(1)}MB/s',
+        ],
+      TransferState.failed ||
+      TransferState.cancelled => [
+          formatRecentDateTime(task.finishedAt),
+          if (task.elapsed case final d?) _durationLabel(context, d),
+        ],
+      _ => const <String?>[],
+    }.nonNulls.join(' · ');
+
     return ListTile(
       dense: true,
       leading: Icon(
@@ -265,6 +332,15 @@ class _TaskTile extends StatelessWidget {
                     ? theme.colorScheme.error
                     : null,
               )),
+          if (meta.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Text(meta,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodySmall
+                      ?.copyWith(color: theme.colorScheme.outline)),
+            ),
           if (task.state == TransferState.running)
             Padding(
               padding: const EdgeInsets.only(top: 4),

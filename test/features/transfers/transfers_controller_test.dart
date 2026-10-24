@@ -50,6 +50,9 @@ final class _BareEngine implements TransferEngine {
   Future<void> cancel(String taskId) async {}
 
   @override
+  Future<void> removeRecord(String taskId) async {}
+
+  @override
   Future<void> clearHistory() async {}
 }
 

@@ -681,6 +681,8 @@ const Map<String, String> zhCatalog = {
   'transfers.completedNotImported': '已完成 · 未导入(可重新下载再试)',
   'transfers.savedInApp': '已保存到应用内',
   'transfers.failedRetries': '失败:{e}(重试 {n} 次)',
+  'transfers.durationSec': '{n}秒',
+  'transfers.durationMinSec': '{m}分{n}秒',
   'edit.reset': '重置',
   'edit.saveToAlbum': '保存到相册',
   'edit.jpegOnly': '无法编辑此文件(仅支持 JPEG)',

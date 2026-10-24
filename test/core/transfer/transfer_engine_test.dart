@@ -16,6 +16,7 @@ import 'package:nikon_pill/core/ptp/ptp_transport.dart';
 import 'package:nikon_pill/core/ptpip/object_format.dart';
 import 'package:nikon_pill/core/transfer/object_downloader.dart';
 import 'package:nikon_pill/core/transfer/transfer_engine.dart';
+import 'package:nikon_pill/core/transfer/transfer_history.dart';
 import 'package:nikon_pill/core/transfer/transfer_task.dart';
 import 'package:nikon_pill/platform/gallery_saver.dart';
 
@@ -135,12 +136,14 @@ Future<List<TransferTask>> waitUntil(TransferEngine engine,
     {Future<XmpMetadata?> Function(ObjectEntry entry)? metadataFor,
     Future<WatermarkOptions?> Function(ObjectEntry entry)? watermarkFor,
     TextRaster? watermarkRaster,
-    Future<void> Function(ObjectEntry entry, String path)? onAppFileSaved}) {
+    Future<void> Function(ObjectEntry entry, String path)? onAppFileSaved,
+    TransferHistoryStore? history}) {
   final fake = FakePtpTransport();
   final gallery = FakeGallerySaver();
   final engine = TransferEngineImpl(
     downloader: ObjectDownloader(session: PtpSession(transport: fake)),
     gallery: gallery,
+    history: history,
     metadataFor: metadataFor,
     watermarkFor: watermarkFor,
     watermarkRaster: watermarkRaster,
@@ -148,6 +151,34 @@ Future<List<TransferTask>> waitUntil(TransferEngine engine,
     backoffFor: (_) => Duration.zero,
   );
   return (engine, fake, gallery);
+}
+
+/// 内存账本(引擎侧持久化钩子的记账器;新→旧语义同实现)。
+final class FakeHistoryStore implements TransferHistoryStore {
+  final records = <TransferTask>[]; // 新→旧
+  final removed = <String>[];
+  var cleared = 0;
+
+  @override
+  Future<List<TransferTask>> load() async => List.of(records);
+
+  @override
+  Future<void> upsert(TransferTask task) async {
+    records.removeWhere((t) => t.id == task.id);
+    records.insert(0, task);
+  }
+
+  @override
+  Future<void> remove(String taskId) async {
+    records.removeWhere((t) => t.id == taskId);
+    removed.add(taskId);
+  }
+
+  @override
+  Future<void> clear() async {
+    records.clear();
+    cleared++;
+  }
 }
 
 /// 60×40 渐变 JPEG:水印用真图(解码 → 叠字 → 重编码)。
@@ -937,4 +968,220 @@ void main() {
     expect(gallery.importCalls[1].map((r) => r.filename), ['DSC_2.JPG']);
     expect(Directory('${gallery.root.path}/temp').listSync(), isEmpty);
   });
+
+  // ── 时间戳与持久化账本(下载时间/耗时/速度;重启留账)──
+
+  test('completed:盖 startedAt/finishedAt/downloadMs,全程与速度口径可算', () async {
+    final (engine, fake, gallery) = _engine();
+    // 下载挂 30ms:downloadMs 有真值,速度不是 0 字节/0 毫秒的未定式。
+    fake.replyAfter(Future<void>.delayed(const Duration(milliseconds: 30)),
+        _okBytes(12));
+
+    final done = waitUntil(
+        engine, (ts) => ts.length == 1 && ts.single.isTerminal);
+    await engine.enqueue([_entry(1, 'A.NEF', 12)],
+        destination: TransferDestination.app);
+    final t = (await done).single;
+
+    expect(t.startedAt, isNotNull);
+    expect(t.finishedAt, isNotNull);
+    expect(t.finishedAt!.isAfter(t.startedAt!), isTrue);
+    expect(t.downloadMs, greaterThanOrEqualTo(30));
+    expect(t.elapsed, isNotNull);
+    expect(t.downloadSpeed, isNotNull);
+    expect(t.downloadSpeed!, greaterThan(0));
+  });
+
+  test('账本:终态沿 upsert;gallery 导入回填沿重记已导入口径', () async {
+    final store = FakeHistoryStore();
+    final (engine, fake, gallery) = _engine(history: store);
+    final jpeg = _jpegPayload();
+    fake.reply(_okData(jpeg));
+    gallery.importResult = [Uri.parse('content://media/1')];
+
+    final done = waitUntil(engine, (ts) =>
+        ts.single.state == TransferState.completed &&
+        ts.single.galleryUri != null);
+    await engine.enqueue([_entry(1, 'DSC_1.JPG', jpeg.length)],
+        destination: TransferDestination.gallery);
+    final t = (await done).single;
+
+    // 账本与快照一致(completed 沿先记无 Uri,回填沿重记去重),时间戳齐。
+    expect(store.records, hasLength(1));
+    expect(store.records.single.id, t.id);
+    expect(store.records.single.galleryUri, Uri.parse('content://media/1'));
+    expect(store.records.single.finishedAt, isNotNull);
+    expect(store.records.single.startedAt, isNotNull);
+  });
+
+  test('失败落账本(带错误与尝试数);取消落账本', () async {
+    final (engine, fake, _) = _engine();
+    for (var i = 0; i < 4; i++) {
+      fake.fail(const PtpResponseException(
+          opcode: PtpOperationCode.getObject,
+          responseCode: PtpResponseCode.generalError));
+    }
+
+    final failed = waitUntil(
+        engine, (ts) => ts.single.state == TransferState.failed);
+    await engine.enqueue([_entry(1, 'A.NEF', 8)],
+        destination: TransferDestination.app);
+    final f = (await failed).single;
+    expect(f.error, contains('0x2002'));
+
+    // 取消:独立引擎接账本,B 挂在传输层(running)时取消,排空后落定。
+    final store = FakeHistoryStore();
+    final fake2 = FakePtpTransport();
+    final engine2 = TransferEngineImpl(
+      downloader: ObjectDownloader(session: PtpSession(transport: fake2)),
+      gallery: FakeGallerySaver(),
+      history: store,
+      backoffFor: (_) => Duration.zero,
+    );
+    final stall = Completer<void>();
+    fake2.replyAfter(stall.future, _okBytes(4));
+
+    final cancelDone = waitUntil(
+        engine2, (ts) => ts.single.state == TransferState.cancelled);
+    await engine2.enqueue([_entry(2, 'B.NEF', 4)],
+        destination: TransferDestination.app);
+    await pumpEventQueue();
+    await engine2.cancel('t0');
+    stall.complete();
+    await cancelDone;
+
+    expect(store.records, hasLength(1));
+    expect(store.records.single.state, TransferState.cancelled);
+    expect(store.records.single.finishedAt, isNotNull);
+  });
+
+  test('clearHistory:内存与账本同清', () async {
+    final store = FakeHistoryStore();
+    final (engine, fake, _) = _engine(history: store);
+    fake.reply(_okBytes(4));
+    final done = waitUntil(
+        engine, (ts) => ts.length == 1 && ts.single.isTerminal);
+    await engine.enqueue([_entry(1, 'A.NEF', 4)],
+        destination: TransferDestination.app);
+    await done;
+    expect(store.records, hasLength(1));
+
+    final emptied = engine.tasks.firstWhere((ts) => ts.isEmpty);
+    await engine.clearHistory();
+    await emptied;
+    expect(store.records, isEmpty);
+    expect(store.cleared, 1);
+  });
+
+  test('removeRecord:单删出快照并落账本;进行中不响应', () async {
+    final store = FakeHistoryStore();
+    final fake = FakePtpTransport();
+    final engine = TransferEngineImpl(
+      downloader: ObjectDownloader(session: PtpSession(transport: fake)),
+      gallery: FakeGallerySaver(),
+      history: store,
+      backoffFor: (_) => Duration.zero,
+    );
+    fake..reply(_okBytes(4))..reply(_okBytes(6)); // A、B 秒完
+    fake.replyAfter(Completer<void>().future, _okBytes(8)); // C 永挂(running)
+
+    final abDone = waitUntil(engine, (ts) =>
+        ts.length == 2 && ts.every((t) => t.isTerminal));
+    await engine.enqueue([_entry(1, 'A.NEF', 4), _entry(2, 'B.NEF', 6)],
+        destination: TransferDestination.app);
+    final ab = await abDone;
+    expect(store.records.map((t) => t.id), containsAll(ab.map((t) => t.id)));
+
+    // C 入队即接泵(running),卡在传输层:进行中样本。
+    final cRunning = waitUntil(engine, (ts) =>
+        ts.any((t) => t.filename == 'C.NEF' &&
+            t.state == TransferState.running));
+    await engine.enqueue([_entry(3, 'C.NEF', 8)],
+        destination: TransferDestination.app);
+    await cRunning;
+
+    // 进行中(C)不响应;终态(A)单删。订阅先行:removeRecord 沿的
+    // 快照即断言对象。
+    final after = engine.tasks.first.timeout(const Duration(seconds: 5));
+    await engine.removeRecord(ab.first.id);
+    expect((await after).map((t) => t.filename), ['B.NEF', 'C.NEF']);
+    expect(store.removed, [ab.first.id]);
+  });
+
+  test('恢复:构造沿账本拼回终态记录,id 序号跳过历史防撞号', () async {
+    final store = FakeHistoryStore();
+    await store.upsert(TransferTask(
+      id: 't9',
+      handle: 3,
+      filename: 'OLD.JPG',
+      totalBytes: 5,
+      destination: TransferDestination.gallery,
+      state: TransferState.completed,
+      receivedBytes: 5,
+      startedAt: DateTime(2026, 10, 23, 9),
+      finishedAt: DateTime(2026, 10, 23, 9, 0, 5),
+      downloadMs: 400,
+      galleryUri: Uri.parse('content://media/old'),
+    ));
+    await store.upsert(TransferTask(
+      id: 't5',
+      handle: 2,
+      filename: 'OLDER.NEF',
+      totalBytes: 6,
+      destination: TransferDestination.app,
+      state: TransferState.completed,
+      receivedBytes: 6,
+      finishedAt: DateTime(2026, 10, 22, 9),
+    ));
+
+    final (engine, fake, _) = _engine(history: store);
+    fake.reply(_okBytes(7));
+    final done = waitUntil(engine, (ts) =>
+        ts.length == 3 &&
+        ts.where((t) => t.filename == 'NEW.NEF').every((t) => t.isTerminal));
+    await engine.enqueue([_entry(9, 'NEW.NEF', 7)],
+        destination: TransferDestination.app);
+    final tasks = await done;
+
+    final restored = tasks.where((t) => t.id != 't10').toList();
+    expect(restored.map((t) => t.id), containsAll(['t9', 't5']));
+    final t9 = tasks.firstWhere((t) => t.id == 't9');
+    expect(t9.isTerminal, isTrue);
+    expect(t9.finishedAt, DateTime(2026, 10, 23, 9, 0, 5));
+    expect(t9.galleryUri, Uri.parse('content://media/old'));
+    // 新任务从历史最大序号之后起号(t9 → t10),快照流里不撞 id
+    expect(tasks.firstWhere((t) => t.filename == 'NEW.NEF').id, 't10');
+  });
+
+  test('恢复失败(账本 load 炸):空账起家,引擎照常收发', () async {
+    final fake = FakePtpTransport();
+    final engine2 = TransferEngineImpl(
+      downloader: ObjectDownloader(session: PtpSession(transport: fake)),
+      gallery: FakeGallerySaver(),
+      history: _ThrowingStore(),
+      backoffFor: (_) => Duration.zero,
+    );
+    fake.reply(_okBytes(4));
+    final done = waitUntil(
+        engine2, (ts) => ts.length == 1 && ts.single.isTerminal);
+    await engine2.enqueue([_entry(1, 'A.NEF', 4)],
+        destination: TransferDestination.app);
+    final tasks = await done;
+    expect(tasks.single.state, TransferState.completed);
+  });
+}
+
+/// load 即炸的账本(恢复失败路用)。
+final class _ThrowingStore implements TransferHistoryStore {
+  @override
+  Future<List<TransferTask>> load() async => throw Exception('盘炸了');
+
+  @override
+  Future<void> upsert(TransferTask task) async {}
+
+  @override
+  Future<void> remove(String taskId) async {}
+
+  @override
+  Future<void> clear() async {}
 }
