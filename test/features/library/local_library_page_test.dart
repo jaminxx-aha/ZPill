@@ -1233,8 +1233,16 @@ void main() {
     expect(find.byType(Image), findsNothing);
 
     await tester.tap(find.text('NEF'));
-    await tester.pumpAndSettle();
-    expect(find.text('解码失败(该平台可能不支持)'), findsOneWidget);
+    // 兜底探路(内嵌缩略提取)是真 IO,FakeAsync 域完成回调只在 runAsync
+    // 出窗上浮:逐窗排水至失败落位(无内嵌缩略 → 报错占位)。
+    var failed = false;
+    for (var i = 0; i < 40 && !failed; i++) {
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)));
+      await tester.pump();
+      failed = find.text('解码失败(该平台可能不支持)').evaluate().isNotEmpty;
+    }
+    expect(failed, isTrue);
   });
 
   // ── HIF 可看可点(2026-10-24:与 NEF 同族走原生解码通道,不再
@@ -1314,6 +1322,50 @@ void main() {
     expect(String.fromCharCodes(cached.sublist(0, 24)), contains('Exif'));
     expect(find.text('NEF'), findsNothing); // 不再图标格
     expect(find.byType(Image), findsOneWidget);
+  });
+
+  testWidgets('NEF 无解码器:查看器回内嵌缩略兜底(不再报错占位)', (tester) async {
+    // 原生解码缺席(缺省 failing 解码器 = ohos/Android 无通道人设)时
+    // 查看器大图回内嵌缩略(方向注入 + 黑边裁剪装配,nefEmbeddedJpeg)
+    // —— 不再死在「解码失败」。HIF 解码失败不走此兜底(见上一组)。
+    final jpeg =
+        Uint8List.fromList(img.encodeJpg(img.Image(width: 4, height: 4)));
+    final nef = _nefWithEmbeddedThumb(jpeg, orientation: 8);
+    File('${dir.path}/c.nef').writeAsBytesSync(nef);
+    final gallery = _FakeGallery(dir);
+    final decoder = _FakeRawDecoder(fail: true);
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    await tester.pumpWidget(host(gallery, controller, rawDecoder: decoder));
+    await drainAppFiles(tester, controller);
+
+    // 网格先行:格缩略兜底同链,排完才可按格键点进查看器。
+    final thumbCache =
+        File('${gallery.thumbs.path}/libv3_c.nef_${nef.length}.jpg');
+    var written = false;
+    for (var i = 0; i < 40 && !written; i++) {
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)));
+      written = thumbCache.existsSync();
+      await tester.pump();
+    }
+    expect(written, isTrue, reason: '网格缩略兜底先行落盘');
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('c.nef')));
+    await tester.pump(); // 查看器进场(解码在途,菊花在屏不能 settle)
+    // 查看器兜底同链真 IO:逐窗排水至大图上屏(512 与 2560 各解码一次)。
+    var shown = false;
+    for (var i = 0; i < 40 && !shown; i++) {
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)));
+      await tester.pump();
+      shown = find.byType(Image).evaluate().isNotEmpty;
+    }
+    expect(shown, isTrue, reason: '查看器回内嵌缩略兜底出图');
+    expect(decoder.calls.last, ('${dir.path}/c.nef', 2560)); // 原生先试
+    expect(find.text('解码失败(该平台可能不支持)'), findsNothing);
+    expect(find.text('c.nef'), findsWidgets); // 查看器 AppBar
   });
 
   // ── 视频页内播放(2026-10-09 再改:点开**不自动播**,首帧 + 播放钮

@@ -5,8 +5,8 @@
 /// 注),唯一可直接取用的位图是 IFD0 0x0201(JPEGInterchangeFormat)
 /// 指向的 160×120 缩略 JPEG —— 与相机相册 GetThumb 同源同质(撑满
 /// 全屏糊,三列网格够用)。平台无原生 RAW 解码器(ohos/Android,
-/// `nikonpill/raw` 缺席或拒绝)时,网格缩略以此为兜底;NEF 全尺寸
-/// 解码仍走原生(iOS ImageIO)。
+/// `nikonpill/raw` 缺席或拒绝)时,网格缩略与大图查看以此为兜底
+/// ([nefEmbeddedJpeg] 装配成品);NEF 全尺寸解码仍走原生(iOS ImageIO)。
 ///
 /// 结构:文件即 TIFF(II*/MM*,IFD0@8),条目表在头部 ~300B 内;
 /// 一次头读 + 一次缩略段读,不碰 RAW 条带(28MB 档只读几 KB)。
@@ -17,6 +17,9 @@ library;
 
 import 'dart:io';
 import 'dart:typed_data';
+
+import 'jpeg_orientation.dart';
+import 'letterbox.dart';
 
 /// 头读窗口:IFD0 条目表(Zf NEF 22 条 ≈ 272B)远在此内。
 const _kHeadBytes = 2048;
@@ -114,4 +117,18 @@ Future<NefEmbeddedThumb?> extractNefEmbeddedThumb(String path) async {
   } finally {
     await raf.close();
   }
+}
+
+/// 内嵌缩略兜底成品 JPEG:提取 → 注入 EXIF 方向(引擎解码即转正)→
+/// 信箱黑边裁剪(无黑边/裁剪异常原样 —— 裁剪是妆补,[trimLetterboxJpeg]
+/// 自吞错回 null,不挡兜底本身)。大图查看的解码兜底用(图库查看器
+/// 解码缓存装配);网格缩略在各自的串行链里就地装配,不走这里。无内嵌
+/// 缩略/非 NEF 结构回 null(调用方回落占位)。
+Future<Uint8List?> nefEmbeddedJpeg(String path) async {
+  final embedded = await extractNefEmbeddedThumb(path);
+  if (embedded == null) {
+    return null;
+  }
+  final oriented = injectJpegOrientation(embedded.jpeg, embedded.orientation);
+  return await trimLetterboxJpeg(oriented) ?? oriented;
 }
