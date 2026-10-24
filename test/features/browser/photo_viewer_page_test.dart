@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:collection';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -20,6 +21,7 @@ import 'package:nikon_pill/core/transfer/transfer_task.dart';
 import 'package:nikon_pill/core/utils/byte_writer.dart';
 import 'package:nikon_pill/features/browser/photo_viewer_page.dart';
 import 'package:nikon_pill/features/common/widgets/embedded_video_player.dart';
+import 'package:nikon_pill/features/common/widgets/hero_zoom.dart';
 import 'package:nikon_pill/features/common/widgets/photo_info_sheet.dart';
 import 'package:nikon_pill/l10n/l10n.dart';
 import 'package:nikon_pill/features/transfers/transfers_page.dart';
@@ -33,12 +35,20 @@ final class _FakeThumbs implements ThumbnailCache {
   /// 信息底单的 EXIF 桩:handle → 卡;未脚本 = null(无 EXIF)。
   final Map<int, ExifCardData> exifByHandle = {};
 
+  /// 预览席位悬挂句柄(路径 Future 永不完成):动效垫显断言用
+  ///(真机预览席位是网络取,慢于格缩略;假件即时回测不出垫显)。
+  final Set<int> hangPreviewHandles = {};
+
   @override
   int get previewMaxPixelSize => 2560;
 
   @override
-  Future<String> pathFor(ObjectEntry entry, ThumbSource source) async =>
-      '/tmp/nikonpill_test_preview_${entry.handle}.jpg';
+  Future<String> pathFor(ObjectEntry entry, ThumbSource source) async {
+    if (source == ThumbSource.preview && hangPreviewHandles.contains(entry.handle)) {
+      return Completer<String>().future; // 悬挂:席位未回
+    }
+    return '/tmp/nikonpill_test_preview_${entry.handle}.jpg';
+  }
 
   @override
   Future<ExifCardData?> exifCardOf(ObjectEntry entry) async =>
@@ -1247,5 +1257,48 @@ void main() {
       expect(find.byIcon(Icons.lock), findsOneWidget,
           reason: '开页 0x1008 读回真值接管显示,不再回落未锁假态');
     });
+  });
+
+  testWidgets('渐进放大动效:初始页挂配对件且先显格缩略(预览席位未回不转圈)',
+      (tester) async {
+    // 格缩略真档(动效落点图;席位链 Image 无裸错误道,须可解码)。
+    final thumbPath = '/tmp/nikonpill_test_hero_thumb_101.jpg';
+    File(thumbPath).writeAsBytesSync(base64Decode(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='));
+
+    final group = PhotoGroup([_file(101, 'DSC_0001.JPG')]);
+    final thumbs = _FakeThumbs()..hangPreviewHandles.add(101); // 席位未回
+    await _openViewer(
+        tester,
+        PhotoViewerPage(
+          items: [group],
+          initialIndex: 0,
+          thumbnails: thumbs,
+          heroTag: 'camera-grid-101:jpg',
+          heroThumbPath: thumbPath,
+          heroImage: gridThumbImageProvider(thumbPath),
+        ));
+
+    // 初始页挂同 tag 配对件(PageView 只建初始页,恰一枚)。
+    expect(find.byWidgetPredicate((w) => w is Hero && w.tag == 'camera-grid-101:jpg'),
+        findsOneWidget);
+    // 格缩略先显(动效落点同图),加载转圈被顶位。
+    expect(
+        find.byWidgetPredicate((w) =>
+            w is Image && (w.image as FileImage).file.path == thumbPath),
+        findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+  });
+
+  testWidgets('无动效参数:不挂配对件,走原预览管线(降级普通转场)', (tester) async {
+    final group = PhotoGroup([_file(102, 'DSC_0002.JPG')]);
+    await _openViewer(
+        tester,
+        PhotoViewerPage(
+          items: [group],
+          initialIndex: 0,
+          thumbnails: _FakeThumbs(),
+        ));
+    expect(find.byWidgetPredicate((w) => w is Hero), findsNothing);
   });
 }

@@ -20,6 +20,8 @@ import 'package:nikon_pill/core/transfer/transfer_task.dart';
 import 'package:nikon_pill/features/browser/album_ratings_controller.dart';
 import 'package:nikon_pill/features/browser/browser_controller.dart';
 import 'package:nikon_pill/features/browser/photo_grid_page.dart';
+import 'package:nikon_pill/features/browser/photo_viewer_page.dart';
+import 'package:nikon_pill/features/common/widgets/hero_zoom.dart';
 import 'package:nikon_pill/features/transfers/transfers_page.dart';
 import '../../helpers/fake_connection.dart';
 
@@ -1253,5 +1255,52 @@ void main() {
       CameraAlbum.allPhotos([_photo(1), _photo(2)])
     ]);
     await loading;
+  });
+
+  testWidgets('渐进放大动效:格缩略挂 HeroZoom,点格查看器初始页同 tag 配对', (tester) async {
+    final repo = _FakeRepo();
+    final controller = BrowserController(repository: repo);
+    await tester.pumpWidget(_host(PhotoGridPage(
+      controller: controller,
+      folderHandle: CameraAlbum.allPhotosHandle,
+      fallbackName: '全部照片',
+      thumbnails: _FakeThumbs(),
+      uiPrefs: InMemoryUiPrefsStore(), // 选项态进程内隔离(防跨用例串味)
+    )));
+
+    final loading = controller.load();
+    repo.updatesCtrl.add(AlbumsUpdate(albums: [
+      CameraAlbum.allPhotos([_photo(1)])
+    ], loaded: 1, total: 1, complete: true));
+    await tester.pump();
+    await tester.pump(); // 缩略 Future 完成(假件微任务回),格出图挂锚
+    repo.completeLoad([CameraAlbum.allPhotos([_photo(1)])]);
+    await loading;
+
+    // 格缩略挂动效锚(HeroZoom 包 Image,tag = 相机侧配对键)。
+    expect(find.byType(HeroZoom), findsOneWidget);
+    expect(find.byWidgetPredicate((w) => w is Hero && w.tag == 'camera-grid-1:jpg'),
+        findsOneWidget);
+
+    // 点格进查看器:初始页挂同 tag 配对件(PageView 只建初始页,恰一枚;
+    // 下方网格路由 offstage 不计)。
+    await tester.tap(find.byType(HeroZoom));
+    await tester.pumpAndSettle();
+    expect(find.byType(PhotoViewerPage), findsOneWidget);
+    expect(find.byWidgetPredicate((w) => w is Hero && w.tag == 'camera-grid-1:jpg'),
+        findsOneWidget);
+    // 初始页先显格缩略(动效落点同图,预览席位未回前已上屏):查看器
+    // 席位链显示档是全解 FileImage(缩略原档),非格内 300px 降采样键。
+    expect(
+        find.byWidgetPredicate((w) =>
+            w is Image &&
+            w.image ==
+                FileImage(File('/tmp/nikonpill_test_thumb_1.jpg'))),
+        findsOneWidget);
+
+    // 收查看器:配对件仍在两侧,回程航班落回格位。
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    expect(find.byType(HeroZoom), findsOneWidget);
   });
 }
