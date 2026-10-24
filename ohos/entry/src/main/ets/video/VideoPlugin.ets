@@ -9,8 +9,9 @@
  *   AVImageGenerator(API 12+,本 SDK @since 23 形态)取 0.1s 处一帧
  *   (iOS 取同点位避纯黑首帧;旋转语义待真机核对 —— 竖拍素材方向
  *   如实机表现),长边压到 maxPixelSize 内(PixelMap.scale 原地缩),
- *   ImagePacker.packToData 打包 JPEG 回传 ArrayBuffer(Dart 侧收
- *   Uint8List)。
+ *   ImagePacker.packToData 打包 JPEG 回传(必须 Uint8Array 包装 ——
+ *   ArrayBuffer 过不了 MethodChannel 序列化,见 onMethodCall 内注,
+ *   2026-10-24 实锤;Dart 侧收 Uint8List)。
  * - `frameRate({path})`:AVImageGenerator 无帧率元数据,AVMetadataHelper
  *   的帧数键在部分档不全 —— 先回 null(调用方不设顺帧门直放,契约
  *   合法),真机核对后如需再补。
@@ -67,7 +68,13 @@ export class VideoPlugin implements FlutterPlugin {
       }
       this.extractThumbnail(path, maxPixelSize).then((bytes) => {
         if (bytes !== null) {
-          result.success(bytes);
+          // 字节陷阱:MethodChannel 序列化(writeValue)不认 ArrayBuffer
+          // —— 落 `typeof value == 'object'` 分支序列化成**空 map**,Dart
+          // 侧 `as Uint8List` 翻 TypeError 被 on Object 吞掉 = 缩略静默
+          // 消失(2026-10-24 ohos 真机实锤:AVImageGenerator 全程无错、
+          // 缓存零落盘)。必须 new Uint8Array 包一层(iOS 裸 Data →
+          // FlutterStandardTypedData 同款教训)。
+          result.success(new Uint8Array(bytes));
         } else {
           result.error('thumbnail_failed', `抽帧失败:${path}`, null);
         }

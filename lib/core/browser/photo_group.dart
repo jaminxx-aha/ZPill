@@ -255,6 +255,11 @@ MediaFormat? mediaFormatOfFilename(String name) {
 
 bool isRawFilename(String name) => _hasExt(name, const {'nef', 'nrw'});
 
+/// HEIF(尼康 .HIF 扩展,外姓 .heif 同档):图库缩略管线分流用 ——
+/// HEIF 引擎解码各平台不齐(ohos 解不动),走原生小图通道
+/// (`nikonpill/raw`,iOS ImageIO / ohos image kit)。
+bool isHifFilename(String name) => _hasExt(name, const {'hif', 'heif'});
+
 bool isVideoFilename(String name) => _hasExt(name, const {'mov', 'mp4', 'm4v'});
 
 /// 连拍相邻张间隔窗:同一夹内相邻快门差 ≤ 此值才归连拍段

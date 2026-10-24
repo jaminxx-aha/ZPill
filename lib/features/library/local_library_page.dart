@@ -9,9 +9,10 @@
 ///([LibraryRatings],下载落盘沿按所在组相机评级写入、相册改评沿传播,
 /// 见 [fileRatingKey]);「连拍聚合」开时相邻拍摄时刻的同段文件合为
 /// 一格(×N 角标,与相机相册连拍簇同参,见 [groupLocalBurstRuns];
-/// mtime = 拍摄时刻由下载引擎落盘回写)。可解码图与 NEF/MOV 同走缩略
+/// mtime = 拍摄时刻由下载引擎落盘回写)。可解码图与 NEF/HIF/MOV 同走缩略
 /// 小档管线(≤512px 落盘,格双源 gapless 切换 —— cache 被系统内存警告
-/// 清空后重解的也是毫秒级小档,2026-10-20「看大图返回缩略重刷新」根治);
+/// 清空后重解的也是毫秒级小档,2026-10-20「看大图返回缩略重刷新」根治;
+/// NEF 原生解码缺席时回内嵌 160×120 缩略兜底 nef_thumb.dart)。
 /// 点任意可看件进黑底查看器:PageView 左右滑翻页(网格过滤序同源),
 /// 图片双指缩放、NEF 原生解码长边 ≤2560(会话缓存,翻回不重解)。视频
 /// 在页面内直接播放(2026-10-09:点开即播,不再「海报帧 + 播放钮 +
@@ -38,7 +39,9 @@ import '../../app_services.dart';
 import '../../data/ui_prefs_store.dart';
 import '../../core/browser/photo_group.dart';
 import '../../core/media/cube_lut.dart';
+import '../../core/media/jpeg_orientation.dart';
 import '../../core/media/letterbox.dart';
+import '../../core/media/nef_thumb.dart';
 import '../../core/media/video_duration.dart';
 import '../../core/media/xmp_rgb_table.dart' show parseXmpRgbTable;
 import '../../core/ptpip/object_format.dart';
@@ -311,7 +314,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
       final dir = await _gallery.thumbsDir();
       final cache = File('$dir/libv3_$key.jpg'); // 键全量升版:黑边裁剪放开到全部缩略
       if (cache.existsSync()) return cache.path;
-      final Uint8List jpeg;
+      Uint8List jpeg;
       if (isVideoFilename(name)) {
         // 信箱黑边裁剪(提取器把画面信箱化进固定画布,失败原样;
         // 提取只调一次,裁剪失败不重提取)。
@@ -319,13 +322,23 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
             await _videoPlayer.thumbnail(file.path, maxPixelSize: 512);
         jpeg = await trimLetterboxJpeg(extracted) ?? extracted;
       } else {
-        // NEF 与可解码图(JPG/PNG)同走原生小图通道:iOS 实现是
-        // CGImageSource 对格式无门槛(CreateThumbnailFromImageAlways,
-        // 45MP 全图下采样解码 ~50ms,内存友好)。原生通道缺失
-        // (Android/ohos)抛 MissingPluginException —— Error 族,
-        // on Exception 接不住,故 on Object:回落 null → 格走原图
-        // 源(双源 gapless),不毒化串行链。
-        jpeg = await _rawDecoder.decodeJpeg(file.path, maxPixelSize: 512);
+        // 原生小图通道:iOS = CGImageSource 对格式无门槛(HIF 一并接,
+        // CreateThumbnailFromImageAlways,45MP 全图下采样解码 ~50ms,
+        // 内存友好);ohos = image kit 只接 HIF(插件侧扩展名闸 ——
+        // image kit 无 RAW 解码,JPG 留给引擎原图源方向自理)。通道
+        // 缺失/拒绝/失败:NEF 回内嵌 160×120 缩略兜底(裸 JPEG 无
+        // EXIF,注入方向引擎解码即转正,与相机相册 GetThumb 同源),
+        // 其余回落 null → 格走原图源(双源 gapless),不毒化串行链。
+        try {
+          jpeg = await _rawDecoder.decodeJpeg(file.path, maxPixelSize: 512);
+        } on Object {
+          final embedded =
+              isRawFilename(name) ? await extractNefEmbeddedThumb(file.path) : null;
+          if (embedded == null) {
+            return null;
+          }
+          jpeg = injectJpegOrientation(embedded.jpeg, embedded.orientation);
+        }
       }
       // 信箱黑边裁剪(HIF/NEF 预览同样信箱化;无黑边原样)。
       final trimmed = await trimLetterboxJpeg(jpeg);
@@ -684,11 +697,13 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     );
   }
 
-  /// 可点进查看器:Flutter 可解码图片 / NEF 原生解码 / MOV 原生抽帧。
+  /// 可点进查看器:Flutter 可解码图片 / HIF·NEF 原生解码 / MOV 原生
+  /// 抽帧(HIF 与 NEF 同走原生解码通道,iOS ImageIO / ohos image kit)。
   bool _openable(File file) {
     final name = _nameOf(file);
     return _isViewableName(name) ||
         isRawFilename(name) ||
+        isHifFilename(name) ||
         isVideoFilename(name);
   }
 
@@ -744,6 +759,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     final viewable = _isViewable(file);
     final name = _nameOf(file);
     final raw = !viewable && isRawFilename(name);
+    final hif = !viewable && isHifFilename(name);
     final video = !viewable && isVideoFilename(name);
     return Stack(
       fit: StackFit.expand,
@@ -765,10 +781,10 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
               );
             },
           )
-        else if (raw || video)
-          // NEF/MOV:原生解码/抽帧缩略(缓存命中/解码完成后铺图);
-          // 无解码器/失败 → 图标格。视频格叠摄像机角标(与相机相册
-          // 网格同款)。
+        else if (raw || video || hif)
+          // NEF/MOV/HIF:原生解码/抽帧缩略(缓存命中/解码完成后铺图;
+          // 无解码器/失败 → NEF 内嵌缩略兜底,再退图标格)。HIF 以前
+          // 落这里外的图标格(2026-10-24 纳入缩略管线)。
           FutureBuilder<String?>(
             future: _thumbFor(file),
             builder: (context, snap) => snap.hasData && snap.data != null
@@ -1121,7 +1137,7 @@ class _LibraryViewerState extends State<_LibraryViewer> {
   /// 邻页预解码(i±1,视频跳过):滑到前把邻居解好,上屏即缓存命中
   /// —— 旧版邻页上屏才开始解码全幅 JPG,解码窗里只有黑底在屏(翻页
   /// 黑闪的根)。JPG 走 precacheImage(与页内 DeSqueezedImage 同一
-  /// FileImage 缓存键);NEF 走会话解码缓存([_decodes] 天然去重)。
+  /// FileImage 缓存键);NEF/HIF 走会话解码缓存([_decodes] 天然去重)。
   /// 视频跳过:平台视图只在真滑到时装载,预建等于白装(不引
   /// allowImplicitScrolling 同因)。解码在引擎线程不占 UI;失败静默
   /// (真滑到走原路兜底)。
@@ -1132,7 +1148,7 @@ class _LibraryViewerState extends State<_LibraryViewer> {
       final file = _files[j];
       final name = _nameOf(file);
       if (isVideoFilename(name)) continue;
-      if (isRawFilename(name)) {
+      if (isRawFilename(name) || isHifFilename(name)) {
         unawaited(_warmNefDecode(file));
       } else if (_isViewableName(name)) {
         // 静默收口走 onError:precache 失败(邻档被删/不可解码)走
@@ -1224,7 +1240,9 @@ class _LibraryViewerState extends State<_LibraryViewer> {
             )
           : _VideoFallbackPage(file: file, thumbFor: widget.thumbFor);
     }
-    if (isRawFilename(name)) {
+    if (isRawFilename(name) || isHifFilename(name)) {
+      // HIF 与 NEF 同走原生解码通道(≤2560,会话缓存):iOS ImageIO /
+      // ohos image kit 都不吃引擎直解 HEIF 的兜底,统一走 decodeJpeg。
       return InteractiveViewer(
         maxScale: 8,
         child: Center(child: _rawBody(file)),

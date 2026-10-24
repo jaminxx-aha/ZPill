@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -336,6 +337,38 @@ bool sortIconShown(WidgetTester tester) => find
         matching: find.byType(SortBarsIcon))
     .evaluate()
     .isNotEmpty;
+
+/// 最小 NEF 合成(II 小端,IFD0@8 条目升序):宽/高/方向/JPEG 偏移/
+/// 长度 + 填充 + [thumb] 内嵌缩略。结构对齐 Zf NEF(nef_thumb.dart
+/// 提取器口径),专供「无原生 RAW 解码器 → 内嵌缩略兜底」用例。
+Uint8List _nefWithEmbeddedThumb(Uint8List thumb, {int orientation = 1}) {
+  final entries = <(int, int, int)>[
+    (0x0100, 4, 160), // width
+    (0x0101, 4, 120), // height
+    (0x0112, 3, orientation), // Orientation(SHORT)
+    (0x0201, 4, 0), // JPEGInterchangeFormat(合成时回填)
+    (0x0202, 4, thumb.length),
+  ]..sort((a, b) => a.$1.compareTo(b.$1));
+  const ifdOffset = 8;
+  final ifdSize = 2 + entries.length * 12 + 4;
+  final thumbOffset = ifdOffset + ifdSize + 64;
+  final out = Uint8List(thumbOffset + thumb.length);
+  final d = ByteData.view(out.buffer);
+  out.setAll(0, [0x49, 0x49, 0x2A, 0x00]); // II*\0
+  d.setUint32(4, ifdOffset, Endian.little);
+  d.setUint16(ifdOffset, entries.length, Endian.little);
+  for (var i = 0; i < entries.length; i++) {
+    final e = ifdOffset + 2 + i * 12;
+    final (tag, type, value) = entries[i];
+    d.setUint16(e, tag, Endian.little);
+    d.setUint16(e + 2, type, Endian.little);
+    d.setUint32(e + 4, 1, Endian.little); // count
+    d.setUint32(e + 8, tag == 0x0201 ? thumbOffset : value, Endian.little);
+  }
+  d.setUint32(ifdOffset + 2 + entries.length * 12, 0, Endian.little);
+  out.setRange(thumbOffset, thumbOffset + thumb.length, thumb);
+  return out;
+}
 
 void main() {
   late Directory dir;
@@ -1202,6 +1235,86 @@ void main() {
     await tester.tap(find.text('NEF'));
     await tester.pumpAndSettle();
     expect(find.text('RAW 解码失败(该平台可能不支持)'), findsOneWidget);
+  });
+
+  // ── HIF 纳入缩略管线 / NEF 内嵌缩略兜底(2026-10-24 ohos 缩略缺口)──
+
+  testWidgets('HIF:走原生小图通道,小档落盘', (tester) async {
+    writeFile('c.hif', modified: DateTime(2026, 10, 3));
+    final gallery = _FakeGallery(dir);
+    final decoder = _FakeRawDecoder();
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    await tester.pumpWidget(host(gallery, controller, rawDecoder: decoder));
+    await drainAppFiles(tester, controller);
+
+    // 与 NEF/MOV 同管线:512px 解码一次,落 libv3_ 小档(此前 HIF 落
+    // 管线外的图标格支路)。
+    expect(decoder.calls, [('${dir.path}/c.hif', 512)]);
+    expect(File('${gallery.thumbs.path}/libv3_c.hif_3.jpg').existsSync(), isTrue);
+  });
+
+  testWidgets('HIF 无解码器:图标格顶位', (tester) async {
+    writeFile('c.hif', modified: DateTime(2026, 10, 3));
+    final gallery = _FakeGallery(dir);
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    // host 缺省注入 failing 解码器。
+    await tester.pumpWidget(host(gallery, controller));
+    await drainAppFiles(tester, controller);
+
+    expect(find.text('HIF'), findsOneWidget); // 图标格
+    expect(find.byType(Image), findsNothing);
+  });
+
+  testWidgets('HIF:点格进查看器,2560px 解码大图(可点同 NEF)', (tester) async {
+    writeFile('c.hif', modified: DateTime(2026, 10, 3));
+    final gallery = _FakeGallery(dir);
+    final decoder = _FakeRawDecoder();
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    await tester.pumpWidget(host(gallery, controller, rawDecoder: decoder));
+    await drainAppFiles(tester, controller);
+
+    await tester.tap(find.byKey(const ValueKey('c.hif')));
+    await tester.pumpAndSettle();
+    expect(find.text('c.hif'), findsWidgets); // 查看器 AppBar(非占位页)
+    expect(decoder.calls.last, ('${dir.path}/c.hif', 2560));
+    expect(find.byType(Image), findsOneWidget);
+  });
+
+  testWidgets('NEF 无解码器:内嵌缩略兜底铺格(方向注入落盘)', (tester) async {
+    // 内嵌缩略给真 JPEG(引擎可解),方向 8(竖拍横置):提取 → 注入
+    // EXIF → 引擎解码转正,格出图不落图标格(ohos/Android 无原生 RAW
+    // 解码器时网格缩略的真身,与相机相册 GetThumb 同质)。
+    final jpeg =
+        Uint8List.fromList(img.encodeJpg(img.Image(width: 4, height: 4)));
+    final nef = _nefWithEmbeddedThumb(jpeg, orientation: 8);
+    File('${dir.path}/c.nef').writeAsBytesSync(nef);
+    final gallery = _FakeGallery(dir);
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    await tester.pumpWidget(host(gallery, controller));
+    await drainAppFiles(tester, controller);
+
+    final cache =
+        File('${gallery.thumbs.path}/libv3_c.nef_${nef.length}.jpg');
+    // 缩略串行链内嵌缩略提取是真 IO(RandomAccessFile 头读/段读):
+    // FakeAsync 域完成回调只在 runAsync 出窗上浮,逐窗排水至小档落盘。
+    var written = false;
+    for (var i = 0; i < 40 && !written; i++) {
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)));
+      written = cache.existsSync();
+      await tester.pump();
+    }
+    expect(written, isTrue, reason: '内嵌缩略兜底落盘');
+    await tester.pumpAndSettle();
+    final cached = cache.readAsBytesSync();
+    expect(cached.length, greaterThan(jpeg.length)); // 注入 APP1 变长
+    expect(String.fromCharCodes(cached.sublist(0, 24)), contains('Exif'));
+    expect(find.text('NEF'), findsNothing); // 不再图标格
+    expect(find.byType(Image), findsOneWidget);
   });
 
   // ── 视频页内播放(2026-10-09 再改:点开**不自动播**,首帧 + 播放钮
