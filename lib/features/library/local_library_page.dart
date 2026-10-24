@@ -82,10 +82,11 @@ String _nameOf(File file) => file.uri.pathSegments.last;
 /// 段列表(未成段的每文件独立单元素段),顺序保持输入序。前提是
 /// mtime = 拍摄时刻(下载引擎落盘回写,见 TransferEngine._run)。
 ///
-/// [modifiedOf] 注入时刻读取(测试专用):dart:io 的
-/// setLastModifiedSync/statSync 秒级取整(宿主机实证:设 .600ms 读回
-/// .000),毫秒级窗边界在真实文件系统上不可表达 —— 边界用例注入合成
-/// 时刻,生产走缺省 statSync。
+/// [modifiedOf] 注入时刻读取:测试注入合成时刻(dart:io 的
+/// setLastModifiedSync/statSync 秒级取整,宿主机实证:设 .600ms 读回
+/// .000,毫秒级窗边界在真实文件系统上不可表达),图库页注入 stat 缓存
+/// (进度事件高频重建不逐文件摸盘,见 LocalLibraryPage._statOf);
+/// 缺省走 statSync。
 List<List<File>> groupLocalBurstRuns(
     List<File> files, {
     DateTime Function(File file)? modifiedOf,
@@ -213,6 +214,27 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
 
   /// 视频时长探测(容器 mvhd 行走,本地小读;会话内合并)。
   final Map<String, Future<Duration?>> _videoDurations = {};
+
+  /// stat 缓存(path → mtime+size):传输进度事件会高频重建本页
+  ///(ListenableBuilder 直吃 TransfersController 的每帧任务快照),
+  /// 逐文件 statSync 的同步盘 IO 不能进热路径 —— 按 appFiles 列表
+  /// 实例变化沿整表重建(落定/删除沿 refreshAppFiles 换列表;缓存期
+  /// 内文件的 mtime/size 视为不变,引擎在文件进列表前落定两者)。
+  List<File>? _statSource;
+  final Map<String, (DateTime, int)> _statCache = {};
+
+  /// 取排序/分段/聚合用的 (mtime, size);换源后首访逐文件补一次。
+  (DateTime, int) _statOf(File file) {
+    final source = _controller.appFiles;
+    if (!identical(source, _statSource)) {
+      _statSource = source;
+      _statCache.clear();
+    }
+    return _statCache.putIfAbsent(file.path, () {
+      final s = file.statSync();
+      return (s.modified, s.size);
+    });
+  }
 
   Future<Duration?> _videoDurationFor(File file) {
     final key = _contentKey(file);
@@ -354,8 +376,9 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
       listenable: Listenable.merge([_controller, _ratings]),
       builder: (context, _) {
         // 排序(共享件):时间/文件名/文件大小 × 双向;默认新在前。
+        // stat 走缓存(见 _statOf),进度事件高频重建不逐文件摸盘。
         final files = sortMedia(List<File>.of(_controller.appFiles), _sort,
-            (f) => (f.statSync().modified, _nameOf(f), f.statSync().size));
+            (f) => (_statOf(f).$1, _nameOf(f), _statOf(f).$2));
         final activeCount =
             _controller.tasks.where((t) => !t.isTerminal).length;
         final filtered = _filtered(files);
@@ -444,7 +467,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   /// 上做,排序/筛选与聚合、分段叠加不用特判。
   Widget _grid(BuildContext context, List<File> filtered) {
     final runs = _burstGrouped
-        ? groupLocalBurstRuns(filtered)
+        ? groupLocalBurstRuns(filtered, modifiedOf: (f) => _statOf(f).$1)
         : [
             for (final f in filtered) [f]
           ];
@@ -454,7 +477,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
         // 同逻辑,共享排序件约定)。
         if (_sort.key == MediaSortKey.time)
           for (final section in groupMediaByDate<List<File>>(
-              runs, (run) => run.first.statSync().modified)) ...[
+              runs, (run) => _statOf(run.first).$1)) ...[
             SliverToBoxAdapter(
               child: MediaSectionHeader(
                 day: section.day,

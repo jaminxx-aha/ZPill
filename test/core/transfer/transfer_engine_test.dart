@@ -379,6 +379,45 @@ void main() {
     expect(Directory('${gallery.root.path}/downloads').listSync(), isEmpty);
   });
 
+  test('进度通知节流:高频块进度合并广播,终态即时', () async {
+    final fake = FakePtpTransport();
+    final gallery = FakeGallerySaver();
+    final engine = TransferEngineImpl(
+      downloader: ObjectDownloader(
+        session: PtpSession(transport: fake),
+        partialChunkBytes: 64,
+      ),
+      gallery: gallery,
+      backoffFor: (_) => Duration.zero,
+    );
+    // 0x101B 在册 + 20 块连续回放(64B × 20 = 1280B):块间微任务级,
+    // 全程落在 100ms 节流窗内,逐块广播(旧实现 20+ 发)应合并。
+    fake.reply(_okData(
+        buildDeviceInfoDataset(operations: const [0x1001, 0x1009, 0x101B])));
+    const chunks = 20;
+    for (var i = 0; i < chunks; i++) {
+      fake.reply(_okData(Uint8List.fromList(List.filled(64, i))));
+    }
+
+    var progressSnapshots = 0;
+    engine.tasks.listen((ts) {
+      final t = ts.single;
+      if (t.state == TransferState.running && t.receivedBytes > 0) {
+        progressSnapshots++;
+      }
+    });
+
+    final done = waitUntil(
+        engine, (ts) => ts.single.isTerminal && ts.single.receivedBytes == chunks * 64);
+    await engine.enqueue([_entry(1, 'A.NEF', chunks * 64)],
+        destination: TransferDestination.app);
+    await done;
+
+    // 领界 1 + 尾随 ≤1 为预期;CI 慢机(块间偶超 100ms)留余量到 5,
+    // 仍远小于逐块广播的 20。
+    expect(progressSnapshots, lessThanOrEqualTo(5));
+  });
+
   test('去重:进行中同 handle 同目的地只留一个;完成后可重新入队', () async {
     final (engine, fake, gallery) = _engine();
     fake..reply(_okBytes(10))..reply(_okBytes(10));
