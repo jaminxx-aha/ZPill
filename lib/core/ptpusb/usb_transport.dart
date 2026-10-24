@@ -49,10 +49,11 @@ abstract interface class UsbBytePipe {
   Stream<Uint8List> get interruptEvents;
 }
 
-/// 流式回调的单块上限:1MB(ohos 单次 bulkTransfer 直接吃满,通道往返
-/// 从 64KB 一次降到 1MB 一次;Android AOSP 有限超时 bulkTransfer 上限
-/// 16KB,native 内部分块循环组装,一次通道调用同样读满 1MB;iOS 容器
-/// 缓冲天然支持任意 maxLen)。
+/// 流式回调的单块上限:1MB(通道往返从 64KB 一次降到 1MB 一次;Android
+/// AOSP 有限超时 bulkTransfer 上限 16KB,native 内部分块循环组装;ohos
+/// 单次 bulkTransfer 大缓冲真机恒 rc=-1、256KB 挂死(2026-10-25 定案),
+/// native 按 64KB 起步自适应探大至 ≤128KB 的子块循环组装;iOS 容器缓冲
+/// 天然支持任意 maxLen。三端一次通道调用均读满 maxLen,短读/ZLB 即返)。
 const int kUsbStreamChunkBytes = 1024 * 1024;
 
 /// bulk 读缺省超时:相机忙(写卡/连拍清缓存)可能拖长,放宽到 15s。
