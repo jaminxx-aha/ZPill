@@ -118,7 +118,35 @@ final class TransferEngineImpl implements TransferEngine {
   List<TransferTask> get _snapshot =>
       [for (final job in _jobs.values) job.task];
 
-  void _notify() => _ctrl.add(_snapshot);
+  /// 进度通知节流窗:块级 onProgress 到达率远高于 UI 需要率(USB 1MB
+  /// 块 ~20+/s;Wi-Fi PTP-IP 按帧更碎,可达百级/s),逐块广播会让 tasks
+  /// 的所有订阅者跟着高频重建 —— 常驻图库页在 ListenableBuilder 里
+  /// 整页重建且逐文件 statSync,下载期全 app 卡顿的根因。进度快照
+  /// 100ms 一档足够顺滑;状态沿(起跑/落定/取消/重排)不走节流,
+  /// 即时通知并清掉尾随定时器。
+  static const Duration _progressInterval = Duration(milliseconds: 100);
+  DateTime _lastNotifyAt = DateTime.fromMillisecondsSinceEpoch(0);
+  Timer? _trailingNotify;
+
+  void _notify() {
+    _trailingNotify?.cancel();
+    _trailingNotify = null;
+    _lastNotifyAt = DateTime.now();
+    _ctrl.add(_snapshot);
+  }
+
+  /// 进度沿通知:距上次通知不足窗则合并进尾随定时器(尾随保证窗内
+  /// 最后的进度不丢;并发 = 1,泵同时只跑一个任务,单槽足够)。
+  void _notifyProgress() {
+    if (DateTime.now().difference(_lastNotifyAt) >= _progressInterval) {
+      _notify();
+      return;
+    }
+    _trailingNotify ??= Timer(_progressInterval, () {
+      _trailingNotify = null;
+      _notify();
+    });
+  }
 
   @override
   Future<void> enqueue(Iterable<ObjectEntry> entries,
@@ -199,7 +227,7 @@ final class TransferEngineImpl implements TransferEngine {
         onProgress: (received) {
           if (!job.task.isTerminal) {
             job.task = job.task.copyWith(receivedBytes: received);
-            _notify();
+            _notifyProgress();
           }
         },
         isCancelled: () => job.cancelRequested,
