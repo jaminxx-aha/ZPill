@@ -120,3 +120,7 @@ flutter build hap
 - [lib/core/ptpip/README.md](lib/core/ptpip/README.md) — 尼康 Wi-Fi 方言定案
 - [lib/core/ptpusb/README.md](lib/core/ptpusb/README.md) — PTP/USB 容器差异备忘
 - [lib/platform/README.md](lib/platform/README.md) — 平台适配层现状
+
+## 许可
+
+MIT,全文见 [LICENSE](LICENSE)。
