@@ -245,6 +245,7 @@ class _SettingsPageState extends State<SettingsPage> {
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
                 child: SegmentedButton<AppThemeMode>(
+                  showSelectedIcon: false,
                   segments: [
                     ButtonSegment(
                         value: AppThemeMode.system,
@@ -268,6 +269,7 @@ class _SettingsPageState extends State<SettingsPage> {
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
                 child: SegmentedButton<AppLanguage>(
+                  showSelectedIcon: false,
                   // 选项文案走 t():英文环境「跟随系统」→ Follow System
                   // (「中文」「English」为专名不译)。第一期基建里语言行
                   // 是唯一消费 enCatalog 的 UI,其余存量文案由后续抽取
@@ -295,6 +297,7 @@ class _SettingsPageState extends State<SettingsPage> {
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
                 child: SegmentedButton<PhotoDownloadFormat>(
+                  showSelectedIcon: false,
                   segments: [
                     for (final f in PhotoDownloadFormat.values)
                       ButtonSegment(
@@ -369,6 +372,7 @@ class _SettingsPageState extends State<SettingsPage> {
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
                 child: SegmentedButton<WatermarkStyle>(
+                  showSelectedIcon: false,
                   segments: [
                     ButtonSegment(
                         value: WatermarkStyle.off,
@@ -415,6 +419,7 @@ class _SettingsPageState extends State<SettingsPage> {
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
                 child: SegmentedButton<FeedUpscaler>(
+                  showSelectedIcon: false,
                   segments: [
                     ButtonSegment(
                         value: FeedUpscaler.off, label: Text(context.t('common.offShort'))),
@@ -454,6 +459,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   children: [
                     for (final preset in kDeSqueezePresets)
                       ChoiceChip(
+                        showCheckmark: false, // 与分段钮统一:选中=实底,无 ✓
                         label: preset == 1.0
                             ? Text(context.t('common.offShort'))
                             : Text('$preset×'),

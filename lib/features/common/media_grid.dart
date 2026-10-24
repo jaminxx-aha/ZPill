@@ -387,11 +387,13 @@ const List<Shadow> kOverlayTextShadows = [
 const String kOverlayFontFamily = 'InterBadge';
 
 /// 角标文字统一样式(白 + 投影 + 随包字体;[size] 10 = 格文字档)。
+/// 汉字回落 NotoSansSC(角标文案纯 ASCII,兜底防御)。
 TextStyle overlayBadgeTextStyle(double size) => TextStyle(
       color: Colors.white,
       fontSize: size,
       height: 1.0,
       fontFamily: kOverlayFontFamily,
+      fontFamilyFallback: const ['NotoSansSC'],
       shadows: kOverlayTextShadows,
     );
 

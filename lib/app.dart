@@ -49,6 +49,12 @@ class NikonPillApp extends StatelessWidget {
           // 特性会把 MenuAnchor 面板钳在距右缘 ~27px 处(_positionChild
           // 的 avoidBounds 钳制),应用内容本就近边绘制 —— 清零后弹层
           // 缝隙由 open(position:) 精确控制(4px)。
+          //
+          // textScaler 钉统一系数:系统动态字号只缩放 Text 不缩 Icon/
+          // 布局,平台字号档不同时同一份代码双端大小/折行全错位(设置
+          // 页实证)。系数 = iOS 端系统字号档实测值(标题/正文两线互证
+          // 0.83/0.85),以 iOS 观感为基准 —— iPhone 端不变,其余平台
+          // 对齐;网格角标格内另有绝对钉(见 media_grid),不受此影响。
           builder: (context, child) => MediaQuery(
             data: MediaQuery.of(context).copyWith(
               padding: MediaQuery.of(context).padding.copyWith(
@@ -56,6 +62,7 @@ class NikonPillApp extends StatelessWidget {
                 right: 0,
               ),
               displayFeatures: const [],
+              textScaler: const TextScaler.linear(0.85),
             ),
             child: child!,
           ),

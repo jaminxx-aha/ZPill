@@ -38,12 +38,34 @@ flutter:
   # 取景「高质量」上采样/时域降噪(Catmull-Rom fragment shader)。
   shaders:
     - shaders/feed_quality.frag
-  # 角标统一字体(Inter Regular 4.1,SIL OFL 1.1,随包):iOS 观感近似
-  # 替身 —— SF 本体是苹果专有字体,许可不允许提取打包/跨平台分发;
-  # 默认字体是平台各自的(iOS=SF/ohos=HarmonyOS Sans),度量差百分之
-  # 几,同一份代码双端观感永远差一口气 —— 显式指定随包字体后同字体
-  # 同排版,逐像素同源(OFL License 随资产入包)。
+  # 应用统一字体(Inter 4.1,SIL OFL 1.1,随包):iOS 观感近似替身 ——
+  # SF 本体是苹果专有字体,许可不允许提取打包/跨平台分发;默认字体是
+  # 平台各自的(iOS=SF/ohos=HarmonyOS Sans),度量差百分之几,同一份
+  # 代码双端观感永远差一口气 —— 全 app 钉随包字体,同字体同排版逐像
+  # 素同源。四字重对应 Material 用档(400 正文/500 按钮标签/600 M3
+  # 标题/700 粗体);汉字 Inter 无字形走系统回落(iOS=PingFang/ohos=
+  # HarmonyOS Sans),要连汉字同源需另打 CJK 字体(体量大,未做)。
   fonts:
     - family: InterBadge
       fonts:
         - asset: assets/fonts/Inter-Regular.ttf
+        - asset: assets/fonts/Inter-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/Inter-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/Inter-Bold.ttf
+          weight: 700
+    # 汉字同源回落:Inter 无 CJK 字形,中文回落到 Noto Sans SC(SIL
+    # OFL)—— 按应用实际用字子集化(1637 字,原 VF 17.8MB;子集外生僻
+    # 字/文件名走系统回落,与旧行为一致)。VF 经 fonttools instancer
+    # 出四档静态字重(与 Inter 同 400/500/600/700 档),不依赖引擎可变
+    # 字体支持。
+    - family: NotoSansSC
+      fonts:
+        - asset: assets/fonts/NotoSansSC-400.ttf
+        - asset: assets/fonts/NotoSansSC-500.ttf
+          weight: 500
+        - asset: assets/fonts/NotoSansSC-600.ttf
+          weight: 600
+        - asset: assets/fonts/NotoSansSC-700.ttf
+          weight: 700
