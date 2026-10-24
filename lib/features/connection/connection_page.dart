@@ -1794,20 +1794,14 @@ class _StaScanBodyState extends State<_StaScanBody> {
                             subtitle: saved.lastIp == null
                                 ? null
                                 : Text(saved.lastIp!),
-                            trailing: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                IconButton(
-                                  icon: const Icon(Icons.delete_outline),
-                                  tooltip: context.t('conn.forgetCamera'),
-                                  onPressed: busy
-                                      ? null
-                                      : () => _ConnectionPageState
-                                          ._confirmRemoveSaved(
-                                              context, controller, saved),
-                                ),
-                                const Icon(Icons.chevron_right),
-                              ],
+                            trailing: IconButton(
+                              icon: const Icon(Icons.delete_outline),
+                              tooltip: context.t('conn.forgetCamera'),
+                              onPressed: busy
+                                  ? null
+                                  : () => _ConnectionPageState
+                                      ._confirmRemoveSaved(
+                                          context, controller, saved),
                             ),
                             onTap: busy
                                 ? null
