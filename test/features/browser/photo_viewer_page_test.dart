@@ -1301,4 +1301,54 @@ void main() {
         ));
     expect(find.byWidgetPredicate((w) => w is Hero), findsNothing);
   });
+
+  testWidgets('下拉跟手:过阈值松手收查看器(返回 harness)', (tester) async {
+    final group = PhotoGroup([_file(103, 'DSC_0003.JPG')]);
+    await _openViewer(
+        tester,
+        PhotoViewerPage(
+          items: [group],
+          initialIndex: 0,
+          thumbnails: _FakeThumbs(),
+        ));
+    expect(find.byType(PageView), findsOneWidget);
+
+    await tester.drag(find.byType(PageView), const Offset(0, 150));
+    await tester.pumpAndSettle();
+    expect(find.text('打开查看器'), findsOneWidget); // 回到 harness
+  });
+
+  testWidgets('下拉跟手:短拖弹回,查看器不收', (tester) async {
+    final group = PhotoGroup([_file(104, 'DSC_0004.JPG')]);
+    await _openViewer(
+        tester,
+        PhotoViewerPage(
+          items: [group],
+          initialIndex: 0,
+          thumbnails: _FakeThumbs(),
+        ));
+
+    await tester.drag(find.byType(PageView), const Offset(0, 60));
+    await tester.pumpAndSettle();
+    expect(find.byType(PageView), findsOneWidget); // 仍在查看器(弹回)
+  });
+
+  testWidgets('下拉跟手:视频页不启用(纵向拖不收)', (tester) async {
+    final group = PhotoGroup([
+      _file(105, 'DSC_0005.MOV', format: 0x300D, kind: ObjectKind.video),
+    ]);
+    await _openViewer(
+        tester,
+        PhotoViewerPage(
+          items: [group],
+          initialIndex: 0,
+          thumbnails: _FakeThumbs(),
+          videoPlayer: _FakeVideoPlayer(),
+        ));
+    expect(find.byType(PageView), findsOneWidget);
+
+    await tester.drag(find.byType(PageView), const Offset(0, 150));
+    await tester.pumpAndSettle();
+    expect(find.byType(PageView), findsOneWidget); // 视频页闸关:不收
+  });
 }
