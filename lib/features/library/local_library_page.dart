@@ -43,7 +43,6 @@ import '../../core/media/video_duration.dart';
 import '../../core/media/xmp_rgb_table.dart' show parseXmpRgbTable;
 import '../../core/ptpip/object_format.dart';
 import '../../design/app_colors.dart';
-import '../../design/app_dimens.dart';
 import '../../l10n/l10n.dart';
 import '../../platform/gallery_saver.dart';
 import '../../platform/raw_decoder.dart';
@@ -361,11 +360,9 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
         final filtered = _filtered(files);
         return Scaffold(
           appBar: AppBar(
-            // 二十轮:标题左对齐(iOS 默认居中)——与相机页左上「相机」
-            // 标签同槽(左 16px),三 tab 顶部左位一致。centerTitle false
-            // 无 leading 时标题从默认 titleSpacing(24)起,须显式收窄。
-            centerTitle: false,
-            titleSpacing: AppSpacing.lg,
+            // 三端居中(2026-10-24 定稿,推二十轮左位):centerTitle 由
+            // 全局主题钉死,不再显式 false/titleSpacing(二十轮左 16 的
+            // 两条配套随之撤)。
             title: Text(_selectMode
                 ? context.t('grid.selectedCount', {'n': _selected.length})
                 : context.t('shell.gallery')),

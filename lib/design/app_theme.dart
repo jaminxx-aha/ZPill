@@ -35,6 +35,11 @@ abstract final class AppTheme {
       // 平台各异(iOS=SF/ohos=HarmonyOS Sans)致同码不同渲染,钉
       // 随包字体后双端逐像素同源;汉字走 NotoSansSC 回落。
       fontFamily: 'InterBadge',
+      // 顶栏标题三端统一居中(2026-10-24 定稿,推二十轮「三 tab 左位」
+      // ):不写 centerTitle 的页原先各随平台默认(iOS/macOS 居中,
+      // android/ohos 等靠左)致两端不一;主题层钉死后逐页无需再写,
+      // 显式 false 的图库页已随本定稿撤除。
+      appBarTheme: const AppBarTheme(centerTitle: true),
       filledButtonTheme: filledButtonTheme,
       // 选中指示胶囊:亮色 = 黑底(其上图标/文字取 onSecondaryContainer
       // = 品牌黄,图标同款反转),暗色 = 拍摄页金胶囊。导航栏整条
