@@ -22,8 +22,8 @@
 ///   塞进一次 requestSendPTPCommand 回调,多 MB 大档(NEF 24MB / MOV
 ///   数百 MB)一次回调不可控 —— 真机触发读超时 → 看门狗判链路死亡,
 ///   整 app 断连(缩略图/点击全挂)。64KB 分块与镜头头读同款(IC 链
-///   已验证粒度);ohos/Android 通道内部本就 1MB 流块,保持 GetObject
-///   不降速。
+///   已验证粒度);ohos/Android 通道一次调用本就读满 1MB 流块(内部
+///   子块组装,ohos 64KB / Android 16KB),保持 GetObject 不降速。
 library;
 
 import 'dart:async';

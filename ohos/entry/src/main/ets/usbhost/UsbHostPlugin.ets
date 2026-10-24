@@ -16,8 +16,10 @@
  *   不阻塞主线程;返回传输字节数,-1 异常,timeout=0 表示无限等待;
  * - libusb 层的读请求长度必须 ≥ 单个事务突发数据量:请求 12B 容器头
  *   而相机整只 DATA 容器(~180B)到达时,以 babble 报
- *   LIBUSB_ERROR_OVERFLOW(-8)—— bulkRead 内部按 ≥16KB 读入,
- *   超出 maxLen 的字节暂存,下次调用先掏暂存(对 Dart 是普通短读流);
+ *   LIBUSB_ERROR_OVERFLOW(-8)—— bulkRead 内部按 ≥16KB、≤64KB 读入
+ *   (上限为实测安全粒度:1MB 整缓冲直读真机恒 rc=-1,2026-10-25 定案,
+ *   详见 BULK_IN_MAX_READ_BYTES 注),超出 maxLen 的字节暂存,
+ *   下次调用先掏暂存(对 Dart 是普通短读流);
  * - usbControlTransfer 的 controlParam **必须带 data 属性**(运行时
  *   401,比 d.ts 严格):零长 OUT 请求也要传 data: new Uint8Array(0);
  * - 上轮失败会在设备侧留下脏状态:OUT 端点 data toggle 停在 DATA1,
@@ -77,6 +79,13 @@ const BULK_OUT_TIMEOUT_MS = 5000;
 /// (真机实测:请求 12B 容器头,相机整只 ~180B DATA 容器到达 →
 /// babble → LIBUSB_ERROR_OVERFLOW -8)。超出 maxLen 的字节进 leftover。
 const BULK_IN_MIN_READ_BYTES = 16 * 1024;
+
+/// bulk IN 单次 libusb 读的上限:64KB(2026-09-27 真机闭环实测安全粒度)。
+/// T1-T4(1ff5e58)把 Dart 流块提到 1MB 后,native 曾把整只 1MB 缓冲
+/// 一次递给 bulkTransfer —— 真机(2026-10-25 复报)大数据相(下载
+/// 整档/0x920F/0x9805)恒 rc=-1 全灭。native 改按此上限子块循环组装,
+/// 一次通道调用仍读满 maxLen(通道往返 1MB/次的收益保留)。
+const BULK_IN_MAX_READ_BYTES = 64 * 1024;
 
 /// interrupt 事件缓冲:PTP 事件容器 ≤64B(Zf 实测 12/16B)。
 const INTERRUPT_BUF_BYTES = 64;
@@ -378,9 +387,15 @@ export class UsbHostPlugin implements FlutterPlugin {
     }
   }
 
-  /// bulk IN:单次读、短读合法;≥1 字节成功,否则按契约抛 usb_timeout/usb_error。
-  /// libusb 层永远按 ≥[BULK_IN_MIN_READ_BYTES] 请求(防 OVERFLOW babble),
-  /// 超出 maxLen 的字节暂存 leftover,下次调用先掏(对 Dart 是普通短读流)。
+  /// bulk IN:单次通道调用读满 maxLen(短读/ZLB 即返),Dart 契约不变;
+  /// native 内部按 [BULK_IN_MAX_READ_BYTES] 子块循环请求并组装。
+  /// - 单次请求下限 ≥[BULK_IN_MIN_READ_BYTES](防 OVERFLOW babble,同旧),
+  ///   上限 64KB 实测安全粒度(1MB 整缓冲直读真机恒 rc=-1,见常量注);
+  /// - 超出 maxLen 的字节暂存 leftover,下次调用先掏(对 Dart 是普通
+  ///   短读流);
+  /// - 空手负值 CLEAR_FEATURE 后原地重读一次(Android 同款:STALL 是
+  ///   相机流控,负值分不清 STALL 与超时 —— STALL 即时失败、超时吃满
+  ///   窗,窗口尚有余量才值得重试);有部分数据则优先交付短读。
   private async bulkRead(maxLen: number, timeoutMs: number, result: MethodResult): Promise<void> {
     const s = this.session;
     if (s === null) {
@@ -399,15 +414,59 @@ export class UsbHostPlugin implements FlutterPlugin {
         result.success(out);
         return;
       }
-      const buffer = new Uint8Array(Math.max(maxLen, BULK_IN_MIN_READ_BYTES));
+      const buffer = new Uint8Array(maxLen);
+      const scratch = new Uint8Array(
+        Math.min(Math.max(maxLen, BULK_IN_MIN_READ_BYTES), BULK_IN_MAX_READ_BYTES));
+      const finite = timeoutMs > 0;
       const start = Date.now();
-      let n = await usb.bulkTransfer(s.pipe, s.bulkIn, buffer, timeoutMs);
-      while (n === 0 && (timeoutMs <= 0 || Date.now() - start < timeoutMs)) {
-        // 零长包:传输边界标记(容器恰为 wMaxPacketSize 整数倍时出现),
-        // 真数据在下一个传输里 —— 耗掉剩余窗口继续等。
-        // 下限 1ms:rest 若为 0 会变成无限等待,绝不可传 0。
-        const rest = timeoutMs <= 0 ? 0 : Math.max(1, timeoutMs - (Date.now() - start));
-        n = await usb.bulkTransfer(s.pipe, s.bulkIn, buffer, rest);
+      const deadline = start + timeoutMs;
+      let filled = 0;
+      let haltRetried = false;
+      let lastRc = 0;
+      while (filled < maxLen) {
+        if (finite && deadline - Date.now() <= 0) {
+          break; // 窗口耗尽:有数据交付短读,无数据走超时
+        }
+        // 下限 1ms:窗内剩余若传 0 会变成无限等待,绝不可传 0。
+        const wait = finite ? Math.max(1, deadline - Date.now()) : 0;
+        const n = await usb.bulkTransfer(s.pipe, s.bulkIn, scratch, wait);
+        lastRc = n;
+        if (n > 0) {
+          const take = Math.min(n, maxLen - filled);
+          buffer.set(scratch.subarray(0, take), filled);
+          filled += take;
+          if (take < n) {
+            // 超读余量(小 maxLen 撞上大突发;仅此一次,take<n 即已满格)
+            this.bulkInLeftover = scratch.slice(take, n);
+          }
+          if (n < scratch.length) {
+            break; // 短读 = 突发结束
+          }
+          continue; // 满块继续组装
+        }
+        if (n === 0) {
+          // 零长包:传输边界标记(容器恰为 wMaxPacketSize 整数倍时出现),
+          // 真数据在下一个传输里。
+          if (filled > 0) break; // 交付
+          continue; // 未见数据的 ZLB:耗窗口续等
+        }
+        // 负值:空手清 halt 原地重读一次(STALL 即时失败、超时吃满窗,
+        // 窗口已尽不再重试);已有部分数据则优先交付(数据是真实的)。
+        if (filled === 0 && !haltRetried && (!finite || deadline - Date.now() > 0)) {
+          haltRetried = true;
+          Log.w(TAG, `bulkRead rc=${n},CLEAR_FEATURE 后原地重读`);
+          await this.clearHalt(s.bulkIn.address);
+          continue;
+        }
+        if (filled > 0) break;
+        NativeLog.e('usb', `bulkRead 失败:rc=${n}(max=${maxLen}B,窗=${timeoutMs}ms,实耗=${Date.now() - start}ms)`);
+        if (finite) {
+          // 窗口内无数据:对齐 Dart 的 TimeoutException 语义
+          result.error('usb_timeout', `bulkTransfer rc=${n} within ${timeoutMs}ms`, null);
+        } else {
+          result.error('usb_error', `bulkTransfer rc=${n}`, null);
+        }
+        return;
       }
       // 会话轮换守卫(关键):等待期间 teardown/重连会让 s 的 pipe 失效,
       // 而晚到的数据绝不能进 this.bulkInLeftover —— leftover 是共享字段,
@@ -417,21 +476,16 @@ export class UsbHostPlugin implements FlutterPlugin {
         result.error('usb_stale', '会话已轮换,旧链路读结果丢弃', null);
         return;
       }
-      if (n > 0) {
-        if (n > maxLen) {
-          this.bulkInLeftover = buffer.slice(maxLen, n);
-          result.success(buffer.slice(0, maxLen));
-        } else {
-          result.success(buffer.slice(0, n));
-        }
+      if (filled > 0) {
+        result.success(buffer.slice(0, filled));
         return;
       }
-      NativeLog.e('usb', `bulkRead 失败:rc=${n}(max=${maxLen}B,窗=${timeoutMs}ms)`);
-      if (timeoutMs > 0) {
+      NativeLog.e('usb', `bulkRead 失败:rc=${lastRc}(max=${maxLen}B,窗=${timeoutMs}ms,实耗=${Date.now() - start}ms)`);
+      if (finite) {
         // 窗口内无数据(-1/0):对齐 Dart 的 TimeoutException 语义
-        result.error('usb_timeout', `bulkTransfer rc=${n} within ${timeoutMs}ms`, null);
+        result.error('usb_timeout', `bulkTransfer rc=${lastRc} within ${timeoutMs}ms`, null);
       } else {
-        result.error('usb_error', `bulkTransfer rc=${n}`, null);
+        result.error('usb_error', `bulkTransfer rc=${lastRc}`, null);
       }
     } catch (e) {
       NativeLog.e('usb', `bulkRead 异常:${e}`);
