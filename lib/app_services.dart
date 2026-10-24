@@ -53,6 +53,7 @@ import 'features/settings/settings_page.dart';
 import 'features/settings/snapshot_controller.dart';
 import 'features/transfers/transfers_page.dart';
 import 'platform/ble_driver.dart';
+import 'platform/ble_scanner.dart' show bleDeviceModelName;
 import 'platform/background_transfer.dart';
 import 'platform/session_lifecycle.dart';
 import 'platform/location_host.dart';
@@ -265,6 +266,13 @@ final class AppServices {
     // (链路层,GPS 开关只管注入层),app 存活期维持,不随 USB/无线
     // 断连拆)。
     bleSession = BleCameraSession(host: PlatformServices.ble);
+    // 相机侧注册名(0x2002,相机「已配对设备」菜单显示):「<手机型号
+    // >-NikonPill」。异步取型号 —— 配对须用户过 UI,毫秒级落定无竞态;
+    // 取不到(native 缺失/异常,helper 已兜空串)保持默认裸名。
+    unawaited(bleDeviceModelName().then((model) {
+      bleSession.controllerName =
+          BleCameraSession.composeControllerName(model);
+    }));
     // 帧级 trace 常年接线进统一日志(ble 域,debug 级):不随配对面板
     // 开关断续,通用日志随时可查握手/注入帧时序(2026-10-17 面板日志
     // 框退役,日志并轨统一日志)。

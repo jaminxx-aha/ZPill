@@ -25,7 +25,7 @@
  *   bondStateChange(经典蓝牙;匹配按名字/序列号,防误配兄弟机身)。
  */
 import { ble, connection, bluetooth } from '@kit.ConnectivityKit';
-import { BusinessError } from '@kit.BasicServicesKit';
+import { BusinessError, deviceInfo } from '@kit.BasicServicesKit';
 import abilityAccessCtrl, { PermissionRequestResult } from '@ohos.abilityAccessCtrl';
 import UIAbility from '@ohos.app.ability.UIAbility';
 import {
@@ -150,6 +150,13 @@ export class BlePlugin implements FlutterPlugin, AbilityAware {
           }
           result.success(on);
         });
+        break;
+      case 'deviceName':
+        // 本机型号名(相机侧注册名「<型号>-NikonPill」的型号段,组装
+        // 在 Dart 侧):市场名(如 HUAWEI Mate 80 Pro)→ 机型代号
+        // (productModel,如 ALN-AL00)兜底。deviceInfo 免权限,同步取。
+        result.success(deviceInfo.marketName !== ''
+          ? deviceInfo.marketName : deviceInfo.productModel);
         break;
       case 'scan':
         this.ensureBluetoothPermission(() => {

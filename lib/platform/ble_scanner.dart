@@ -139,6 +139,21 @@ abstract interface class BleHost {
   Future<void> disconnect();
 }
 
+/// 本机手机型号(`nikonpill/ble` `deviceName`;相机侧注册名
+/// 「<手机型号>-NikonPill」的型号段,组装在 BleCameraSession.
+/// composeControllerName):iOS hw.machine 对照市场名 / Android 市场名
+/// +Build.MODEL / ohos deviceInfo.marketName。
+/// native 未实现或取不到返回空串,调用方回落裸名 'NikonPill'。
+Future<String> bleDeviceModelName() async {
+  try {
+    return await const MethodChannel('nikonpill/ble')
+            .invokeMethod<String>('deviceName') ??
+        '';
+  } on Exception {
+    return '';
+  }
+}
+
 /// 经 `nikonpill/ble` + `nikonpill/ble/events`。
 final class MethodChannelBleHost implements BleHost {
   static const MethodChannel _methods = MethodChannel('nikonpill/ble');
