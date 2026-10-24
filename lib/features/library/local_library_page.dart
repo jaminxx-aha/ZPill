@@ -335,7 +335,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     final name = _nameOf(file);
     try {
       final dir = await _gallery.thumbsDir();
-      final cache = File('$dir/libv3_$key.jpg'); // 键全量升版:黑边裁剪放开到全部缩略
+      final cache = File('$dir/libv4_$key.jpg'); // 键全量升版:NEF 缩略 LibRaw 真解码(旧 libv3_ 是内嵌缩略糊图)
       if (cache.existsSync()) return cache.path;
       Uint8List jpeg;
       if (isVideoFilename(name)) {
@@ -1344,7 +1344,25 @@ class _LibraryViewerState extends State<_LibraryViewer> {
               ),
             );
           }
-          return const CircularProgressIndicator();
+          // 解码中(LibRaw 45MP 硬成本秒级):磁盘缩略垫底 —— 网格刚
+          // 产出的 512 真解码图秒开不转圈,大图解完原位换清(_warmNeighbors
+          // 已预热,正常路径缩略都在盘上);无缩略(深链冷启)才转圈。
+          return FutureBuilder<String?>(
+            future: widget.thumbFor(file),
+            builder: (context, thumbSnap) {
+              final path = thumbSnap.data;
+              if (thumbSnap.hasData && path != null) {
+                return Image.file(
+                  File(path),
+                  fit: BoxFit.contain,
+                  gaplessPlayback: true,
+                  errorBuilder: (context, error, stackTrace) =>
+                      const CircularProgressIndicator(),
+                );
+              }
+              return const CircularProgressIndicator();
+            },
+          );
         },
       );
 
