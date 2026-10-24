@@ -141,30 +141,23 @@ class _HomeShellState extends State<HomeShell> {
       ),
       bottomNavigationBar: wide
           ? null
-          // 图标下沉(2026-10-24 用户反馈两轮定标:栏不动,图标再下
-          // 8):栏带 = 顶垫 6 + 栏 56,网格视口下缘与栏带高度都不动;
-          // Transform.translate 把内容(胶囊/图标/文字,含点按与语义
-          // 盒)整体画低 8,布局盒不变 —— 胶囊/图标/文字相对几何不走
-          // 样。多出的 8 落在安全区上沿(文字底距屏底 28,与 iOS 原生
-          // 相仿);垫条/安全区/栏三者同为 surface 色(M3 脚手架背景
-          // 即 colorScheme.surface),越界绘制无缝,明暗主题皆然。
-          : Padding(
-              padding: const EdgeInsets.only(top: 6),
-              child: Transform.translate(
-                offset: const Offset(0, 8),
-                child: NavigationBar(
-                  selectedIndex: _index,
-                  onDestinationSelected: _select,
-                  destinations: [
-                    for (final t in _tabs)
-                      NavigationDestination(
-                        icon: Icon(t.icon),
-                        selectedIcon: Icon(t.selectedIcon),
-                        label: context.t(t.label),
-                      ),
-                  ],
-                ),
-              ),
+          // 上下两栏几何对齐微信(2026-10-24 三轮定标,截图实测 3x:
+          // 顶栏 46.3、底栏带 87.3 = 栏内容区 53.3 + 安全区 34;图标
+          // 心距带顶 ~20)。高度与 labelPadding 钉在 app_theme;此前
+          // 两轮的顶垫 6/Transform 下沉 8(对齐 iOS 原生照片栏时期的
+          // 微调)被本定标取代撤除 —— 内容在 53 栏内随高居中即落在
+          // 微信位。
+          : NavigationBar(
+              selectedIndex: _index,
+              onDestinationSelected: _select,
+              destinations: [
+                for (final t in _tabs)
+                  NavigationDestination(
+                    icon: Icon(t.icon),
+                    selectedIcon: Icon(t.selectedIcon),
+                    label: context.t(t.label),
+                  ),
+              ],
             ),
     );
   }
