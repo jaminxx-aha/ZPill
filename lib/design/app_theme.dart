@@ -44,9 +44,14 @@ abstract final class AppTheme {
       // 选中指示胶囊:亮色 = 黑底(其上图标/文字取 onSecondaryContainer
       // = 品牌黄,图标同款反转),暗色 = 拍摄页金胶囊。导航栏整条
       // surface(亮色即整条品牌黄,拒绝默认 surfaceContainer 淡黄条)。
+      // 高度钉 56:对齐 iOS 原生照片 tab 栏胶囊高度(2026-10-24 真机
+      // 截图实测,3x 下 2379→2548px ≈ 56pt;M3 默认 80 视觉偏高)。
+      // 栏内图标+文字随高度垂直居中,56 恰容胶囊 32 + labelPadding 4
+      // + 文字 16 = 52,再低会贴边。
       navigationBarTheme: NavigationBarThemeData(
         backgroundColor: scheme.surface,
         indicatorColor: scheme.secondaryContainer,
+        height: 56,
       ),
       navigationRailTheme:
           NavigationRailThemeData(indicatorColor: scheme.secondaryContainer),

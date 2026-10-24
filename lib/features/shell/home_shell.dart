@@ -1,6 +1,6 @@
 /// 应用主框架:三 tab 导航(相机 / 图库 / 设置)—— 竖屏底部
-/// NavigationBar,横屏换左侧 NavigationRail(80px 底栏会吃掉监看画面
-/// 高度)。
+/// NavigationBar(高度钉 56,见 app_theme navigationBarTheme),横屏
+/// 换左侧 NavigationRail(底栏再矮也会吃掉监看画面高度)。
 ///
 /// 相机 = 连接 + 相机信息总览(相册入口);图库 = 「下载到应用」的
 /// 文件(传输徽标入口);设置 = 全局配置。拍摄页不再是 tab(2026-10-08
@@ -141,17 +141,30 @@ class _HomeShellState extends State<HomeShell> {
       ),
       bottomNavigationBar: wide
           ? null
-          : NavigationBar(
-              selectedIndex: _index,
-              onDestinationSelected: _select,
-              destinations: [
-                for (final t in _tabs)
-                  NavigationDestination(
-                    icon: Icon(t.icon),
-                    selectedIcon: Icon(t.selectedIcon),
-                    label: context.t(t.label),
-                  ),
-              ],
+          // 图标下沉(2026-10-24 用户反馈两轮定标:栏不动,图标再下
+          // 8):栏带 = 顶垫 6 + 栏 56,网格视口下缘与栏带高度都不动;
+          // Transform.translate 把内容(胶囊/图标/文字,含点按与语义
+          // 盒)整体画低 8,布局盒不变 —— 胶囊/图标/文字相对几何不走
+          // 样。多出的 8 落在安全区上沿(文字底距屏底 28,与 iOS 原生
+          // 相仿);垫条/安全区/栏三者同为 surface 色(M3 脚手架背景
+          // 即 colorScheme.surface),越界绘制无缝,明暗主题皆然。
+          : Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Transform.translate(
+                offset: const Offset(0, 8),
+                child: NavigationBar(
+                  selectedIndex: _index,
+                  onDestinationSelected: _select,
+                  destinations: [
+                    for (final t in _tabs)
+                      NavigationDestination(
+                        icon: Icon(t.icon),
+                        selectedIcon: Icon(t.selectedIcon),
+                        label: context.t(t.label),
+                      ),
+                  ],
+                ),
+              ),
             ),
     );
   }
