@@ -225,7 +225,14 @@ class _SettingsPageState extends State<SettingsPage> {
   Widget build(BuildContext context) {
     final controller = AppServices.instance.settingsController;
     return Scaffold(
-      appBar: AppBar(title: Text(context.t('common.settings'))),
+      // 三十轮定稿:设置页是全 app 唯一显式居中的顶栏(二十九轮全局
+      // appBarTheme 居中误扩当日收回,连接/图库还原二十轮左位);显式
+      // 钉死防平台默认分叉(fork platformCenter:ohos/android 靠左、
+      // iOS 居中)。
+      appBar: AppBar(
+        centerTitle: true,
+        title: Text(context.t('common.settings')),
+      ),
       body: ListenableBuilder(
         listenable: controller,
         builder: (context, _) => GestureDetector(

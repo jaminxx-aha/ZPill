@@ -260,14 +260,34 @@ class _ConnectionPageState extends State<ConnectionPage>
   Widget build(BuildContext context) {
     final controller = _controller;
     return Scaffold(
-      // AppBar(六~七轮三分;2026-10-24 三端居中定稿重排):「相机」
-      // 词回 title 槽居中(与图库/设置同规,centerTitle 走全局主题);
-      // 方式位(图标+标题+ⓘ)迁右上与连接钮(Icons.link,七轮自「连接」
-      // 文字改,方法无关)成组,仍开方式弹层;已连接后两者都退场,顶栏
-      // 只余居中标题。原左上 leading 槽(二十一轮 leadingWidth 104 装
-      // EN「Camera」)随迁撤除。
+      // AppBar 三分(六~七轮):「相机」挪左;当前方式(图标+标题+ⓘ)
+      // 居中接管原标题位;右上角统一连接图标(Icons.link,七轮自「连接」
+      // 文字改,方法无关)仍开方式弹层。已连接后方式位与钮都退场。
       appBar: AppBar(
-        title: Text(context.t('shell.camera')),
+        // 二十一轮:72 → 104 —— leading 槽要装下 EN「Camera」(titleLarge
+        // 22px 约 77px + 左缘 16 padding;56px 槽 EN 必换行,真机截图实证)。
+        // Align centerLeft 左缘 16 不动,与图库同槽;居中方式 chip
+        // 在常见屏宽不受推挤(NavigationToolbar 仅重叠时才让位)。
+        leadingWidth: 104,
+        leading: Padding(
+          padding: const EdgeInsets.only(left: AppSpacing.lg),
+          // 二十轮:Align centerLeft(勿用 Center)—— AppBar 把 leading
+          // 钉成 leadingWidth 宽,Center 会把文字在余宽里水平也
+          // 居中(左缘 ~22px),与图库标题(左 16px)错位。
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Text(context.t('shell.camera'),
+                style: Theme.of(context).textTheme.titleLarge),
+          ),
+        ),
+        centerTitle: true,
+        title: ListenableBuilder(
+          listenable: controller,
+          builder: (context, _) =>
+              controller.state == CameraLinkState.connected
+                  ? const SizedBox.shrink()
+                  : _modeChip(context, controller.method),
+        ),
         actions: [
           ListenableBuilder(
             listenable: controller,
@@ -276,25 +296,19 @@ class _ConnectionPageState extends State<ConnectionPage>
                 return const SizedBox.shrink();
               }
               final busy = _busyState(controller);
-              return Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  _modeChip(context, controller.method),
-                  IconButton(
-                    key: const ValueKey('conn_mode_picker'),
-                    tooltip: context.t('conn.chooseMethod'),
-                    // 十八轮:链环斜扣(用户从设计稿选 J)——「正在接上」的
-                    // 动作方向;十九轮:再转 90°,共 135° 换另一条对角线。
-                    // 命中区仍是按钮 48dp,旋转只动绘制。
-                    icon: Transform.rotate(
-                      angle: 3 * pi / 4,
-                      child: const Icon(Icons.link),
-                    ),
-                    onPressed: busy
-                        ? null
-                        : () => _showModePickerSheet(context, controller),
-                  ),
-                ],
+              return IconButton(
+                key: const ValueKey('conn_mode_picker'),
+                tooltip: context.t('conn.chooseMethod'),
+                // 十八轮:链环斜扣(用户从设计稿选 J)——「正在接上」的
+                // 动作方向;十九轮:再转 90°,共 135° 换另一条对角线。
+                // 命中区仍是按钮 48dp,旋转只动绘制。
+                icon: Transform.rotate(
+                  angle: 3 * pi / 4,
+                  child: const Icon(Icons.link),
+                ),
+                onPressed: busy
+                    ? null
+                    : () => _showModePickerSheet(context, controller),
               );
             },
           ),
@@ -489,16 +503,18 @@ class _ConnectionPageState extends State<ConnectionPage>
     );
   }
 
-  /// AppBar 方式位(五轮方式行,六轮居中接管「相机」原标题位;
-  /// 2026-10-24 三端居中定稿迁 actions 右上,与方式钮成组):弹窗同款
-  /// 图标+标题;ⓘ 说明入口随后(六轮:去外圈裸图标,InkWell padding
-  /// 撑命中区)。ⓘ 点按弹说明弹窗 —— hero 点按已让位给连接/取消
-  /// (见 [_heroPressed])。八轮「首侧补格空」重心补偿随迁出居中位撤除。
+  /// AppBar 方式位(五轮方式行,六轮挪 AppBar 正中接管「相机」原标题
+  /// 位):弹窗同款图标+标题;ⓘ 说明入口随后(六轮:去外圈裸图标,
+  /// InkWell padding 撑命中区)。ⓘ 点按弹说明弹窗 —— hero 点按已让位
+  /// 给连接/取消(见 [_heroPressed])。首侧补一格空(八轮「左右两侧
+  /// 居中」):ⓘ 尾垫只出不进,行内可视内容整体右偏 —— 首侧对称补空
+  /// 后可视重心落回屏幕正中(centerTitle 是整条工具栏宽居中)。
   Widget _modeChip(BuildContext context, ConnectionMethod m) {
     final theme = Theme.of(context);
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
+        const SizedBox(width: AppSpacing.sm),
         _methodIconWidget(m, size: 20, color: theme.colorScheme.primary),
         const SizedBox(width: AppSpacing.sm),
         Text(
