@@ -775,6 +775,11 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
                       ),
                     ),
                   ),
+                // 尾部留白:滚到底最后一行不贴死底缘(ohos 真机底部安全
+                // 区常报 0,手势条会压住最后一行;iOS 自动安全区外再垫一档)。
+                const SliverPadding(
+                  padding: EdgeInsets.only(bottom: 48),
+                ),
               ],
             ),
           ),
