@@ -75,6 +75,8 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
         private const val DISCOVERY_RETRY_MS = 2000L
         private const val DISCOVERY_RETRY_MAX = 2
         private const val BOND_TIMEOUT_MS = 20000L
+        private const val CONNECT_WATCHDOG_MS = 10000L
+        private const val OP_WATCHDOG_MS = 5000L
     }
 
     private enum class OpKind { WRITE_CHAR, WRITE_DESC, READ }
@@ -121,6 +123,7 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
     private var discoveryDone = false
     private val opQueue = ArrayDeque<PendingOp>()
     private var opBusy = false
+    private var inFlight: PendingOp? = null
 
     // 绑定(经典蓝牙)
     private var pendingBond: MethodChannel.Result? = null
@@ -193,6 +196,7 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
         override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
             mainHandler.post {
                 if (g !== this@BlePlugin.gatt) return@post
+                NativeLog.i("ble", "GATT 回调:newState=$newState status=$status($deviceId)")
                 if (newState == BluetoothProfile.STATE_CONNECTED) {
                     discoveryRetries = 0
                     discoveryDone = false
@@ -217,6 +221,7 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
         override fun onMtuChanged(g: BluetoothGatt, mtu: Int, status: Int) {
             mainHandler.post {
                 if (g !== this@BlePlugin.gatt) return@post
+                NativeLog.i("ble", "MTU 回调:mtu=$mtu status=$status")
                 if (status == BluetoothGatt.GATT_SUCCESS) this@BlePlugin.mtu = mtu
                 discoverServices()
             }
@@ -226,6 +231,7 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
             mainHandler.post {
                 if (g !== this@BlePlugin.gatt) return@post
                 discoveryInFlight = false
+                NativeLog.i("ble", "服务发现回调:status=$status")
                 if (status != BluetoothGatt.GATT_SUCCESS) {
                     settleConnect("discoveryFailed", "服务发现失败(status=$status)")
                     return@post
@@ -324,6 +330,11 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         context = binding.applicationContext
+        // 容器指纹留痕(卓易通等翻译层的 Build 值待采,调检测阈值用)。
+        NativeLog.i(
+            "ble",
+            "env: mfr=${Build.MANUFACTURER} hw=${Build.HARDWARE} fp=${Build.FINGERPRINT}",
+        )
         channel = MethodChannel(binding.binaryMessenger, CHANNEL).also {
             it.setMethodCallHandler(this)
         }
@@ -380,6 +391,7 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
                         val granted = blePermissions().all {
                             context?.checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED
                         }
+                        NativeLog.i("ble", "权限回包:granted=$granted")
                         if (granted) {
                             pending()
                         } else {
@@ -427,6 +439,10 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
         when (call.method) {
             "isAvailable" -> result.success(adapter?.isEnabled == true)
             "deviceName" -> result.success(deviceModelName())
+            // 通道面探针:Dart 侧据此分派首配收尾剧本 —— 卓易通等容器里
+            // Android APK 的通道由本 Android 插件应答,宿主平台面却可能
+            // 不同;iOS/ohos 原生面不实现此方法(探针落 null)。
+            "platformTag" -> result.success("android")
             "scan" -> ensurePermissions { startScan(call.argument<Int>("seconds") ?: 10, null, result) }
             "scanForDeviceId" -> ensurePermissions {
                 startScan(
@@ -489,6 +505,7 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
             onReady()
             return
         }
+        NativeLog.w("ble", "请求蓝牙权限:$missing")
         val act = activity
         if (act == null || pendingPermission != null) {
             emit(
@@ -652,10 +669,12 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
             result.error("connectFailed", "设备标识无效:$e", null)
             return
         }
+        NativeLog.i("ble", "connectPaired 发起:$uuid")
         try {
             gatt = device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
         } catch (e: SecurityException) {
             android.util.Log.e(TAG, "connectGatt: $e")
+            NativeLog.w("ble", "connectGatt SecurityException:$e")
             pendingConnect = null
             gatt = null
             result.error("connectFailed", "连接失败(蓝牙权限):$e", null)
@@ -665,6 +684,19 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
             pendingConnect = null
             gatt = null
             result.error("connectFailed", "$e", null)
+        }
+        if (pendingConnect != null && gatt != null) {
+            // 连接看门狗:容器(卓易通)里 GATT 回调可能永不到达 —— 10s 无
+            // 收口即落错清场,不让 channel 干挂(外层 Dart 15s 才放弃)。
+            val captured = gatt
+            NativeLog.i("ble", "connectGatt 已返回:${captured != null}")
+            mainHandler.postDelayed({
+                if (pendingConnect != null && gatt === captured) {
+                    NativeLog.w("ble", "GATT 连接 10s 无回调,强制落错")
+                    settleConnect("connectFailed", "连接超时:GATT 10s 无回调")
+                    teardownGatt()
+                }
+            }, CONNECT_WATCHDOG_MS)
         }
     }
 
@@ -738,6 +770,7 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
         }
         opQueue.clear()
         opBusy = false
+        inFlight = null
         charMap.clear()
         propsMap.clear()
         settleBond(false, "连接已断开")
@@ -769,6 +802,18 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
             return
         }
         opBusy = true
+        inFlight = op
+        // op 看门狗:容器里 WRITE/DESC 回调可能永不到达 —— 5s 无收口即
+        // 落错取下一笔,队列不至永久卡死(真机毫秒级,5s 足够宽)。
+        mainHandler.postDelayed({
+            if (inFlight === op) {
+                NativeLog.w("ble", "GATT op 5s 无回调:${op.kind}:${shortUuid(op.uuid)}")
+                inFlight = null
+                opBusy = false
+                op.result?.error("opTimeout", "GATT op 5s 无回调:${op.uuid}", null)
+                flushOps()
+            }
+        }, OP_WATCHDOG_MS)
         val ok = try {
             when (op.kind) {
                 OpKind.WRITE_CHAR -> {
@@ -806,6 +851,8 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
             return
         }
         if (!ok) {
+            NativeLog.w("ble", "op 被拒:${op.kind}:${shortUuid(op.uuid)}")
+            inFlight = null
             op.result?.error(
                 if (op.kind == OpKind.READ) "readFailed" else "writeFailed",
                 "GATT 操作被拒(协议栈忙或特征不可写)",
@@ -818,11 +865,10 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
 
     /** 回调收口:status == GATT_SUCCESS 时 result 带值/成功,然后取下一笔。 */
     private fun settleOp(status: Int, value: ByteArray?) {
-        val op = opQueue.removeFirstOrNull()
-        if (op == null) {
-            opBusy = false
-            return
-        }
+        val op = inFlight
+        inFlight = null
+        opBusy = false
+        if (op == null) return
         if (status != BluetoothGatt.GATT_SUCCESS) {
             op.result?.error(
                 if (op.kind == OpKind.READ) "readFailed" else "writeFailed",
@@ -888,6 +934,7 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
         }
         opQueue.clear()
         opBusy = false
+        inFlight = null
         charMap.clear()
         propsMap.clear()
     }
@@ -922,19 +969,23 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
             return
         }
         pendingBond = result
+        NativeLog.i("ble", "bondDevice 发起:$deviceId(当前 bondState=${dev.bondState})")
         val created = try {
             dev.createBond()
         } catch (e: SecurityException) {
             android.util.Log.e(TAG, "createBond: $e")
+            NativeLog.w("ble", "createBond SecurityException:$e")
             pendingBond = null
             result.error("bondFailed", "配对请求失败(蓝牙权限):$e", null)
             return
         } catch (e: Exception) {
             android.util.Log.e(TAG, "createBond: $e")
+            NativeLog.w("ble", "createBond 失败:$e")
             pendingBond = null
             result.error("bondFailed", "配对请求失败:$e", null)
             return
         }
+        NativeLog.i("ble", "createBond 返回:$created")
         if (!created) {
             pendingBond = null
             result.error("bondFailed", "配对请求被系统拒绝", null)
@@ -1001,6 +1052,10 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
     } catch (e: SecurityException) {
         null
     }
+
+    /** 0000XXXX-… → XXXX(日志短名)。 */
+    private fun shortUuid(uuid: String): String =
+        if (uuid.length >= 8) uuid.substring(4, 8).uppercase() else uuid
 
     private fun emit(payload: Map<String, Any?>) {
         sink?.success(payload)

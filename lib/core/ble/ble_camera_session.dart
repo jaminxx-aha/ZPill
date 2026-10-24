@@ -260,19 +260,37 @@ final class BleCameraSession {
     _serial = null;
     final epoch = _cancelEpoch;
     _pairWaitActive = true;
+    var attempt = 0;
     try {
       while (_cancelEpoch == epoch) {
+        attempt++;
         _setState(BleSessionState.pairing);
         final done = _handshake = Completer<void>();
         try {
+          AppLog.d(AppLog.ble, 'connect → channel(${device.uuid}) 第$attempt次');
           await _host.connectPaired(device.uuid).timeout(handshakeTimeout);
+          AppLog.d(AppLog.ble, 'connect ← channel 已回,等握手');
           await done.future.timeout(handshakeTimeout);
           return; // ready(握手沿置上)
         } on TimeoutException {
+          // 15s 无果:原生没回包(connect 挂)或相机没进窗。逐次留痕,
+          // 卓易通等容器里 channel 级悬死只有这里能看见。
+          AppLog.d(AppLog.ble, 'connect/握手 ${handshakeTimeout.inSeconds}s 无果,弃局重试');
           _abandonHandshake(done); // 无应答:相机不在场/深睡,继续等窗
-        } on Exception {
+        } on Exception catch (e) {
+          // 原生主动落错(容器看门狗「GATT 10s 无回调」/握手首帧被拒)或
+          // 被相机踢:与纯超时(上面 TimeoutException)是两条路,留痕区分。
+          // 注意绑 catch 变量 —— 本文件裸 import dart:math,无变量时 $e
+          // 会取到数学常数 e(2.718…),错误信息全丢(2026-10-24 实证)。
+          AppLog.d(AppLog.ble, 'connect 异常:$e');
           _setState(BleSessionState.idle);
-          _handshake = null; // 被踢 = 还没进窗(T4a),继续等
+          _handshake = null;
+          if (_cryptoWallDetected) {
+            // 容器加密墙已实锤:不再空转重试,立即给出明确文案。
+            throw BlePairingException(
+                '此环境蓝牙不支持与相机配对(加密链路无法建立,卓易通等容器环境)');
+          }
+          // 被踢 = 还没进窗(T4a),继续等
         }
         if (_cancelEpoch != epoch) return; // 已取消:外层超时收口
         await Future<void>.delayed(const Duration(seconds: 2));
@@ -289,6 +307,17 @@ final class BleCameraSession {
   void cancelPairWait() {
     if (_pairWaitActive) _cancelEpoch++;
   }
+
+  /// 容器加密墙已实锤(本次会话内不可恢复,重试只会空转)。
+  bool _cryptoWallDetected = false;
+
+  /// 卓易通等容器加密墙特征:0x2000(PAIR)握手首帧写被栈直接拒
+  /// (writeCharacteristic 返回 false,不走 GATT 回调、不触发 SMP),
+  /// 其余读写/CCCD 全通 —— 配对协议第一帧发不出去,容器安全栈缺口。
+  bool _isCryptoWall(Object e) =>
+      e is PlatformException &&
+      e.code == 'writeFailed' &&
+      (e.message?.contains('被拒') ?? false);
 
   /// 配对码探针进行中(面板自动重连/注入驱动让路;真机 2026-10-19
   /// 实证:探针断链后面板重挂自动重连与注入驱动的重扫会掐死探针二段
@@ -766,6 +795,12 @@ final class BleCameraSession {
   // ------------------------------------------------------------------
 
   Future<void> _onEvent(BleEvent event) async {
+    // 卓易通排障:事件是否真到会话(面板监听收到了、会话订阅没收到
+    // 的话,握手永远不会启动且零 trace)。
+    // 扫描广播量大且成对,不逐条留痕;其余事件(连接/断开/状态)保留。
+    if (event is! BleDeviceFound) {
+      _trace('event → ${event.runtimeType} state=$_state');
+    }
     switch (event) {
       case BlePreConnected():
         // 物理链路建立沿:会话状态机零动作(时序取证事件,页面日志消费)。
@@ -785,7 +820,9 @@ final class BleCameraSession {
             silentBondWait = Duration.zero;
             _trace('静默窗结束 → 复用握手');
           }
+          _trace('握手起始:setNotify → 2000');
           await _host.setNotify(kNikonCharPairing);
+          _trace('setNotify 2000 ✓');
           await _host.setNotify(kNikonCharNot1);
           // NOT2(0x200A)留观察窗:方言核对期跟踪信号帧,不参与状态机。
           await _host.setNotify(kNikonCharNot2);
@@ -830,17 +867,34 @@ final class BleCameraSession {
           // 失败落盘(AppLog.e → errorTail/tail.log):握手起始失败的
           // 原生异常串上盘,真机排障唯一持久面(2026-10-21 夜教训)。
           AppLog.e(AppLog.ble, 'handshake start FAIL $e');
+          if (_isCryptoWall(e)) {
+            // 卓易通等容器:0x2000(PAIR)写被栈直接拒(writeCharacteristic
+            // 返回 false,不触发 SMP)—— 配对第一帧发不出去,重试无意义
+            // (2026-10-24 实证)。立即收口并给出明确文案。
+            _cryptoWallDetected = true;
+            final w = _handshake;
+            if (w != null && !w.isCompleted) {
+              w.completeError(BlePairingException(
+                  '此环境蓝牙不支持与相机配对(加密链路无法建立,卓易通等容器环境)'));
+            }
+          }
           // 连续拒绝计数:kick = 相机接受链路后立刻掐 —— 瞬时态(唤醒
           // 窗/状态切换)2s 快试即可过;持续态(≥6 次)= 相机侧接受通
           // 道楔死(2026-10-21 实证:GEO 写到一半链路死,16-60s 慢试也
           // 不恢复,相机重启才解)→ 换引导文案,别无限刷原始错误。
-          _kickStreak++;
-          if (_kickStreak >= 6) {
-            lastError = (key: 'ble.reconnectRejected', args: null);
+          if (_cryptoWallDetected) {
+            // 容器加密墙:红字直接给结论,不展示底层异常串;kickStreak
+            // 只数真实踢,不计容器墙。
+            lastError = (key: 'ble.cryptoWall', args: null);
           } else {
-            lastError =
-                (key: 'ble.handshakeStartFail', args: {'e': e.toString()});
-            if (_kickStreak < 4) _backoffStep = 0; // 瞬时踢:2s 快试
+            _kickStreak++;
+            if (_kickStreak >= 6) {
+              lastError = (key: 'ble.reconnectRejected', args: null);
+            } else {
+              lastError =
+                  (key: 'ble.handshakeStartFail', args: {'e': e.toString()});
+              if (_kickStreak < 4) _backoffStep = 0; // 瞬时踢:2s 快试
+            }
           }
           _failHandshake();
         }

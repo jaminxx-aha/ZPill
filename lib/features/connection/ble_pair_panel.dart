@@ -531,6 +531,29 @@ class BlePairPanelState extends State<BlePairPanel>
       }
       return;
     }
+    // 收尾剧本按「通道面 × 宿主平台」分派,不只看 Platform.operatingSystem
+    // —— 卓易通等容器里 Android APK 的通道由 Android 插件应答,宿主平台
+    // 表现可能与真机不同,用通道探针(platformTag)对账。
+    final nativeFace = await _bleNativeFace();
+    if (nativeFace == 'android' && Platform.operatingSystem == 'android') {
+      // 真机 Android:createBond 公开 API 可为,剧本同原生 ohos(断链 →
+      // 绑定 → 直连先行回链)。
+      AppServices.instance.bleManualOff = true;
+      await _session.disconnect();
+      await Future<void>.delayed(const Duration(seconds: 3));
+      await _bondClassic();
+      _session.directFirstPending = true;
+      await manualResume();
+      return;
+    }
+    if (nativeFace == 'android') {
+      // 卓易通等容器:实测配对在握手首帧就被加密墙拦下(0x2000 写被拒,
+      // 会话侧 _isCryptoWall fail-fast),正常走不到这里;若未来容器放行
+      // 到这儿,也按「不断链」收尾 —— 程序化 bond 在容器的可用性未实证,
+      // 断链又会让相机进静默态,风险大于收益。
+      _log('容器环境:程序化绑定不可用,注册在当前链上继续(不断链)');
+      return;
+    }
     if (Platform.operatingSystem == 'ohos') {
       // 鸿蒙首配收尾 = 程序化经典绑定(2026-10-22 用户定稿:对齐 iOS
       // 剧本,配对成功沿自动进行,无手动按钮)。断链先行:相机等 BLE
@@ -750,6 +773,18 @@ class BlePairPanelState extends State<BlePairPanel>
       if (mounted) {
         setState(() => _binding = false);
       }
+    }
+  }
+
+  /// 通道面探针:Android 插件面回 'android';iOS/ohos 原生面不实现此
+  /// 方法(探针落 null)。卓易通判别用(见首配收尾分派)。
+  Future<String?> _bleNativeFace() async {
+    try {
+      return await _bleChannel.invokeMethod<String>('platformTag');
+    } on PlatformException {
+      return null;
+    } on MissingPluginException {
+      return null;
     }
   }
 

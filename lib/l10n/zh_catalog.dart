@@ -86,6 +86,7 @@ const Map<String, String> zhCatalog = {
   'ble.geoWriteFail': 'GEO 写失败:{e}',
   'ble.timeWriteFail': 'TIME 写失败:{e}',
   'ble.handshakeStartFail': '握手起始失败:{e}',
+  'ble.cryptoWall': '此环境蓝牙不支持与相机配对(加密链路无法建立,卓易通等容器环境)',
   'ble.reconnectRejected':
       '相机多次拒绝连接 —— 请重启相机后重试;仍不行请重新配对',
   'ble.handshakeDisconnected': '握手期间断连',

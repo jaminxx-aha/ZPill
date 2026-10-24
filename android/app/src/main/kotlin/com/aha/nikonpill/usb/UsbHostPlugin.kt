@@ -277,7 +277,9 @@ class UsbHostPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHandl
     private fun requestPermissionThenOpen(device: UsbDevice, gen: Int, result: Result) {
         val action = appContext.packageName + ".USB_PERMISSION"
         pendingPermissionReceiverTeardown()
-        val intent = Intent(action)
+        // U+(targetSdk 34+)禁 FLAG_MUTABLE+隐式 Intent;系统要回填 EXTRA_DEVICE 故
+        // MUTABLE 保留,包名补成显式广播。卓易通容器(U)实测隐式建 PI 直接 IllegalArgumentException。
+        val intent = Intent(action).setPackage(appContext.packageName)
         val piFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             PendingIntent.FLAG_MUTABLE
         } else {
