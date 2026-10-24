@@ -132,16 +132,13 @@ class _PhotoViewerPageState extends State<PhotoViewerPage>
       PageController(initialPage: widget.initialIndex);
   late int _index = widget.initialIndex;
 
-  /// 下拉跟手返回(图片页;视频页/缩放态/全屏不启用,见 _onPullStart)。
+  /// 下拉跟手返回(缩放态/全屏不启用,见 _onPullStart)。
   /// initState 现建(late final 内联惰性 + dispose 沿首访的教训,见
   /// flutter-late-final-controller-dispose-trap)。
   late final PullAwayController _pull;
 
   /// InteractiveViewer 缩放态(缩放中纵向平移归 IV,跟手闸关)。
   bool _ivZoomed = false;
-
-  /// 当前页是否图片页(视频页不启用下拉跟手)。
-  bool get _isPhotoPage => !widget.items[_index].isVideo;
 
   /// 底栏两段式下载:「下载」钮点按后换出「到相册/到应用」双目的地;
   /// 翻页沿与入队完成沿复位(下张照片重新从「下载」起)。
@@ -259,17 +256,17 @@ class _PhotoViewerPageState extends State<PhotoViewerPage>
   // ── 下拉跟手返回(图片页)──
 
   void _onPullStart(DragStartDetails details) {
-    if (_fullscreen || !_isPhotoPage || _ivZoomed) return;
+    if (_fullscreen || _ivZoomed) return;
     _pull.beginDrag();
   }
 
   void _onPullUpdate(DragUpdateDetails details) {
-    if (_fullscreen || !_isPhotoPage || _ivZoomed) return;
+    if (_fullscreen || _ivZoomed) return;
     _pull.update(_pull.dy + details.delta.dy);
   }
 
   void _onPullEnd(DragEndDetails details) {
-    if (_fullscreen || !_isPhotoPage || _ivZoomed) return;
+    if (_fullscreen || _ivZoomed) return;
     final vy = details.velocity.pixelsPerSecond.dy;
     final commit = _pull.dy >= kPullAwayCommitDistance ||
         vy >= kPullAwayCommitVelocity;
@@ -618,7 +615,7 @@ class _PhotoViewerPageState extends State<PhotoViewerPage>
                   child: PullAwayFade(controller: _pull, child: viewerBar),
                 ),
           body: GestureDetector(
-            // 下拉跟手返回(图片页;闸见 _onPullStart)。垂直识别器只认
+            // 下拉跟手返回(闸见 _onPullStart)。垂直识别器只认
             // 纵向,水平翻页归 PageView;缩放态归 InteractiveViewer。
             onVerticalDragStart: _onPullStart,
             onVerticalDragUpdate: _onPullUpdate,

@@ -1155,16 +1155,12 @@ class _LibraryViewerState extends State<_LibraryViewer>
       PageController(initialPage: widget.initialIndex);
   late int _index = widget.initialIndex;
 
-  /// 下拉跟手返回(图片页;视频页/缩放态/全屏不启用,见 _onPullStart)。
+  /// 下拉跟手返回(缩放态/全屏不启用,见 _onPullStart)。
   /// initState 现建(同相机侧,弃内联惰性)。
   late final PullAwayController _pull;
 
   /// InteractiveViewer 缩放态(缩放中纵向平移归 IV,跟手闸关)。
   bool _ivZoomed = false;
-
-  /// 当前页是否图片页(视频页不启用下拉跟手)。
-  bool get _isPhotoPage =>
-      !isVideoFilename(_nameOf(_files[_index]));
 
   /// LUT 导出宿主与支持位:探测异步落位前不显示入口(ohos 无实现
   /// → 永 false,入口不出现)。
@@ -1179,19 +1175,17 @@ class _LibraryViewerState extends State<_LibraryViewer>
   // ── 下拉跟手返回(图片页)──
 
   void _onPullStart(DragStartDetails details) {
-    debugPrint('[跟手探针] start fs= photo= zoom=');
-    if (_fullscreen || !_isPhotoPage || _ivZoomed) return;
+    if (_fullscreen || _ivZoomed) return;
     _pull.beginDrag();
   }
 
   void _onPullUpdate(DragUpdateDetails details) {
-    debugPrint('[跟手探针] update dy= zoom=');
-    if (_fullscreen || !_isPhotoPage || _ivZoomed) return;
+    if (_fullscreen || _ivZoomed) return;
     _pull.update(_pull.dy + details.delta.dy);
   }
 
   void _onPullEnd(DragEndDetails details) {
-    if (_fullscreen || !_isPhotoPage || _ivZoomed) return;
+    if (_fullscreen || _ivZoomed) return;
     final vy = details.velocity.pixelsPerSecond.dy;
     final commit = _pull.dy >= kPullAwayCommitDistance ||
         vy >= kPullAwayCommitVelocity;
@@ -1402,7 +1396,7 @@ class _LibraryViewerState extends State<_LibraryViewer>
               child: PullAwayFade(controller: _pull, child: viewerBar),
             ),
       body: GestureDetector(
-        // 下拉跟手返回(图片页;闸见 _onPullStart)。垂直识别器只认
+        // 下拉跟手返回(闸见 _onPullStart)。垂直识别器只认
         // 纵向,水平翻页归 PageView;缩放态归 InteractiveViewer。
         onVerticalDragStart: _onPullStart,
         onVerticalDragUpdate: _onPullUpdate,
@@ -1488,7 +1482,7 @@ class _LibraryViewerState extends State<_LibraryViewer>
       // ohos image kit 都不吃引擎直解 HEIF 的兜底,统一走 decodeJpeg。
       return InteractiveViewer(
         maxScale: 8,
-        onInteractionStart: (_) { debugPrint('[跟手探针] IV interactionStart'); _ivZoomed = true; },
+        onInteractionStart: (_) => _ivZoomed = true,
         onInteractionEnd: (_) => _ivZoomed = false,
         child: Center(
           child: zoomHero(
@@ -1515,7 +1509,7 @@ class _LibraryViewerState extends State<_LibraryViewer>
     if (_isViewableName(name)) {
       return InteractiveViewer(
         maxScale: 8,
-        onInteractionStart: (_) { debugPrint('[跟手探针] IV interactionStart'); _ivZoomed = true; },
+        onInteractionStart: (_) => _ivZoomed = true,
         onInteractionEnd: (_) => _ivZoomed = false,
         child: Center(
           child: zoomHero(

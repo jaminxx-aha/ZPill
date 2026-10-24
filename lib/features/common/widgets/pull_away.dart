@@ -6,7 +6,7 @@
 ///
 /// 用法:查看器 State 持有 [PullAwayController](vsync 传入,dispose
 /// 归还);body 外包 [PullAwayTransform],appBar/底栏外包
-/// [PullAwayFade];垂直拖拽三回调里先过闸(全屏/视频页/缩放态不启用)
+/// [PullAwayFade];垂直拖拽三回调里先过闸(全屏/缩放态不启用;视频页同启)
 /// 再喂 controller。水平翻页不受影响(垂直识别器只认纵向;Interactive
 /// Viewer 缩放态由调用方闸掉)。
 library;
@@ -93,7 +93,10 @@ final class PullAwayController extends ChangeNotifier {
 
 /// 跟手变换:图片页内容随 [PullAwayController] 平移 + 轻微缩小。
 /// 缩小走**布局**(SizedBox,hero 实测盒随之,航班起点 = 可见位);
-/// 平移走绘制(Transform.translate,不扰动布局)。闲态直通零开销。
+/// 平移走绘制(Transform.translate,不扰动布局)。**结构恒定**:闲态
+/// 也走同一包裹链(恒等值)—— 闲态直通会在拖拽起步沿整棵子树跨结构
+/// 重挂载,视频页播放器平台视图卸载重装 = 闪一下 + 播放位丢失
+/// (真机复报「视频下滑跟手返回会闪一下」根因)。
 class PullAwayTransform extends StatelessWidget {
   const PullAwayTransform({
     super.key,
@@ -111,8 +114,8 @@ class PullAwayTransform extends StatelessWidget {
       animation: controller,
       builder: (context, child) {
         final dy = controller.dy;
-        if (dy <= 0) return child!;
-        // 缩小幅度:提交距离后仍缓续(封顶 12%),读感与 iOS 对齐。
+        // 缩小幅度:提交距离后仍缓续(封顶 12%),读感与 iOS 对齐;
+        // 闲态 shrink=1 → 盒同全尺寸,布局恒等。
         final shrink =
             1 - 0.12 * (dy / (kPullAwayCommitDistance * 2)).clamp(0.0, 1.0);
         return LayoutBuilder(

@@ -1333,7 +1333,7 @@ void main() {
     expect(find.byType(PageView), findsOneWidget); // 仍在查看器(弹回)
   });
 
-  testWidgets('下拉跟手:视频页不启用(纵向拖不收)', (tester) async {
+  testWidgets('下拉跟手:视频页同启(过阈值松手收查看器)', (tester) async {
     final group = PhotoGroup([
       _file(105, 'DSC_0005.MOV', format: 0x300D, kind: ObjectKind.video),
     ]);
@@ -1349,6 +1349,6 @@ void main() {
 
     await tester.drag(find.byType(PageView), const Offset(0, 150));
     await tester.pumpAndSettle();
-    expect(find.byType(PageView), findsOneWidget); // 视频页闸关:不收
+    expect(find.text('打开查看器'), findsOneWidget); // 视频页同启:提交返回
   });
 }

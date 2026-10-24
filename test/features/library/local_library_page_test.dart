@@ -2292,7 +2292,7 @@ void main() {
     expect(find.text('a.jpg'), findsWidgets);
   });
 
-  testWidgets('下拉跟手:视频页不启用(纵向拖不收)', (tester) async {
+  testWidgets('下拉跟手:视频页同启(过阈值松手收查看器)', (tester) async {
     useTallSurface(tester);
     writeFile('b.mov', modified: DateTime(2026, 10, 2));
     final gallery = _FakeGallery(dir);
@@ -2310,9 +2310,8 @@ void main() {
 
     await tester.drag(find.byType(PageView), const Offset(0, 150));
     await tester.pumpAndSettle();
-    expect(find.text('b.mov'), findsWidgets); // 视频页闸关:不收
-    await tester.pageBack();
-    await tester.pumpAndSettle();
+    expect(find.text('b.mov'), findsNothing); // 视频页同启:提交返回
+    expect(find.byType(HeroZoom), findsOneWidget); // 网格回位(海报锚配对)
   });
 
   testWidgets('下拉跟手:横翻页之后的纵拉仍生效(竞技场序列)', (tester) async {
