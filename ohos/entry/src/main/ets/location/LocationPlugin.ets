@@ -7,8 +7,11 @@
  * - `startStream`/`stopStream` + EventChannel `nikonpill/location/stream`
  *   连续定位流(BLE GPS 注入驱动源):on('locationChange') 持续回调,
  *   事件载荷 Map{latitude, longitude, altitude}。
- * - `authStatus` 回授权态(granted/denied,查 token);`requestAlways`
- *   在 ohos 即前景定位授权(真正的后台定位须受限 ACL 权限
+ * - `authStatus` 回授权态(词表对齐 Dart 契约的 iOS 方言:两权限齐 =
+ *   'whenInUse' —— ohos 无「始终」分层,前景即最上;未授/查询异常 =
+ *   'notDetermined',交 requestAlways 的 requestPermissionsFromUser
+ *   定夺:没问过弹窗、拒过免弹直接 -1);`requestAlways` 在 ohos 即
+ *   前景定位授权(真正的后台定位须受限 ACL 权限
  *   ohos.permission.LOCATION_IN_BACKGROUND,普通应用拿不到 —— app 退
  *   后台时流会停,与 iOS「使用期间」同限,如实降级)。
  *
@@ -108,8 +111,10 @@ export class LocationPlugin implements FlutterPlugin, AbilityAware {
         result.success(null);
         break;
       case 'requestAlways':
-        // ohos 无「始终」分层:同前景授权(差异见类注)
-        this.current(result);
+        // ohos 无「始终」分层:即前景定位授权(差异见类注)。成败皆
+        // 即时定局,拒绝走 error 快败(Dart 侧 Exception catch 翻回),
+        // 不进 Dart 侧 10s 授权轮询干等。
+        this.requestForegroundAuth(result);
         break;
       case 'authStatus':
         this.authStatus((s: string): void => {
@@ -121,10 +126,19 @@ export class LocationPlugin implements FlutterPlugin, AbilityAware {
     }
   }
 
-  /** 查定位授权(granted/denied;读 token,不弹窗;checkAccessToken 异步)。 */
+  /**
+   * 查定位授权(读 token,不弹窗;checkAccessToken 异步)。token 须
+   * GET_BUNDLE_INFO_WITH_APPLICATION 档 —— DEFAULT 档的 BundleInfo 不
+   * 含 applicationInfo,appInfo 为 undefined 访问即抛,恒 catch 回
+   * denied(2026-10-24 修:授权了也白搭的根因)。词表对齐 Dart 契约
+   * (iOS 方言):两权限齐 = 'whenInUse';未授/查询异常 =
+   * 'notDetermined' —— 定夺交给 requestAlways 的
+   * requestPermissionsFromUser(没问过弹窗、拒过免弹直接 -1),闸门
+   * 不死于查询侧。
+   */
   private authStatus(onDone: (s: string) => void): void {
     try {
-      const flag = bundleManager.BundleFlag.GET_BUNDLE_INFO_DEFAULT;
+      const flag = bundleManager.BundleFlag.GET_BUNDLE_INFO_WITH_APPLICATION;
       const info = bundleManager.getBundleInfoForSelfSync(flag);
       const tokenId = info.appInfo.accessTokenId;
       const atManager = abilityAccessCtrl.createAtManager();
@@ -135,15 +149,43 @@ export class LocationPlugin implements FlutterPlugin, AbilityAware {
       ]).then((rs: abilityAccessCtrl.GrantStatus[]): void => {
         const granted = rs.every((s: abilityAccessCtrl.GrantStatus): boolean =>
           s === abilityAccessCtrl.GrantStatus.PERMISSION_GRANTED);
-        onDone(granted ? 'granted' : 'denied');
+        onDone(granted ? 'whenInUse' : 'notDetermined');
       }).catch((e: Object): void => {
         Log.w(TAG, `authStatus: ${e}`);
-        onDone('denied');
+        onDone('notDetermined');
       });
     } catch (e) {
       Log.w(TAG, `authStatus: ${e}`);
-      onDone('denied');
+      onDone('notDetermined');
     }
+  }
+
+  /**
+   * 申请前景定位授权(两权限一并;开关「未定态」沿走这里)。成败都
+   * 即时定局:没问过弹系统窗,拒过免弹直接 -1 → error 快败。
+   */
+  private requestForegroundAuth(result: MethodResult): void {
+    const ctx = this.ability?.context ?? null;
+    if (ctx === null) {
+      result.error('noAbility', 'UIAbility 未挂载', null);
+      return;
+    }
+    const atManager = abilityAccessCtrl.createAtManager();
+    atManager.requestPermissionsFromUser(ctx,
+      ['ohos.permission.APPROXIMATELY_LOCATION', 'ohos.permission.LOCATION'])
+      .then((res: PermissionRequestResult): void => {
+        for (const status of res.authResults) {
+          if (status !== 0) {
+            result.error('permissionDenied', '定位权限未授权', null);
+            return;
+          }
+        }
+        result.success(null);
+      })
+      .catch((e: Object): void => {
+        Log.w(TAG, `requestPermissionsFromUser: ${e}`);
+        result.error('permissionDenied', `${e}`, null);
+      });
   }
 
   private startStream(result: MethodResult): void {
