@@ -65,6 +65,7 @@ import '../common/widgets/confirm_dialog.dart';
 import '../common/widgets/de_squeezed_image.dart';
 import '../common/widgets/embedded_video_player.dart';
 import '../common/widgets/hero_zoom.dart';
+import '../common/widgets/pull_away.dart';
 import '../common/widgets/photo_info_sheet.dart';
 import '../common/widgets/states.dart';
 import '../transfers/transfers_page.dart';
@@ -1119,11 +1120,23 @@ class _LibraryViewer extends StatefulWidget {
   State<_LibraryViewer> createState() => _LibraryViewerState();
 }
 
-class _LibraryViewerState extends State<_LibraryViewer> {
+class _LibraryViewerState extends State<_LibraryViewer>
+    with TickerProviderStateMixin {
   late final List<File> _files = List.of(widget.files);
   late final PageController _pageController =
       PageController(initialPage: widget.initialIndex);
   late int _index = widget.initialIndex;
+
+  /// 下拉跟手返回(图片页;视频页/缩放态/全屏不启用,见 _onPullStart)。
+  /// initState 现建(同相机侧,弃内联惰性)。
+  late final PullAwayController _pull;
+
+  /// InteractiveViewer 缩放态(缩放中纵向平移归 IV,跟手闸关)。
+  bool _ivZoomed = false;
+
+  /// 当前页是否图片页(视频页不启用下拉跟手)。
+  bool get _isPhotoPage =>
+      !isVideoFilename(_nameOf(_files[_index]));
 
   /// LUT 导出宿主与支持位:探测异步落位前不显示入口(ohos 无实现
   /// → 永 false,入口不出现)。
@@ -1135,9 +1148,38 @@ class _LibraryViewerState extends State<_LibraryViewer> {
   /// 不动全局默认。
   late final int _cacheBudgetRestore;
 
+  // ── 下拉跟手返回(图片页)──
+
+  void _onPullStart(DragStartDetails details) {
+    debugPrint('[跟手探针] start fs= photo= zoom=');
+    if (_fullscreen || !_isPhotoPage || _ivZoomed) return;
+    _pull.beginDrag();
+  }
+
+  void _onPullUpdate(DragUpdateDetails details) {
+    debugPrint('[跟手探针] update dy= zoom=');
+    if (_fullscreen || !_isPhotoPage || _ivZoomed) return;
+    _pull.update(_pull.dy + details.delta.dy);
+  }
+
+  void _onPullEnd(DragEndDetails details) {
+    if (_fullscreen || !_isPhotoPage || _ivZoomed) return;
+    final vy = details.velocity.pixelsPerSecond.dy;
+    final commit = _pull.dy >= kPullAwayCommitDistance ||
+        vy >= kPullAwayCommitVelocity;
+    if (commit) {
+      // 位移冻结在释放位:初始页 Hero 以拖拽后的绘制位为起点飞回格位
+      // (绘制变换进入框架实测;非初始页无配对,普通淡出收场)。
+      Navigator.of(context).pop();
+    } else {
+      _pull.settleBack();
+    }
+  }
+
   @override
   void initState() {
     super.initState();
+    _pull = PullAwayController(vsync: this); // initState 现建(弃内联惰性)
     final cache = PaintingBinding.instance.imageCache;
     _cacheBudgetRestore = cache.maximumSizeBytes;
     // 全幅 Zf JPG 解码后 ≈180MB/张,Flutter 默认预算(100MiB)装不下
@@ -1172,6 +1214,7 @@ class _LibraryViewerState extends State<_LibraryViewer> {
   void dispose() {
     PaintingBinding.instance.imageCache.maximumSizeBytes = _cacheBudgetRestore;
     _pageController.dispose();
+    _pull.dispose();
     if (_fullscreen) {
       // 全屏中收查看器(返回手势/删除尾页):还原方向与系统栏再走
       _setChrome(fullscreen: false);
@@ -1274,54 +1317,70 @@ class _LibraryViewerState extends State<_LibraryViewer> {
 
   @override
   Widget build(BuildContext context) {
+    // 查看器顶栏(下拉跟手沿 PullAwayFade 渐隐;PreferredSize 适配
+    // Scaffold appBar 的尺寸契约)。
+    final viewerBar = AppBar(
+      backgroundColor: AppMedia.chrome,
+      foregroundColor: AppMedia.onMedia,
+      title: Text(_nameOf(_current),
+          maxLines: 1, overflow: TextOverflow.ellipsis),
+      actions: [
+        IconButton(
+          tooltip: context.t('info.title'),
+          onPressed: () => _showInfo(_current),
+          icon: const Icon(Icons.info_outline),
+        ),
+        IconButton(
+          tooltip: context.t('libpage.importAlbum'),
+          onPressed: _importToGallery,
+          icon: const Icon(Icons.photo_library_outlined),
+        ),
+        if (isVideoFilename(_nameOf(_current)) && (_lutSupported ?? false))
+          IconButton(
+            tooltip: context.t('lut.exportTitle'),
+            onPressed: _exportWithLut,
+            icon: const Icon(Icons.movie_filter_outlined),
+          ),
+        IconButton(
+          tooltip: context.t('common.delete'),
+          onPressed: _delete,
+          icon: const Icon(Icons.delete_outline),
+        ),
+      ],
+    );
     return Scaffold(
       backgroundColor: AppMedia.background,
-      // 全屏收顶栏:视频页撑满(同一平台视图转横),照片页无顶栏照看
+      // 全屏收顶栏:视频页撑满(同一平台视图转横),照片页无顶栏照看;
+      // 下拉跟手沿 PullAwayFade 渐隐。
       appBar: _fullscreen
           ? null
-          : AppBar(
-              backgroundColor: AppMedia.chrome,
-              foregroundColor: AppMedia.onMedia,
-              title: Text(_nameOf(_current),
-                  maxLines: 1, overflow: TextOverflow.ellipsis),
-              actions: [
-                IconButton(
-                  tooltip: context.t('info.title'),
-                  onPressed: () => _showInfo(_current),
-                  icon: const Icon(Icons.info_outline),
-                ),
-                IconButton(
-                  tooltip: context.t('libpage.importAlbum'),
-                  onPressed: _importToGallery,
-                  icon: const Icon(Icons.photo_library_outlined),
-                ),
-                if (isVideoFilename(_nameOf(_current)) &&
-                    (_lutSupported ?? false))
-                  IconButton(
-                    tooltip: context.t('lut.exportTitle'),
-                    onPressed: _exportWithLut,
-                    icon: const Icon(Icons.movie_filter_outlined),
-                  ),
-                IconButton(
-                  tooltip: context.t('common.delete'),
-                  onPressed: _delete,
-                  icon: const Icon(Icons.delete_outline),
-                ),
-              ],
+          : PreferredSize(
+              preferredSize: viewerBar.preferredSize,
+              child: PullAwayFade(controller: _pull, child: viewerBar),
             ),
-      body: PageView.builder(
-        controller: _pageController,
-        itemCount: _files.length,
-        onPageChanged: (i) {
-          setState(() => _index = i);
-          _warmNeighbors(); // 新当前页的两侧邻居提前解码(翻页不黑闪)
-          // 全屏是视频语境:滑到非视频页自动退出(还原方向与顶栏)
-          if (_fullscreen && !isVideoFilename(_nameOf(_files[i]))) {
-            _setFullscreen(false);
-          }
-        },
-        itemBuilder: (_, i) => _page(_files[i],
-            active: i == _index, isInitial: i == widget.initialIndex),
+      body: GestureDetector(
+        // 下拉跟手返回(图片页;闸见 _onPullStart)。垂直识别器只认
+        // 纵向,水平翻页归 PageView;缩放态归 InteractiveViewer。
+        onVerticalDragStart: _onPullStart,
+        onVerticalDragUpdate: _onPullUpdate,
+        onVerticalDragEnd: _onPullEnd,
+        child: PullAwayTransform(
+          controller: _pull,
+          child: PageView.builder(
+            controller: _pageController,
+            itemCount: _files.length,
+            onPageChanged: (i) {
+              setState(() => _index = i);
+              _warmNeighbors(); // 新当前页的两侧邻居提前解码(翻页不黑闪)
+              // 全屏是视频语境:滑到非视频页自动退出(还原方向与顶栏)
+              if (_fullscreen && !isVideoFilename(_nameOf(_files[i]))) {
+                _setFullscreen(false);
+              }
+            },
+            itemBuilder: (_, i) => _page(_files[i],
+                active: i == _index, isInitial: i == widget.initialIndex),
+          ),
+        ),
       ),
     );
   }
@@ -1386,6 +1445,8 @@ class _LibraryViewerState extends State<_LibraryViewer> {
       // ohos image kit 都不吃引擎直解 HEIF 的兜底,统一走 decodeJpeg。
       return InteractiveViewer(
         maxScale: 8,
+        onInteractionStart: (_) { debugPrint('[跟手探针] IV interactionStart'); _ivZoomed = true; },
+        onInteractionEnd: (_) => _ivZoomed = false,
         child: Center(
           child: zoomHero(
             // 300px 档垫底(缓存命中即显):航班收梭子沿原生大图解码未
@@ -1411,6 +1472,8 @@ class _LibraryViewerState extends State<_LibraryViewer> {
     if (_isViewableName(name)) {
       return InteractiveViewer(
         maxScale: 8,
+        onInteractionStart: (_) { debugPrint('[跟手探针] IV interactionStart'); _ivZoomed = true; },
+        onInteractionEnd: (_) => _ivZoomed = false,
         child: Center(
           child: zoomHero(
             // 缩略垫底:全幅解码完成前顶黑底(航班落点即同图不闪白),

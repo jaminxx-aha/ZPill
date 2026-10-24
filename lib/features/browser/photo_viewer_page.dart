@@ -47,6 +47,7 @@ import '../common/widgets/embedded_video_player.dart';
 import '../common/widgets/hero_zoom.dart';
 import '../common/widgets/loading_overlay.dart';
 import '../common/widgets/photo_info_sheet.dart';
+import '../common/widgets/pull_away.dart';
 import '../edit/edit_page.dart';
 import 'album_ratings_controller.dart';
 
@@ -125,10 +126,22 @@ class PhotoViewerPage extends StatefulWidget {
   State<PhotoViewerPage> createState() => _PhotoViewerPageState();
 }
 
-class _PhotoViewerPageState extends State<PhotoViewerPage> {
+class _PhotoViewerPageState extends State<PhotoViewerPage>
+    with TickerProviderStateMixin {
   late final PageController _controller =
       PageController(initialPage: widget.initialIndex);
   late int _index = widget.initialIndex;
+
+  /// 下拉跟手返回(图片页;视频页/缩放态/全屏不启用,见 _onPullStart)。
+  /// initState 现建(late final 内联惰性 + dispose 沿首访的教训,见
+  /// flutter-late-final-controller-dispose-trap)。
+  late final PullAwayController _pull;
+
+  /// InteractiveViewer 缩放态(缩放中纵向平移归 IV,跟手闸关)。
+  bool _ivZoomed = false;
+
+  /// 当前页是否图片页(视频页不启用下拉跟手)。
+  bool get _isPhotoPage => !widget.items[_index].isVideo;
 
   /// 底栏两段式下载:「下载」钮点按后换出「到相册/到应用」双目的地;
   /// 翻页沿与入队完成沿复位(下张照片重新从「下载」起)。
@@ -215,6 +228,7 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
   @override
   void initState() {
     super.initState();
+    _pull = PullAwayController(vsync: this); // initState 现建(弃内联惰性)
     _warmCurrent();
     _readProtectState(widget.items[_index]);
     // 当前组评级即时补读全链(星档+删除候选;单件在目,全答不成队列)。
@@ -234,11 +248,38 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
   @override
   void dispose() {
     _controller.dispose();
+    _pull.dispose();
     if (_fullscreen) {
       // 全屏中收查看器(返回手势):还原方向与系统栏再走
       _setChrome(fullscreen: false);
     }
     super.dispose();
+  }
+
+  // ── 下拉跟手返回(图片页)──
+
+  void _onPullStart(DragStartDetails details) {
+    if (_fullscreen || !_isPhotoPage || _ivZoomed) return;
+    _pull.beginDrag();
+  }
+
+  void _onPullUpdate(DragUpdateDetails details) {
+    if (_fullscreen || !_isPhotoPage || _ivZoomed) return;
+    _pull.update(_pull.dy + details.delta.dy);
+  }
+
+  void _onPullEnd(DragEndDetails details) {
+    if (_fullscreen || !_isPhotoPage || _ivZoomed) return;
+    final vy = details.velocity.pixelsPerSecond.dy;
+    final commit = _pull.dy >= kPullAwayCommitDistance ||
+        vy >= kPullAwayCommitVelocity;
+    if (commit) {
+      // 位移冻结在释放位:航班以拖拽后的绘制位为起点飞回格位
+      // (绘制变换进入框架实测;fromHero 航班中由占位件隐藏)。
+      Navigator.of(context).pop();
+    } else {
+      _pull.settleBack();
+    }
   }
 
   void _setFullscreen(bool on) {
@@ -526,71 +567,91 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
       listenable: _ratings,
       builder: (context, _) {
         final rating = _ratings.ratingOf(group);
+        // 查看器顶栏(下拉跟手沿 PullAwayFade 渐隐;PreferredSize 适配
+        // Scaffold appBar 的尺寸契约)。
+        final viewerBar = AppBar(
+          backgroundColor: AppMedia.chrome,
+          foregroundColor: AppMedia.onMedia,
+          title: Text('${_index + 1} / ${widget.items.length}'),
+          actions: [
+            IconButton(
+              tooltip: context.t('info.title'),
+              onPressed: () => _showInfo(group),
+              icon: const Icon(Icons.info_outline),
+            ),
+            IconButton(
+              tooltip: _isProtected(group)
+                  ? context.t('viewer.unprotect')
+                  : context.t('viewer.protect'),
+              onPressed: () => _toggleProtect(group),
+              icon: Icon(
+                _isProtected(group) ? Icons.lock : Icons.lock_outline,
+              ),
+            ),
+            if (group.hasJpg)
+              IconButton(
+                tooltip: context.t('viewer.edit'),
+                onPressed: () => _edit(group),
+                icon: const Icon(Icons.tune),
+              ),
+            // 评分设置总闸(kRatingUiEnabled=false):先藏设评
+            // 入口,面板与落相机代码保留,翻闸即回。
+            if (kRatingUiEnabled)
+              IconButton(
+                tooltip: context.t('viewer.rating'),
+                onPressed: () => _rate(group),
+                icon: Icon(
+                  rating > 0 ? Icons.star : Icons.star_border,
+                  color: rating > 0 ? AppColors.brandYellow : null,
+                ),
+              ),
+          ],
+        );
         return Scaffold(
           backgroundColor: AppMedia.background,
-          // 全屏收顶栏与底栏:视频页撑满(同一平台视图转横)
+          // 全屏收顶栏与底栏:视频页撑满(同一平台视图转横);下拉跟手
+          // 沿 chrome 渐隐(PullAwayFade)。
           appBar: _fullscreen
               ? null
-              : AppBar(
-                  backgroundColor: AppMedia.chrome,
-                  foregroundColor: AppMedia.onMedia,
-                  title: Text('${_index + 1} / ${widget.items.length}'),
-                  actions: [
-                    IconButton(
-                      tooltip: context.t('info.title'),
-                      onPressed: () => _showInfo(group),
-                      icon: const Icon(Icons.info_outline),
-                    ),
-                    IconButton(
-                      tooltip: _isProtected(group)
-                          ? context.t('viewer.unprotect')
-                          : context.t('viewer.protect'),
-                      onPressed: () => _toggleProtect(group),
-                      icon: Icon(
-                        _isProtected(group)
-                            ? Icons.lock
-                            : Icons.lock_outline,
-                      ),
-                    ),
-                    if (group.hasJpg)
-                      IconButton(
-                        tooltip: context.t('viewer.edit'),
-                        onPressed: () => _edit(group),
-                        icon: const Icon(Icons.tune),
-                      ),
-                    // 评分设置总闸(kRatingUiEnabled=false):先藏设评
-                    // 入口,面板与落相机代码保留,翻闸即回。
-                    if (kRatingUiEnabled)
-                      IconButton(
-                        tooltip: context.t('viewer.rating'),
-                        onPressed: () => _rate(group),
-                        icon: Icon(
-                          rating > 0 ? Icons.star : Icons.star_border,
-                          color: rating > 0 ? AppColors.brandYellow : null,
-                        ),
-                      ),
-                  ],
+              : PreferredSize(
+                  preferredSize: viewerBar.preferredSize,
+                  child: PullAwayFade(controller: _pull, child: viewerBar),
                 ),
-          body: PageView.builder(
-            controller: _controller,
-            itemCount: widget.items.length,
-            onPageChanged: (i) {
-              setState(() {
-                _index = i;
-                _revealDownload = false; // 翻页复位两段式下载
-              });
-              _warmCurrent();
-              _readProtectState(widget.items[i]);
-              _ratings.ensureFull(widget.items[i]); // 评级即时补读全链
-              // 全屏是视频语境:滑到非视频页自动退出(还原方向与栏)
-              if (_fullscreen && !widget.items[i].isVideo) {
-                _setFullscreen(false);
-              }
-            },
-            itemBuilder: (_, i) => _page(widget.items[i],
-                active: i == _index, isInitial: i == widget.initialIndex),
+          body: GestureDetector(
+            // 下拉跟手返回(图片页;闸见 _onPullStart)。垂直识别器只认
+            // 纵向,水平翻页归 PageView;缩放态归 InteractiveViewer。
+            onVerticalDragStart: _onPullStart,
+            onVerticalDragUpdate: _onPullUpdate,
+            onVerticalDragEnd: _onPullEnd,
+            child: PullAwayTransform(
+              controller: _pull,
+              child: PageView.builder(
+                controller: _controller,
+                itemCount: widget.items.length,
+                onPageChanged: (i) {
+                  setState(() {
+                    _index = i;
+                    _revealDownload = false; // 翻页复位两段式下载
+                  });
+                  _warmCurrent();
+                  _readProtectState(widget.items[i]);
+                  _ratings.ensureFull(widget.items[i]); // 评级即时补读全链
+                  // 全屏是视频语境:滑到非视频页自动退出(还原方向与栏)
+                  if (_fullscreen && !widget.items[i].isVideo) {
+                    _setFullscreen(false);
+                  }
+                },
+                itemBuilder: (_, i) => _page(widget.items[i],
+                    active: i == _index, isInitial: i == widget.initialIndex),
+              ),
+            ),
           ),
-          bottomNavigationBar: _fullscreen ? null : _infoBar(context, group),
+          bottomNavigationBar: _fullscreen
+              ? null
+              : PullAwayFade(
+                  controller: _pull,
+                  child: _infoBar(context, group),
+                ),
         );
       },
     );
@@ -616,6 +677,9 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
     // 视频页包的是海报(播放钮不随航班)。
     final body = InteractiveViewer(
       maxScale: 8,
+      // 缩放态闸:缩放中纵向平移归 IV(跟手返回闸关,见 _onPullStart)。
+      onInteractionStart: (_) => _ivZoomed = true,
+      onInteractionEnd: (_) => _ivZoomed = false,
       child: Center(
         child: heroPage
             ? HeroZoom(

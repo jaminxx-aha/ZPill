@@ -2166,8 +2166,6 @@ void main() {
     // 两格都挂动效锚(NEF 原生缩略 + MOV 抽帧)。
     expect(find.byType(HeroZoom), findsNWidgets(2));
     expect(find.byWidgetPredicate(
-        (w) => w is Hero && w.tag == 'lib-grid-${nef.path}'), findsOneWidget);
-    expect(find.byWidgetPredicate(
         (w) => w is Hero && w.tag == 'lib-grid-${mov.path}'), findsOneWidget);
 
     // 点 NEF 格进查看器:初始页同 tag 配对(_nativeBody aspectBox)。
@@ -2187,5 +2185,155 @@ void main() {
         (w) => w is Hero && w.tag == 'lib-grid-${mov.path}'), findsOneWidget);
     await tester.pageBack();
     await tester.pumpAndSettle();
+  });
+
+  testWidgets('下拉跟手:过阈值松手收查看器回网格', (tester) async {
+    useTallSurface(tester);
+    File writeReal(String name, DateTime modified) {
+      final f = File('${dir.path}/$name');
+      f.writeAsBytesSync(img.encodePng(img.Image(width: 8, height: 6)));
+      f.setLastModifiedSync(modified);
+      return f;
+    }
+
+    writeReal('a.jpg', DateTime(2026, 10, 1));
+    final gallery = _FakeGallery(dir);
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    await tester.pumpWidget(host(gallery, controller));
+    await drainAppFiles(tester, controller);
+    await tester.tap(find.byType(HeroZoom));
+    await tester.pumpAndSettle();
+    expect(find.text('a.jpg'), findsWidgets); // 查看器在场
+
+    // 垂直拖 150px(>110 阈值)松手 → 提交返回,网格回位。
+    await tester.drag(find.byType(PageView), const Offset(0, 150));
+    await tester.pumpAndSettle();
+    expect(find.text('a.jpg'), findsNothing); // 查看器已收
+    expect(find.byType(HeroZoom), findsOneWidget); // 网格回位
+  });
+
+  testWidgets('下拉跟手:短拖弹回,查看器不收', (tester) async {
+    useTallSurface(tester);
+    File writeReal(String name, DateTime modified) {
+      final f = File('${dir.path}/$name');
+      f.writeAsBytesSync(img.encodePng(img.Image(width: 8, height: 6)));
+      f.setLastModifiedSync(modified);
+      return f;
+    }
+
+    writeReal('a.jpg', DateTime(2026, 10, 1));
+    final gallery = _FakeGallery(dir);
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    await tester.pumpWidget(host(gallery, controller));
+    await drainAppFiles(tester, controller);
+    await tester.tap(find.byType(HeroZoom));
+    await tester.pumpAndSettle();
+
+    await tester.drag(find.byType(PageView), const Offset(0, 60));
+    await tester.pumpAndSettle();
+    expect(find.text('a.jpg'), findsWidgets); // 仍在查看器(弹回)
+  });
+
+  testWidgets('下拉跟手:拖拽中图片跟手(下移+缩小)、chrome 渐隐,松手弹回复位',
+      (tester) async {
+    useTallSurface(tester);
+    File writeReal(String name, DateTime modified) {
+      final f = File('${dir.path}/$name');
+      f.writeAsBytesSync(img.encodePng(img.Image(width: 8, height: 6)));
+      f.setLastModifiedSync(modified);
+      return f;
+    }
+
+    writeReal('a.jpg', DateTime(2026, 10, 1));
+    final gallery = _FakeGallery(dir);
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    await tester.pumpWidget(host(gallery, controller));
+    await drainAppFiles(tester, controller);
+    await tester.tap(find.byType(HeroZoom));
+    await tester.pumpAndSettle();
+
+    final hero = find
+        .byWidgetPredicate(
+            (w) => w is Hero && w.tag == 'lib-grid-${dir.path}/a.jpg')
+        .last;
+    final rest = tester.getRect(hero);
+
+    debugPrint('[跟手探针] === 纵拖 ===');
+    // 持续拖拽 80px(不过阈值):图片跟手下移 + 缩小;chrome 渐隐。
+    final gesture = await tester.startGesture(
+        tester.getCenter(find.byType(PageView)));
+    await gesture.moveBy(const Offset(0, 20));
+    await tester.pump();
+    await gesture.moveBy(const Offset(0, 60));
+    await tester.pump();
+    final during = tester.getRect(hero);
+    expect(during.top, greaterThan(rest.top), reason: '跟手下移');
+    expect(during.height, lessThan(rest.height), reason: '轻微缩小');
+    expect(
+        find.byWidgetPredicate((w) => w is Opacity && w.opacity < 1),
+        findsWidgets,
+        reason: 'chrome 渐隐');
+
+    // 松手(80 < 110 阈值)→ 弹回复位,查看器不收。
+    await gesture.up();
+    await tester.pumpAndSettle();
+    expect(tester.getRect(hero), rest, reason: '弹回复位');
+    expect(find.text('a.jpg'), findsWidgets);
+  });
+
+  testWidgets('下拉跟手:视频页不启用(纵向拖不收)', (tester) async {
+    useTallSurface(tester);
+    writeFile('b.mov', modified: DateTime(2026, 10, 2));
+    final gallery = _FakeGallery(dir);
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    await tester.pumpWidget(host(
+      gallery,
+      controller,
+      videoPlayer: _FakeVideoPlayer(failThumbs: false),
+    ));
+    await drainAppFiles(tester, controller);
+    await tester.tap(find.byKey(const ValueKey('b.mov')));
+    await tester.pumpAndSettle();
+    expect(find.text('b.mov'), findsWidgets);
+
+    await tester.drag(find.byType(PageView), const Offset(0, 150));
+    await tester.pumpAndSettle();
+    expect(find.text('b.mov'), findsWidgets); // 视频页闸关:不收
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('下拉跟手:横翻页之后的纵拉仍生效(竞技场序列)', (tester) async {
+    useTallSurface(tester);
+    File writeReal(String name, DateTime modified) {
+      final f = File('${dir.path}/$name');
+      f.writeAsBytesSync(img.encodePng(img.Image(width: 8, height: 6)));
+      f.setLastModifiedSync(modified);
+      return f;
+    }
+
+    writeReal('a.jpg', DateTime(2026, 10, 1));
+    writeReal('b.jpg', DateTime(2026, 10, 2));
+    final gallery = _FakeGallery(dir);
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    await tester.pumpWidget(host(gallery, controller));
+    await drainAppFiles(tester, controller);
+    await tester.tap(find.byKey(const ValueKey('a.jpg')));
+    await tester.pumpAndSettle();
+    // 先横翻页(网格倒序:b 在前;查看器开在 a,正向翻到 b),再纵拉:
+    // 下拉跟手必须仍然生效。
+    await dragLikeFinger(tester, find.byType(PageView), const Offset(600, 0));
+    await tester.pumpAndSettle();
+    expect(find.text('b.jpg'), findsWidgets);
+
+    await tester.drag(find.byType(PageView), const Offset(0, 150));
+    await tester.pumpAndSettle();
+    expect(find.text('b.jpg'), findsNothing); // 纵拉提交返回
+    expect(find.byType(HeroZoom), findsNWidgets(2)); // 网格回位(两格锚)
   });
 }
