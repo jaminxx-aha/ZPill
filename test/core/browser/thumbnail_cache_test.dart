@@ -470,7 +470,7 @@ void main() {
     final thumbsDir = await gallery.thumbsDir();
     // 旧档位小图缓存(同族 plain 键)+ 格式标记(免被清空闸扫掉):
     // 键不分档的话这里会被当成高清档直接命中(小图键 = 高清键去 lt_)。
-    File('$thumbsDir/.fmt-v3').writeAsStringSync('cleared');
+    File('$thumbsDir/.fmt-v4').writeAsStringSync('cleared');
     final smallJpeg = Uint8List.fromList([0xFF, 0xD8, 0xFF, 0xD9]);
     File('$thumbsDir/v2_DSC_0001.JPG_100.jpg').writeAsBytesSync(smallJpeg);
 
@@ -997,7 +997,7 @@ void main() {
 
     final path = await cache.pathFor(entry, ThumbSource.grid);
     expect(jpegExifOrientation(File(path).readAsBytesSync()), 8); // 新档带注入
-    expect(File('$thumbsDir/.fmt-v3').existsSync(), isTrue); // 标记档在
+    expect(File('$thumbsDir/.fmt-v4').existsSync(), isTrue); // 标记档在
 
     // 新实例:标记在 → 不再清,磁盘命中零请求
     final fake2 = FakePtpTransport();

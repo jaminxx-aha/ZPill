@@ -28,6 +28,10 @@
 /// 应用内文件保留)。单删收进多选(选 1 删 1);查看器内单删不动。
 /// 页面常驻 IndexedStack,选中态跨 tab 保活(计数从活控制器现取,
 /// 文件被删自然缩)。AppBar 传输徽标(进行中任务数)→ 传输页。
+///
+/// 点格进查看器走渐进放大动效(iOS 图库式,HeroZoom 航班:格缩略从格
+/// 位放大展开到全屏,收查看器反向落回格位);缩略未就绪(图标格态)
+/// 无动效,照旧普通转场 —— 见 common/widgets/hero_zoom.dart。
 library;
 
 import 'dart:async';
@@ -61,6 +65,7 @@ import '../common/rating_filter.dart';
 import '../common/widgets/confirm_dialog.dart';
 import '../common/widgets/de_squeezed_image.dart';
 import '../common/widgets/embedded_video_player.dart';
+import '../common/widgets/hero_zoom.dart';
 import '../common/widgets/photo_info_sheet.dart';
 import '../common/widgets/states.dart';
 import '../transfers/transfers_page.dart';
@@ -219,6 +224,11 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
 
   /// 视频时长探测(容器 mvhd 行走,本地小读;会话内合并)。
   final Map<String, Future<Duration?>> _videoDurations = {};
+
+  /// 格当前显示档(文件路径 → 缩略小档路径或原图路径):渐进放大动效
+  /// 在点按沿取同源图源用(见 [_cellBody] 记账、[_openViewer] 消费);
+  /// build 沿记账不 setState,点按时同步可查。
+  final Map<String, String> _cellShownThumbs = {};
 
   /// stat 缓存(path → mtime+size):传输进度事件会高频重建本页
   ///(ListenableBuilder 直吃 TransfersController 的每帧任务快照),
@@ -808,6 +818,11 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   /// 小档生成完静默换小档源(gaplessPlayback 保帧无感切换)。cache 被
   /// 系统内存警告整体清空后(2026-10-20 复报「看大图返回缩略图经常重
   /// 新刷新」),滚回的格重解的是几十 KB 小档 —— 毫秒级,无感。
+  ///
+  /// 图像格包渐进放大动效锚([HeroZoom],tag 按文件路径与查看器初始页
+  /// 配对,见 [_openViewer]);图标格态(缩略未就绪/未知格式)不挂
+  /// —— 配对不成无航班,推入照旧普通转场。图像用共享提供器构造
+  /// ([gridThumbImageProvider]),航班梭子命中同一份已解码缓存。
   Widget _cellBody(BuildContext context, File file) {
     final viewable = _isViewable(file);
     final name = _nameOf(file);
@@ -821,15 +836,23 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
           FutureBuilder<String?>(
             future: _thumbFor(file),
             builder: (context, snap) {
-              final thumb = snap.data;
-              return Image.file(
-                thumb != null ? File(thumb) : file,
-                fit: BoxFit.cover,
-                cacheWidth: 300,
-                gaplessPlayback: true, // 换源(原图 → 小档)保旧帧不闪
-                errorBuilder: (context, error, stackTrace) => ColoredBox(
-                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                  child: const Center(child: Icon(Icons.broken_image_outlined)),
+              // 显档记账(点按沿同步可查,动效图源与格同源;小档未生成
+              // 显原图)。真缩略上格后小档可能再被 LRU 驱逐,以最近记账
+              // 为准,解码失败沿 errorBuilder 自见。
+              final shown = snap.data ?? file.path;
+              _recordShownThumb(file, shown);
+              return HeroZoom(
+                tag: 'lib-grid-${file.path}',
+                thumbPath: shown,
+                child: Image(
+                  image: gridThumbImageProvider(shown),
+                  fit: BoxFit.cover,
+                  gaplessPlayback: true, // 换源(原图 → 小档)保旧帧不闪
+                  errorBuilder: (context, error, stackTrace) => ColoredBox(
+                    color:
+                        Theme.of(context).colorScheme.surfaceContainerHighest,
+                    child: const Center(child: Icon(Icons.broken_image_outlined)),
+                  ),
                 ),
               );
             },
@@ -837,24 +860,39 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
         else if (raw || heif || video)
           // NEF/HIF/MOV:原生解码/抽帧缩略(缓存命中/解码完成后铺图;
           // 无解码器/失败 → NEF 内嵌缩略兜底,再退图标格)。HIF 曾落
-          // 三分类外的图标格支路(2026-10-24 纳入缩略管线)。
+          // 三分类外的图标格支路(2026-10-24 纳入缩略管线)。显档记账
+          // 与 viewable 分支同规(点按沿取同源图源挂动效)。
           FutureBuilder<String?>(
             future: _thumbFor(file),
-            builder: (context, snap) => snap.hasData && snap.data != null
-                ? Image.file(
-                    File(snap.data!),
-                    fit: BoxFit.cover,
-                    cacheWidth: 300,
-                    gaplessPlayback: true,
-                    errorBuilder: (context, error, stackTrace) =>
-                        _iconCell(context, name),
-                  )
-                : _iconCell(context, name),
+            builder: (context, snap) {
+              if (!(snap.hasData && snap.data != null)) {
+                return _iconCell(context, name);
+              }
+              _recordShownThumb(file, snap.data!);
+              return HeroZoom(
+                tag: 'lib-grid-${file.path}',
+                thumbPath: snap.data!,
+                child: Image(
+                  image: gridThumbImageProvider(snap.data!),
+                  fit: BoxFit.cover,
+                  gaplessPlayback: true,
+                  errorBuilder: (context, error, stackTrace) =>
+                      _iconCell(context, name),
+                ),
+              );
+            },
           )
         else
           _iconCell(context, name),
       ],
     );
+  }
+
+  /// NEF/HIF/MOV 缩略上格沿的显档记账(viewable 分支同规):点按沿
+  /// [_openViewer] 取同源图源挂动效 —— 漏记则四类格式全部退化为普通
+  /// 转场(真机复报「MOV/HIF/MP4/NEF 都没实现」的根因)。
+  void _recordShownThumb(File file, String thumbPath) {
+    _cellShownThumbs[file.path] = thumbPath;
   }
 
   /// 图标格:视频件用摄像机图标(与「视频」过滤 chips 视觉对上),
@@ -894,10 +932,17 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   /// 打开查看器:在网格过滤序(倒序)上翻页,初始页 = 被点的格。
   /// 返回后的缩略显示不靠这里善后 —— 格走小档双源(见 [_cellBody]),
   /// cache 被系统清空后重解的也是毫秒级小档,天然无感。
+  ///
+  /// 渐进放大动效:格当前显示档已记账才挂配对件(图源 = 该档 300px
+  /// 提供器,与格内解码缓存同键);图标格态(缩略未就绪)降级普通转场。
   void _openViewer(File file, List<File> peers) {
+    final shown = _cellShownThumbs[file.path];
+    // ZoomPageRoute:整页淡入 + 网格原地不动(动效底图),与 Hero 航班
+    // 同拍 —— 系统 zoom 转场的缩退/快隐会与飞行图打架(原生图库缩放里
+    // 网格不动)。
     Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => _LibraryViewer(
+      ZoomPageRoute<void>(
+        pageBuilder: (_, __, ___) => _LibraryViewer(
           files: peers,
           initialIndex: peers.indexOf(file),
           controller: _controller,
@@ -907,6 +952,9 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
           thumbFor: _thumbFor,
           embeddedVideoView: widget.embeddedVideoView,
           videoLutExport: widget.videoLutExport,
+          heroTag: shown == null ? null : 'lib-grid-${file.path}',
+          heroThumbPath: shown,
+          heroImage: shown == null ? null : gridThumbImageProvider(shown),
         ),
       ),
     );
@@ -1060,6 +1108,9 @@ class _LibraryViewer extends StatefulWidget {
     required this.thumbFor,
     this.embeddedVideoView,
     this.videoLutExport,
+    this.heroTag,
+    this.heroThumbPath,
+    this.heroImage,
   });
 
   /// 网格过滤序快照(修改时间倒序);查看器内删除只改本地列表,
@@ -1080,6 +1131,17 @@ class _LibraryViewer extends StatefulWidget {
   /// 测试注入(LUT 导出宿主);缺省 MethodChannel 实现(ohos 无
   /// native,入口按 isSupported 隐藏)。
   final VideoLutExportHost? videoLutExport;
+
+  /// 渐进放大动效配对(网格页点格沿传入,见 hero_zoom.dart):初始页
+  /// 挂同 tag 的 HeroZoom,航班图源 = 格缩略。三者同给同缺;[heroTag]
+  /// 为空 = 无动效(降级普通转场)。
+  final Object? heroTag;
+
+  /// 格缩略盘档路径(动效梭子图源与初始页垫底)。
+  final String? heroThumbPath;
+
+  /// 格缩略的 300px 缓存命中提供器([gridThumbImageProvider])。
+  final ImageProvider<Object>? heroImage;
 
   @override
   State<_LibraryViewer> createState() => _LibraryViewerState();
@@ -1301,39 +1363,116 @@ class _LibraryViewerState extends State<_LibraryViewer> {
             _setFullscreen(false);
           }
         },
-        itemBuilder: (_, i) => _page(_files[i], active: i == _index),
+        itemBuilder: (_, i) => _page(_files[i],
+            active: i == _index, isInitial: i == widget.initialIndex),
       ),
     );
   }
 
-  Widget _page(File file, {required bool active}) {
+  Widget _page(File file, {required bool active, bool isInitial = false}) {
     final name = _nameOf(file);
+    // 渐进放大动效只在初始页挂 HeroZoom(其余页无此 tag,翻页后收查看
+    // 器无航班,自然回落普通转场)。aspectBox(图片/海报显示盒)= hero
+    // 盒即图片 contain 显示位 —— 框架航班终点追踪 toHero 盒原点,盒必须
+    // 是显示位本身,落点才不错位;视频页整页包(控制浮层不进显示盒,
+    // 收程落点随海报盒,既有行为)。
+    final hero = isInitial &&
+        widget.heroTag != null &&
+        widget.heroImage != null &&
+        widget.heroThumbPath != null;
+    Widget zoomHero(Widget child, {bool aspectBox = false}) => hero
+        ? HeroZoom(
+            tag: widget.heroTag!,
+            thumbPath: widget.heroThumbPath!,
+            deSqueeze:
+                AppServices.instance.settingsController.value.deSqueeze,
+            aspectBox: aspectBox,
+            child: child,
+          )
+        : child;
     if (isVideoFilename(name)) {
-      return widget.videoPlayer.supportsEmbeddedView
-          ? EmbeddedVideoPlayer(
-              path: file.path,
-              active: active,
-              player: widget.videoPlayer,
-              viewBuilder: widget.embeddedVideoView ?? embeddedVideoViewBuilder,
-              fullscreen: _fullscreen,
-              onToggleFullscreen: () => _setFullscreen(!_fullscreen),
-              poster: _VideoPoster(file: file, thumbFor: widget.thumbFor),
-            )
-          : _VideoPlayPage(
-              file: file, thumbFor: widget.thumbFor, player: widget.videoPlayer);
+      // 动效锚:海报显示位上挂透明 Hero(aspectBox 盒 = 海报 contain
+      // 显示位);可见海报层铺满(contain 绘制)同位,航班落点即显示位,
+      // 收梭子无缝。播放控制浮层等兄弟层保持整页,不受显示盒约束。
+      Widget? heroAnchor;
+      if (hero) {
+        heroAnchor = HeroZoom(
+          tag: widget.heroTag!,
+          thumbPath: widget.heroThumbPath!,
+          aspectBox: true,
+          child: const SizedBox.shrink(),
+        );
+      }
+      if (widget.videoPlayer.supportsEmbeddedView) {
+        return EmbeddedVideoPlayer(
+          path: file.path,
+          active: active,
+          player: widget.videoPlayer,
+          viewBuilder: widget.embeddedVideoView ?? embeddedVideoViewBuilder,
+          fullscreen: _fullscreen,
+          onToggleFullscreen: () => _setFullscreen(!_fullscreen),
+          poster: Stack(fit: StackFit.expand, children: [
+            _VideoPoster(file: file, thumbFor: widget.thumbFor),
+            if (heroAnchor != null) Align(child: heroAnchor),
+          ]),
+        );
+      }
+      return _VideoPlayPage(
+        file: file,
+        thumbFor: widget.thumbFor,
+        player: widget.videoPlayer,
+        heroAnchor: heroAnchor,
+      );
     }
     if (isRawFilename(name) || isHeifFilename(name)) {
       // HIF 与 NEF 同走原生解码通道(≤2560,会话缓存):iOS ImageIO /
       // ohos image kit 都不吃引擎直解 HEIF 的兜底,统一走 decodeJpeg。
       return InteractiveViewer(
         maxScale: 8,
-        child: Center(child: _nativeBody(file)),
+        child: Center(
+          child: zoomHero(
+            // 300px 档垫底(缓存命中即显):航班收梭子沿原生大图解码未
+            // 回、缩略垫层自身读档也未上屏的空窗不闪黑(真机复报「HIF/
+            // RAW 放大后黑屏闪一下」根因);两层解码产物到后原位盖过。
+            hero
+                ? Stack(fit: StackFit.expand, children: [
+                    Image(
+                      image: widget.heroImage!,
+                      fit: BoxFit.contain,
+                      gaplessPlayback: true,
+                      excludeFromSemantics: true,
+                      errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                    ),
+                    _nativeBody(file),
+                  ])
+                : _nativeBody(file),
+            aspectBox: true,
+          ),
+        ),
       );
     }
     if (_isViewableName(name)) {
       return InteractiveViewer(
         maxScale: 8,
-        child: Center(child: _imageBody(file)),
+        child: Center(
+          child: zoomHero(
+            // 缩略垫底:全幅解码完成前顶黑底(航班落点即同图不闪白),
+            // 解码完成原位盖过。显示盒内两源同比,contain 即满铺。
+            hero
+                ? Stack(fit: StackFit.expand, children: [
+                    Image(
+                      image: widget.heroImage!,
+                      fit: BoxFit.contain,
+                      gaplessPlayback: true,
+                      excludeFromSemantics: true,
+                      errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                    ),
+                    _imageBody(file),
+                  ])
+                : _imageBody(file),
+            aspectBox: true,
+          ),
+        ),
       );
     }
     // 其余格式(「全部」chips 下网格里的图标格):占位页,可滑过。
@@ -1640,6 +1779,7 @@ class _VideoPlayPage extends StatefulWidget {
     required this.file,
     required this.thumbFor,
     required this.player,
+    this.heroAnchor,
   });
 
   final File file;
@@ -1648,6 +1788,10 @@ class _VideoPlayPage extends StatefulWidget {
   final Future<String?> Function(File file) thumbFor;
 
   final VideoPlayer player;
+
+  /// 动效锚(初始页且格缩略就绪时传入):海报显示位上的透明 Hero
+  /// (aspectBox 盒),铺在海报层之上、播放钮之下。
+  final Widget? heroAnchor;
 
   @override
   State<_VideoPlayPage> createState() => _VideoPlayPageState();
@@ -1680,6 +1824,8 @@ class _VideoPlayPageState extends State<_VideoPlayPage> {
       fit: StackFit.expand,
       children: [
         _VideoPoster(file: widget.file, thumbFor: widget.thumbFor),
+        // 动效锚(海报显示位上的透明 Hero;海报 contain 绘制同位)。
+        if (widget.heroAnchor != null) Align(child: widget.heroAnchor!),
         // 播放钮:与相机相册视频页未播态同款中键圆钮。
         Center(
           child: Material(

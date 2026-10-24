@@ -311,7 +311,7 @@ class ThumbnailCache {
     _fhdPictureDegraded = false;
   }
 
-  static const _fmtMarker = '.fmt-v3'; // v3:清 v2 时代未验签落盘的非 JPEG FHD 垃圾档
+  static const _fmtMarker = '.fmt-v4'; // v4:清 v3 时代未裁黑边的 lt_/fhd_/grid 席位档(libv4_ 伴生族豁免)
 
   Future<String> _fetch(
       ObjectEntry entry, ThumbSource source, String key) async {
@@ -346,7 +346,8 @@ class ThumbnailCache {
               // 键直走小图链(2026-10-25 卓易通相机相册破图复报根修)。
               _fhdNonJpegKeys.add(key);
             } else {
-              final data = await _orientThumb(entry, raw);
+              final oriented = await _orientThumb(entry, raw);
+              final data = await trimLetterboxJpeg(oriented) ?? oriented;
               await fhdFile.writeAsBytes(data, flush: true);
               _remember(source, 'fhd_$key', fhdPath, data.length);
               await _evictIfNeeded(source);
@@ -426,11 +427,13 @@ class ThumbnailCache {
       return ltPath;
     }
     // ② 未降级:试 0x90C4(已降级时 session 层也会秒拒,这里直查免
-    //    一次异常开销)
+    //    一次异常开销)。HIF 的高清缩略同样信箱化进固定画布,落盘前
+    //    裁黑边(GetThumb 路径同款;无黑边裁剪自回 null 原样)。
     if (!_session.largeThumbDegraded) {
       try {
-        final data = await _orientThumb(
+        final oriented = await _orientThumb(
             entry, await _session.getLargeThumb(entry.handle, force: true));
+        final data = await trimLetterboxJpeg(oriented) ?? oriented;
         await ltFile.writeAsBytes(data, flush: true);
         _remember(source, ltKey, ltPath, data.length);
         await _evictIfNeeded(source);
@@ -539,7 +542,11 @@ class ThumbnailCache {
     if (await marker.exists()) return;
     try {
       await for (final f in d.list()) {
-        if (f is File && f.path.endsWith('.jpg')) {
+        // libv4_ = 本地图库伴生/缩略族(传输完成沿写入),不属于相机
+        // 席位格式版本,清扫不波及(不然升版一次,HIF 伴生预览全灭)。
+        if (f is File &&
+            f.path.endsWith('.jpg') &&
+            !f.path.contains('/libv4_')) {
           try {
             await f.delete();
           } on FileSystemException {

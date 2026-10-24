@@ -24,6 +24,7 @@ import 'core/browser/photo_group.dart';
 import 'core/browser/thumbnail_cache.dart';
 import 'core/camera/camera_connection.dart';
 import 'core/media/watermark.dart';
+import 'core/media/letterbox.dart';
 import 'core/media/xmp_metadata.dart';
 import 'core/ptp/event_poller.dart';
 import 'core/ptp/ptp_link_router.dart';
@@ -520,7 +521,10 @@ final class AppServices {
             'HIF 伴生预览:${entry.name} 相机 JPEG 缺席/非 JPEG,跳过');
         return;
       }
-      await companion.writeAsBytes(jpeg, flush: true);
+      // 信箱黑边裁剪:相机缩略把画面信箱化进固定画布(HIF/NEF/视频均
+      // 会),无黑边裁剪自回 null 原样。
+      final trimmed = await trimLetterboxJpeg(jpeg);
+      await companion.writeAsBytes(trimmed ?? jpeg, flush: true);
       AppLog.i(AppLog.browser,
           'HIF 伴生预览:${entry.name} → libv4_${safe}_$len.jpg');
     } on Exception {
