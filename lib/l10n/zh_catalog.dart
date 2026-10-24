@@ -762,7 +762,7 @@ const Map<String, String> zhCatalog = {
   'remote.scopeNlog': 'N-Log',
   'fmt.shortJpg': 'JPG',
   'fmt.shortRaw': 'RAW',
-  'fmt.shortJpgRaw': 'JPG+RAW',
+  'fmt.shortJpgRaw': 'JPG+\nRAW',
   'fmt.jpgAndRaw': 'JPG + RAW',
   'log.title': '诊断日志',
   'log.subtitle': '应用运行日志(内存环形缓冲 {n}/{cap} 条),连接/传输故障都在这里',

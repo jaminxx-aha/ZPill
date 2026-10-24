@@ -70,8 +70,8 @@ class PhotoViewerPage extends StatefulWidget {
   final int initialIndex;
 
   /// 相册页被点格的格式档(格 = 组 × 格式档):非空时组内按格式收集,
-  /// 缺该格式的组提示不下;空 = 整组直接下。网格显示不受影响,仅下载
-  /// 口径跟随相册页筛选(多格式并集 possible)。
+  /// 缺该格式的组提示不下;空 = 整组直接下。信息栏/信息底单同口径
+  ///(JPG 格只显 JPG 名与 JPG 体量,见 [_infoGroup]);多格式并集 possible。
   final Set<MediaFormat> formats;
 
   /// 测试注入;缺省用 AppServices 单例。
@@ -323,23 +323,39 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
     }
   }
 
+  /// 信息口径(信息栏与信息底单共用):按被点格的格式档过滤组内成员
+  ///(与下载口径同源 —— 格 = 组 × 格式档,JPG 格只显 JPG 名与 JPG
+  /// 体量,不再双格式合计);组内无该格式(翻页到异格式组)回落整组,
+  /// 与预览恒显组照同语义;空口径(未拆格兜底格)= 整组。
+  PhotoGroup _infoGroup(PhotoGroup group) {
+    if (widget.formats.isEmpty) return group;
+    final subset = [
+      for (final m in group.members)
+        if (mediaFormatOfFilename(m.name)
+            case final f? when widget.formats.contains(f))
+          m,
+    ];
+    return subset.isEmpty ? group : PhotoGroup(subset);
+  }
+
   /// 照片信息底单:文件级信息立显(名称/大小/连拍/时间),EXIF(机身/
-  /// 镜头/参数/拍摄时间)走 64KB 头读懒加载 —— 优先组内 JPG(Zf 实证
-  /// 头读形状),无 JPG 的 RAW 组走 NEF TIFF 头(同路);视频只走
+  /// 镜头/参数/拍摄时间)走 64KB 头读懒加载 —— 优先口径内 JPG(Zf 实证
+  /// 头读形状),无 JPG 的 RAW 口径走 NEF TIFF 头(同路);视频只走
   /// 第一段。
   void _showInfo(PhotoGroup group) {
-    final pair = group.hasJpg && group.hasRaw;
+    final sub = _infoGroup(group);
+    final pair = sub.hasJpg && sub.hasRaw;
     showPhotoInfoSheet(
       context,
-      filename: pair ? '${group.jpg!.name} + ${group.raw!.name}' : group.name,
-      sizeBytes: group.totalBytes,
+      filename: pair ? '${sub.jpg!.name} + ${sub.raw!.name}' : sub.name,
+      sizeBytes: sub.totalBytes,
       // 连拍张数(值列)在本页预翻译,信息底单只包行标签
       burstLabel:
           group.isBurst ? context.t('viewer.burstCount', {'n': group.shotCount}) : null,
       fallbackTime: formatDateTime(group.capturedAt),
       loadExif: group.isVideo
           ? null
-          : () => _thumbnails.exifCardOf(group.jpg ?? group.primary),
+          : () => _thumbnails.exifCardOf(sub.jpg ?? sub.primary),
     );
   }
 
@@ -589,11 +605,14 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
   }
 
   Widget _infoBar(BuildContext context, PhotoGroup group) {
-    // RAW+JPG 合并组:两份文件名都列出,大小取合计;连拍簇注明张数。
-    final pair = group.hasJpg && group.hasRaw;
+    // 信息行跟随被点格的格式档(见 [_infoGroup]):JPG 格只显 JPG 名与
+    // JPG 体量;整组口径(未拆格兜底/翻页组缺该格式回落)保持合并显示
+    // —— RAW+JPG 两份文件名都列出,大小取合计;连拍簇注明张数。
+    final sub = _infoGroup(group);
+    final pair = sub.hasJpg && sub.hasRaw;
     final info = [
-      pair ? '${group.jpg!.name} + ${group.raw!.name}' : group.name,
-      formatBytes(group.totalBytes),
+      pair ? '${sub.jpg!.name} + ${sub.raw!.name}' : sub.name,
+      formatBytes(sub.totalBytes),
       if (group.isBurst) context.t('viewer.burstCount', {'n': group.shotCount}),
       if (formatDateTime(group.capturedAt) != null)
         formatDateTime(group.capturedAt)!,

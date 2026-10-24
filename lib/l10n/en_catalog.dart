@@ -898,7 +898,7 @@ const Map<String, String> enCatalog = {
   'remote.scopeNlog': 'N-Log',
   'fmt.shortJpg': 'JPG',
   'fmt.shortRaw': 'RAW',
-  'fmt.shortJpgRaw': 'JPG+RAW',
+  'fmt.shortJpgRaw': 'JPG+\nRAW',
   'fmt.jpgAndRaw': 'JPG + RAW',
   'log.title': 'Diagnostic Logs',
   'log.subtitle': 'App runtime log (in-memory ring buffer, {n}/{cap} entries) — connection & transfer faults land here',

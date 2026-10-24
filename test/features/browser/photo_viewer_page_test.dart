@@ -483,6 +483,74 @@ void main() {
     expect(find.text('照片信息'), findsNothing);
   });
 
+  testWidgets('信息跟随被点格口径:JPG 格只显 JPG 名与体量,NEF 格同'
+      '(不再双格式名拼接/合计)', (tester) async {
+    final thumbs = _FakeThumbs()
+      ..exifByHandle[102] = ExifCardData(
+          make: 'NIKON CORPORATION',
+          model: 'NIKON Z f',
+          lens: 'NIKKOR Z 40mm f/2',
+          focalLengthMm: 40,
+          fNumber: 2,
+          exposureSec: 1 / 250,
+          iso: 100,
+          takenAt: DateTime(2026, 10, 1, 12));
+    final group = PhotoGroup([
+      _file(101, 'DSC_0001.JPG'),
+      _file(102, 'DSC_0001.NEF', format: 0x3000),
+    ]);
+
+    // JPG 格进入(相册页拆格传 {jpg}):信息行与底单都只 JPG 一份
+    await _openViewer(
+        tester,
+        PhotoViewerPage(
+          items: [group],
+          initialIndex: 0,
+          thumbnails: thumbs,
+          engine: _FakeEngine(),
+          formats: {MediaFormat.jpg},
+        ));
+    expect(find.textContaining('DSC_0001.JPG · 8B'), findsOneWidget,
+        reason: '信息行:单文件名 + 单文件体量(条目各 8 字节)');
+    expect(find.textContaining('+'), findsNothing,
+        reason: '不再拼接两格式名');
+
+    await tester.tap(find.byTooltip('照片信息'));
+    await tester.pumpAndSettle();
+    expect(find.text('DSC_0001.JPG'), findsOneWidget);
+    expect(find.text('8B'), findsOneWidget);
+    expect(find.text('16B'), findsNothing, reason: '不再双文件合计');
+
+    await tester.tapAt(const Offset(10, 10)); // 点外关闭底单
+    await tester.pumpAndSettle();
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+
+    // NEF 格进入:名字/体量随 NEF,EXIF 也改锚 NEF 件(头 102)
+    await _openViewer(
+        tester,
+        PhotoViewerPage(
+          items: [group],
+          initialIndex: 0,
+          thumbnails: thumbs,
+          engine: _FakeEngine(),
+          formats: {MediaFormat.nef},
+        ));
+    expect(find.textContaining('DSC_0001.NEF · 8B'), findsOneWidget);
+    expect(find.textContaining('+'), findsNothing);
+
+    await tester.tap(find.byTooltip('照片信息'));
+    await tester.pumpAndSettle();
+    expect(find.text('DSC_0001.NEF'), findsOneWidget);
+    expect(find.text('8B'), findsOneWidget);
+    expect(find.text('NIKON Z f'), findsOneWidget,
+        reason: 'EXIF 锚随口径走 NEF 件(TIFF 头路)');
+
+    await tester.tapAt(const Offset(10, 10)); // 点外关闭底单
+    await tester.pumpAndSettle();
+    expect(find.text('照片信息'), findsNothing);
+  });
+
   testWidgets('信息底单:视频组只走文件级信息(无 EXIF 段无转圈)',
       (tester) async {
     await _openViewer(
