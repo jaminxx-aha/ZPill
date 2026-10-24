@@ -88,7 +88,24 @@ final class BleCameraSession {
   /// 写 0x2002 的控制器名(32B ASCII 零填充;相机「已配对设备」显示)。
   /// 可变:配对页实验用(SnapBridge 按平台写前缀名 —— Android 版实证
   /// `Android_<机型>_<4位随机>`;相机以名识别客户端类型,见 0x2008 注)。
+  /// 装配沿由 AppServices 组装成「<手机型号>-NikonPill」
+  /// ([composeControllerName]);取不到型号(平台缺失/异常)保持默认
+  /// 裸名。
   String controllerName;
+
+  /// 相机侧注册名组装(0x2002 = 32B ASCII 零填充):「<手机型号>-
+  /// NikonPill」。型号只留可打印 ASCII(连续空白并一,零填充里嵌空格
+  /// 无害);型号为空回落裸名 'NikonPill';总长钳 32(型号段最多 22)。
+  static String composeControllerName(String model) {
+    final cleaned = String.fromCharCodes(
+            model.codeUnits.where((c) => c >= 0x20 && c <= 0x7E))
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    if (cleaned.isEmpty) return 'NikonPill';
+    final head =
+        cleaned.length > 22 ? cleaned.substring(0, 22) : cleaned;
+    return '$head-NikonPill';
+  }
 
   /// 握手/连接总闸(15s):连上非相机(扫描全量列表误点)或相机已退出
   /// 配对菜单时,stage1 无应答 —— 没有超时 pair() 会永久挂在 pairing。

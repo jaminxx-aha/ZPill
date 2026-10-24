@@ -128,6 +128,26 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
     private val adapter: BluetoothAdapter?
         get() = (context?.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
 
+    /**
+     * 本机型号名(相机侧注册名「<型号>-NikonPill」的型号段,组装在 Dart
+     * 侧):市场名(Huawei/Honor ro.config.marketing_name —— Build.MODEL
+     * 在国产 ROM 常是 ALN-AL00 这类代号)→ Build.MODEL → 设置「设备名称」
+     * (默认即市场名)。取不到返回 null,调用方回落裸名。反射读隐藏
+     * SystemProperties 包在 runCatching 里,任何 ROM 缺失/受限都静默降级。
+     */
+    private fun deviceModelName(): String? {
+        runCatching {
+            val sp = Class.forName("android.os.SystemProperties")
+            val get = sp.getMethod("get", String::class.java)
+            (get.invoke(null, "ro.config.marketing_name") as? String)?.takeIf { it.isNotBlank() }
+        }.getOrNull()?.let { return it }
+        Build.MODEL.takeIf { it.isNotBlank() }?.let { return it }
+        val ctx = context ?: return null
+        return runCatching {
+            Settings.Global.getString(ctx.contentResolver, "device_name")
+        }.getOrNull()?.takeIf { it.isNotBlank() }
+    }
+
     private val stateReceiver = object : BroadcastReceiver() {
         override fun onReceive(ctx: Context, intent: Intent) {
             if (intent.action != BluetoothAdapter.ACTION_STATE_CHANGED) return
@@ -406,6 +426,7 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
         android.util.Log.i(TAG, "method=${call.method}")
         when (call.method) {
             "isAvailable" -> result.success(adapter?.isEnabled == true)
+            "deviceName" -> result.success(deviceModelName())
             "scan" -> ensurePermissions { startScan(call.argument<Int>("seconds") ?: 10, null, result) }
             "scanForDeviceId" -> ensurePermissions {
                 startScan(

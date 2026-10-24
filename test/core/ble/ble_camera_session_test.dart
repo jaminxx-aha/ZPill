@@ -261,6 +261,54 @@ void main() {
     expect(name.skip(9).every((b) => b == 0), isTrue);
   });
 
+  test('组装名沿写入 0x2002(「<型号>-NikonPill」,32B 零填充)', () async {
+    session.controllerName =
+        BleCameraSession.composeControllerName('iPhone 17 Pro');
+    final done = expectLater(session.pair(device), completes);
+    host.emit(const BleConnected(
+        uuid: 'P1', characteristics: {}, writeWithoutResponseMtu: 20));
+    await pump();
+    final stage1 = PairingMessage.decode(host.lastWrite(kNikonCharPairing));
+    host.emit(BleNotified(
+        uuid: kNikonCharPairing, data: buildStage2(stage1).encode()));
+    await pump();
+    host.emit(BleNotified(
+        uuid: kNikonCharPairing, data: buildStage4().encode()));
+    await pump();
+    expect(session.state, BleSessionState.ready);
+    expect(session.identity!.name, 'iPhone 17 Pro-NikonPill');
+    final name = host.lastWrite(kNikonCharName);
+    expect(name.length, 32);
+    expect(String.fromCharCodes(name.take(23)), 'iPhone 17 Pro-NikonPill');
+    expect(name.skip(23).every((b) => b == 0), isTrue);
+    await done;
+  });
+
+  group('composeControllerName(相机侧注册名「<型号>-NikonPill」)', () {
+    test('常规型号原样接后缀', () {
+      expect(BleCameraSession.composeControllerName('iPhone 17 Pro'),
+          'iPhone 17 Pro-NikonPill');
+      expect(BleCameraSession.composeControllerName('HUAWEI Mate 80 Pro'),
+          'HUAWEI Mate 80 Pro-NikonPill');
+    });
+
+    test('型号空/纯非 ASCII 回落裸名(0x2002 须 ASCII)', () {
+      expect(BleCameraSession.composeControllerName(''), 'NikonPill');
+      expect(BleCameraSession.composeControllerName('哈哈手机'), 'NikonPill');
+    });
+
+    test('非 ASCII 剔除 + 连续空白并一', () {
+      expect(BleCameraSession.composeControllerName('Aha 的 Mate60'),
+          'Aha Mate60-NikonPill');
+    });
+
+    test('总长钳 32(型号段最多 22)', () {
+      final name = BleCameraSession.composeControllerName('A' * 30);
+      expect(name, '${'A' * 22}-NikonPill');
+      expect(name.length, 32);
+    });
+  });
+
   test('lastError 变化沿 errors 流实时发(同值不发,清空发 null)', () async {
     final seen = <L10nMessage?>[];
     final sub = session.errors.listen(seen.add);
@@ -1155,7 +1203,10 @@ void main() {
 
   test('v7 全表扫描读:权限含 read 的特征全读,0x2000/0x2008/write-only 除外',
       () async {
-    final done = expectLater(session.pair(device, waitTimeout: const Duration(milliseconds: 1)), completes);
+    // waitTimeout 只是防挂死的看门狗(测试内握手是微任务级,正常路径
+    // 完成即收):1ms 真闸与握手微任务链竞速,负载下偶发假超时(2026-10-24
+    // 全量两连挂实证,main 无改动同样复现)—— 放宽到 1s。
+    final done = expectLater(session.pair(device, waitTimeout: const Duration(seconds: 1)), completes);
     host.emit(const BleConnected(
         uuid: 'P1',
         characteristics: {
