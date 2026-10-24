@@ -792,8 +792,8 @@ const Map<String, String> enCatalog = {
   'lut.exportFailed': 'Export Failed',
   'lut.parseFailed': 'LUT Parse Failed',
   'libpage.savedToAlbum': 'Saved to the system album',
-  'libpage.rawDecodeFailed':
-      'RAW decode failed (this platform may not support it)',
+  'libpage.decodeFailed':
+      'Decode failed (this platform may not support it)',
   'transfers.clearHistory': 'Clear History',
   'transfers.empty':
       'No transfer tasks yet\n(select multiple in the camera album, or download single items from the photo viewer)',

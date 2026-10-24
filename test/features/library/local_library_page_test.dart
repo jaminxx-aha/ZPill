@@ -1201,7 +1201,49 @@ void main() {
 
     await tester.tap(find.text('NEF'));
     await tester.pumpAndSettle();
-    expect(find.text('RAW 解码失败(该平台可能不支持)'), findsOneWidget);
+    expect(find.text('解码失败(该平台可能不支持)'), findsOneWidget);
+  });
+
+  // ── HIF 可看可点(2026-10-24:与 NEF 同族走原生解码通道,不再
+  // 图标格 + 不可点;真机语境 iOS CGImageSource 直解 HEIF)──
+
+  testWidgets('HIF:网格缩略解码落盘,点进查看器解码大图', (tester) async {
+    writeFile('c.hif', modified: DateTime(2026, 10, 3));
+    final gallery = _FakeGallery(dir);
+    final decoder = _FakeRawDecoder();
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    await tester.pumpWidget(host(gallery, controller, rawDecoder: decoder));
+    await drainAppFiles(tester, controller);
+
+    // 与 NEF 同管线:格缩略 512px 解码一次,落盘 thumbsDir(libv3 键)。
+    expect(decoder.calls, [('${dir.path}/c.hif', 512)]);
+    expect(File('${gallery.thumbs.path}/libv3_c.hif_3.jpg').existsSync(), isTrue);
+
+    // 点 HIF 格进查看器:标题 + 2560px 全尺寸解码(假 JPEG 解不开走
+    // errorBuilder,Image 组件在即可)。
+    await tester.tap(find.byKey(const ValueKey('c.hif')));
+    await tester.pumpAndSettle();
+    expect(find.text('c.hif'), findsWidgets); // 查看器 AppBar
+    expect(decoder.calls.last, ('${dir.path}/c.hif', 2560));
+    expect(find.byType(Image), findsOneWidget);
+  });
+
+  testWidgets('HIF 无解码器:网格图标格顶位,查看器报错占位', (tester) async {
+    writeFile('c.hif', modified: DateTime(2026, 10, 3));
+    final gallery = _FakeGallery(dir);
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    // host 缺省注入 failing 解码器。
+    await tester.pumpWidget(host(gallery, controller));
+    await drainAppFiles(tester, controller);
+
+    expect(find.text('HIF'), findsOneWidget); // 图标格
+    expect(find.byType(Image), findsNothing);
+
+    await tester.tap(find.text('HIF'));
+    await tester.pumpAndSettle();
+    expect(find.text('解码失败(该平台可能不支持)'), findsOneWidget);
   });
 
   // ── 视频页内播放(2026-10-09 再改:点开**不自动播**,首帧 + 播放钮
