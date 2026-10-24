@@ -35,10 +35,20 @@ final class AlbumRatingsController extends ChangeNotifier {
   /// 相机评级数据是否已建立(筛选分区只在建立后展示)。
   bool get available => repository.ratingsLoaded;
 
-  /// 即时补读当前组的评级(查看器打开/翻页沿):后台补读未到的先拉,
-  /// 0 = 已问过未评,不重复发。
+  /// 即时补读当前组的评级(网格格 build 沿,轻量段):图像只发 0xDC8A
+  /// 星档一笔,视频走容器 NCTG;昂贵的 256KB 删除候选甄别留给
+  /// [ensureTrash] 驻留沿,滚过格不占链。
   void ensure(PhotoGroup group) =>
+      repository.requestRating(group.primary.handle, trashProbe: false);
+
+  /// 查看器沿全链(星档 + 删除候选甄别):单件在目,全答不构成队列。
+  void ensureFull(PhotoGroup group) =>
       repository.requestRating(group.primary.handle);
+
+  /// 驻留沿补删除候选甄别(256KB XMP 头读;NEF 兼档位兜底)。去重集
+  /// 保证与后台甄别/查看器全链互不重发。
+  void ensureTrash(PhotoGroup group) =>
+      repository.requestTrashProbe(group.primary.handle);
 
   /// 打星([stars] 0 = 清除):相机写入,失败原样上抛(乐观上屏由
   /// 仓库回滚);成功后传播图库快照(传播失败不挡 —— 相机已落账,

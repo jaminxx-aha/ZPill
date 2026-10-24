@@ -56,7 +56,13 @@ final class _RecordingRepo implements ObjectRepository {
   bool get ratingsLoaded => false;
 
   @override
-  void requestRating(int handle) {}
+  void requestRating(int handle, {bool trashProbe = true}) {}
+  @override
+  void requestTrashProbe(int handle) {}
+  @override
+  Duration? durationFor(int handle) => null;
+  @override
+  void requestVideoDuration(int handle) {}
 
   @override
   int ratingForHandle(int handle) => 0;

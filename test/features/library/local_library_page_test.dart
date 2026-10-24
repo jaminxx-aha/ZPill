@@ -14,6 +14,9 @@ import 'package:nikon_pill/core/transfer/transfer_engine.dart';
 import 'package:nikon_pill/core/transfer/transfer_task.dart';
 import 'package:nikon_pill/core/utils/byte_writer.dart';
 import 'package:nikon_pill/data/ratings_store.dart';
+import 'package:nikon_pill/features/common/trash_rating_icon.dart';
+import 'package:nikon_pill/features/common/sort_bars_icon.dart';
+import 'package:nikon_pill/data/ui_prefs_store.dart';
 import 'package:nikon_pill/features/library/library_ratings.dart';
 import 'package:nikon_pill/features/library/local_library_page.dart';
 import 'package:nikon_pill/features/transfers/transfers_page.dart';
@@ -28,8 +31,7 @@ final class _FakeGallery implements GallerySaver {
   _FakeGallery(this.dir);
 
   final Directory dir;
-  late final Directory thumbs = Directory('${dir.path}/_thumbs')
-    ..createSync();
+  late final Directory thumbs = Directory('${dir.path}/_thumbs')..createSync();
   final importCalls = <List<GalleryImportRequest>>[];
   List<Uri> importResult = [Uri.parse('content://media/1')];
 
@@ -81,7 +83,8 @@ final class _FakeRawDecoder implements RawDecoder {
 /// viewControl 驱动像真播放器 —— 位置不前进,值不变才不重绘,
 /// FakeAsync 里 pumpAndSettle 才能收)。
 final class _FakeVideoPlayer implements VideoPlayer {
-  _FakeVideoPlayer({this.failThumbs = true, this.frameRateOf, this.embedded = false});
+  _FakeVideoPlayer(
+      {this.failThumbs = true, this.frameRateOf, this.embedded = false});
 
   final bool failThumbs;
   final double? Function(String path)? frameRateOf;
@@ -136,10 +139,9 @@ final class _FakeVideoPlayer implements VideoPlayer {
   }
 
   @override
-  Future<({double position, double duration, bool playing})>
-      embeddedViewStatus(int viewId) async =>
-          viewStates[viewId] ??
-          (position: 0.0, duration: 60.0, playing: false);
+  Future<({double position, double duration, bool playing})> embeddedViewStatus(
+          int viewId) async =>
+      viewStates[viewId] ?? (position: 0.0, duration: 60.0, playing: false);
 
   @override
   Future<void> seekEmbeddedView(int viewId, {required double position}) async {
@@ -224,7 +226,10 @@ final class _FakeEngine implements TransferEngine {
 /// —— EXIF 规则:值 ≤4 字节内联存储,短串会踩中内联路径测不到偏移。
 Uint8List _jpgExifBytes() {
   const ascii = 2, short = 3, long = 4, rational = 5;
-  const makeOff = 104, modelOff = 122, fNumOff = 131, expOff = 139,
+  const makeOff = 104,
+      modelOff = 122,
+      fNumOff = 131,
+      expOff = 139,
       focalOff = 147;
   final w = ByteWriter()
     ..u16(0x4949)
@@ -232,23 +237,50 @@ Uint8List _jpgExifBytes() {
     ..u32(8)
     // IFD0:Make / Model / Exif 指针(count 含结尾 NUL:17 字符 → 18)
     ..u16(3)
-    ..u16(0x010F)..u16(ascii)..u32(18)..u32(makeOff)
-    ..u16(0x0110)..u16(ascii)..u32(9)..u32(modelOff)
-    ..u16(0x8769)..u16(long)..u32(1)..u32(50)
+    ..u16(0x010F)
+    ..u16(ascii)
+    ..u32(18)
+    ..u32(makeOff)
+    ..u16(0x0110)
+    ..u16(ascii)
+    ..u32(9)
+    ..u32(modelOff)
+    ..u16(0x8769)
+    ..u16(long)
+    ..u32(1)
+    ..u32(50)
     ..u32(0)
     // Exif 子表:光圈 / 快门 / ISO / 焦距
     ..u16(4)
-    ..u16(0x829D)..u16(rational)..u32(1)..u32(fNumOff)
-    ..u16(0x829A)..u16(rational)..u32(1)..u32(expOff)
-    ..u16(0x8827)..u16(short)..u32(1)..u16(100)..u16(0)
-    ..u16(0x920A)..u16(rational)..u32(1)..u32(focalOff)
+    ..u16(0x829D)
+    ..u16(rational)
+    ..u32(1)
+    ..u32(fNumOff)
+    ..u16(0x829A)
+    ..u16(rational)
+    ..u32(1)
+    ..u32(expOff)
+    ..u16(0x8827)
+    ..u16(short)
+    ..u32(1)
+    ..u16(100)
+    ..u16(0)
+    ..u16(0x920A)
+    ..u16(rational)
+    ..u32(1)
+    ..u32(focalOff)
     ..u32(0)
     // 数据区
-    ..raw('NIKON CORPORATION'.codeUnits)..u8(0)
-    ..raw('NIKON Zf'.codeUnits)..u8(0)
-    ..u32(2)..u32(1) // ƒ/2
-    ..u32(1)..u32(250) // 1/250s
-    ..u32(40)..u32(1); // 40mm
+    ..raw('NIKON CORPORATION'.codeUnits)
+    ..u8(0)
+    ..raw('NIKON Zf'.codeUnits)
+    ..u8(0)
+    ..u32(2)
+    ..u32(1) // ƒ/2
+    ..u32(1)
+    ..u32(250) // 1/250s
+    ..u32(40)
+    ..u32(1); // 40mm
   final payload = w.takeBytes();
   final segLen = 2 + 6 + payload.length;
   return Uint8List.fromList([
@@ -266,6 +298,18 @@ Future<void> openFilterMenu(WidgetTester tester) async {
   await tester.pumpAndSettle();
 }
 
+/// 选一个格式档(共享级联子面板:开筛选 → 进格式 → 点档 → 点外收层;
+/// [formatName] ∈ all/nef/jpg/mov/mp4/hif)。
+Future<void> pickFormat(WidgetTester tester, String formatName) async {
+  await openFilterMenu(tester);
+  await tester.tap(find.byKey(const ValueKey('formatFilter-entry')));
+  await tester.pumpAndSettle();
+  await tester.tap(find.byKey(ValueKey('formatFilter-$formatName')));
+  await tester.pumpAndSettle();
+  await tester.tapAt(const Offset(30, 10)); // 点外收层(选档行不收)
+  await tester.pumpAndSettle();
+}
+
 /// 开弹层点一行并等收场。弹层行文案页面唯一(旧双行 chips 的
 /// 「全部/视频」重名问题随弹层化消失,直接按文案点)。
 Future<void> pickFilter(WidgetTester tester, String label) async {
@@ -274,20 +318,24 @@ Future<void> pickFilter(WidgetTester tester, String label) async {
   await tester.pumpAndSettle();
 }
 
-/// 开弹层点排序行(单行「时间+方向箭头」,点按翻向并收层)。
-/// 排序行没有方向文案,翻向断言看行尾箭头图标(见箭头约定:↓ = 新→旧)。
-Future<void> toggleSort(WidgetTester tester) async {
+/// 点一次「时间」排序行(直切:当前键翻方向,他键切键;行不收层,
+/// 点外收)。
+Future<void> tapSortTime(WidgetTester tester) async {
   await openFilterMenu(tester);
-  await tester.tap(find.text('时间'));
+  await tester.tap(find.byKey(const ValueKey('sort-time')));
+  await tester.pumpAndSettle();
+  await tester.tapAt(const Offset(30, 10)); // 点外收层
   await tester.pumpAndSettle();
 }
 
-/// 排序行行尾方向箭头(默认 ↓ = 新→旧,翻向 ↑ = 旧→新)。
-IconData? sortArrow(WidgetTester tester) =>
-    tester.widget<Icon>(find.descendant(
+/// 排序行行尾示排序图标(自绘 SortBarsIcon;方向断言看排序结果)。
+bool sortIconShown(WidgetTester tester) => find
+    .descendant(
         of: find.ancestor(
             of: find.text('时间'), matching: find.byType(MenuItemButton)),
-        matching: find.byType(Icon))).icon;
+        matching: find.byType(SortBarsIcon))
+    .evaluate()
+    .isNotEmpty;
 
 void main() {
   late Directory dir;
@@ -297,7 +345,8 @@ void main() {
     // AppServices 惰性装配(查看器 DeSqueezedImage 首触)会起 BLE 身份
     // 装载、传输页真单例会列下载目录,都走本通道:三个目录方法给个
     // 无害默认(临时目录),通道错误不落进任何用例的 runAsync 排水窗。
-    Future<Object?> galleryHandler(MethodCall call) async => switch (call.method) {
+    Future<Object?> galleryHandler(MethodCall call) async =>
+        switch (call.method) {
           'dataDir' || 'previewsDir' || 'downloadsDir' => dir.path,
           _ => null,
         };
@@ -336,6 +385,15 @@ void main() {
     return f;
   }
 
+  /// 网格类测试用高视口:日期分段后各日纵向堆叠(每段 = 段头 + 行),
+  /// 默认 600 逻辑高装不下多段,尾部格不进 cacheExtent 不构建。
+  void useTallSurface(WidgetTester tester) {
+    tester.view.physicalSize = const Size(800, 2400);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+  }
+
   Widget host(_FakeGallery gallery, TransfersController controller,
           {RawDecoder? rawDecoder,
           VideoPlayer? videoPlayer,
@@ -344,6 +402,7 @@ void main() {
           LibraryRatings? ratings}) =>
       MaterialApp(
           home: LocalLibraryPage(
+            uiPrefs: InMemoryUiPrefsStore(),
         controller: controller,
         gallery: gallery,
         rawDecoder: rawDecoder ?? _FakeRawDecoder(fail: true),
@@ -355,8 +414,7 @@ void main() {
 
   /// 内嵌播放人设:embedded 播放器 + 假视图(onCreated 回固定 viewId 7)。
   Widget embeddedHost(_FakeGallery gallery, TransfersController controller,
-          _FakeVideoPlayer player,
-          {VideoLutExportHost? videoLut}) =>
+          _FakeVideoPlayer player, {VideoLutExportHost? videoLut}) =>
       host(gallery, controller,
           videoPlayer: player,
           embeddedView: (path, onCreated) =>
@@ -376,8 +434,8 @@ void main() {
             (!c.appFilesScanned ||
                 (expectCount != null && c.appFiles.length != expectCount));
         i++) {
-      await tester
-          .runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)));
       await tester.pump();
     }
     expect(c.appFilesScanned, isTrue, reason: '首扫收口(排水窗内目录枚举完成)');
@@ -411,14 +469,12 @@ void main() {
     expect(controller.appFilesScanned, isFalse);
     expect(find.byType(CircularProgressIndicator), findsOneWidget);
     expect(find.text('正在扫描文件…'), findsOneWidget);
-    expect(find.text('应用内还没有文件\n(在相机相册里选择「下载到应用」)'),
-        findsNothing);
+    expect(find.text('应用内还没有文件\n(在相机相册里选择「下载到应用」)'), findsNothing);
 
     await drainAppFiles(tester, controller);
     expect(controller.appFilesScanned, isTrue);
     expect(find.byType(CircularProgressIndicator), findsNothing);
-    expect(find.text('应用内还没有文件\n(在相机相册里选择「下载到应用」)'),
-        findsOneWidget);
+    expect(find.text('应用内还没有文件\n(在相机相册里选择「下载到应用」)'), findsOneWidget);
     // 真空库(未筛过)不出「清除筛选」:那是筛后空的专属动作。
     expect(find.text('清除筛选'), findsNothing);
   });
@@ -431,9 +487,9 @@ void main() {
     await tester.pumpWidget(host(gallery, controller));
     await drainAppFiles(tester, controller, 1);
 
-    await pickFilter(tester, '视频');
+    await pickFormat(tester, 'mov');
     // 筛后空:文案 + 「清除筛选」动作(EmptyState 动作位),不再是裸 Text。
-    expect(find.text('没有视频格式的文件'), findsOneWidget);
+    expect(find.text('没有MOV格式的文件'), findsOneWidget);
     final clear = find.widgetWithText(FilledButton, '清除筛选');
     expect(clear, findsOneWidget);
     expect(find.byType(CircularProgressIndicator), findsNothing);
@@ -445,6 +501,7 @@ void main() {
   });
 
   testWidgets('网格:修改时间倒序;可解码图片铺格,NEF 落图标格', (tester) async {
+    useTallSurface(tester); // 日期分段后各日纵向堆叠,600 高视口装不下(尾部格不进 cacheExtent)
     // a.jpg(最旧)/ b.jpg / c.nef(最新)
     writeFile('a.jpg', modified: DateTime(2026, 10, 1));
     writeFile('b.jpg', modified: DateTime(2026, 10, 2));
@@ -466,6 +523,7 @@ void main() {
   });
 
   testWidgets('格式过滤:弹层 RAW/JPG/视频按扩展名收窄网格', (tester) async {
+    useTallSurface(tester); // 日期分段后各日纵向堆叠,600 高视口装不下(尾部格不进 cacheExtent)
     writeFile('a.jpg', modified: DateTime(2026, 10, 1));
     writeFile('b.nef', modified: DateTime(2026, 10, 2));
     writeFile('c.mov', modified: DateTime(2026, 10, 3));
@@ -480,55 +538,69 @@ void main() {
     expect(find.text('NEF'), findsOneWidget);
     expect(find.byIcon(Icons.videocam_outlined), findsOneWidget);
 
-    await pickFilter(tester, 'RAW');
+    await pickFormat(tester, 'nef');
     expect(find.text('NEF'), findsOneWidget);
     expect(find.byType(Image), findsNothing);
     expect(find.byIcon(Icons.videocam_outlined), findsNothing);
 
-    await pickFilter(tester, '视频');
+    // 多选并集:切档前先回「全部」清空(与旧单选流等价)。
+    await pickFormat(tester, 'all');
+    await pickFormat(tester, 'mov');
     expect(find.byIcon(Icons.videocam_outlined), findsOneWidget);
     expect(find.text('NEF'), findsNothing);
     expect(find.byType(Image), findsNothing);
 
-    await pickFilter(tester, 'JPG');
+    await pickFormat(tester, 'all');
+    await pickFormat(tester, 'jpg');
     expect(find.byType(Image), findsOneWidget);
     expect(find.text('NEF'), findsNothing);
     expect(find.byIcon(Icons.videocam_outlined), findsNothing);
 
-    await pickFilter(tester, '全部');
+    await pickFormat(tester, 'all');
     expect(find.byType(Image), findsOneWidget);
     expect(find.text('NEF'), findsOneWidget);
     expect(find.byIcon(Icons.videocam_outlined), findsOneWidget);
   });
 
-  testWidgets('视频缩略格角标带底色:黑半透明圆角小底,亮帧上可辨',
-      (tester) async {
-    writeFile('c.mov', modified: DateTime(2026, 10, 3));
+  testWidgets('视频格:摄像机角标退场,时长胶囊上屏(mvhd 本地读)', (tester) async {
+    useTallSurface(tester);
+    // 最小容器:ftyp(16B)+ moov[mvhd v0](48B)= 64B,时长 150s。
+    final mov = Uint8List.fromList([
+      0, 0, 0, 16, 0x66, 0x74, 0x79, 0x70, ...List.filled(8, 0x20),
+      0, 0, 0, 48, 0x6d, 0x6f, 0x6f, 0x76,
+      0, 0, 0, 40, 0x6d, 0x76, 0x68, 0x64,
+      0x00, 0x00, 0x00, 0x00,
+      0, 0, 0, 1, 0, 0, 0, 2,
+      0, 0, 2, 88, // timescale 600
+      0, 0, 1, 95, // duration 419 → 419/600 ≈ 0.698s → 0:00?毫秒取整
+      0, 0, 0, 1, 1, 0, 0, 0,
+    ]);
+    // 重写 timescale(物理 44-47)/duration(48-51)= 150s:
+    final ts = 1000, dur = 150000; // 150s
+    mov[44] = (ts >> 24) & 0xff; mov[45] = (ts >> 16) & 0xff;
+    mov[46] = (ts >> 8) & 0xff; mov[47] = ts & 0xff;
+    mov[48] = (dur >> 24) & 0xff; mov[49] = (dur >> 16) & 0xff;
+    mov[50] = (dur >> 8) & 0xff; mov[51] = dur & 0xff;
+    final f = File('${dir.path}/c.mov');
+    f.writeAsBytesSync(mov);
+    f.setLastModifiedSync(DateTime(2026, 10, 3));
     final gallery = _FakeGallery(dir);
-    final player = _FakeVideoPlayer(failThumbs: false); // 抽帧出小档路径
+    final player = _FakeVideoPlayer(failThumbs: false);
     final controller =
         TransfersController(engine: _FakeEngine(), gallery: gallery);
     await tester.pumpWidget(host(gallery, controller, videoPlayer: player));
     await drainAppFiles(tester, controller);
 
-    // 抽帧小档就位:缩略铺图格 + 摄像机角标(非图标格的 outlined)。
-    expect(find.byIcon(Icons.videocam), findsOneWidget);
-    expect(find.byIcon(Icons.videocam_outlined), findsNothing);
-
-    // 角标图标最近的 DecoratedBox 祖先 = 底:黑 0.55 圆角矩形(与
-    // 相机相册网格同款视觉语言)。
-    final iconEl = tester.element(find.byIcon(Icons.videocam));
-    late final Element badgeBase;
-    iconEl.visitAncestorElements((e) {
-      if (e.widget is DecoratedBox) {
-        badgeBase = e;
-        return false;
-      }
-      return true;
-    });
-    final deco = (badgeBase.widget as DecoratedBox).decoration as BoxDecoration;
-    expect(deco.color, Colors.black.withValues(alpha: 0.55));
-    expect(deco.borderRadius, BorderRadius.circular(4));
+    // 摄像机角标退场;时长胶囊上屏(150s → 2:30)。
+    expect(find.byIcon(Icons.videocam), findsNothing);
+    // 时长探测是真 IO:逐窗排水等 mvhd 读取收口再断言(一窗只上浮
+    // 一个回调,open/setPosition/read/close 链多窗才走完)。
+    for (var i = 0; i < 40; i++) {
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 50)));
+      await tester.pumpAndSettle();
+    }
+    expect(find.text('2:30'), findsOneWidget);
   });
 
   testWidgets('过滤无匹配:提示该格式暂无,切回全部即恢复', (tester) async {
@@ -539,16 +611,16 @@ void main() {
     await tester.pumpWidget(host(gallery, controller));
     await drainAppFiles(tester, controller);
 
-    await pickFilter(tester, '视频');
-    expect(find.text('没有视频格式的文件'), findsOneWidget);
+    await pickFormat(tester, 'mov');
+    expect(find.text('没有MOV格式的文件'), findsOneWidget);
     expect(find.byType(Image), findsNothing);
 
-    await pickFilter(tester, '全部');
+    await pickFormat(tester, 'all');
     expect(find.byType(Image), findsOneWidget);
   });
 
-  testWidgets('评级:徽标上屏;评级档(快照装载后)收窄网格,筛空走专用文案',
-      (tester) async {
+  testWidgets('评级:徽标上屏;评级档(快照装载后)收窄网格,筛空走专用文案', (tester) async {
+    useTallSurface(tester); // 日期分段后各日纵向堆叠,600 高视口装不下(尾部格不进 cacheExtent)
     // a.jpg ★3(3 字节档,见 writeFile)/ b.jpg 未评。
     writeFile('a.jpg', modified: DateTime(2026, 10, 1));
     writeFile('b.jpg', modified: DateTime(2026, 10, 2));
@@ -565,41 +637,142 @@ void main() {
     await drainAppFiles(tester, controller, 2);
     await tester.pumpAndSettle();
 
-    // 徽标:a.jpg 左上黄底星标;两格照常。
+    // 显示.评级:勾上后评级图标上格(默认净格)。
+    await openFilterMenu(tester);
+    await tester.tap(find.byKey(const ValueKey('show-rating')));
+    await tester.pumpAndSettle();
+    await tester.tapAt(const Offset(30, 10));
+    await tester.pumpAndSettle();
+
+    // 徽标:a.jpg 左下胶囊内 ★3;两格照常。
     expect(find.byType(Image), findsNWidgets(2));
     expect(find.text('3'), findsOneWidget);
 
-    // 评级分区在(快照装载且非空;图库无垃圾星/未知档,星档键 = 4-8)。
+    // 主面板:评级分区收成单行入口(7 档收进级联子面板;图库无垃圾星/
+    // 未知档,星档键 = 4-8)。
     await openFilterMenu(tester);
-    expect(find.text('评级'), findsOneWidget);
-    expect(find.text('无评级'), findsOneWidget);
+    expect(find.byKey(const ValueKey('ratingFilter-entry')), findsOneWidget);
+    expect(find.text('无评级'), findsNothing);
+
+    // 点开子面板:与父面板共存(排序区仍在),全部 + 5 分类。
+    await tester.tap(find.byKey(const ValueKey('ratingFilter-entry')));
+    await tester.pumpAndSettle();
+    expect(find.text('排序'), findsOneWidget); // 父面板保持
+    expect(find.byKey(const ValueKey('ratingFilter-0')), findsOneWidget);
+    expect(find.text('无评级'), findsNothing); // 无评级亦仅图标
+    expect(find.byKey(const ValueKey('ratingFilter-1')), findsOneWidget);
     expect(find.text('已评级'), findsNothing);
+
+    // ★3:只剩 a.jpg;弹层不收(选档不收层,点外才收)。
     await tester.tap(find.byKey(const ValueKey('ratingFilter-6')));
     await tester.pumpAndSettle();
-    expect(find.byType(Image), findsOneWidget); // 只剩 a.jpg
+    expect(find.byType(Image), findsOneWidget);
     expect(find.text('3'), findsOneWidget);
+    expect(find.byKey(const ValueKey('ratingFilter-entry')), findsOneWidget);
 
-    // 无评级:只剩 b.jpg,星标消失。(评级区「全部」与格式区重名,
-    // 评级行一律按键点。)
-    await openFilterMenu(tester);
+    // 接着勾无评级:多选并集 = a + b。
     await tester.tap(find.byKey(const ValueKey('ratingFilter-1')));
     await tester.pumpAndSettle();
-    expect(find.byType(Image), findsOneWidget);
-    expect(find.text('3'), findsNothing);
+    expect(find.byType(Image), findsNWidgets(2));
+    expect(find.text('3'), findsOneWidget); // a.jpg 星标仍在
 
-    // ★4 筛空:专用文案(格式档不背锅)。
-    await openFilterMenu(tester);
-    await tester.tap(find.byKey(const ValueKey('ratingFilter-7')));
-    await tester.pumpAndSettle();
-    expect(find.text('没有该评级的文件'), findsOneWidget);
-    expect(find.byType(Image), findsNothing);
-
-    // 切回全部:两格与星标复原。
-    await openFilterMenu(tester);
+    // 勾「全部」:互斥清空,网格复原。
     await tester.tap(find.byKey(const ValueKey('ratingFilter-0')));
     await tester.pumpAndSettle();
     expect(find.byType(Image), findsNWidgets(2));
     expect(find.text('3'), findsOneWidget);
+
+    // 点弹层外:整体收起。
+    await tester.tapAt(const Offset(30, 10)); // AppBar 空区(高视口下 400 落格,穿透)
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('ratingFilter-entry')), findsNothing);
+
+    // ★4 筛空:单勾 ★4 → 专用文案(格式档不背锅)。
+    await openFilterMenu(tester);
+    await tester.tap(find.byKey(const ValueKey('ratingFilter-entry')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('ratingFilter-7')));
+    await tester.pumpAndSettle();
+    expect(find.text('没有该评级的文件'), findsOneWidget);
+    expect(find.byType(Image), findsNothing);
+    expect(find.byKey(const ValueKey('ratingFilter-entry')), findsOneWidget);
+    await tester.tapAt(const Offset(30, 10)); // AppBar 空区(高视口下 400 落格,穿透)
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('分区折叠:一级头点按收展,行随头隐现', (tester) async {
+    writeFile('a.jpg', modified: DateTime(2026, 10, 1));
+    final gallery = _FakeGallery(dir);
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    await tester.pumpWidget(host(gallery, controller));
+    await drainAppFiles(tester, controller);
+
+    await openFilterMenu(tester);
+    // 折叠排序区:三行消失,头行在;展开复原。
+    await tester.tap(find.byKey(const ValueKey('section-sort')));
+    await tester.pumpAndSettle();
+    expect(find.text('时间'), findsNothing);
+    expect(find.text('排序'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('section-sort')));
+    await tester.pumpAndSettle();
+    expect(find.text('时间'), findsOneWidget);
+
+    // 折叠筛选区:格式/评级入口行消失;展开复原。
+    await tester.tap(find.byKey(const ValueKey('section-filter')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('formatFilter-entry')), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('section-filter')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('formatFilter-entry')), findsOneWidget);
+    await tester.tapAt(const Offset(30, 10));
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('删除候选:值 -1 不显星标;筛选行(仅图标)收窄网格', (tester) async {
+    useTallSurface(tester); // 日期分段后各日纵向堆叠,600 高视口装不下(尾部格不进 cacheExtent)
+    writeFile('a.jpg', modified: DateTime(2026, 10, 1));
+    writeFile('c.jpg', modified: DateTime(2026, 10, 3));
+    final gallery = _FakeGallery(dir);
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    final store = InMemoryRatingsStore();
+    await store.set(fileRatingKey('a.jpg', 3), 3);
+    await store.set(fileRatingKey('c.jpg', 3), -1); // 下载沿垃圾桶档
+    final ratings = LibraryRatings(store: store);
+    addTearDown(ratings.dispose);
+    await tester.pumpWidget(host(gallery, controller, ratings: ratings));
+    await drainAppFiles(tester, controller, 2);
+    await tester.pumpAndSettle();
+
+    // 显示.评级:勾上后评级图标上格。
+    await openFilterMenu(tester);
+    await tester.tap(find.byKey(const ValueKey('show-rating')));
+    await tester.pumpAndSettle();
+    await tester.tapAt(const Offset(30, 10));
+    await tester.pumpAndSettle();
+
+    // 徽标:a.jpg ★3;c.jpg 删除候选不显星标(值 -1 归零)。
+    expect(find.byType(Image), findsNWidgets(2));
+    expect(find.text('3'), findsOneWidget);
+
+    // 筛选:删除候选行(仅图标)→ 只剩 c.jpg;勾「全部」复原。
+    await openFilterMenu(tester);
+    await tester.tap(find.byKey(const ValueKey('ratingFilter-entry')));
+    await tester.pumpAndSettle();
+    // 菜单行 + c.jpg 格上删除候选徽标(格上也有角标,与相机相册一致)
+    expect(find.byType(TrashRatingIcon), findsNWidgets(2));
+    expect(find.text('删除候选'), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('ratingFilter-2')));
+    await tester.pumpAndSettle();
+    expect(find.byType(Image), findsOneWidget);
+    expect(find.text('3'), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('ratingFilter-0')));
+    await tester.pumpAndSettle();
+    expect(find.byType(Image), findsNWidgets(2));
+    await tester
+        .tapAt(const Offset(30, 10)); // AppBar 空区(高视口下 400 落格,穿透) // 点外收层
+    await tester.pumpAndSettle();
   });
 
   testWidgets('查看器:导入系统相册(kind 按扩展名)→ 相册服务落账', (tester) async {
@@ -628,7 +801,8 @@ void main() {
     await tester.pumpAndSettle();
   });
 
-  testWidgets('视频 LUT 导出:视频页入口 → 选表 → 导出落库(_LUT.mp4 改名,'
+  testWidgets(
+      '视频 LUT 导出:视频页入口 → 选表 → 导出落库(_LUT.mp4 改名,'
       '临时档用完即删)', (tester) async {
     writeFile('c.mov', modified: DateTime(2026, 10, 3));
     final gallery = _FakeGallery(dir);
@@ -638,8 +812,8 @@ void main() {
     final outPath = '${dir.path}/_out.mp4';
     File(outPath).writeAsBytesSync([9, 9, 9]);
     final lut = _FakeVideoLut(outPath);
-    await tester.pumpWidget(
-        embeddedHost(gallery, controller, player, videoLut: lut));
+    await tester
+        .pumpWidget(embeddedHost(gallery, controller, player, videoLut: lut));
     // 扫描转圈期 pumpAndSettle 挂帧:先排水到首扫收口(其余用例同款)。
     await drainAppFiles(tester, controller);
 
@@ -667,7 +841,8 @@ void main() {
     await tester.pumpAndSettle();
   });
 
-  testWidgets('信息底单:本地 JPG 头读 EXIF(机身/参数/兜底时间),'
+  testWidgets(
+      '信息底单:本地 JPG 头读 EXIF(机身/参数/兜底时间),'
       'MOV 只走文件级信息', (tester) async {
     // 带 EXIF 的「JPG」(SOI+APP1+EOI,无图像数据:网格解码走占位,
     // 头读只认头部)。无 takenAt → 时间行回落文件 mtime(「时间」非
@@ -690,9 +865,11 @@ void main() {
     expect(inSheet('exif.jpg'), findsOneWidget);
     expect(inSheet('NIKON Zf'), findsOneWidget, reason: '机身(titleLine)');
     expect(inSheet('40mm ƒ/2 · 1/250s · ISO 100'), findsOneWidget);
-    expect(find.descendant(
-        of: find.byType(BottomSheet), matching: find.text('拍摄时间')),
-        findsNothing, reason: 'EXIF 无时间 → 不出「拍摄时间」行');
+    expect(
+        find.descendant(
+            of: find.byType(BottomSheet), matching: find.text('拍摄时间')),
+        findsNothing,
+        reason: 'EXIF 无时间 → 不出「拍摄时间」行');
 
     await tester.tapAt(const Offset(10, 10)); // 关底单
     await tester.pumpAndSettle();
@@ -703,8 +880,9 @@ void main() {
     await tester.tap(find.byTooltip('照片信息'));
     await tester.pumpAndSettle();
     expect(inSheet('v.mov'), findsOneWidget);
-    expect(find.descendant(
-        of: find.byType(BottomSheet), matching: find.text('机身')),
+    expect(
+        find.descendant(
+            of: find.byType(BottomSheet), matching: find.text('机身')),
         findsNothing);
     expect(
         find.descendant(
@@ -714,8 +892,8 @@ void main() {
         reason: '时间行(mtime 兜底)');
   });
 
-  testWidgets('长按进多选:预选该格,批量删除确认把关,删后网格收缩',
-      (tester) async {
+  testWidgets('长按进多选:预选该格,批量删除确认把关,删后网格收缩', (tester) async {
+    useTallSurface(tester); // 日期分段后各日纵向堆叠,600 高视口装不下(尾部格不进 cacheExtent)
     writeFile('a.jpg', modified: DateTime(2026, 10, 1));
     writeFile('b.jpg', modified: DateTime(2026, 10, 2));
     final gallery = _FakeGallery(dir);
@@ -728,7 +906,8 @@ void main() {
     await tester.longPress(find.byType(Image).first); // b.jpg(最新在前)
     await tester.pumpAndSettle();
     expect(find.text('已选 1 项'), findsOneWidget); // AppBar 计数
-    expect(find.byIcon(Icons.check_circle), findsOneWidget); // 格上勾
+    // 格上勾 + 段头「该日已全选」勾(共享段头多选沿)
+    expect(find.byIcon(Icons.check_circle), findsNWidgets(2));
     expect(find.byType(BottomAppBar), findsOneWidget); // 操作栏常驻
 
     await tester.tap(find.byTooltip('批量删除'));
@@ -756,8 +935,7 @@ void main() {
   // ── 筛选弹层/多选(2026-10-16:iPhone 图库式收口,筛选进弹层,
   // 长按格进多选,操作栏批量删/导出)──
 
-  testWidgets('筛选弹层:分区头在场,当前项打勾,换档勾随迁、点行即收',
-      (tester) async {
+  testWidgets('筛选弹层:分区头在场,当前项打勾,换档勾随迁、点行即收', (tester) async {
     writeFile('a.jpg', modified: DateTime(2026, 10, 1));
     final gallery = _FakeGallery(dir);
     final controller =
@@ -766,39 +944,52 @@ void main() {
     await drainAppFiles(tester, controller);
 
     await openFilterMenu(tester);
-    // 排序分区头在场;排序 = 单行「时间+方向箭头」(默认 ↓ 新→旧)
+    // 排序区(共享):三行平铺,当前键(时间)行尾示排序图标。
+    // 筛选区 = 共享两级联子面板入口(格式 + 评级;评级未建立仅格式)。
     expect(find.text('排序'), findsOneWidget);
     expect(find.text('时间'), findsOneWidget);
-    expect(sortArrow(tester), Icons.arrow_downward);
-    expect(find.text('筛选:'), findsOneWidget);
+    expect(find.text('文件名'), findsOneWidget);
+    expect(find.text('文件大小'), findsOneWidget);
+    expect(sortIconShown(tester), isTrue);
+    expect(find.text('筛选'), findsOneWidget);
+    expect(find.byKey(const ValueKey('formatFilter-entry')), findsOneWidget);
+    expect(find.byKey(const ValueKey('ratingFilter-entry')), findsNothing);
     expect(find.text('视图选项'), findsOneWidget);
     expect(find.text('连拍聚合'), findsOneWidget);
-    // 当前档(全部)行尾打勾;排序行以箭头示向,无勾
+    // 排序行无勾(勾位语言专属格式/评级多选)
     Finder checkBeside(String label) => find.descendant(
         of: find.ancestor(
             of: find.text(label), matching: find.byType(MenuItemButton)),
         matching: find.byIcon(Icons.check));
-    expect(checkBeside('全部'), findsOneWidget);
     expect(checkBeside('时间'), findsNothing);
 
-    await tester.tap(find.text('时间')); // 点排序行:翻向 + 收层
+    // 点时间行:直切翻向(不收层,无二级面板)。
+    await tester.tap(find.byKey(const ValueKey('sort-time')));
     await tester.pumpAndSettle();
-    expect(find.byType(MenuItemButton), findsNothing); // 点行即收
+    expect(sortIconShown(tester), isTrue); // 图标同码,方向看排序结果
+    expect(find.byType(MenuItemButton), findsWidgets); // 弹层保持(行仍在)
 
-    await openFilterMenu(tester);
-    expect(sortArrow(tester), Icons.arrow_upward); // 已翻旧→新
-    await tester.tap(find.text('时间'));
+    // 点外收层;再点翻回。
+    await tester.tapAt(const Offset(30, 10));
     await tester.pumpAndSettle();
-    expect(find.byType(MenuItemButton), findsNothing);
-
     await openFilterMenu(tester);
-    expect(sortArrow(tester), Icons.arrow_downward); // 再翻回新→旧
-    await tester.tap(find.text('全部'));
+    await tester.tap(find.byKey(const ValueKey('sort-time')));
     await tester.pumpAndSettle();
-    expect(find.byType(MenuItemButton), findsNothing);
+    await tester.tapAt(const Offset(30, 10));
+    await tester.pumpAndSettle();
+    await openFilterMenu(tester);
+    await tester.tap(find.byKey(const ValueKey('formatFilter-entry')));
+    await tester.pumpAndSettle();
+    expect(checkBeside('全部'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('formatFilter-nef')));
+    await tester.pumpAndSettle();
+    expect(find.byType(Image), findsNothing); // 只剩?—— 本例无 NEF:筛空
+    await tester.tapAt(const Offset(30, 10));
+    await tester.pumpAndSettle();
   });
 
   testWidgets('长按进多选:勾选启用操作栏,空选禁用,退出复原', (tester) async {
+    useTallSurface(tester); // 日期分段后各日纵向堆叠,600 高视口装不下(尾部格不进 cacheExtent)
     writeFile('a.jpg', modified: DateTime(2026, 10, 1));
     writeFile('b.jpg', modified: DateTime(2026, 10, 2));
     final gallery = _FakeGallery(dir);
@@ -835,6 +1026,7 @@ void main() {
   });
 
   testWidgets('多选增删与全选:点格勾/取消,全选收齐', (tester) async {
+    useTallSurface(tester); // 日期分段后各日纵向堆叠,600 高视口装不下(尾部格不进 cacheExtent)
     writeFile('a.jpg', modified: DateTime(2026, 10, 1));
     writeFile('b.jpg', modified: DateTime(2026, 10, 2));
     final gallery = _FakeGallery(dir);
@@ -852,12 +1044,14 @@ void main() {
     await tester.tap(find.byType(Image).first); // b 再点 = 取消
     await tester.pumpAndSettle();
     expect(find.text('已选 1 项'), findsOneWidget);
-    expect(find.byIcon(Icons.radio_button_unchecked), findsOneWidget);
+    // b 格未选圈 + b 段头「未全选」圈(共享段头多选沿)
+    expect(find.byIcon(Icons.radio_button_unchecked), findsNWidgets(2));
 
     await tester.tap(find.byTooltip('全选'));
     await tester.pumpAndSettle();
     expect(find.text('已选 2 项'), findsOneWidget);
-    expect(find.byIcon(Icons.check_circle), findsNWidgets(2));
+    // 两格勾 + 两段头「已全选」勾
+    expect(find.byIcon(Icons.check_circle), findsNWidgets(4));
     expect(find.byIcon(Icons.radio_button_unchecked), findsNothing);
   });
 
@@ -873,9 +1067,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byTooltip('批量删除'));
     await tester.pumpAndSettle();
-    expect(
-        find.text('将删除 1 个文件。\n此操作不可恢复(相机上的原件不受影响)。'),
-        findsOneWidget);
+    expect(find.text('将删除 1 个文件。\n此操作不可恢复(相机上的原件不受影响)。'), findsOneWidget);
     await tester.tap(find.text('取消'));
     await tester.pumpAndSettle();
 
@@ -884,8 +1076,7 @@ void main() {
     expect(find.byType(BottomAppBar), findsOneWidget);
   });
 
-  testWidgets('批量导出:一次批量落账(kind 按扩展名),应用内文件保留',
-      (tester) async {
+  testWidgets('批量导出:一次批量落账(kind 按扩展名),应用内文件保留', (tester) async {
     writeFile('a.jpg', modified: DateTime(2026, 10, 1));
     writeFile('v.mov', modified: DateTime(2026, 10, 3));
     final gallery = _FakeGallery(dir);
@@ -906,8 +1097,8 @@ void main() {
     expect(gallery.importCalls, hasLength(1)); // 一次批量调用,不逐格拆单
     final call = gallery.importCalls.single;
     expect(call, hasLength(2));
-    expect(call.map((r) => r.kind).toSet(),
-        {ObjectKind.image, ObjectKind.video});
+    expect(
+        call.map((r) => r.kind).toSet(), {ObjectKind.image, ObjectKind.video});
     expect(call.map((r) => r.filename).toSet(), {'a.jpg', 'v.mov'});
     expect(find.text('已导出 2 项到系统相册(应用内文件保留)'), findsOneWidget);
     // 复制不是移动:两文件原位保留
@@ -920,8 +1111,7 @@ void main() {
     await tester.pumpAndSettle();
   });
 
-  testWidgets('批量导出取消:空回列表 → 未导入文案,退出多选,文件原位',
-      (tester) async {
+  testWidgets('批量导出取消:空回列表 → 未导入文案,退出多选,文件原位', (tester) async {
     writeFile('a.jpg', modified: DateTime(2026, 10, 1));
     final gallery = _FakeGallery(dir)..importResult = const [];
     final controller =
@@ -983,10 +1173,9 @@ void main() {
     await drainAppFiles(tester, controller);
 
     // 网格缩略:512px 解码一次(会话内合并),落盘 thumbsDir
-    // (内容键 + lib_ 前缀,不与相机侧缩略键串台)。
+    // (内容键 + libv3_ 前缀,不与相机侧缩略键串台;键全量升版 = 黑边裁剪放开到全部缩略)。
     expect(decoder.calls, [('${dir.path}/c.nef', 512)]);
-    expect(
-        File('${gallery.thumbs.path}/lib_c.nef_3.jpg').existsSync(), isTrue);
+    expect(File('${gallery.thumbs.path}/libv3_c.nef_3.jpg').existsSync(), isTrue);
 
     // 点 NEF 格进查看器:标题 + 2560px 全尺寸解码(假 JPEG 解不开走
     // errorBuilder,Image 组件在即可)。格键 = 文件名(缩略解码后
@@ -1164,8 +1353,8 @@ void main() {
         TransfersController(engine: _FakeEngine(), gallery: gallery);
     // 记录 SystemChrome 通道指令(方向锁/沉浸是全屏的本体动作)
     final chromeCalls = <MethodCall>[];
-    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
-        SystemChannels.platform, (call) async {
+    tester.binding.defaultBinaryMessenger
+        .setMockMethodCallHandler(SystemChannels.platform, (call) async {
       chromeCalls.add(call);
       return null;
     });
@@ -1188,8 +1377,10 @@ void main() {
         .where((c) => c.method == 'SystemChrome.setPreferredOrientations')
         .map((c) => List<String>.from(c.arguments as List))
         .toList();
-    expect(orientationCalls().first, ['DeviceOrientation.landscapeLeft',
-        'DeviceOrientation.landscapeRight']); // 锁横屏
+    expect(orientationCalls().first, [
+      'DeviceOrientation.landscapeLeft',
+      'DeviceOrientation.landscapeRight'
+    ]); // 锁横屏
     expect(chromeCalls.any((c) => c.method.contains('SystemUIMode')),
         isTrue); // 沉浸
 
@@ -1198,13 +1389,14 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('c.mov'), findsWidgets);
     expect(find.byIcon(Icons.fullscreen), findsOneWidget);
-    expect(orientationCalls().last, ['DeviceOrientation.portraitUp',
-        'DeviceOrientation.landscapeLeft',
-        'DeviceOrientation.landscapeRight']);
+    expect(orientationCalls().last, [
+      'DeviceOrientation.portraitUp',
+      'DeviceOrientation.landscapeLeft',
+      'DeviceOrientation.landscapeRight'
+    ]);
   });
 
-  testWidgets('MOV:无内嵌视图平台(Android/ohos)回落海报帧 + 说明文案',
-      (tester) async {
+  testWidgets('MOV:无内嵌视图平台(Android/ohos)回落海报帧 + 说明文案', (tester) async {
     writeFile('c.mov', modified: DateTime(2026, 10, 3));
     final gallery = _FakeGallery(dir);
     final player = _FakeVideoPlayer(failThumbs: false);
@@ -1213,11 +1405,12 @@ void main() {
     await tester.pumpWidget(host(gallery, controller, videoPlayer: player));
     await drainAppFiles(tester, controller);
 
-    // 抽帧一次(会话内合并),落盘 thumbsDir(lib_ 前缀内容键,与
+    // 抽帧一次(会话内合并),落盘 thumbsDir(libv3_ 前缀内容键,与
     // NEF 同管线)。
     expect(player.thumbs, [('${dir.path}/c.mov', 512)]);
+    // 键全量升版(libv3_):黑边裁剪放开到全部缩略。
     expect(
-        File('${gallery.thumbs.path}/lib_c.mov_3.jpg').existsSync(), isTrue);
+        File('${gallery.thumbs.path}/libv3_c.mov_3.jpg').existsSync(), isTrue);
 
     await tester.tap(find.byKey(const ValueKey('c.mov')));
     await tester.pumpAndSettle();
@@ -1271,7 +1464,8 @@ void main() {
     expect(find.text('b.jpg'), findsNothing);
   });
 
-  testWidgets('查看器预热:邻页预解码进缓存 + 缓存预算随查看器开收'
+  testWidgets(
+      '查看器预热:邻页预解码进缓存 + 缓存预算随查看器开收'
       '(2026-10-20 翻页黑闪根修)', (tester) async {
     // 真字节(可解码):预热命中才能从 imageCache 断言;假字节走
     // precache 静默失败,测不出命中。
@@ -1316,7 +1510,8 @@ void main() {
     expect(cache.maximumSizeBytes, budgetBefore);
   });
 
-  testWidgets('JPG 网格格走小档管线:落盘 + 换小档源 + gapless'
+  testWidgets(
+      'JPG 网格格走小档管线:落盘 + 换小档源 + gapless'
       '(2026-10-20 缩略重刷根治)', (tester) async {
     writeFile('a.jpg', modified: DateTime(2026, 10, 1));
     final decoder = _FakeRawDecoder(); // 成功人设
@@ -1328,15 +1523,13 @@ void main() {
 
     // 小档解码一次、落盘 thumbsDir(与 NEF/MOV 同管线同键式)
     expect(decoder.calls, [('${dir.path}/a.jpg', 512)]);
-    expect(
-        File('${gallery.thumbs.path}/lib_a.jpg_3.jpg').existsSync(), isTrue);
+    expect(File('${gallery.thumbs.path}/libv3_a.jpg_3.jpg').existsSync(), isTrue);
 
     // 格已换小档源:provider 指向小档文件,gapless 换源保帧不闪
     final image = tester.widget<Image>(find.byType(Image).first);
     expect(image.gaplessPlayback, isTrue);
-    final inner =
-        (image.image as ResizeImage).imageProvider as FileImage;
-    expect(inner.file.path, '${gallery.thumbs.path}/lib_a.jpg_3.jpg');
+    final inner = (image.image as ResizeImage).imageProvider as FileImage;
+    expect(inner.file.path, '${gallery.thumbs.path}/libv3_a.jpg_3.jpg');
   });
 
   testWidgets('查看器:图片滑到视频不自动播放(装载即暂停)', (tester) async {
@@ -1361,8 +1554,7 @@ void main() {
     expect(find.byIcon(Icons.play_arrow), findsOneWidget);
   });
 
-  testWidgets('查看器删除:当前页删除下一张滑入;删尾页翻回前一页',
-      (tester) async {
+  testWidgets('查看器删除:当前页删除下一张滑入;删尾页翻回前一页', (tester) async {
     writeFile('a.jpg', modified: DateTime(2026, 10, 1));
     writeFile('b.jpg', modified: DateTime(2026, 10, 2));
     writeFile('c.jpg', modified: DateTime(2026, 10, 3));
@@ -1374,6 +1566,17 @@ void main() {
 
     // 倒序 c,b,a;打开 c
     await tester.tap(find.byType(Image).first);
+    await tester.pumpAndSettle();
+    // 删除前把在途图片 IO 全部出窗(drainAppFiles 同机制:dart:io 完成回调
+    // 只在 runAsync 窗上浮,一窗一个)—— 格/页对 c 的在途读若拖到删除后
+    // 才出窗,撞「档已无」且 listener 已卸,由 ImageCache 报 image
+    // resource service 翻测试;文件还在时出窗只会 codec 失败,走
+    // errorBuilder/precache onError 静默口,不外冒。
+    for (var i = 0; i < 10; i++) {
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)));
+      await tester.pump();
+    }
     await tester.pumpAndSettle();
 
     // 删当前页 c → b 滑入(页位不变,下一张补上)。删除+异步列目录刷新
@@ -1389,6 +1592,13 @@ void main() {
     // 滑到尾页 a,删除 → 翻回前一页 b(不白屏)
     await dragLikeFinger(tester, find.byType(PageView), const Offset(-600, 0));
     expect(find.text('a.jpg'), findsWidgets);
+    // 同上:a 页在途读删除前出窗,不外冒(第二次删除前)。
+    for (var i = 0; i < 10; i++) {
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)));
+      await tester.pump();
+    }
+    await tester.pumpAndSettle();
     await tester.tap(find.byTooltip('删除'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('删除'));
@@ -1401,8 +1611,7 @@ void main() {
 
   // ── 排序(时间两向,弹层切换)──
 
-  testWidgets('排序:默认新→旧不动;「旧→新」翻向,查看器随排序翻页',
-      (tester) async {
+  testWidgets('排序:默认新→旧不动;「旧→新」翻向,查看器随排序翻页', (tester) async {
     writeFile('a.jpg', modified: DateTime(2026, 10, 1));
     writeFile('b.jpg', modified: DateTime(2026, 10, 2));
     writeFile('c.jpg', modified: DateTime(2026, 10, 3));
@@ -1419,8 +1628,8 @@ void main() {
     await tester.pageBack();
     await tester.pumpAndSettle();
 
-    // 旧→新(点排序行翻向):首格 a,翻页序随排序(a → b)
-    await toggleSort(tester);
+    // 旧→新(点时间行直切翻向):首格 a,翻页序随排序(a → b)
+    await tapSortTime(tester);
     await tester.pumpAndSettle();
     await tester.tap(find.byType(Image).first);
     await tester.pumpAndSettle();
@@ -1428,10 +1637,10 @@ void main() {
     await dragLikeFinger(tester, find.byType(PageView), const Offset(-600, 0));
     expect(find.text('b.jpg'), findsWidgets);
 
-    // 回新→旧(再翻向):首格回到 c
+    // 回新→旧(再点翻向):首格回到 c
     await tester.pageBack();
     await tester.pumpAndSettle();
-    await toggleSort(tester);
+    await tapSortTime(tester);
     await tester.pumpAndSettle();
     await tester.tap(find.byType(Image).first);
     await tester.pumpAndSettle();
@@ -1458,25 +1667,29 @@ void main() {
     final base = DateTime(2026, 10, 1, 10, 0, 0);
     final files = [
       writeFile('a.jpg', modified: base),
-      writeFile('b.jpg',
-          modified: base.add(const Duration(milliseconds: 100))),
-      writeFile('c.jpg',
-          modified: base.add(const Duration(milliseconds: 200))),
+      writeFile('b.jpg', modified: base.add(const Duration(milliseconds: 100))),
+      writeFile('c.jpg', modified: base.add(const Duration(milliseconds: 200))),
     ];
     expect(groupLocalBurstRuns(files), [files]);
   });
 
   test('连拍聚合:相邻差 600ms 超窗断段,窗内段照聚', () {
+    // setLastModifiedSync 秒级取整(dart:io 限制,宿主机实证:设
+    // .600ms 读回 .000),毫秒窗边界走注入时刻(见 groupLocalBurstRuns
+    // 库注);真机 mtime 同为秒级粒度,窗语义不变(同秒内聚、跨秒断)。
     final base = DateTime(2026, 10, 1, 10, 0, 0);
-    final a = writeFile('a.jpg', modified: base);
-    final b = writeFile('b.jpg',
-        modified: base.add(const Duration(milliseconds: 600)));
-    final c = writeFile('c.jpg',
-        modified: base.add(const Duration(milliseconds: 700)));
-    final d = writeFile('d.jpg',
-        modified: base.add(const Duration(milliseconds: 800)));
+    final a = writeFile('a.jpg');
+    final b = writeFile('b.jpg');
+    final c = writeFile('c.jpg');
+    final d = writeFile('d.jpg');
+    final times = {
+      a: base,
+      b: base.add(const Duration(milliseconds: 600)),
+      c: base.add(const Duration(milliseconds: 700)),
+      d: base.add(const Duration(milliseconds: 800)),
+    };
     // a |600ms 超窗| b,c,d(各 100ms)→ a 单段 + bcd 一段
-    expect(groupLocalBurstRuns([a, b, c, d]), [
+    expect(groupLocalBurstRuns([a, b, c, d], modifiedOf: (f) => times[f]!), [
       [a],
       [b, c, d],
     ]);
@@ -1504,10 +1717,7 @@ void main() {
     final runs = groupLocalBurstRuns(files);
     expect(runs, hasLength(1));
     expect(runs.single, hasLength(6));
-    expect(
-        runs.single
-            .map((f) => baseNameOf(f.uri.pathSegments.last))
-            .toSet(),
+    expect(runs.single.map((f) => baseNameOf(f.uri.pathSegments.last)).toSet(),
         hasLength(3));
   });
 
@@ -1541,15 +1751,13 @@ void main() {
     ]);
   });
 
-  testWidgets('连拍聚合弹层开关:成段合为一格带 ×N 角标,点开段内翻张,关掉恢复平铺',
-      (tester) async {
+  testWidgets('连拍聚合弹层开关:成段合为一格带 ×N 角标,点开段内翻张,关掉恢复平铺', (tester) async {
     final base = DateTime(2026, 10, 1, 10, 0, 0);
     // 三连拍(mtime = 拍摄时刻)+ 一张散拍
     writeFile('b1.jpg', modified: base);
     writeFile('b2.jpg', modified: base.add(const Duration(milliseconds: 100)));
     writeFile('b3.jpg', modified: base.add(const Duration(milliseconds: 200)));
-    writeFile('solo.jpg',
-        modified: base.subtract(const Duration(minutes: 10)));
+    writeFile('solo.jpg', modified: base.subtract(const Duration(minutes: 10)));
     final gallery = _FakeGallery(dir);
     final controller =
         TransfersController(engine: _FakeEngine(), gallery: gallery);
@@ -1569,8 +1777,7 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('b3.jpg')));
     await tester.pumpAndSettle();
     expect(find.text('b3.jpg'), findsWidgets);
-    await dragLikeFinger(
-        tester, find.byType(PageView), const Offset(-600, 0));
+    await dragLikeFinger(tester, find.byType(PageView), const Offset(-600, 0));
     expect(find.text('b2.jpg'), findsWidgets);
     // 段外文件(solo)不在查看器翻页集里
     expect(find.text('solo.jpg'), findsNothing);
@@ -1584,6 +1791,7 @@ void main() {
   });
 
   testWidgets('连拍格长按:整段成员一次全选,批量删除整段', (tester) async {
+    useTallSurface(tester); // 日期分段后各日纵向堆叠,600 高视口装不下(尾部格不进 cacheExtent)
     final base = DateTime(2026, 10, 1, 10, 0, 0);
     writeFile('b1.jpg', modified: base);
     writeFile('b2.jpg', modified: base.add(const Duration(milliseconds: 100)));
@@ -1600,7 +1808,8 @@ void main() {
     await tester.longPress(find.byKey(const ValueKey('b3.jpg')));
     await tester.pumpAndSettle();
     expect(find.text('已选 3 项'), findsOneWidget);
-    expect(find.byIcon(Icons.check_circle), findsOneWidget);
+    // 段内唯一连拍格勾 + 其段头「已全选」勾
+    expect(find.byIcon(Icons.check_circle), findsNWidgets(2));
 
     await tester.tap(find.byTooltip('批量删除'));
     await tester.pumpAndSettle();
@@ -1628,8 +1837,7 @@ void main() {
   // 大图解码(maxPixelSize 2560)与网格缩略(512)共用假解码器,计数
   // 只认 2560 档(查看器会话缓存 _decodes 的进出)。
 
-  testWidgets('NEF 解码缓存 LRU:塞 17 张最旧被逐(首开张翻回须重解)',
-      (tester) async {
+  testWidgets('NEF 解码缓存 LRU:塞 17 张最旧被逐(首开张翻回须重解)', (tester) async {
     for (var i = 0; i <= 16; i++) {
       writeFile('f$i.nef', modified: DateTime(2026, 10, 1, 0, i));
     }
@@ -1652,15 +1860,13 @@ void main() {
       await dragLikeFinger(
           tester, find.byType(PageView), const Offset(-600, 0));
     }
-    expect(
-        decoder.calls.where((c) => c.$2 == 2560).length, 17,
+    expect(decoder.calls.where((c) => c.$2 == 2560).length, 17,
         reason: '全程恰 17 次大图解码(每张一次)');
     expect(bigDecodes('f16.nef'), 1);
 
     // 翻回首张:f16 被逐过,重解(其余 16 张都还驻留,不重解)。
     for (var i = 0; i < 16; i++) {
-      await dragLikeFinger(
-          tester, find.byType(PageView), const Offset(600, 0));
+      await dragLikeFinger(tester, find.byType(PageView), const Offset(600, 0));
     }
     expect(bigDecodes('f16.nef'), 2, reason: '最旧被逐:翻回须重解');
     for (var i = 0; i <= 15; i++) {
@@ -1668,8 +1874,7 @@ void main() {
     }
   });
 
-  testWidgets('NEF 解码缓存 LRU:访问即提升(逐访问最旧,不按插入序)',
-      (tester) async {
+  testWidgets('NEF 解码缓存 LRU:访问即提升(逐访问最旧,不按插入序)', (tester) async {
     for (var i = 0; i <= 16; i++) {
       writeFile('f$i.nef', modified: DateTime(2026, 10, 1, 0, i));
     }
@@ -1695,8 +1900,7 @@ void main() {
     // 访问过 —— f16 落位时按访问序逐的是 f00(回程第一触、之后不再
     // 碰),而不是插入序最旧的 f15:提升语义的判别点。
     for (var i = 0; i < 16; i++) {
-      await dragLikeFinger(
-          tester, find.byType(PageView), const Offset(600, 0));
+      await dragLikeFinger(tester, find.byType(PageView), const Offset(600, 0));
     }
     // ③ 再正向到尾:f00 被逐过须重解;f15(插入次旧)两段回看都在访
     // 问,驻留不重解 —— 若无访问提升(FIFO),②里被逐的会是 f15。

@@ -1547,15 +1547,18 @@ class _MethodHeroState extends State<_MethodHero>
   /// 九轮「圈小一点,速度慢一点」:外扩上限 1.9→1.5、周期 1500→2400ms
   ///(一圈的可见寿命 = 整周期,错相 1/3 不变)。
   static const double _ringMaxScale = 1.5;
+  static const Duration _ringPeriod = Duration(milliseconds: 2400);
 
-  late final AnimationController _ripple = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 2400),
-  );
+  /// 涟漪驱动。**initState 现建,不做内联惰性初始化** —— 闲态 hero 终生
+  /// 不碰涟漪,首次访问落在 dispose 沿:unmount 期 createTicker 查
+  /// TickerMode 祖先必炸(debug 守卫「deactivated widget's ancestor」,
+  /// f82e8eb 起全量 app 骨架类用例全挂的根因)。
+  late final AnimationController _ripple;
 
   @override
   void initState() {
     super.initState();
+    _ripple = AnimationController(vsync: this, duration: _ringPeriod);
     if (widget.busy) _ripple.repeat();
   }
 

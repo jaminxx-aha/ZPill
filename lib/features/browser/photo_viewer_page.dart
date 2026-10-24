@@ -63,16 +63,16 @@ class PhotoViewerPage extends StatefulWidget {
     this.embeddedVideoView,
     this.session,
     this.onOpenTransfers,
-    this.downloadFormat,
+    this.formats = const <MediaFormat>{},
   });
 
   final List<PhotoGroup> items;
   final int initialIndex;
 
-  /// 相册页筛选弹层预定的下载格式(仅 JPG/仅 RAW;null = 全部:整组
-  /// 直接下,JPG+RAW 全要)。非 null 时按该格式收集,组内缺该格式提示
-  /// 不下。网格显示不受影响,仅下载口径跟随相册页筛选。
-  final PhotoDownloadFormat? downloadFormat;
+  /// 相册页被点格的格式档(格 = 组 × 格式档):非空时组内按格式收集,
+  /// 缺该格式的组提示不下;空 = 整组直接下。网格显示不受影响,仅下载
+  /// 口径跟随相册页筛选(多格式并集 possible)。
+  final Set<MediaFormat> formats;
 
   /// 测试注入;缺省用 AppServices 单例。
   final ThumbnailCache? thumbnails;
@@ -208,8 +208,8 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
     super.initState();
     _warmCurrent();
     _readProtectState(widget.items[_index]);
-    // 当前组评级即时补读(后台补读未到的先拉,已问过空转)。
-    _ratings.ensure(widget.items[_index]);
+    // 当前组评级即时补读全链(星档+删除候选;单件在目,全答不成队列)。
+    _ratings.ensureFull(widget.items[_index]);
   }
 
   /// 当前页预览预热(高清席位):小图已先显,后台拉整档解码换高清;
@@ -343,21 +343,24 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
     );
   }
 
-  /// 下载:全程不弹格式面板 —— 筛选弹层预定格式(widget.downloadFormat
-  /// 非 null)按该格式收集,组内缺该格式(纯 JPG 组 × 仅 RAW 等)提示
-  /// 不下;null(全部)整组直接入队,双格式组 JPG+RAW 全要。
+  /// 下载:全程不弹格式面板 —— 被点格的格式档(widget.formats 非空)
+  /// 按格式收集,组内缺该格式(纯 JPG 组 × 仅 NEF 等)提示不下;空集
+  /// 整组直接入队。
   Future<void> _download(
       PhotoGroup group, TransferDestination destination) async {
     var entries = group.members;
-    final format = widget.downloadFormat;
-    if (format != null) {
-      entries = group.membersFor(format);
+    final formats = widget.formats;
+    if (formats.isNotEmpty) {
+      entries = [
+        for (final m in group.members)
+          if (mediaFormatOfFilename(m.name) case final f? when formats.contains(f)) m,
+      ];
       if (entries.isEmpty) {
         ScaffoldMessenger.of(context)
           ..hideCurrentSnackBar()
           ..showSnackBar(SnackBar(
               content: Text(context.t('grid.noMatchNoDownload',
-                  {'label': context.t(format.label)}))));
+                  {'label': formats.map((f) => f.label).join('+')}))));
         return;
       }
     }
@@ -371,7 +374,9 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
     final where = destination == TransferDestination.gallery
         ? context.t('grid.toAlbum')
         : context.t('grid.toApp');
-    final tag = format == null ? '' : '(${context.t(format.short)})';
+    final tag = formats.isEmpty
+        ? ''
+        : '(${formats.map((f) => f.label).join('+')})';
     // Navigator 在展示时刻捕获(网格页同款):SnackBar 活得比本页久
     // (pop 后提示挂到上一页),届时 State 已 unmount,Navigator.of 会
     // 抛 defunct —— 捕获的根 Navigator 跨 pop 存活,窗口期内动作照常。
@@ -545,7 +550,7 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
               });
               _warmCurrent();
               _readProtectState(widget.items[i]);
-              _ratings.ensure(widget.items[i]); // 评级即时补读
+              _ratings.ensureFull(widget.items[i]); // 评级即时补读全链
               // 全屏是视频语境:滑到非视频页自动退出(还原方向与栏)
               if (_fullscreen && !widget.items[i].isVideo) {
                 _setFullscreen(false);

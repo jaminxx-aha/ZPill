@@ -225,6 +225,34 @@ bool isVideoFile(ObjectEntry entry) {
 /// 扩展名集合与条目级判定同源,别处分叉会两边口径不一。
 bool isJpgFilename(String name) => _hasExt(name, const {'jpg', 'jpeg', 'jpe'});
 
+/// 通用筛选格式档(相机相册/图库筛选弹层共用,设计同评级子面板):
+/// 相机产出的五族文件。label 为拉丁短名,t() 未命中原文直传。
+enum MediaFormat {
+  nef('NEF'),
+  jpg('JPG'),
+  mov('MOV'),
+  mp4('MP4'),
+  hif('HIF');
+
+  const MediaFormat(this.label);
+
+  final String label;
+}
+
+/// 扩展名 → 格式档(未知扩展返回 null —— 全档直通,选中态不含它)。
+/// NEF 码 0x3000(undefined)无判别力,DCF 扩展名即真相,相机侧同用此映射。
+MediaFormat? mediaFormatOfFilename(String name) {
+  final ext = name.contains('.') ? name.split('.').last.toLowerCase() : '';
+  return switch (ext) {
+    'nef' || 'nrw' => MediaFormat.nef,
+    'jpg' || 'jpeg' => MediaFormat.jpg,
+    'mov' || 'm4v' => MediaFormat.mov,
+    'mp4' => MediaFormat.mp4,
+    'hif' || 'heif' => MediaFormat.hif,
+    _ => null,
+  };
+}
+
 bool isRawFilename(String name) => _hasExt(name, const {'nef', 'nrw'});
 
 bool isVideoFilename(String name) => _hasExt(name, const {'mov', 'mp4', 'm4v'});

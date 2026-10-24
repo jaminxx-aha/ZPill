@@ -5,6 +5,8 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:nikon_pill/features/common/trash_rating_icon.dart';
+import 'package:nikon_pill/data/ui_prefs_store.dart';
 import 'package:nikon_pill/core/browser/album.dart';
 import 'package:nikon_pill/core/browser/object_entry.dart';
 import 'package:nikon_pill/core/media/watermark.dart' show ExifCardData;
@@ -25,6 +27,9 @@ import '../../helpers/fake_connection.dart';
 /// loadAlbums 挂在 Completer 上由测试择机完成)。
 final class _FakeRepo implements ObjectRepository {
   final updatesCtrl = StreamController<AlbumsUpdate>.broadcast(sync: true);
+
+  /// 视频时长预置(测试直设,免 PTP 脚本)。
+  final Map<int, Duration> durations = {};
   Completer<List<CameraAlbum>>? _pending;
   int resetCalls = 0;
 
@@ -52,8 +57,7 @@ final class _FakeRepo implements ObjectRepository {
   final List<int> removedHandles = [];
 
   @override
-  void removeHandles(Iterable<int> handles) =>
-      removedHandles.addAll(handles);
+  void removeHandles(Iterable<int> handles) => removedHandles.addAll(handles);
 
   // ── 评级面(评级筛选用例驱动;句柄 → 星)──
   final Map<int, int> ratings = {};
@@ -63,7 +67,13 @@ final class _FakeRepo implements ObjectRepository {
   bool get ratingsLoaded => ratingsAvailable;
 
   @override
-  void requestRating(int handle) {}
+  void requestRating(int handle, {bool trashProbe = true}) {}
+  @override
+  void requestTrashProbe(int handle) {}
+  @override
+  Duration? durationFor(int handle) => durations[handle];
+  @override
+  void requestVideoDuration(int handle) {}
 
   @override
   int ratingForHandle(int handle) => ratings[handle] ?? 0;
@@ -98,8 +108,6 @@ final class _FakeRepo implements ObjectRepository {
     }
   }
 }
-
-
 
 /// 1×1 PNG(解码必成):缩略出图路径的真档替身。
 final _tinyPng = base64Decode(
@@ -144,6 +152,17 @@ final class _FakeThumbs implements ThumbnailCache {
 
   @override
   int get previewLimitBytes => 0;
+}
+
+/// 组 → 展示格键(与页面 _expandGroup 同口径:组内出现的格式各一格)。
+List<String> cellKeysOf(PhotoGroup group) {
+  final formats = <MediaFormat>[];
+  for (final m in group.members) {
+    final f = mediaFormatOfFilename(m.name);
+    if (f != null && !formats.contains(f)) formats.add(f);
+  }
+  if (formats.isEmpty) return ['${group.key}'];
+  return [for (final f in formats) '${group.key}:${f.name}'];
 }
 
 ObjectEntry _entry(int handle) => ObjectEntry(
@@ -244,75 +263,69 @@ void main() {
       folderHandle: CameraAlbum.allPhotosHandle,
       fallbackName: '全部照片',
       thumbnails: _FakeThumbs(),
+      uiPrefs: InMemoryUiPrefsStore(), // 选项态进程内隔离(防跨用例串味)
     )));
 
     final loading = controller.load();
     // 块 1:两个对象。
-    repo.updatesCtrl.add(AlbumsUpdate(
-        albums: [CameraAlbum.allPhotos([_photo(1), _photo(2)])],
-        loaded: 2,
-        total: 4,
-        complete: false));
+    repo.updatesCtrl.add(AlbumsUpdate(albums: [
+      CameraAlbum.allPhotos([_photo(1), _photo(2)])
+    ], loaded: 2, total: 4, complete: false));
     await tester.pump();
-    expect(find.byKey(ValueKey(1)), findsOneWidget);
-    expect(find.byKey(ValueKey(2)), findsOneWidget);
-    expect(find.byKey(ValueKey(3)), findsNothing);
+    expect(find.byKey(ValueKey('1:jpg')), findsOneWidget);
+    expect(find.byKey(ValueKey('2:jpg')), findsOneWidget);
+    expect(find.byKey(ValueKey('3:jpg')), findsNothing);
 
     // 块 2:增长到四个 —— 新 cell 尾部追加,首格原位复用不漂移。
-    repo.updatesCtrl.add(AlbumsUpdate(
-        albums: [CameraAlbum.allPhotos([_photo(1), _photo(2), _photo(3), _photo(4)])],
-        loaded: 4,
-        total: 4,
-        complete: true));
+    repo.updatesCtrl.add(AlbumsUpdate(albums: [
+      CameraAlbum.allPhotos([_photo(1), _photo(2), _photo(3), _photo(4)])
+    ], loaded: 4, total: 4, complete: true));
     await tester.pump();
-    expect(find.byKey(ValueKey(1)), findsOneWidget);
-    expect(find.byKey(ValueKey(3)), findsOneWidget);
-    expect(find.byKey(ValueKey(4)), findsOneWidget);
+    expect(find.byKey(ValueKey('1:jpg')), findsOneWidget);
+    expect(find.byKey(ValueKey('3:jpg')), findsOneWidget);
+    expect(find.byKey(ValueKey('4:jpg')), findsOneWidget);
 
-    repo.completeLoad(
-        [CameraAlbum.allPhotos([_photo(1), _photo(2), _photo(3), _photo(4)])]);
+    repo.completeLoad([
+      CameraAlbum.allPhotos([_photo(1), _photo(2), _photo(3), _photo(4)])
+    ]);
     await loading;
   });
 
-  testWidgets('视频角标带底色:黑半透明圆角小底,亮缩略上可辨', (tester) async {
+  testWidgets('视频格:摄像机角标退场,时长胶囊上屏(mvhd 行走)', (tester) async {
     final repo = _FakeRepo();
     final controller = BrowserController(repository: repo);
+    final ratings = AlbumRatingsController(repository: repo);
+    addTearDown(ratings.dispose);
+    final thumbs = _FakeThumbs();
     await tester.pumpWidget(_host(PhotoGridPage(
       controller: controller,
       folderHandle: CameraAlbum.allPhotosHandle,
       fallbackName: '全部照片',
-      thumbnails: _FakeThumbs(),
+      thumbnails: thumbs,
+      ratings: ratings,
+      uiPrefs: InMemoryUiPrefsStore(),
     )));
 
+    repo.durations[1] = const Duration(seconds: 150); // mvhd 探测成果预置
+
     final loading = controller.load();
-    repo.updatesCtrl.add(AlbumsUpdate(
-        albums: [CameraAlbum.allPhotos([_video(1), _photo(2)])],
-        loaded: 2,
-        total: 2,
-        complete: true));
+    repo.updatesCtrl.add(AlbumsUpdate(albums: [
+      CameraAlbum.allPhotos([_video(1), _photo(2)])
+    ], loaded: 2, total: 2, complete: true));
     await tester.pump();
+    await tester.pumpAndSettle();
 
-    // 角标图标最近的 DecoratedBox 祖先 = 底:黑 0.55 圆角矩形(与
-    // 左下类型角标同视觉语言),纯白图标不再裸叠缩略。
-    final iconEl = tester.element(find.byIcon(Icons.videocam));
-    late final Element badgeBase;
-    iconEl.visitAncestorElements((e) {
-      if (e.widget is DecoratedBox) {
-        badgeBase = e;
-        return false;
-      }
-      return true;
-    });
-    final deco = (badgeBase.widget as DecoratedBox).decoration as BoxDecoration;
-    expect(deco.color, Colors.black.withValues(alpha: 0.55));
-    expect(deco.borderRadius, BorderRadius.circular(4));
+    // 摄像机角标退场;时长胶囊上屏(150s → 2:30),黑底同格式角标。
+    expect(find.byIcon(Icons.videocam), findsNothing);
+    expect(find.text('2:30'), findsOneWidget);
 
-    repo.completeLoad([CameraAlbum.allPhotos([_video(1), _photo(2)])]);
+    repo.completeLoad([
+      CameraAlbum.allPhotos([_video(1), _photo(2)])
+    ]);
     await loading;
   });
 
-  testWidgets('首块前骨架:枚举在途显网格形占位,首块到达切真网格',
-      (tester) async {
+  testWidgets('首块前骨架:枚举在途显网格形占位,首块到达切真网格', (tester) async {
     final repo = _FakeRepo();
     final controller = BrowserController(repository: repo);
     await tester.pumpWidget(_host(PhotoGridPage(
@@ -320,6 +333,7 @@ void main() {
       folderHandle: CameraAlbum.allPhotosHandle,
       fallbackName: '全部照片',
       thumbnails: _FakeThumbs(),
+      uiPrefs: InMemoryUiPrefsStore(), // 选项态进程内隔离(防跨用例串味)
     )));
     await tester.pump(); // initState 懒枚举已发起,块未到:骨架态
 
@@ -330,22 +344,21 @@ void main() {
     expect(find.byType(LinearProgressIndicator), findsOneWidget);
 
     // 首块到达:骨架退场,真网格上屏。
-    repo.updatesCtrl.add(AlbumsUpdate(
-        albums: [CameraAlbum.allPhotos([_photo(1)])],
-        loaded: 1,
-        total: 2,
-        complete: false));
+    repo.updatesCtrl.add(AlbumsUpdate(albums: [
+      CameraAlbum.allPhotos([_photo(1)])
+    ], loaded: 1, total: 2, complete: false));
     await tester.pump();
     expect(find.byKey(const ValueKey('gridSkeleton')), findsNothing);
-    expect(find.byKey(ValueKey(1)), findsOneWidget);
+    expect(find.byKey(ValueKey('1:jpg')), findsOneWidget);
 
-    repo.completeLoad([CameraAlbum.allPhotos([_photo(1)])]);
+    repo.completeLoad([
+      CameraAlbum.allPhotos([_photo(1)])
+    ]);
     await tester.pumpAndSettle();
     expect(find.byType(LinearProgressIndicator), findsNothing);
   });
 
-  testWidgets('缩略取数失败:断图占位,3s 后限次自动重试(失败 future 不驻留)',
-      (tester) async {
+  testWidgets('缩略取数失败:断图占位,3s 后限次自动重试(失败 future 不驻留)', (tester) async {
     final repo = _FakeRepo();
     final controller = BrowserController(repository: repo);
     final thumbs = _FakeThumbs(failHandles: {1});
@@ -357,13 +370,11 @@ void main() {
     )));
 
     final loading = controller.load();
-    repo.updatesCtrl.add(AlbumsUpdate(
-        albums: [CameraAlbum.allPhotos([_photo(1), _photo(2)])],
-        loaded: 2,
-        total: 2,
-        complete: true));
+    repo.updatesCtrl.add(AlbumsUpdate(albums: [
+      CameraAlbum.allPhotos([_photo(1), _photo(2)])
+    ], loaded: 2, total: 2, complete: true));
     await tester.pump();
-    expect(find.byKey(ValueKey(1)), findsOneWidget);
+    expect(find.byKey(ValueKey('1:jpg')), findsOneWidget);
     await tester.pump(); // 取数失败的错误沿下一帧上屏(微任务 → setState → 帧)
     expect(find.byIcon(Icons.broken_image_outlined), findsOneWidget,
         reason: '句柄 1 取数失败:断图占位');
@@ -375,12 +386,13 @@ void main() {
     expect(thumbs.calls.where((h) => h == 1), hasLength(2),
         reason: '自动重试发出第二次取数(失败 future 不驻留)');
 
-    repo.completeLoad([CameraAlbum.allPhotos([_photo(1), _photo(2)])]);
+    repo.completeLoad([
+      CameraAlbum.allPhotos([_photo(1), _photo(2)])
+    ]);
     await loading;
   });
 
-  testWidgets('图档级失败:2s 去抖删坏档 + future 失效重取(死路径自愈)',
-      (tester) async {
+  testWidgets('图档级失败:2s 去抖删坏档 + future 失效重取(死路径自愈)', (tester) async {
     final repo = _FakeRepo();
     final controller = BrowserController(repository: repo);
     final thumbs = _FakeThumbs();
@@ -393,11 +405,9 @@ void main() {
     )));
 
     final loading = controller.load();
-    repo.updatesCtrl.add(AlbumsUpdate(
-        albums: [CameraAlbum.allPhotos([group, _photo(2)])],
-        loaded: 2,
-        total: 2,
-        complete: true));
+    repo.updatesCtrl.add(AlbumsUpdate(albums: [
+      CameraAlbum.allPhotos([group, _photo(2)])
+    ], loaded: 2, total: 2, complete: true));
     await tester.pump();
     await tester.pump();
     expect(thumbs.calls.where((h) => h == 1), hasLength(1));
@@ -412,12 +422,13 @@ void main() {
     expect(thumbs.calls.where((h) => h == 1), hasLength(2),
         reason: '图档级失败触发重取(死路径 future 不驻留)');
 
-    repo.completeLoad([CameraAlbum.allPhotos([group, _photo(2)])]);
+    repo.completeLoad([
+      CameraAlbum.allPhotos([group, _photo(2)])
+    ]);
     await loading;
   });
 
-  testWidgets('前瞻预取:构建沿窗外一窗先取(滚到即现,可视请求先入队)',
-      (tester) async {
+  testWidgets('前瞻预取:构建沿窗外一窗先取(滚到即现,可视请求先入队)', (tester) async {
     final repo = _FakeRepo();
     final controller = BrowserController(repository: repo);
     final thumbs = _FakeThumbs();
@@ -456,15 +467,16 @@ void main() {
       folderHandle: CameraAlbum.allPhotosHandle,
       fallbackName: '全部照片',
       thumbnails: _FakeThumbs(),
+      uiPrefs: InMemoryUiPrefsStore(), // 选项态进程内隔离(防跨用例串味)
     )));
 
     final loading = controller.load();
     final album = CameraAlbum.allPhotos([_photo(1), _photo(2)]);
-    repo.updatesCtrl.add(AlbumsUpdate(
-        albums: [album], loaded: 2, total: 2, complete: true));
+    repo.updatesCtrl.add(
+        AlbumsUpdate(albums: [album], loaded: 2, total: 2, complete: true));
     await tester.pump();
-    expect(find.byKey(ValueKey(1)), findsOneWidget);
-    expect(find.byKey(ValueKey(2)), findsOneWidget);
+    expect(find.byKey(ValueKey('1:jpg')), findsOneWidget);
+    expect(find.byKey(ValueKey('2:jpg')), findsOneWidget);
 
     conn.statesCtrl.add(CameraLinkState.disconnected); // albums 被清空
     await tester.pump();
@@ -472,8 +484,8 @@ void main() {
 
     // 控制器已清空,但网格保持最后快照(页面级 _lastAlbum 兜底)。
     expect(controller.albums, isEmpty);
-    expect(find.byKey(ValueKey(1)), findsOneWidget);
-    expect(find.byKey(ValueKey(2)), findsOneWidget);
+    expect(find.byKey(ValueKey('1:jpg')), findsOneWidget);
+    expect(find.byKey(ValueKey('2:jpg')), findsOneWidget);
     expect(find.text('全部照片'), findsOneWidget);
 
     repo.completeLoad([album]);
@@ -488,6 +500,7 @@ void main() {
       folderHandle: 0x11,
       fallbackName: '文件夹',
       thumbnails: _FakeThumbs(),
+      uiPrefs: InMemoryUiPrefsStore(), // 选项态进程内隔离(防跨用例串味)
     )));
 
     final loading = controller.load();
@@ -500,10 +513,12 @@ void main() {
     await tester.pump();
 
     // 只渲染 0x11 相册的内容;标题用兜底名,相册名收在筛选弹层。
-    expect(find.byKey(ValueKey(5)), findsOneWidget);
-    expect(find.byKey(ValueKey(1)), findsNothing);
+    expect(find.byKey(ValueKey('5:jpg')), findsOneWidget);
+    expect(find.byKey(ValueKey('1:jpg')), findsNothing);
     expect(find.text('文件夹'), findsOneWidget);
     await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('folderFilter-entry')));
     await tester.pumpAndSettle();
     expect(find.text('100NIKON'), findsOneWidget);
     expect(find.text('全部照片'), findsOneWidget);
@@ -512,7 +527,13 @@ void main() {
     await loading;
   });
 
-  testWidgets('类型角标:合并组 jpg+raw / 纯 raw / 纯 jpg 各自落格', (tester) async {
+  testWidgets('文件夹持久化:清单一致 → 应用持久化选集(按名匹配)',
+      (tester) async {
+    final prefs = InMemoryUiPrefsStore();
+    await prefs.save({
+      'grid.folderNames': ['100NIKON'],
+      'grid.folderSel': ['100NIKON'],
+    });
     final repo = _FakeRepo();
     final controller = BrowserController(repository: repo);
     await tester.pumpWidget(_host(PhotoGridPage(
@@ -520,30 +541,197 @@ void main() {
       folderHandle: CameraAlbum.allPhotosHandle,
       fallbackName: '全部照片',
       thumbnails: _FakeThumbs(),
+      uiPrefs: prefs,
     )));
 
     final loading = controller.load();
+    final aggregate = CameraAlbum.allPhotos([_photo(1), _photo(2)]);
+    final folder = CameraAlbum(
+        name: '100NIKON', folderHandle: 0x11, items: [_photo(5)]);
     repo.updatesCtrl.add(AlbumsUpdate(
-        albums: [
-          CameraAlbum.allPhotos([
-            _pair(101, 102), // DSC_0001 双格式
-            _photo(2), // IMG_2.JPG 独立 JPG
-            _photo(3),
-          ]),
-        ],
-        loaded: 4,
-        total: 4,
-        complete: true));
+        albums: [aggregate, folder], loaded: 3, total: 3, complete: true));
+    await tester.pump();
+    repo.completeLoad([aggregate, folder]);
+    await loading;
     await tester.pump();
 
-    // RAW+JPG 合并:一个 cell、角标 jpg+raw;两份文件不再各占一格。
-    expect(find.text('jpg+raw'), findsOneWidget);
-    expect(find.byKey(ValueKey(102)), findsOneWidget); // 组键 = 最大句柄
-    expect(find.byKey(ValueKey(101)), findsNothing);
-    // 独立 JPG(两张):角标 jpg 各一格。
-    expect(find.text('jpg'), findsNWidgets(2));
+    // 清单一致:持久化选集(100NIKON)生效,汇总内容被筛掉。
+    expect(find.byKey(ValueKey('5:jpg')), findsOneWidget);
+    expect(find.byKey(ValueKey('1:jpg')), findsNothing);
+  });
 
-    repo.completeLoad([CameraAlbum.allPhotos([_pair(101, 102)])]);
+  testWidgets('文件夹持久化:清单不一致 → 重置回全部照片', (tester) async {
+    final prefs = InMemoryUiPrefsStore();
+    await prefs.save({
+      'grid.folderNames': ['200NIKON'], // 上次的夹这次没了
+      'grid.folderSel': ['200NIKON'],
+    });
+    final repo = _FakeRepo();
+    final controller = BrowserController(repository: repo);
+    await tester.pumpWidget(_host(PhotoGridPage(
+      controller: controller,
+      folderHandle: CameraAlbum.allPhotosHandle,
+      fallbackName: '全部照片',
+      thumbnails: _FakeThumbs(),
+      uiPrefs: prefs,
+    )));
+
+    final loading = controller.load();
+    final aggregate = CameraAlbum.allPhotos([_photo(1), _photo(2)]);
+    final folder = CameraAlbum(
+        name: '100NIKON', folderHandle: 0x11, items: [_photo(5)]);
+    repo.updatesCtrl.add(AlbumsUpdate(
+        albums: [aggregate, folder], loaded: 3, total: 3, complete: true));
+    await tester.pump();
+    repo.completeLoad([aggregate, folder]);
+    await loading;
+    await tester.pump();
+    await tester.pump(); // 重置沿 post-frame
+
+    // 清单不一致:选集重置,汇总(全部照片)上屏 —— 夹具的 5 只在
+    // 文件夹夹里,随选集重置一起消失(= 对账生效)。
+    expect(find.byKey(ValueKey('1:jpg')), findsOneWidget);
+    expect(find.byKey(ValueKey('5:jpg')), findsNothing);
+  });
+
+  testWidgets('选项持久化:预置格式选集,进页子面板勾态恢复', (tester) async {
+    final prefs = InMemoryUiPrefsStore();
+    await prefs.save({
+      'grid.formats': ['mov'],
+    });
+    final repo = _FakeRepo();
+    final controller = BrowserController(repository: repo);
+    await tester.pumpWidget(_host(PhotoGridPage(
+      controller: controller,
+      folderHandle: CameraAlbum.allPhotosHandle,
+      fallbackName: '全部照片',
+      thumbnails: _FakeThumbs(),
+      uiPrefs: prefs,
+    )));
+
+    final loading = controller.load();
+    repo.updatesCtrl.add(AlbumsUpdate(albums: [
+      CameraAlbum.allPhotos([_video(1), _photo(2)])
+    ], loaded: 2, total: 2, complete: true));
+    await tester.pump();
+    await tester.pump();
+
+    // 恢复的格式选集直接生效:MOV 在,JPG 被筛掉。
+    expect(find.byKey(ValueKey('1:mov')), findsOneWidget);
+    expect(find.byKey(ValueKey('2:jpg')), findsNothing);
+
+    // 子面板勾态:MOV 勾、全部未勾。
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('formatFilter-entry')));
+    await tester.pumpAndSettle();
+    expect(
+        find.byKey(const ValueKey('formatFilter-mov')), findsOneWidget);
+    final movCheck = find.descendant(
+        of: find.byKey(const ValueKey('formatFilter-mov')),
+        matching: find.byIcon(Icons.check));
+    expect(movCheck, findsOneWidget);
+
+    repo.completeLoad([
+      CameraAlbum.allPhotos([_video(1), _photo(2)])
+    ]);
+    await loading;
+  });
+
+  testWidgets('类型角标:RAW+JPG 拆分两格 / 纯 raw / 纯 jpg 各自落格', (tester) async {
+    final repo = _FakeRepo();
+    final controller = BrowserController(repository: repo);
+    await tester.pumpWidget(_host(PhotoGridPage(
+      controller: controller,
+      folderHandle: CameraAlbum.allPhotosHandle,
+      fallbackName: '全部照片',
+      thumbnails: _FakeThumbs(),
+      uiPrefs: InMemoryUiPrefsStore(), // 选项态进程内隔离(防跨用例串味)
+    )));
+
+    final loading = controller.load();
+    repo.updatesCtrl.add(AlbumsUpdate(albums: [
+      CameraAlbum.allPhotos([
+        _pair(101, 102), // DSC_0001 双格式
+        _photo(2), // IMG_2.JPG 独立 JPG
+        _photo(3),
+      ]),
+    ], loaded: 4, total: 4, complete: true));
+    await tester.pump();
+
+    // 显示.格式:勾上后格式短名上格(默认净格)。
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('show-format')));
+    await tester.pumpAndSettle();
+    await tester.tapAt(const Offset(30, 10));
+    await tester.pumpAndSettle();
+
+    // RAW+JPG 拆分:同一次快门两格(每格式一格,用户定稿 2026-10-23)。
+    expect(find.text('NEF'), findsOneWidget);
+    expect(find.byKey(ValueKey('102:jpg')), findsOneWidget);
+    expect(find.byKey(ValueKey('102:nef')), findsOneWidget);
+    // 独立 JPG(两张):角标 jpg 各一格。
+    expect(find.text('JPG'), findsNWidgets(3));
+
+    repo.completeLoad([
+      CameraAlbum.allPhotos([_pair(101, 102)])
+    ]);
+    await loading;
+  });
+
+  testWidgets('连拍不聚合:簇进页拆回单快门逐张显格,×N 不上相机格',
+      (tester) async {
+    final repo = _FakeRepo();
+    final controller = BrowserController(repository: repo);
+    await tester.pumpWidget(_host(PhotoGridPage(
+      controller: controller,
+      folderHandle: CameraAlbum.allPhotosHandle,
+      fallbackName: '全部照片',
+      thumbnails: _FakeThumbs(),
+      uiPrefs: InMemoryUiPrefsStore(), // 选项态进程内隔离(防跨用例串味)
+    )));
+
+    // 连拍簇一条目(仓库第三遍并组产物形态):三张同夹 JPG 时刻相邻。
+    ObjectEntry shot(int handle, String name, int ms) => ObjectEntry(
+          handle: handle,
+          name: name,
+          sizeInBytes: 1,
+          kind: ObjectKind.image,
+          parentHandle: 0x11,
+          capturedAt: DateTime.utc(2026, 10, 1, 12, 0, 0, ms),
+          formatCode: 0x3801,
+        );
+    final burst = PhotoGroup([
+      shot(11, 'DSC_0001.JPG', 0),
+      shot(12, 'DSC_0002.JPG', 200),
+      shot(13, 'DSC_0003.JPG', 400),
+    ]);
+    final loading = controller.load();
+    repo.updatesCtrl.add(AlbumsUpdate(albums: [
+      CameraAlbum.allPhotos([burst, _photo(2)]),
+    ], loaded: 4, total: 4, complete: true));
+    await tester.pump();
+
+    // 显示.格式:勾上后格式短名上格(默认净格)。
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('show-format')));
+    await tester.pumpAndSettle();
+    await tester.tapAt(const Offset(30, 10));
+    await tester.pumpAndSettle();
+
+    // 拆簇:4 格(3 快门 + 散拍)各自 JPG 短名,×N 不出现在相机格。
+    expect(find.text('JPG'), findsNWidgets(4));
+    expect(find.textContaining('×'), findsNothing);
+    // 各快门独立格(键 = 单快门组键 = 最大句柄)。
+    expect(find.byKey(const ValueKey('11:jpg')), findsOneWidget);
+    expect(find.byKey(const ValueKey('12:jpg')), findsOneWidget);
+    expect(find.byKey(const ValueKey('13:jpg')), findsOneWidget);
+
+    repo.completeLoad([
+      CameraAlbum.allPhotos([burst])
+    ]);
     await loading;
   });
 
@@ -562,6 +750,7 @@ void main() {
       folderHandle: CameraAlbum.allPhotosHandle,
       fallbackName: '全部照片',
       thumbnails: _FakeThumbs(),
+      uiPrefs: InMemoryUiPrefsStore(), // 选项态进程内隔离(防跨用例串味)
       engine: engine,
       onOpenTransfers: onOpenTransfers,
     )));
@@ -575,18 +764,19 @@ void main() {
     repo.completeLoad([album]);
     await loading;
 
-    await tester.longPress(find.byKey(ValueKey(groups.first.key)));
+    // 格 = 组 × 格式档(RAW+JPG 拆分):逐格勾选。
+    final cellKeys = [for (final g in groups) ...cellKeysOf(g)];
+    await tester.longPress(find.byKey(ValueKey(cellKeys.first)));
     await tester.pump();
-    for (final group in groups.skip(1)) {
-      await tester.tap(find.byKey(ValueKey(group.key)));
+    for (final key in cellKeys.skip(1)) {
+      await tester.tap(find.byKey(ValueKey(key)));
       await tester.pump();
     }
-    expect(find.text('已选 ${groups.length} 项'), findsOneWidget);
+    expect(find.text('已选 ${cellKeys.length} 项'), findsOneWidget);
     return (controller, engine);
   }
 
-  testWidgets('多选含双格式组:筛选「全部」整组全量直接入队,不弹面板',
-      (tester) async {
+  testWidgets('多选含双格式组:筛选「全部」整组全量直接入队,不弹面板', (tester) async {
     final (_, engine) =
         await selectGroups(tester, [_pair(101, 102), _rawPhoto(201)]);
 
@@ -594,10 +784,10 @@ void main() {
     await tester.pump();
     await tester.tap(find.text('下载到相册'));
     await tester.pumpAndSettle();
-    expect(find.text('选择下载格式'), findsNothing,
-        reason: '全部 = 整组全量直接下,不弹格式面板');
+    expect(find.text('选择下载格式'), findsNothing, reason: '全部 = 整组全量直接下,不弹格式面板');
 
     final (entries, destination) = engine.calls.single;
+    // 入队随格序 = 排序后展示序(三者同时刻:稳定排序保输入序)。
     expect(entries.map((e) => e.name),
         ['DSC_0001.JPG', 'DSC_0001.NEF', 'DSC_0002.NEF']);
     expect(destination, TransferDestination.gallery);
@@ -620,8 +810,9 @@ void main() {
 
     expect(find.text('选择下载格式'), findsNothing);
     final (entries, destination) = engine.calls.single;
-    expect(entries.map((e) => e.name),
-        ['IMG_1.JPG', 'DSC_0002.NEF', 'IMG_3.JPG']);
+    // 入队随格序 = 排序后展示序(时间从大到小:12:03 → 12:01 → 12:00)。
+    expect(
+        entries.map((e) => e.name), ['IMG_3.JPG', 'IMG_1.JPG', 'DSC_0002.NEF']);
     expect(destination, TransferDestination.app);
 
     // SnackBar「查看进度」动作 → 传输页入口
@@ -632,7 +823,8 @@ void main() {
     await _drainSnackBar(tester);
   });
 
-  testWidgets('底栏两段式下载:默认单「下载」钮,点按换出双目的地;'
+  testWidgets(
+      '底栏两段式下载:默认单「下载」钮,点按换出双目的地;'
       '下载完成清空选择复位', (tester) async {
     final (_, engine) = await selectGroups(tester, [_photo(1)]);
 
@@ -659,7 +851,7 @@ void main() {
     final (_, engine) = await selectGroups(tester, [_photo(1), _photo(2)]);
 
     // 先取消一项再展开:1 项选中,底栏显单「下载」。
-    await tester.tap(find.byKey(ValueKey(2)));
+    await tester.tap(find.byKey(ValueKey('2:jpg')));
     await tester.pump();
     expect(find.text('已选 1 项'), findsOneWidget);
     await tester.tap(find.text('下载'));
@@ -681,14 +873,13 @@ void main() {
     await tester.tap(find.text('下载到应用'));
     await tester.pumpAndSettle();
     final (entries, destination) = engine.calls.single;
-    expect(entries.map((e) => e.name), ['IMG_1.JPG', 'IMG_2.JPG']);
+    expect(entries.map((e) => e.name), ['IMG_2.JPG', 'IMG_1.JPG']);
     expect(destination, TransferDestination.app);
 
     await _drainSnackBar(tester);
   });
 
-  testWidgets('筛选定格式仅 JPG:下载跳过面板直接收集,缺格式组跳过',
-      (tester) async {
+  testWidgets('筛选定格式仅 JPG:下载跳过面板直接收集,缺格式组跳过', (tester) async {
     final repo = _FakeRepo();
     final engine = _FakeEngine();
     final controller = BrowserController(repository: repo);
@@ -697,46 +888,49 @@ void main() {
       folderHandle: CameraAlbum.allPhotosHandle,
       fallbackName: '全部照片',
       thumbnails: _FakeThumbs(),
+      uiPrefs: InMemoryUiPrefsStore(), // 选项态进程内隔离(防跨用例串味)
       engine: engine,
     )));
     final loading = controller.load();
     final album = CameraAlbum.allPhotos([_pair(101, 102), _rawPhoto(201)]);
-    repo.updatesCtrl.add(AlbumsUpdate(
-        albums: [album], loaded: 2, total: 2, complete: true));
+    repo.updatesCtrl.add(
+        AlbumsUpdate(albums: [album], loaded: 2, total: 2, complete: true));
     await tester.pump();
     repo.completeLoad([album]);
     await loading;
     await tester.pump(); // await loading 留下脏树:交互前先落一帧
 
-    // 先在筛选弹层定格式(多选中弹层不可达,须先设后选)
+    // 先在筛选弹层定格式(格式子面板:只勾 JPG;非 JPG 格不可见,
+    // 多选中弹层不可达,须先设后选)。
     await tester.tap(find.byIcon(Icons.tune));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('仅 JPG'));
+    await tester.tap(find.byKey(const ValueKey('formatFilter-entry')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('formatFilter-jpg')));
+    await tester.pumpAndSettle();
+    expect(find.text('DSC_0002.NEF'), findsNothing); // NEF 格被筛掉
+    await tester.tapAt(const Offset(30, 10)); // 点外收层
     await tester.pumpAndSettle();
 
-    await tester.longPress(find.byKey(ValueKey(102)));
+    await tester.longPress(find.byKey(ValueKey('102:jpg')));
     await tester.pump();
-    await tester.tap(find.byKey(ValueKey(201)));
-    await tester.pump();
-    expect(find.text('已选 2 项'), findsOneWidget);
+    expect(find.text('已选 1 项'), findsOneWidget);
 
     await tester.tap(find.text('下载'));
     await tester.pump();
     await tester.tap(find.text('下载到相册'));
     await tester.pumpAndSettle();
 
-    expect(find.text('选择下载格式'), findsNothing,
-        reason: '筛选已定格式:不再弹格式面板');
+    expect(find.text('选择下载格式'), findsNothing, reason: '筛选已定格式:不再弹格式面板');
     final (entries, destination) = engine.calls.single;
     expect(entries.map((e) => e.name), ['DSC_0001.JPG']);
     expect(destination, TransferDestination.gallery);
-    expect(find.textContaining('跳过 1 项无 JPG'), findsOneWidget);
+    expect(find.textContaining('跳过'), findsNothing);
 
     await _drainSnackBar(tester);
   });
 
-  testWidgets('下载后立即返回:提示自动消失,「查看进度」仍可跳传输页',
-      (tester) async {
+  testWidgets('下载后立即返回:提示自动消失,「查看进度」仍可跳传输页', (tester) async {
     // 真实导航栈(入口页 push 相册页)+ 生产默认跳转路径(不注入
     // onOpenTransfers)。复现盘:2026-10-17 真机 —— SDK #173084 起带
     // action 的 SnackBar 默认 persist=true 永不消失,且 pop 后动作闭包
@@ -759,6 +953,7 @@ void main() {
                     folderHandle: CameraAlbum.allPhotosHandle,
                     fallbackName: '相机相册',
                     thumbnails: _FakeThumbs(),
+      uiPrefs: InMemoryUiPrefsStore(), // 选项态进程内隔离(防跨用例串味)
                     engine: engine,
                   ),
                 ),
@@ -775,15 +970,15 @@ void main() {
     // 懒枚举(2026-10-17):initState 已发起 load,块到达前 syncing 转圈,
     // 须先喂完仓库再 pumpAndSettle;手动 load() 在途去重,不再单发。
     final album = CameraAlbum.allPhotos([g1, g2]);
-    repo.updatesCtrl.add(AlbumsUpdate(
-        albums: [album], loaded: 2, total: 2, complete: true));
+    repo.updatesCtrl.add(
+        AlbumsUpdate(albums: [album], loaded: 2, total: 2, complete: true));
     await tester.pump();
     repo.completeLoad([album]);
     await tester.pumpAndSettle();
 
-    await tester.longPress(find.byKey(ValueKey(g1.key)));
+    await tester.longPress(find.byKey(ValueKey('1:jpg')));
     await tester.pump();
-    await tester.tap(find.byKey(ValueKey(g2.key)));
+    await tester.tap(find.byKey(ValueKey('2:jpg')));
     await tester.pump();
     // 两段式:先点「下载」换出目的地,再点「下载到应用」。
     await tester.tap(find.text('下载'));
@@ -814,8 +1009,7 @@ void main() {
 
   // ── 右上筛选弹层(相册区 + 图片下载格式区) ─────────────────────
 
-  testWidgets('筛选弹层:双相册出相册区,点选切换过滤;格式区三档常在',
-      (tester) async {
+  testWidgets('筛选弹层:双相册出相册区,点选切换过滤;格式区三档常在', (tester) async {
     final repo = _FakeRepo();
     final controller = BrowserController(repository: repo);
     await tester.pumpWidget(_host(PhotoGridPage(
@@ -823,6 +1017,7 @@ void main() {
       folderHandle: CameraAlbum.allPhotosHandle,
       fallbackName: '相机相册',
       thumbnails: _FakeThumbs(),
+      uiPrefs: InMemoryUiPrefsStore(), // 选项态进程内隔离(防跨用例串味)
     )));
 
     final loading = controller.load();
@@ -838,33 +1033,39 @@ void main() {
     expect(find.text('相机相册'), findsOneWidget);
     expect(find.text('全部照片'), findsNothing);
     // 默认过滤 = 全部:三个组都在格
-    expect(find.byKey(ValueKey(1)), findsOneWidget);
-    expect(find.byKey(ValueKey(5)), findsOneWidget);
+    expect(find.byKey(ValueKey('1:jpg')), findsOneWidget);
+    expect(find.byKey(ValueKey('5:jpg')), findsOneWidget);
 
     await tester.tap(find.byIcon(Icons.tune));
     await tester.pumpAndSettle();
-    expect(find.text('相册'), findsOneWidget);
-    expect(find.text('全部照片'), findsOneWidget);
-    expect(find.text('100NIKON'), findsOneWidget);
-    expect(find.text('图片下载格式'), findsOneWidget);
-    expect(find.text('全部'), findsOneWidget);
-    expect(find.text('仅 JPG'), findsOneWidget);
-    expect(find.text('仅 RAW'), findsOneWidget);
+    // 筛选区:三级联子面板入口(文件夹 + 格式;评级未建立不出现)。
+    expect(find.text('筛选'), findsOneWidget);
+    expect(find.text('文件夹'), findsOneWidget);
+    expect(find.byKey(const ValueKey('formatFilter-entry')), findsOneWidget);
+    expect(find.byKey(const ValueKey('ratingFilter-entry')), findsNothing);
 
-    // 点文件夹名:弹层收,网格只剩该夹内容
+    // 进文件夹子面板点 100NIKON:不收层,网格只剩该夹内容。
+    await tester.tap(find.byKey(const ValueKey('folderFilter-entry')));
+    await tester.pumpAndSettle();
+    expect(find.text('全部照片'), findsOneWidget);
     await tester.tap(find.text('100NIKON'));
     await tester.pumpAndSettle();
-    expect(find.byKey(ValueKey(5)), findsOneWidget);
-    expect(find.byKey(ValueKey(1)), findsNothing);
-    expect(find.text('相机相册'), findsOneWidget); // 标题回常态
+    expect(find.byKey(ValueKey('5:jpg')), findsOneWidget);
+    expect(find.byKey(ValueKey('1:jpg')), findsNothing);
 
-    // 重开弹层切回汇总:两组回归
+    // 点外收层;重开切回全部照片:两组回归。
+    await tester.tapAt(const Offset(30, 10));
+    await tester.pumpAndSettle();
     await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('folderFilter-entry')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('全部照片'));
     await tester.pumpAndSettle();
-    expect(find.byKey(ValueKey(1)), findsOneWidget);
-    expect(find.byKey(ValueKey(5)), findsOneWidget);
+    await tester.tapAt(const Offset(30, 10));
+    await tester.pumpAndSettle();
+    expect(find.byKey(ValueKey('1:jpg')), findsOneWidget);
+    expect(find.byKey(ValueKey('5:jpg')), findsOneWidget);
 
     repo.completeLoad([aggregate, folder]);
     await loading;
@@ -878,15 +1079,16 @@ void main() {
       folderHandle: CameraAlbum.allPhotosHandle,
       fallbackName: '相机相册',
       thumbnails: _FakeThumbs(),
+      uiPrefs: InMemoryUiPrefsStore(), // 选项态进程内隔离(防跨用例串味)
     )));
 
     final loading = controller.load();
     final aggregate = CameraAlbum.allPhotos([_photo(1), _photo(2)]);
-    repo.updatesCtrl.add(AlbumsUpdate(
-        albums: [aggregate], loaded: 2, total: 2, complete: true));
+    repo.updatesCtrl.add(
+        AlbumsUpdate(albums: [aggregate], loaded: 2, total: 2, complete: true));
     await tester.pump();
 
-    await tester.longPress(find.byKey(ValueKey(1)));
+    await tester.longPress(find.byKey(ValueKey('1:jpg')));
     await tester.pump();
     expect(find.byIcon(Icons.tune), findsNothing,
         reason: '多选中弹层入口换场不可达(图库页同规矩)');
@@ -903,6 +1105,7 @@ void main() {
       folderHandle: CameraAlbum.allPhotosHandle,
       fallbackName: '相机相册',
       thumbnails: _FakeThumbs(),
+      uiPrefs: InMemoryUiPrefsStore(), // 选项态进程内隔离(防跨用例串味)
     )));
 
     final loading = controller.load();
@@ -917,7 +1120,8 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('相册'), findsNothing);
     expect(find.text('全部照片'), findsNothing);
-    expect(find.text('图片下载格式'), findsOneWidget);
+    expect(find.text('筛选'), findsOneWidget);
+    expect(find.byKey(const ValueKey('formatFilter-entry')), findsOneWidget);
 
     repo.completeLoad([aggregate]);
     await loading;
@@ -925,8 +1129,7 @@ void main() {
 
   // ── 评级(相机 0xDC8A 真源;角标与筛选分区) ─────────────────────
 
-  testWidgets('评级角标与筛选:数据建立后出分区,星档/无评级收窄网格',
-      (tester) async {
+  testWidgets('评级角标与筛选:数据建立后出分区,星档/无评级收窄网格', (tester) async {
     final repo = _FakeRepo();
     final ratings = AlbumRatingsController(repository: repo);
     addTearDown(ratings.dispose);
@@ -936,6 +1139,7 @@ void main() {
       folderHandle: CameraAlbum.allPhotosHandle,
       fallbackName: '相机相册',
       thumbnails: _FakeThumbs(),
+      uiPrefs: InMemoryUiPrefsStore(), // 选项态进程内隔离(防跨用例串味)
       ratings: ratings,
     )));
 
@@ -943,45 +1147,71 @@ void main() {
     repo.ratings[1] = 3;
     repo.ratings[3] = 5;
     repo.ratingsAvailable = true;
-    repo.updatesCtrl.add(AlbumsUpdate(
-        albums: [
-          CameraAlbum.allPhotos([_photo(1), _photo(2), _photo(3)])
-        ],
-        loaded: 3,
-        total: 3,
-        complete: true));
+    repo.updatesCtrl.add(AlbumsUpdate(albums: [
+      CameraAlbum.allPhotos([_photo(1), _photo(2), _photo(3)])
+    ], loaded: 3, total: 3, complete: true));
     await tester.pump();
 
-    // 角标:有星条目左上黄底星标(星图标 + 数字),无星条目无。
+    // 显示.评级:勾上后评级图标上格(默认净格);有星条目显 ★+数。
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('show-rating')));
+    await tester.pumpAndSettle();
+    await tester.tapAt(const Offset(30, 10));
+    await tester.pumpAndSettle();
     expect(find.text('3'), findsOneWidget);
     expect(find.text('5'), findsOneWidget);
 
-    // 评级分区(7 档);星档行 = 行内实心星(1+2+3+4+5 = 15 颗)。
+    // 主面板:评级分区收成单行入口(7 档收进级联子面板)。
     await tester.tap(find.byIcon(Icons.tune));
     await tester.pumpAndSettle();
-    expect(find.text('评级'), findsOneWidget);
-    expect(find.text('无评级'), findsOneWidget);
-    expect(find.text('已评级'), findsOneWidget);
+    expect(find.byKey(const ValueKey('ratingFilter-entry')), findsOneWidget);
+    expect(find.text('无评级'), findsNothing);
+
+    // 点开子面板:与父面板共存(主面板行仍在),全部 + 6 分类;星档行
+    // = 行内实心星(1+2+3+4+5 = 15 颗)。「全部」与格式区重名,按键点。
+    await tester.tap(find.byKey(const ValueKey('ratingFilter-entry')));
+    await tester.pumpAndSettle();
+    expect(find.text('筛选'), findsOneWidget); // 父面板保持
+    expect(find.byKey(const ValueKey('ratingFilter-0')), findsOneWidget);
+    expect(find.text('无评级'), findsNothing); // 无评级亦仅图标
+    expect(find.byKey(const ValueKey('ratingFilter-1')), findsOneWidget);
+    expect(find.text('已评级'), findsNothing); // 已评级不设行
+    expect(find.byType(TrashRatingIcon), findsOneWidget); // 删除候选仅图标
+    expect(find.text('删除候选'), findsNothing);
     expect(
       find.descendant(
           of: find.byType(MenuItemButton), matching: find.byIcon(Icons.star)),
       findsNWidgets(15),
     );
 
-    // 无评级:只剩未评的 2。
-    await tester.tap(find.text('无评级'));
+    // 无评级(仅图标,按键点):网格只剩未评的 2;不收层。
+    await tester.tap(find.byKey(const ValueKey('ratingFilter-1')));
     await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey(2)), findsOneWidget);
-    expect(find.byKey(const ValueKey(1)), findsNothing);
-    expect(find.byKey(const ValueKey(3)), findsNothing);
+    expect(find.byKey(const ValueKey('2:jpg')), findsOneWidget);
+    expect(find.byKey(const ValueKey('1:jpg')), findsNothing);
+    expect(find.byKey(const ValueKey('3:jpg')), findsNothing);
+    expect(find.byKey(const ValueKey('ratingFilter-entry')), findsOneWidget);
 
-    // ★5:只剩 3(trash/rated 档入列,星档键 = 枚举序 4-8)。
-    await tester.tap(find.byIcon(Icons.tune));
-    await tester.pumpAndSettle();
+    // 接着勾 ★5:多选并集 = 2 + 3(星档键 = 枚举序 4-8)。
     await tester.tap(find.byKey(const ValueKey('ratingFilter-8')));
     await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey(3)), findsOneWidget);
-    expect(find.byKey(const ValueKey(2)), findsNothing);
+    expect(find.byKey(const ValueKey('2:jpg')), findsOneWidget);
+    expect(find.byKey(const ValueKey('3:jpg')), findsOneWidget);
+    expect(find.byKey(const ValueKey('1:jpg')), findsNothing);
+
+    // 勾「全部」:互斥清空分类勾选,网格复原。
+    await tester.tap(find.byKey(const ValueKey('ratingFilter-0')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('1:jpg')), findsOneWidget);
+    expect(find.byKey(const ValueKey('2:jpg')), findsOneWidget);
+    expect(find.byKey(const ValueKey('3:jpg')), findsOneWidget);
+    expect(find.byKey(const ValueKey('ratingFilter-entry')), findsOneWidget);
+
+    // 点弹层外:整体收起。
+    await tester.tapAt(const Offset(30, 400));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('ratingFilter-entry')), findsNothing);
 
     repo.completeLoad([
       CameraAlbum.allPhotos([_photo(1), _photo(2), _photo(3)])
@@ -989,8 +1219,7 @@ void main() {
     await loading;
   });
 
-  testWidgets('评级数据未建立:无分区无角标,网格不筛(防「未取到」当「未评」)',
-      (tester) async {
+  testWidgets('评级数据未建立:无分区无角标,网格不筛(防「未取到」当「未评」)', (tester) async {
     final repo = _FakeRepo();
     final ratings = AlbumRatingsController(repository: repo);
     addTearDown(ratings.dispose);
@@ -1000,24 +1229,22 @@ void main() {
       folderHandle: CameraAlbum.allPhotosHandle,
       fallbackName: '相机相册',
       thumbnails: _FakeThumbs(),
+      uiPrefs: InMemoryUiPrefsStore(), // 选项态进程内隔离(防跨用例串味)
       ratings: ratings,
     )));
 
     final loading = controller.load();
-    repo.updatesCtrl.add(AlbumsUpdate(
-        albums: [
-          CameraAlbum.allPhotos([_photo(1), _photo(2)])
-        ],
-        loaded: 2,
-        total: 2,
-        complete: true));
+    repo.updatesCtrl.add(AlbumsUpdate(albums: [
+      CameraAlbum.allPhotos([_photo(1), _photo(2)])
+    ], loaded: 2, total: 2, complete: true));
     await tester.pump();
 
     expect(find.byIcon(Icons.star), findsNothing);
     await tester.tap(find.byIcon(Icons.tune));
     await tester.pumpAndSettle();
-    expect(find.text('评级'), findsNothing);
-    expect(find.text('图片下载格式'), findsOneWidget);
+    expect(find.byKey(const ValueKey('ratingFilter-entry')), findsNothing);
+    expect(find.text('筛选'), findsOneWidget);
+    expect(find.byKey(const ValueKey('formatFilter-entry')), findsOneWidget);
 
     repo.completeLoad([
       CameraAlbum.allPhotos([_photo(1), _photo(2)])

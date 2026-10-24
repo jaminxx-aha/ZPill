@@ -11,6 +11,7 @@ import '../ptp/ptp_session.dart';
 import '../ptp/ptp_transport.dart';
 import '../log/app_log.dart';
 import '../media/video_rating.dart';
+import '../media/video_duration.dart';
 import '../utils/byte_reader.dart';
 import '../utils/byte_writer.dart';
 import 'album.dart';
@@ -87,8 +88,21 @@ abstract interface class ObjectRepository {
   bool get ratingsLoaded;
 
   /// 请求拉取某句柄的相机评级(逐张 0x9803;批量收割已被真机证伪)。
-  /// fire-and-forget:重复请求/在途/不在册空转,成果经 [updates] 发布。
-  void requestRating(int handle);
+  /// [trashProbe] 放行时图像兼做 256KB XMP 删除候选甄别(昂贵大读,
+  /// 网格轻量沿传 false,驻留沿走 [requestTrashProbe])。fire-and-forget:
+  /// 重复请求/在途/不在册空转,成果经 [updates] 发布。
+  void requestRating(int handle, {bool trashProbe = true});
+
+  /// 补发删除候选甄别(图像 256KB XMP 头读,NEF 兼档位兜底;视频已随
+  /// NCTG 走完空转)。与 [requestRating]/后台甄别共去重集,不重发。
+  void requestTrashProbe(int handle);
+
+  /// 视频时长(容器 mvhd 解析;null = 未探测/探测失败)。
+  Duration? durationFor(int handle);
+
+  /// 请求探测视频时长(容器行走,数次小读;去重,fire-and-forget,
+  /// 成果经 [updates] 发布)。
+  void requestVideoDuration(int handle);
 
   /// 单文件评级(0 = 未评/未取到)。
   int ratingForHandle(int handle);
@@ -374,16 +388,92 @@ final class ObjectRepositoryImpl implements ObjectRepository {
     });
   }
 
-  /// 请求拉取某句柄的评级(查看器翻页/网格即时补读用;后台补读的
-  /// 单张入口):已问过/在途/不在册/是文件夹则空转。fire-and-forget。
+  /// 评级即时发布(按需沿):可见格先答的意义就是不等合窗。
+  void _publishRatingsNow() {
+    _ratingPublishTimer?.cancel();
+    _ratingPublishTimer = null;
+    if (_loading != null) return; // 枚举中:块发布自然带上
+    _publish(_byHandle.length, _byHandle.length, complete: true);
+  }
+
+  /// 请求拉取某句柄的评级(网格格 build / 查看器翻页沿按需即发,后台
+  /// 顺序队的插队口):按格式分流 —— 视频走容器 NCTG(星档+删除候选
+  /// 一笔流);图像先 0xDC8A 拉星档(NEF 必拒,跳过),[trashProbe] 放行
+  /// 时位图外再 256KB XMP 甄别删除候选 —— 两段串行(并发会同抢在途
+  /// 去重互吞)。各段完成即发布(跳过 300ms 合并窗,可见格先答的意义
+  /// 就是不等)。各路自有去重集,重复调用空转。fire-and-forget。
   @override
-  void requestRating(int handle) {
+  void requestRating(int handle, {bool trashProbe = true}) {
     final entry = _byHandle[handle];
     if (entry == null || entry.isFolder) return;
-    if (_ratingQueried.contains(handle)) return;
-    // 位图有星的拒答格式(NEF)也放行:fetch 拒后走 XMP 头读兜底。
-    if (!isRatingCapable(entry) && !_metaRated.contains(handle)) return;
-    unawaited(_fetchRating(handle));
+    switch (entry.kind) {
+      case ObjectKind.video:
+        unawaited(() async {
+          await _detectTrashViaNctg(entry);
+          _publishRatingsNow();
+        }());
+      case ObjectKind.image:
+        unawaited(() async {
+          if (isRatingCapable(entry)) {
+            await _fetchRating(handle); // 星档(位图有星 0xDC8A/拒走 XMP 兜底)
+            _publishRatingsNow(); // 便宜一笔,即读即上屏,不等甄别
+          }
+          if (trashProbe && !_metaRated.contains(handle)) {
+            await _detectTrashViaXmp(handle); // 删除候选(NEF 兼档位兜底)
+            _publishRatingsNow();
+          }
+        }());
+      default:
+        break;
+    }
+  }
+
+  /// 驻留沿补删除候选甄别(网格格驻留 ~400ms 仍在树上才发):图像
+  /// 256KB XMP 头读,视频已随 NCTG 走完空转。fire-and-forget。
+  @override
+  void requestTrashProbe(int handle) {
+    final entry = _byHandle[handle];
+    if (entry == null || entry.isFolder) return;
+    if (entry.kind != ObjectKind.image) return;
+    unawaited(() async {
+      // 驻留沿可能与轻量段 fetch 在途撞车:_detectTrashViaXmp 先登记
+      // 已甄别再撞在途门,撞车 = 静默吞 + 永久记「已甄别」—— 先等收口。
+      while (_ratingInFlight.contains(handle)) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+      await _detectTrashViaXmp(handle);
+      _publishRatingsNow();
+    }());
+  }
+
+  final Map<int, Duration> _videoDurations = {};
+  final Set<int> _videoDurationQueried = {};
+
+  @override
+  Duration? durationFor(int handle) => _videoDurations[handle];
+
+  @override
+  void requestVideoDuration(int handle) {
+    final entry = _byHandle[handle];
+    if (entry == null || entry.kind != ObjectKind.video) return;
+    if (!_videoDurationQueried.add(handle)) return;
+    unawaited(() async {
+      try {
+        final d = await readVideoDuration((off, len) async {
+          try {
+            return await session.getPartialObject(handle, off, len);
+          } on Object {
+            return null;
+          }
+        });
+        if (d != null) {
+          _videoDurations[handle] = d;
+          _scheduleRatingPublish(); // 借评级发布管线广播(页侧重建取值)
+        }
+      } on Object {
+        // 探测失败:不显时长
+      }
+    }());
   }
 
   /// 评级回退补读(0x9434 不可用时的旧路):按缓存序(新→旧)逐适用
@@ -749,8 +839,9 @@ final class ObjectRepositoryImpl implements ObjectRepository {
       if (entry == null) continue; // 句柄已不在册(被删等)
       if ((_ratings[handle] ?? 0) > 0) continue; // 档位已知(收割/写回)
       // 一律先试 0xDC8A(适用格式 OK);拒答(NEF 形态)由 _fetchRating
-      // 内部落 XMP 头读兜底,再不行才「已评级·未知」。
-      await _fetchRating(handle, force: true);
+      // 内部落 XMP 头读兜底,再不行才「已评级·未知」。非 force:登记
+      // 已问集,后续 requestRating 不重复发。
+      await _fetchRating(handle);
       if (generation != _generation) return;
       await Future<void>.delayed(const Duration(milliseconds: 30));
     }

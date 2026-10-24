@@ -468,11 +468,11 @@ void main() {
   test('网格 JPG:0x90C4 成功出高清,lt_ 键落盘;旧小图缓存不挡高清', () async {
     final gallery = FakeGallerySaver();
     final thumbsDir = await gallery.thumbsDir();
-    // 旧版小图缓存(plain 键)+ 格式标记(免被清空闸扫掉):键不分档
-    // 的话这里会被当成高清档直接命中
+    // 旧档位小图缓存(同族 plain 键)+ 格式标记(免被清空闸扫掉):
+    // 键不分档的话这里会被当成高清档直接命中(小图键 = 高清键去 lt_)。
     File('$thumbsDir/.fmt-v2').writeAsStringSync('cleared');
     final smallJpeg = Uint8List.fromList([0xFF, 0xD8, 0xFF, 0xD9]);
-    File('$thumbsDir/DSC_0001.JPG_100.jpg').writeAsBytesSync(smallJpeg);
+    File('$thumbsDir/v2_DSC_0001.JPG_100.jpg').writeAsBytesSync(smallJpeg);
 
     final fake = FakePtpTransport()
       ..reply(_okData(_jpeg)) // 0x90C4 高清(裸)
@@ -482,7 +482,7 @@ void main() {
 
     final path = await cache.pathFor(_entry(0x12), ThumbSource.grid);
     // 高清档独立键(lt_):不是旧小图档的路径,内容是 0x90C4 回包
-    expect(path, endsWith('lt_DSC_0001.JPG_100.jpg'));
+    expect(path, endsWith('lt_v2_DSC_0001.JPG_100.jpg'));
     expect(File(path).readAsBytesSync(), _jpeg);
     expect(fake.requests.map((r) => r.opcode),
         [NikonOperationCode.getLargeThumb, PtpOperationCode.getPartialObject]);
@@ -517,7 +517,7 @@ void main() {
     expect(session.largeThumbDegraded, isTrue);
     // 高清档未落盘(垃圾字节不进 .jpg 缓存)
     final thumbsDir = await gallery.thumbsDir();
-    expect(File('$thumbsDir/lt_DSC_0001.JPG_100.jpg').existsSync(), isFalse);
+    expect(File('$thumbsDir/lt_v2_DSC_0001.JPG_100.jpg').existsSync(), isFalse);
   });
 
   test('会话级降级:首个 JPG 失败(错误应答)后,后续 JPG 不再发 0x90C4', () async {
@@ -660,7 +660,7 @@ void main() {
         session: PtpSession(transport: fake), gallery: FakeGallerySaver());
 
     final path = await cache.pathFor(_entry(0x12), ThumbSource.preview);
-    expect(path, endsWith('fhd_DSC_0001.JPG_100.jpg'));
+    expect(path, endsWith('fhd_v2_DSC_0001.JPG_100.jpg'));
     expect(File(path).existsSync(), isTrue);
     // 无 getDeviceInfo(直发),FHD 请求在前、头读在后
     expect(fake.requests.map((r) => r.opcode),
@@ -683,7 +683,7 @@ void main() {
 
     final path = await cache.pathFor(_entry(0x12), ThumbSource.preview);
     expect(File(path).readAsBytesSync(), _jpeg);
-    expect(path, endsWith('lt_DSC_0001.JPG_100.jpg'));
+    expect(path, endsWith('lt_v2_DSC_0001.JPG_100.jpg'));
     expect(fake.requests.map((r) => r.opcode), [
       NikonOperationCode.getFhdPicture,
       NikonOperationCode.getLargeThumb,
@@ -711,7 +711,7 @@ void main() {
       ..reply(_okData(_jpgHead(1)));
     final retry = await cache.pathFor(
         _entry(0x14, name: 'DSC_0003.JPG', size: 300), ThumbSource.preview);
-    expect(retry, endsWith('fhd_DSC_0003.JPG_300.jpg'));
+    expect(retry, endsWith('fhd_v2_DSC_0003.JPG_300.jpg'));
     expect(fake.requests.length, 7);
     expect(fake.requests[5].opcode, NikonOperationCode.getFhdPicture,
         reason: 'reset 后重探 0x920F');
@@ -808,7 +808,7 @@ void main() {
 
     final small = await cache.pathFor(entry, ThumbSource.preview);
     expect(File(small).readAsBytesSync(), _jpeg);
-    expect(small, endsWith('fhd_DSC_0001.JPG_100.jpg'));
+    expect(small, endsWith('fhd_v2_DSC_0001.JPG_100.jpg'));
     expect(fake.requests.map((r) => r.opcode),
         [NikonOperationCode.getFhdPicture, PtpOperationCode.getPartialObject]);
     expect(upgrades, isEmpty);

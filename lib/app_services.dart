@@ -37,6 +37,7 @@ import 'data/client_identity_store.dart';
 import 'data/config_snapshot_store.dart';
 import 'data/paired_cameras_store.dart';
 import 'data/ratings_store.dart';
+import 'data/ui_prefs_store.dart';
 import 'data/settings_store.dart';
 import 'debug/nikon_exif_probe.dart';
 import 'debug/ptp_diagnostics.dart';
@@ -138,6 +139,8 @@ final class AppServices {
     fileOps = CameraFileOps(session: session, repository: repository);
     ratingsStore = FileRatingsStore(
         dataDir: PlatformServices.gallery.dataDir);
+    // 弹层选项持久化(排序/筛选/显示/视图;文件夹不入账,句柄随相机漂移)。
+    uiPrefs = FileUiPrefsStore(dataDir: PlatformServices.gallery.dataDir);
     // 图库文件级评级快照(下载落盘沿写、相册改评沿传播)。
     libraryRatings = LibraryRatings(store: ratingsStore);
     // 相册评级控制器:真源 = 相机(MTP 0xDC8A),改评成功沿把快照
@@ -220,11 +223,14 @@ final class AppServices {
       onAppFileSaved: (entry, path) async {
         if (!repository.ratingsLoaded) return;
         final group = repository.groupOf(entry.handle);
-        final stars = group == null ? 0 : repository.ratingForGroup(group);
-        if (stars < 1) return;
+        if (group == null) return;
+        final stars = repository.ratingForGroup(group);
+        final trash = repository.groupTrashStar(group);
+        if (stars < 1 && !trash) return;
         final name = path.split(Platform.pathSeparator).last;
+        // 垃圾桶档记 -1(星级与删除候选互斥存储;改评传播沿覆写)。
         await libraryRatings
-            .setFile(name, await File(path).length(), stars);
+            .setFile(name, await File(path).length(), trash ? -1 : stars);
       },
     );
     // 速传:ObjectAdded 事件驱动自动下载(开关/格式见设置页)。
@@ -543,6 +549,7 @@ final class AppServices {
   late final ObjectRepositoryImpl repository;
   late final CameraFileOps fileOps;
   late final FileRatingsStore ratingsStore;
+  late final FileUiPrefsStore uiPrefs;
 
   /// 图库文件级评级快照(徽标/筛选;下载落盘沿与改评传播沿写入)。
   late final LibraryRatings libraryRatings;

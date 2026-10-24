@@ -605,7 +605,7 @@ void main() {
           initialIndex: 0,
           thumbnails: _FakeThumbs(),
           engine: engine,
-          downloadFormat: PhotoDownloadFormat.raw,
+          formats: {MediaFormat.nef},
         ));
 
     await tester.tap(find.text('下载'));
@@ -635,7 +635,7 @@ void main() {
           initialIndex: 0,
           thumbnails: _FakeThumbs(),
           engine: engine,
-          downloadFormat: PhotoDownloadFormat.raw,
+          formats: {MediaFormat.nef},
         ));
 
     await tester.tap(find.text('下载'));
@@ -644,7 +644,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(engine.calls, isEmpty);
-    expect(find.text('没有符合「仅 RAW」的文件,未开始下载'), findsOneWidget);
+    expect(find.text('没有符合「NEF」的文件,未开始下载'), findsOneWidget);
 
     await _drainSnackBar(tester);
   });

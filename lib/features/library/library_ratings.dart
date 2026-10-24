@@ -26,16 +26,29 @@ final class LibraryRatings extends ChangeNotifier {
   /// 「全部」重名,空档分区徒增歧义)。
   bool get hasAny => _values.isNotEmpty;
 
-  /// 文件当前评分(0 = 未评/文件不可读)。
+  /// 文件当前评分(0 = 未评/文件不可读;-1 删除候选档归零,星标不显,
+  /// 删除候选走 [trashMarked])。
   int ratingOf(File file) {
     try {
-      return _values[fileRatingKey(_nameOf(file), file.lengthSync())] ?? 0;
+      final v = _values[fileRatingKey(_nameOf(file), file.lengthSync())] ?? 0;
+      return v < 0 ? 0 : v;
     } on FileSystemException {
       return 0;
     }
   }
 
-  /// 写文件评分([stars] 0 = 清除)并刷新(相册改评传播沿)。
+  /// 文件是否删除候选(下载沿随组记录,值 -1,机身垃圾桶同义)。
+  bool trashMarked(File file) {
+    try {
+      return (_values[fileRatingKey(_nameOf(file), file.lengthSync())] ?? 0) <
+          0;
+    } on FileSystemException {
+      return false;
+    }
+  }
+
+  /// 写文件评分([stars] 0 = 清除,-1 = 删除候选)并刷新(相册改评
+  /// 传播沿/下载落盘沿)。
   Future<void> setFile(String name, int bytes, int stars) async {
     await store.set(fileRatingKey(name, bytes), stars);
     await reload();

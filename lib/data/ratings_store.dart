@@ -1,4 +1,5 @@
-/// 本地文件级评分快照:`<dataDir>/ratings.json`,`文件名|字节 → 1-5 星`。
+/// 本地文件级评分快照:`<dataDir>/ratings.json`,`文件名|字节 → 1-5 星`
+///(负值 -1 = 删除候选,机身垃圾桶档随下载沿入表;读侧归零)。
 ///
 /// 评级真源 = 相机(MTP 0xDC8A Rating,官方 §6.6.3.3 Get/Set —— 旧注
 /// 「Zf 拒答」系误断,规格书明文支持,未见真发反证):相机相册的打星
@@ -17,7 +18,7 @@ import 'dart:io';
 String fileRatingKey(String name, int bytes) => '$name|$bytes';
 
 abstract interface class RatingsStore {
-  /// 键 → 星(1-5);0/未评分不入表。
+  /// 键 → 星(1-5;-1 = 删除候选);0/未评分不入表。
   Future<Map<String, int>> loadAll();
 
   /// 写评分([stars] 0 = 清除);持久化失败按调用方捕获处理。
@@ -43,7 +44,8 @@ final class FileRatingsStore implements RatingsStore {
         if (json is Map<String, Object?>) {
           value = {
             for (final e in json.entries)
-              if (e.value is num && (e.value as num).toInt() >= 1)
+              if (e.value is num &&
+                  (e.value as num).toInt() != 0) // 0 = 未评,±值照收
                 e.key: (e.value as num).toInt(),
           };
         }
@@ -57,8 +59,8 @@ final class FileRatingsStore implements RatingsStore {
   @override
   Future<void> set(String key, int stars) async {
     final all = await loadAll();
-    if (stars >= 1) {
-      all[key] = stars;
+    if (stars != 0) {
+      all[key] = stars; // 1-5 星 / -1 删除候选;0 = 清除
     } else {
       all.remove(key);
     }
@@ -77,8 +79,8 @@ final class InMemoryRatingsStore implements RatingsStore {
 
   @override
   Future<void> set(String key, int stars) async {
-    if (stars >= 1) {
-      _value[key] = stars;
+    if (stars != 0) {
+      _value[key] = stars; // 1-5 星 / -1 删除候选;0 = 清除
     } else {
       _value.remove(key);
     }

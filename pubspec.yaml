@@ -38,3 +38,12 @@ flutter:
   # 取景「高质量」上采样/时域降噪(Catmull-Rom fragment shader)。
   shaders:
     - shaders/feed_quality.frag
+  # 角标统一字体(Inter Regular 4.1,SIL OFL 1.1,随包):iOS 观感近似
+  # 替身 —— SF 本体是苹果专有字体,许可不允许提取打包/跨平台分发;
+  # 默认字体是平台各自的(iOS=SF/ohos=HarmonyOS Sans),度量差百分之
+  # 几,同一份代码双端观感永远差一口气 —— 显式指定随包字体后同字体
+  # 同排版,逐像素同源(OFL License 随资产入包)。
+  fonts:
+    - family: InterBadge
+      fonts:
+        - asset: assets/fonts/Inter-Regular.ttf

@@ -1226,7 +1226,7 @@ void main() {
     );
   });
 
-  test('requestRating NEF:能力门拦截不发读(0x3000 不在适用表,机身可评 API 不开)',
+  test('requestRating NEF:跳过必拒的 0xDC8A,直走 XMP 头读(脚本空=静默)',
       () async {
     final fake = FakePtpTransport();
     final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
@@ -1237,7 +1237,7 @@ void main() {
     fake.reply(_okData(_page100Dataset()));
     await repo.loadAlbums();
 
-    repo.requestRating(0x12); // NEF:门内直接空转
+    repo.requestRating(0x12); // NEF:0xDC8A 必拒不发,XMP 头读一发(空脚本吞)
     await pumpEventQueue();
 
     expect(repo.ratingsLoaded, isFalse); // 没见过真数据,评级面不开
@@ -1420,7 +1420,7 @@ void main() {
     expect(partialHandles, [0x22, 0x12, 0x13]);
   });
 
-  test('删除候选甄别与协议读解耦:0xDC8A 已问不挡 XMP 甄别(查看器沿不吞垃圾桶)',
+  test('requestRating 分流:轻量沿免大读,驻留甄别走 requestTrashProbe,视频走容器',
       () async {
     final fake = FakePtpTransport();
     final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
@@ -1429,24 +1429,45 @@ void main() {
     fake.reply(_okData(_rootProbeDataset()));
     fake.reply(_okData(_page101Dataset()));
     fake.reply(_okData(_page100Dataset()));
-    // 应答按**消费者时间线**排:视频 0x22 容器甄别速败(16 零字节)→
-    // 查看器 0xDC8A(t=0)→ 主同步位图(+500ms)→ 图像甄别 0x12/0x13。
-    fake.reply(_okData(Uint8List.fromList(List.filled(16, 0)))); // 视频速败
-    fake.reply(_okData(Uint8List.fromList([00, 00]))); // 查看器 0xDC8A(0)
-    fake.reply(_okData(_metaDataset(const []))); // 主同步位图:全卡无 1-5 星
-    fake.reply(_okData(Uint8List.fromList(
-        utf8.encode('<x:xmpmeta><xmp:Rating>-1</xmp:Rating></x:xmpmeta>')))); // 甄别 0x12
-    fake.reply(_okData(Uint8List.fromList(
-        utf8.encode('<x:xmpmeta><xmp:Rating>-1</xmp:Rating></x:xmpmeta>')))); // 甄别 0x13
+    // 位图空。requestRating(JPG, trashProbe: false)→ 只 0xDC8A 星档
+    // 一笔;requestTrashProbe(JPG)→ 256KB XMP 甄别(-1 = 垃圾桶);
+    // requestRating(MOV)→ 容器 NCTG 甄别速败(16 零字节,boxSize 0
+    // 不误判)。
     await repo.loadAlbums();
-    repo.requestRating(0x13); // 协议读先问(回答星档,不回答垃圾桶)
+    // 应答按消费序排队:轻量段 0x9803 → 视频容器 → 驻留甄别(与轻量段
+    // fetch 撞车时在途等待收口后再发)→ +500ms 同步 0x9434(meta 排甄别
+    // 应答前,排前面会被 0x9803 抢走:u16 100 → 误判 ★5,实锚)→ 同步
+    // 甄别对 0x12 的例行补读。
+    fake.reply(_okData(Uint8List.fromList([00, 00]))); // 0x9803 0x13 → 0(未评)
+    fake.reply(_okData(Uint8List.fromList(List.filled(16, 0)))); // 0x101b 0x22 视频速败
+    fake.reply(_okData(Uint8List.fromList(
+        utf8.encode('<x:xmpmeta><xmp:Rating>-1</xmp:Rating></x:xmpmeta>')))); // 0x101b 0x13 XMP -1
+    fake.reply(_okData(_metaDataset(const [])));
+    fake.reply(_okData(Uint8List.fromList(
+        utf8.encode('<x:xmpmeta><xmp:Rating>0</xmp:Rating></x:xmpmeta>')))); // 0x101b 0x12(+500ms 同步甄别)→ 无标记
+    repo.requestRating(0x13, trashProbe: false); // 图像轻量段
+    repo.requestRating(0x22); // 视频分流
+    repo.requestTrashProbe(0x13); // 驻留甄别
     await Future<void>.delayed(const Duration(milliseconds: 1200));
 
-    expect(repo.trashMarkedFor(0x12), isTrue);
-    expect(repo.trashMarkedFor(0x13), isTrue); // 协议已问不吞甄别
+    expect(repo.trashMarkedFor(0x13), isTrue); // XMP -1 = 删除候选
     expect(repo.ratingForHandle(0x13), 0);
     expect(repo.groupTrashStar(PhotoGroup([await repo.entryFor(0x13)])),
         isTrue);
+    expect(repo.trashMarkedFor(0x22), isFalse); // 容器速败:保持无评级
+    // 甄别读序:视频容器 → 驻留 0x13;尾笔 0x12 是 +500ms 同步甄别对
+    // 未点看对象的例行补读(与 requestRating 无关)。
+    final partialHandles = fake.requests
+        .where((r) => r.opcode == PtpOperationCode.getPartialObject)
+        .map((r) => r.params.first)
+        .toList();
+    expect(partialHandles, [0x22, 0x13, 0x12]);
+    expect(
+      fake.requests
+          .where((r) => r.opcode == NikonOperationCode.getObjectPropValue)
+          .map((r) => r.params.first),
+      [0x13],
+    );
   });
 
   test('删除候选甄别:视频走容器 NCTG(0xFFFF = 垃圾桶)', () async {

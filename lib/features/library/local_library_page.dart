@@ -35,8 +35,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../app_services.dart';
+import '../../data/ui_prefs_store.dart';
 import '../../core/browser/photo_group.dart';
 import '../../core/media/cube_lut.dart';
+import '../../core/media/letterbox.dart';
+import '../../core/media/video_duration.dart';
 import '../../core/media/xmp_rgb_table.dart' show parseXmpRgbTable;
 import '../../core/ptpip/object_format.dart';
 import '../../design/app_colors.dart';
@@ -48,6 +51,7 @@ import '../../platform/services.dart';
 import '../../platform/video_lut_export.dart';
 import '../../platform/video_player.dart';
 import '../common/format.dart' show formatDateTime;
+import '../common/media_grid.dart';
 import '../common/rating_filter.dart';
 import '../common/widgets/confirm_dialog.dart';
 import '../common/widgets/de_squeezed_image.dart';
@@ -57,36 +61,6 @@ import '../common/widgets/states.dart';
 import '../transfers/transfers_page.dart';
 import 'library_ratings.dart';
 import 'lut_export_sheet.dart';
-
-/// 图库格式过滤:按扩展名分流,与相机侧条目判定同源。
-/// label = t() 键(RAW/JPG 走短格式键,值两侧同拉丁),显示点包 t()。
-enum _LibFilter {
-  all('libpage.all'),
-  raw('fmt.shortRaw'),
-  jpg('fmt.shortJpg'),
-  video('common.video');
-
-  const _LibFilter(this.label);
-
-  final String label;
-
-  bool allows(String filename) => switch (this) {
-        all => true,
-        raw => isRawFilename(filename),
-        jpg => isJpgFilename(filename),
-        video => isVideoFilename(filename),
-      };
-}
-
-/// 图库排序:时间两向(新→旧 = 既有默认,下载的新货在前)。评级档
-/// 数据源 = 应用内文件快照([LibraryRatings]:下载落盘沿按所在组相机
-/// 评级写入、相册改评沿按基名传播),星档精确匹配(与相机相册筛选
-/// 同口径)。方向不落词表:弹层只有单行「时间」,
-/// 方向由行尾箭头表达(↓ = 大→小 = 新→旧,↑ = 小→大 = 旧→新)。
-enum _LibSort {
-  newestFirst,
-  oldestFirst,
-}
 
 /// Flutter 可解码的图片扩展名(NEF 等原生格式走解码管线)。
 const _viewableExts = {'.jpg', '.jpeg', '.png', '.webp', '.gif'};
@@ -107,16 +81,21 @@ String _nameOf(File file) => file.uri.pathSegments.last;
 /// 误聚,「3 张连拍 × 双格式 6 文件」聚为一段 ×3。返回覆盖全部输入的
 /// 段列表(未成段的每文件独立单元素段),顺序保持输入序。前提是
 /// mtime = 拍摄时刻(下载引擎落盘回写,见 TransferEngine._run)。
-List<List<File>> groupLocalBurstRuns(List<File> files) {
+///
+/// [modifiedOf] 注入时刻读取(测试专用):dart:io 的
+/// setLastModifiedSync/statSync 秒级取整(宿主机实证:设 .600ms 读回
+/// .000),毫秒级窗边界在真实文件系统上不可表达 —— 边界用例注入合成
+/// 时刻,生产走缺省 statSync。
+List<List<File>> groupLocalBurstRuns(
+    List<File> files, {
+    DateTime Function(File file)? modifiedOf,
+}) {
+  final mtime = modifiedOf ?? (f) => f.statSync().modified;
   final out = <List<File>>[];
   var start = 0;
   for (var i = 1; i <= files.length; i++) {
     final inGap = i < files.length &&
-        files[i]
-                .statSync()
-                .modified
-                .difference(files[i - 1].statSync().modified)
-                .abs() <=
+        mtime(files[i]).difference(mtime(files[i - 1])).abs() <=
             kBurstShotGap;
     if (!inGap) {
       final run = files.sublist(start, i);
@@ -152,6 +131,7 @@ class LocalLibraryPage extends StatefulWidget {
     this.embeddedVideoView,
     this.videoLutExport,
     this.ratings,
+    this.uiPrefs,
   });
 
   /// 测试注入;缺省用 AppServices 单例(应用级共享,本页不持有)。
@@ -159,6 +139,9 @@ class LocalLibraryPage extends StatefulWidget {
 
   /// 测试注入;缺省用 AppServices 单例(评级快照,与相册改评传播共享)。
   final LibraryRatings? ratings;
+
+  /// 弹层选项持久化注入(测试);缺省用 AppServices 单例。
+  final UiPrefsStore? uiPrefs;
 
   /// 测试注入;缺省用平台服务单例。
   final GallerySaver? gallery;
@@ -195,12 +178,23 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
 
   LibraryRatings get _ratings =>
       widget.ratings ?? AppServices.instance.libraryRatings;
+  UiPrefsStore? get _uiPrefs => widget.uiPrefs ?? AppServices.instance.uiPrefs;
 
-  _LibFilter _filter = _LibFilter.all;
-  _LibSort _sort = _LibSort.newestFirst;
+  /// 格式筛选(共享选集件:空集 = 全部,非空 = 各格式并集;未知扩展
+  /// 名仅空选集下显示)。
+  final FormatFilterSelection _formatSelection = FormatFilterSelection();
 
-  /// 评级筛选(筛选弹层;快照装载后可选)。
-  RatingFilter _ratingFilter = RatingFilter.all;
+  /// 排序(共享状态件:时间/文件名/文件大小 × 双向;默认时间从大到小)。
+  final MediaSortState _sort = MediaSortState();
+
+  /// 「显示」开关(共享状态件:评级/格式角标按需上格,默认净格)。
+  final ShowToggle _show = ShowToggle();
+
+  /// 弹层分区折叠态(排序/筛选/显示/视图选项头行点按收展)。
+  final MenuSectionState _sections = MenuSectionState();
+
+  /// 评级筛选(共享选集件:空集 = 全部,非空 = 各分类并集)。
+  final RatingFilterSelection _ratingSelection = RatingFilterSelection();
 
   /// 连拍聚合开关(内存级,不落 AppSettings —— 与筛选弹层各档同
   /// 先例):开时网格条目 = [groupLocalBurstRuns] 的段,成段合为一格。
@@ -217,10 +211,85 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   final Map<String, Future<String?>> _mediaThumbs = {};
   Future<String?> _thumbQueue = Future.value();
 
+  /// 视频时长探测(容器 mvhd 行走,本地小读;会话内合并)。
+  final Map<String, Future<Duration?>> _videoDurations = {};
+
+  Future<Duration?> _videoDurationFor(File file) {
+    final key = _contentKey(file);
+    return _videoDurations.putIfAbsent(key, () async {
+      try {
+        if (!isVideoFilename(_nameOf(file))) return null;
+        final d = await readVideoDuration((off, len) async {
+          final raf = await file.open();
+          try {
+            await raf.setPosition(off);
+            return await raf.read(len);
+          } finally {
+            await raf.close();
+          }
+        });
+        return d;
+      } on Object {
+        return null; // 读失败/病箱:不显时长
+      }
+    });
+  }
+
   @override
   void initState() {
     super.initState();
     _controller.refreshAppFiles();
+    unawaited(_restorePrefs()); // 弹层选项:上次退出时的状态
+  }
+
+  /// 恢复弹层选项(排序/格式/评级/显示/连拍聚合;文件夹不入账)。
+  Future<void> _restorePrefs() async {
+    try {
+      final v = await _uiPrefs!.load();
+      if (!mounted) return;
+      setState(() {
+        for (final k in MediaSortKey.values) {
+          if (k.name == v['lib.sortKey']) _sort.key = k;
+        }
+        if (v['lib.sortDesc'] is bool) _sort.desc = v['lib.sortDesc'] as bool;
+        _formatSelection.restore([
+          for (final f in MediaFormat.values)
+            if ((v['lib.formats'] as List<Object?>?)?.contains(f.name) ?? false)
+              f,
+        ]);
+        _ratingSelection.restore([
+          for (final r in RatingFilter.values)
+            if ((v['lib.ratings'] as List<Object?>?)?.contains(r.index) ?? false)
+              r,
+        ]);
+        if (v['lib.showRating'] is bool) {
+          _show.rating = v['lib.showRating'] as bool;
+        }
+        if (v['lib.showFormat'] is bool) {
+          _show.format = v['lib.showFormat'] as bool;
+        }
+        if (v['lib.burst'] is bool) _burstGrouped = v['lib.burst'] as bool;
+      });
+    } on Object {
+      // 默认值(净格 + 时间降序 + 不聚合)
+    }
+  }
+
+  /// 落账弹层选项(每次变更沿;失败不挡交互)。
+  Future<void> _savePrefs() async {
+    try {
+      await _uiPrefs!.save({
+        'lib.sortKey': _sort.key.name,
+        'lib.sortDesc': _sort.desc,
+        'lib.formats': [for (final f in _formatSelection.values) f.name],
+        'lib.ratings': [for (final r in _ratingSelection.values) r.index],
+        'lib.showRating': _show.rating,
+        'lib.showFormat': _show.format,
+        'lib.burst': _burstGrouped,
+      });
+    } on Object {
+      // 持久化失败不挡交互
+    }
   }
 
   bool _isViewable(File file) => _isViewableName(_nameOf(file));
@@ -237,14 +306,18 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   }
 
   Future<String?> _decodeThumb(File file, String key) async {
+    final name = _nameOf(file);
     try {
       final dir = await _gallery.thumbsDir();
-      final cache = File('$dir/lib_$key.jpg'); // lib_ 前缀避开相机缩略键
+      final cache = File('$dir/libv3_$key.jpg'); // 键全量升版:黑边裁剪放开到全部缩略
       if (cache.existsSync()) return cache.path;
-      final name = _nameOf(file);
       final Uint8List jpeg;
       if (isVideoFilename(name)) {
-        jpeg = await _videoPlayer.thumbnail(file.path, maxPixelSize: 512);
+        // 信箱黑边裁剪(提取器把画面信箱化进固定画布,失败原样;
+        // 提取只调一次,裁剪失败不重提取)。
+        final extracted =
+            await _videoPlayer.thumbnail(file.path, maxPixelSize: 512);
+        jpeg = await trimLetterboxJpeg(extracted) ?? extracted;
       } else {
         // NEF 与可解码图(JPG/PNG)同走原生小图通道:iOS 实现是
         // CGImageSource 对格式无门槛(CreateThumbnailFromImageAlways,
@@ -254,7 +327,9 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
         // 源(双源 gapless),不毒化串行链。
         jpeg = await _rawDecoder.decodeJpeg(file.path, maxPixelSize: 512);
       }
-      cache.writeAsBytesSync(jpeg, flush: true);
+      // 信箱黑边裁剪(HIF/NEF 预览同样信箱化;无黑边原样)。
+      final trimmed = await trimLetterboxJpeg(jpeg);
+      cache.writeAsBytesSync(trimmed ?? jpeg, flush: true);
       return cache.path;
     } on Object {
       return null; // 无解码器/抽帧/失败:原图源(吞掉,不毒化串行链)
@@ -278,12 +353,9 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     return ListenableBuilder(
       listenable: Listenable.merge([_controller, _ratings]),
       builder: (context, _) {
-        // 修改时间排序:默认新在前(新下载的先看),「旧→新」翻向。
-        final newestFirst = _sort == _LibSort.newestFirst;
-        final files = List<File>.of(_controller.appFiles)
-          ..sort((a, b) => newestFirst
-              ? b.statSync().modified.compareTo(a.statSync().modified)
-              : a.statSync().modified.compareTo(b.statSync().modified));
+        // 排序(共享件):时间/文件名/文件大小 × 双向;默认新在前。
+        final files = sortMedia(List<File>.of(_controller.appFiles), _sort,
+            (f) => (f.statSync().modified, _nameOf(f), f.statSync().size));
         final activeCount =
             _controller.tasks.where((t) => !t.isTerminal).length;
         final filtered = _filtered(files);
@@ -336,7 +408,10 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
                           icon: Icons.tune, // 与筛选弹层入口同图标
                           message: _emptyMessage,
                           actionLabel: 'libpage.clearFilter',
-                          onAction: () => _setFilter(_LibFilter.all),
+                          onAction: () => setState(() {
+                            _formatSelection.clear();
+                            _ratingSelection.clear();
+                          }),
                         )
                       : _grid(context, filtered),
           bottomSheet: _selectMode ? _actionBar() : null,
@@ -345,14 +420,16 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     );
   }
 
-  // 格式筛子按扩展名收窄 + 评级滤网(快照未装载恒放行,防「没读到」
-  // 被「无评级」筛空)。
+  // 格式筛子(共享选集,扩展名映射)+ 评级滤网(快照未装载恒放行,
+  // 防「没读到」被「无评级」筛空;空选集 = 全部,非空 = 各分类并集)。
   List<File> _filtered(List<File> files) => files
       .where((f) =>
-          _filter.allows(_nameOf(f)) &&
-          (_ratingFilter.isAll ||
-              !_ratings.loaded ||
-              _ratingFilter.allows(_ratings.ratingOf(f))))
+          _formatSelection.allows(mediaFormatOfFilename(_nameOf(f))) &&
+          _ratingSelection.allows(
+            rating: _ratings.ratingOf(f),
+            trashStar: _ratings.trashMarked(f),
+            available: _ratings.loaded,
+          ))
       .toList(growable: false);
 
   /// 网格主体:平铺(现状)或连拍聚合。「连拍」开时条目 =
@@ -360,26 +437,67 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   /// 单文件段保持现状平铺格。聚合在 filtered(已排序已筛选)列表上做,
   /// 排序/筛选与聚合的叠加不用特判:两向排序、格式/类型筛选天然生效
   ///(筛 RAW 时连拍段只剩 NEF 成员,如实显示)。
+  /// 网格主体:按修改日期分段(共享 [groupMediaByDate],与相机相册
+  /// 同款段头;多选段头点按整日勾选)。条目 = 平铺单文件格或连拍聚合
+  /// 段([groupLocalBurstRuns] 的段,成段合为一格 ×N,段日期取封面
+  /// mtime;跨零点连拍归封面日)。聚合在 filtered(已排序已筛选)列表
+  /// 上做,排序/筛选与聚合、分段叠加不用特判。
   Widget _grid(BuildContext context, List<File> filtered) {
-    if (!_burstGrouped) {
-      return GridView.builder(
-        padding: const EdgeInsets.all(2),
-        gridDelegate: _gridDelegate,
-        itemCount: filtered.length,
-        itemBuilder: (_, i) => _cell(context, filtered[i], filtered),
-      );
-    }
-    final runs = groupLocalBurstRuns(filtered);
-    return GridView.builder(
-      padding: const EdgeInsets.all(2),
-      gridDelegate: _gridDelegate,
-      itemCount: runs.length,
-      itemBuilder: (_, i) {
-        final run = runs[i];
-        return _isBurstRun(run)
-            ? _burstCell(context, run)
-            : _cell(context, run.single, filtered);
-      },
+    final runs = _burstGrouped
+        ? groupLocalBurstRuns(filtered)
+        : [
+            for (final f in filtered) [f]
+          ];
+    return CustomScrollView(
+      slivers: [
+        // 时间排序才按修改日分段;文件名/文件大小排序平铺(与相机相册
+        // 同逻辑,共享排序件约定)。
+        if (_sort.key == MediaSortKey.time)
+          for (final section in groupMediaByDate<List<File>>(
+              runs, (run) => run.first.statSync().modified)) ...[
+            SliverToBoxAdapter(
+              child: MediaSectionHeader(
+                day: section.day,
+                count: section.items.length,
+                selecting: _selectMode,
+                daySelected: _selectMode &&
+                    section.items.every(
+                        (run) => run.every((f) => _selected.contains(f.path))),
+                onToggle: () => setState(() => _togglePaths({
+                      for (final run in section.items)
+                        for (final f in run) f.path
+                    })),
+              ),
+            ),
+            SliverPadding(
+              padding: const EdgeInsets.symmetric(horizontal: 2),
+              sliver: SliverGrid.builder(
+                gridDelegate: _gridDelegate,
+                itemCount: section.items.length,
+                itemBuilder: (_, i) {
+                  final run = section.items[i];
+                  return _isBurstRun(run)
+                      ? _burstCell(context, run)
+                      : _cell(context, run.single, filtered);
+                },
+              ),
+            ),
+          ]
+        else
+          SliverPadding(
+            padding: const EdgeInsets.symmetric(horizontal: 2),
+            sliver: SliverGrid.builder(
+              gridDelegate: _gridDelegate,
+              itemCount: runs.length,
+              itemBuilder: (_, i) {
+                final run = runs[i];
+                return _isBurstRun(run)
+                    ? _burstCell(context, run)
+                    : _cell(context, run.single, filtered);
+              },
+            ),
+          ),
+      ],
     );
   }
 
@@ -390,246 +508,136 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
       run.map((f) => baseNameOf(_nameOf(f))).toSet().length >= 2;
 
   /// 连拍段格:封面 = 段内首个 JPG(无 JPG 用段首文件,与相机侧
-  /// primary = jpg ?? first 同语义);左下 ×N 角标(N = 段内不同基名
-  /// 数,即张数)。点开查看器 peers = 段内全部文件(可翻张),初始页
-  /// = 封面;多选中整段成员原子勾/取消(格选中 = 段内全部都在)。
+  /// primary = jpg ?? first 同语义);左下角标 = 格式(可选)+ ×N 恒显,
+  /// 评级不显(段是多次快门)。点开查看器 peers = 段内全部文件(可翻张),
+  /// 初始页 = 封面;多选中整段成员原子勾/取消(格选中 = 段内全部都在)。
   Widget _burstCell(BuildContext context, List<File> run) {
     final cover = run.firstWhere((f) => isJpgFilename(_nameOf(f)),
         orElse: () => run.first);
     final shots = run.map((f) => baseNameOf(_nameOf(f))).toSet().length;
-    final stars = _ratings.ratingOf(cover);
-    return GestureDetector(
+    return MediaGridCell(
       key: ValueKey(_nameOf(cover)), // 测试/定位锚:格 = 封面文件名
       onTap: _selectMode
           ? () => _toggleFiles(run)
           : (_openable(cover) ? () => _openViewer(cover, run) : null),
       onLongPress: () => _cellLongPress(run),
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          _cellBody(context, cover),
-          if (stars > 0) _ratingBadge(stars),
-          // ×N 角标(左下,半透明黑底白字小胶囊 —— 与相机相册网格
-          // typeLabel 角标、本页视频格 videocam 角标同一写法)。
+      badges: [
+        // 「显示」角标(左下):连拍聚合计数恒显(×N,置于格式后 ——
+        // 2026-10-24 定稿);评级不显于连拍格(段是多次快门,封面档位
+        // 不代表段内)。格式文案按「显示·格式」开关跟随。
+        Align(
+          alignment: Alignment.bottomLeft,
+          child: ShowChip(
+            format: _show.format
+                ? mediaFormatOfFilename(_nameOf(cover))?.label
+                : null,
+            extra: '×$shots',
+          ),
+        ),
+        // 视频时长(右下,原摄像机角标位)。
+        if (isVideoFilename(_nameOf(cover)))
           Align(
-            alignment: Alignment.bottomLeft,
-            child: Padding(
-              padding: const EdgeInsets.all(4),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.55),
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Text(
-                  '×$shots',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 9,
-                    height: 1.3,
-                  ),
-                ),
-              ),
+            alignment: Alignment.bottomRight,
+            child: FutureBuilder<Duration?>(
+              future: _videoDurationFor(cover),
+              builder: (context, snap) => DurationChip(
+                  text:
+                      snap.data == null ? null : formatVideoDuration(snap.data!)),
             ),
           ),
-          if (_selectMode) ..._selectOverlay(
-              run.every((f) => _selected.contains(f.path))),
-        ],
-      ),
+      ],
+      selecting: _selectMode,
+      selected: run.every((f) => _selected.contains(f.path)),
+      child: _cellBody(context, cover),
     );
   }
 
   /// 空筛选文案:格式名片段经 t() 内嵌(模板中文拼回与原串逐字一致);
   /// 评级档筛空走专用文案(格式档不背锅)。
-  String get _emptyMessage => _ratingFilter.isAll
-      ? context.t('libpage.noFormatFiles', {'label': context.t(_filter.label)})
+  String get _emptyMessage => !_formatSelection.isAll
+      ? context.t('libpage.noFormatFiles', {
+          'label': _formatSelection.values.map((f) => f.label).join('+'),
+        })
       : context.t('libpage.noRatingFiles');
 
-  /// 筛选弹层(AppBar 右上,iPhone 图库式分区卡片):排序单行「时间」
-  /// (行尾方向箭头,点按翻向并收层)/ 格式四档 / 视图选项(连拍聚合)。
-  /// MenuAnchor 锚按钮弹出,点任意行即收;当前档 trailing 打勾(排序行
-  /// 以箭头示向,无勾)。多选中弹层不可达(actions 换了),setter 仍
-  /// 防御性清选中(与相机相册页换筛选清选中同规矩)。
-  ///
-  /// 行宽/行距(2026-10-20 三轮真机收口):M3 菜单行默认最小高 48;
-  /// 只改 minimumSize 会被移动端 tapTargetSize=padded 架空(仍 48,二轮
-  /// 真机「行距还是太大」根因)—— 须 shrinkWrap 才真生效,36(竖
-  /// padding 2)。宽度:行横 padding 8 + reservedPadding 只留竖 8(默认
-  /// EdgeInsets.all(8) 的横向预留也是变宽一刀)。分区头保留(用户
-  /// 实证「排序」头有导航价值,三轮回归)。
+  /// 筛选弹层(共享 [FilterMenu] 卡片骨架):排序区(共享三行入口 ×
+  /// 方向子面板)/ 筛选区(格式 + 评级级联子面板)/ 视图选项。多选中
+  /// 弹层不可达(actions 换了),setter 仍防御性清选中(与相机相册页
+  /// 换筛选清选中同规矩)。
   Widget _filterMenuAnchor(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final newestFirst = _sort == _LibSort.newestFirst;
-    return MenuAnchor(
-      reservedPadding: const EdgeInsets.symmetric(vertical: 8),
-      style: MenuStyle(
-        backgroundColor: WidgetStatePropertyAll(scheme.surfaceContainerLow),
-        shape: WidgetStatePropertyAll(
-          RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadius.lg)),
-        ),
-      ),
-      alignmentOffset: const Offset(0, 6),
-      menuChildren: [
-        _menuHeader(context, 'libpage.sort'),
-        // 排序单行:时间 + 方向箭头(↓ = 大→小 = 新→旧,↑ = 小→大 =
-        // 旧→新),点按翻向。两行文案并一行,行尾箭头示向。
+    return FilterMenu(children: [
+      // 排序区(共享,头行可折叠):时间/文件名/文件大小三行直切。
+      ...sortMenuSection(
+          context, _sort, _sections, () => setState(() {}), _onSort),
+      menuSectionDivider,
+      // 筛选区(共享,头行可折叠):格式 + 评级级联子面板(快照装载且
+      // 非空后出评级;已知档位 + 删除候选,「已评级」不设行)。
+      filterMenuSectionHeader(context, context.t('libpage.filter'), 'filter',
+          _sections, () => setState(() {})),
+      if (!_sections.isCollapsed('filter')) ...[
+        ...formatFilterMenuSection(context, _formatSelection, _toggleFormat),
+        if (_ratings.loaded && _ratings.hasAny)
+          ...ratingFilterMenuSection(
+              context, _ratingSelection, _toggleRatingFilter),
+      ],
+      menuSectionDivider,
+      // 显示区(共享,头行可折叠):评级/格式角标按需上格。
+      ...showMenuSection(context, _show, _sections, () {
+        setState(() {
+          _selected.clear();
+        });
+        unawaited(_savePrefs());
+      }),
+      menuSectionDivider,
+      // 视图选项(头行可折叠):连拍聚合开关。
+      filterMenuSectionHeader(context, context.t('libpage.viewOptions'),
+          'view', _sections, () => setState(() {})),
+      if (!_sections.isCollapsed('view'))
         MenuItemButton(
-          style: _menuRowStyle,
-          trailingIcon: Icon(
-            newestFirst ? Icons.arrow_downward : Icons.arrow_upward,
-            size: 20,
-            color: scheme.primary,
-          ),
-          onPressed: () => _setSort(newestFirst
-              ? _LibSort.oldestFirst
-              : _LibSort.newestFirst),
-          child: Text(context.t('libpage.sortTime')),
-        ),
-        _menuHeader(context, 'libpage.filterColon'),
-        for (final f in _LibFilter.values)
-          MenuItemButton(
-            style: _menuRowStyle,
-            leadingIcon: Icon(_filterIcon(f)),
-            trailingIcon: _filter == f
-                ? Icon(Icons.check, size: 18, color: scheme.primary)
-                : null,
-            onPressed: () => _setFilter(f),
-            child: Text(context.t(f.label)),
-          ),
-        // 评级分区(快照装载后出现;星档 = 行内实心星。图库快照只有
-        // 已知档位,垃圾星/未知档两行不设 —— 数据模型里不存在)。
-        if (_ratings.loaded && _ratings.hasAny) ...[
-          _menuHeader(context, 'grid.rating'),
-          for (final r in RatingFilter.values)
-            if (r != RatingFilter.trash && r != RatingFilter.rated)
-              MenuItemButton(
-                key: ValueKey('ratingFilter-${r.index}'),
-                style: _menuRowStyle,
-                leadingIcon: r == RatingFilter.all
-                    ? const Icon(Icons.apps)
-                    : r == RatingFilter.none
-                        ? const Icon(Icons.star_border)
-                        : _ratingStars(r.stars),
-                trailingIcon: _ratingFilter == r
-                    ? Icon(Icons.check, size: 18, color: scheme.primary)
-                    : null,
-                onPressed: () => _setRatingFilter(r),
-                child: r.label.isEmpty
-                    ? const SizedBox.shrink()
-                    : Text(context.t(r.label)),
-              ),
-        ],
-        _menuHeader(context, 'libpage.viewOptions'),
-        MenuItemButton(
-          style: _menuRowStyle,
-          leadingIcon: const Icon(Icons.burst_mode_outlined),
+          style: filterMenuChildRowStyle,
+          closeOnActivate: false, // 全行不收层,点外才收
           trailingIcon: _burstGrouped
-              ? Icon(Icons.check, size: 18, color: scheme.primary)
+              ? Icon(Icons.check, size: kMenuIconSize, color: scheme.primary)
               : null,
           onPressed: _toggleBurstGrouped,
-          child: Text(context.t('libpage.groupBursts')),
+          child: filterMenuText(context.t('libpage.groupBursts')),
         ),
-      ],
-      builder: (context, controller, child) => IconButton(
-        tooltip: context.t('libpage.filter'),
-        onPressed: () =>
-            controller.isOpen ? controller.close() : controller.open(),
-        icon: const Icon(Icons.tune),
-      ),
-    );
+    ]);
   }
 
-  /// 弹层行统一收紧行高(48 → 36,shrinkWrap 必要性见
-  /// [_filterMenuAnchor] 注)。
-  static const _menuRowStyle = ButtonStyle(
-    minimumSize: WidgetStatePropertyAll(Size(64, 36)),
-    padding: WidgetStatePropertyAll(
-      EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-    ),
-    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-  );
-
-  Widget _menuHeader(BuildContext context, String key) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(8, 8, 8, 2),
-      child: Text(
-        context.t(key),
-        style: TextStyle(
-          fontSize: 12,
-          fontWeight: FontWeight.w600,
-          color: Theme.of(context).colorScheme.onSurfaceVariant,
-        ),
-      ),
-    );
-  }
-
-  IconData _filterIcon(_LibFilter f) => switch (f) {
-        _LibFilter.all => Icons.apps,
-        _LibFilter.raw => Icons.raw_on_outlined,
-        _LibFilter.jpg => Icons.image_outlined,
-        _LibFilter.video => Icons.videocam_outlined,
-      };
-
-  /// 评级星档行首的实心星组(与相机相册筛选弹层同款)。
-  Widget _ratingStars(int n) => Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          for (var i = 0; i < n; i++)
-            const Icon(Icons.star, size: 16, color: AppColors.brandYellow),
-        ],
-      );
-
-  void _setRatingFilter(RatingFilter r) {
-    if (r == _ratingFilter) return;
+  /// 级联子面板选档(共享选集件):每次选档沿清空网格选择(可见集
+  /// 变化,与旧单选同规)。
+  void _toggleRatingFilter(RatingFilter r) {
     setState(() {
-      _ratingFilter = r;
+      _ratingSelection.toggle(r);
       _selected.clear();
     });
+    unawaited(_savePrefs());
   }
 
-  /// 评级角标(左上,品牌黄底 —— 与相机相册网格同款)。
-  Widget _ratingBadge(int stars) => Align(
-        alignment: Alignment.topLeft,
-        child: Padding(
-          padding: const EdgeInsets.all(4),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-            decoration: BoxDecoration(
-              color: AppColors.brandYellow,
-              borderRadius: BorderRadius.circular(4),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(Icons.star,
-                    size: 9, color: AppColors.onBrandYellow),
-                const SizedBox(width: 2),
-                Text(
-                  '$stars',
-                  style: const TextStyle(
-                    color: AppColors.onBrandYellow,
-                    fontSize: 9,
-                    height: 1.3,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      );
-
-  void _setFilter(_LibFilter f) {
+  /// 格式子面板选档(null = 全部):可见集变化沿清空网格选择(与评级
+  /// 筛选同规)。
+  void _toggleFormat(MediaFormat? f) {
     setState(() {
-      _filter = f;
+      f == null ? _formatSelection.clear() : _formatSelection.toggle(f);
       _selected.clear();
     });
+    unawaited(_savePrefs());
   }
 
-  void _setSort(_LibSort s) {
+  /// 排序直切(共享件):点当前键翻方向,点他键切键(方向沿用);
+  /// 可见集变化沿清空网格选择(与各筛选同规)。
+  void _onSort(MediaSortKey key) {
     setState(() {
-      _sort = s;
+      if (_sort.key == key) {
+        _sort.desc = !_sort.desc;
+      } else {
+        _sort.key = key;
+      }
       _selected.clear();
     });
+    unawaited(_savePrefs());
   }
 
   void _toggleBurstGrouped() {
@@ -637,6 +645,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
       _burstGrouped = !_burstGrouped;
       _selected.clear();
     });
+    unawaited(_savePrefs());
   }
 
   Widget _transfersBadge(BuildContext context, int activeCount) {
@@ -687,46 +696,43 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   /// 预选)包内容(见 [_cellBody])。
   Widget _cell(BuildContext context, File file, List<File> peers) {
     final stars = _ratings.ratingOf(file);
-    return GestureDetector(
+    final trash = _ratings.trashMarked(file);
+    final video = isVideoFilename(_nameOf(file));
+    return MediaGridCell(
       key: ValueKey(_nameOf(file)), // 测试/定位锚:格 = 文件名
       onTap: _selectMode
           ? () => _toggleFiles([file])
           : (_openable(file) ? () => _openViewer(file, peers) : null),
       onLongPress: () => _cellLongPress([file]),
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          _cellBody(context, file),
-          if (stars > 0) _ratingBadge(stars),
-          if (_selectMode) ..._selectOverlay(_selected.contains(file.path)),
-        ],
-      ),
-    );
-  }
-
-  /// 选中覆盖层(与相机相册网格同款):压暗 + 右上勾圈。
-  List<Widget> _selectOverlay(bool selected) => [
-        Positioned.fill(
-          child: ColoredBox(
-            color: selected
-                ? Colors.black.withValues(alpha: 0.3)
-                : Colors.black.withValues(alpha: 0.55),
+      badges: [
+        // 「显示」胶囊(左下):格式文案、评级图标同框;未勾选不占位。
+        Align(
+          alignment: Alignment.bottomLeft,
+          child: ShowChip(
+            format:
+                _show.format ? mediaFormatOfFilename(_nameOf(file))?.label : null,
+            ratingIcon: _show.rating
+                ? ratingInlineIcon(stars: stars, trash: trash)
+                : null,
           ),
         ),
-        Align(
-          alignment: Alignment.topRight,
-          child: Padding(
-            padding: const EdgeInsets.all(4),
-            child: Icon(
-              selected ? Icons.check_circle : Icons.radio_button_unchecked,
-              color: selected
-                  ? Theme.of(context).colorScheme.primary
-                  : Colors.white,
-              size: 20,
+        // 视频时长(右下,原摄像机角标位;横轴与「显示」胶囊同线)。
+        if (video)
+          Align(
+            alignment: Alignment.bottomRight,
+            child: FutureBuilder<Duration?>(
+              future: _videoDurationFor(file),
+              builder: (context, snap) => DurationChip(
+                  text:
+                      snap.data == null ? null : formatVideoDuration(snap.data!)),
             ),
           ),
-        ),
-      ];
+      ],
+      selecting: _selectMode,
+      selected: _selected.contains(file.path),
+      child: _cellBody(context, file),
+    );
+  }
 
   /// 格内容(可解码图片铺格 / NEF·MOV 原生缩略 / 图标格)。
   ///
@@ -766,36 +772,13 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
           FutureBuilder<String?>(
             future: _thumbFor(file),
             builder: (context, snap) => snap.hasData && snap.data != null
-                ? Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      Image.file(
-                        File(snap.data!),
-                        fit: BoxFit.cover,
-                        cacheWidth: 300,
-                        gaplessPlayback: true,
-                        errorBuilder: (context, error, stackTrace) =>
-                            _iconCell(context, name),
-                      ),
-                      if (video)
-                        Align(
-                          alignment: Alignment.bottomRight,
-                          child: Padding(
-                            padding: const EdgeInsets.all(4),
-                            child: Container(
-                              // 黑半透明圆角小底(与相机相册网格同款):
-                              // 亮帧上纯白图标不可辨。
-                              padding: const EdgeInsets.all(2),
-                              decoration: BoxDecoration(
-                                color: Colors.black.withValues(alpha: 0.55),
-                                borderRadius: BorderRadius.circular(4),
-                              ),
-                              child: const Icon(Icons.videocam,
-                                  size: 16, color: Colors.white),
-                            ),
-                          ),
-                        ),
-                    ],
+                ? Image.file(
+                    File(snap.data!),
+                    fit: BoxFit.cover,
+                    cacheWidth: 300,
+                    gaplessPlayback: true,
+                    errorBuilder: (context, error, stackTrace) =>
+                        _iconCell(context, name),
                   )
                 : _iconCell(context, name),
           )
@@ -923,8 +906,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
         ..showSnackBar(SnackBar(
-            content:
-                Text(context.t('grid.deleted', {'n': files.length}))));
+            content: Text(context.t('grid.deleted', {'n': files.length}))));
     }
   }
 
@@ -955,8 +937,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
         ..hideCurrentSnackBar()
         ..showSnackBar(SnackBar(
             content: Text(imported
-                ? context.t('libpage.exportedAlbum',
-                    {'n': files.length})
+                ? context.t('libpage.exportedAlbum', {'n': files.length})
                 : context.t('libpage.notImported'))));
     }
   }
@@ -1129,8 +1110,7 @@ class _LibraryViewerState extends State<_LibraryViewer> {
       _decodes[key] = cached;
       return cached;
     }
-    final fresh =
-        widget.rawDecoder.decodeJpeg(file.path, maxPixelSize: 2560);
+    final fresh = widget.rawDecoder.decodeJpeg(file.path, maxPixelSize: 2560);
     _decodes[key] = fresh;
     while (_decodes.length > _decodeCacheLimit) {
       _decodes.remove(_decodes.keys.first); // LinkedHashMap 首位 = 最旧
@@ -1200,7 +1180,8 @@ class _LibraryViewerState extends State<_LibraryViewer> {
                   onPressed: _importToGallery,
                   icon: const Icon(Icons.photo_library_outlined),
                 ),
-                if (isVideoFilename(_nameOf(_current)) && (_lutSupported ?? false))
+                if (isVideoFilename(_nameOf(_current)) &&
+                    (_lutSupported ?? false))
                   IconButton(
                     tooltip: context.t('lut.exportTitle'),
                     onPressed: _exportWithLut,

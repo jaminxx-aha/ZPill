@@ -42,6 +42,7 @@ import '../../platform/gallery_saver.dart';
 import '../../platform/raw_decoder.dart';
 import '../log/app_log.dart';
 import '../media/jpeg_orientation.dart';
+import '../media/letterbox.dart';
 import '../media/watermark.dart' show ExifCardData, exifCardFromHead;
 import '../ptpip/object_format.dart' show ObjectFormatCode, ObjectKind;
 import '../ptpip/transport.dart' show PtpLinkException;
@@ -371,6 +372,10 @@ class ThumbnailCache {
       data = source == ThumbSource.grid
           ? await _orientThumb(entry, await _session.getThumb(entry.handle))
           : await _fetchPreview(entry);
+      // 信箱黑边裁剪:相机内嵌缩略(HIF/NEF/视频均会)把画面信箱化进
+      // 固定画布,cover 裁不掉图内黑边;静照无黑边时裁剪自回 null;
+      // 暗场景由内容占比防误裁线兜底。
+      data = await trimLetterboxJpeg(data) ?? data;
     } catch (e) {
       _logFetchError(entry, source, e);
       rethrow;
@@ -572,7 +577,9 @@ class ThumbnailCache {
   /// 即便存在也字节级几乎不可能同内容,碰撞风险可忽略。
   static String _keyFor(ObjectEntry entry) {
     final safe = entry.name.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
-    return '${safe}_${entry.sizeInBytes}';
+    // 键全量升版(v2):黑边裁剪放开到全部缩略(HIF/NEF 预览同样
+    // 信箱化),旧未裁剪条目按 miss 重取一次。
+    return 'v2_${safe}_${entry.sizeInBytes}';
   }
 }
 

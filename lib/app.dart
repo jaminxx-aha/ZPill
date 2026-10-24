@@ -45,6 +45,20 @@ class NikonPillApp extends StatelessWidget {
       builder: (context, _) => L10nScope(
         code: _l10nCodeOf(controller.settings.language),
         child: MaterialApp(
+          // 水平安全区 + 显示特性清零:这台机曲面屏的安全区/圆角显示
+          // 特性会把 MenuAnchor 面板钳在距右缘 ~27px 处(_positionChild
+          // 的 avoidBounds 钳制),应用内容本就近边绘制 —— 清零后弹层
+          // 缝隙由 open(position:) 精确控制(4px)。
+          builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(context).copyWith(
+              padding: MediaQuery.of(context).padding.copyWith(
+                left: 0,
+                right: 0,
+              ),
+              displayFeatures: const [],
+            ),
+            child: child!,
+          ),
           title: 'NikonPill',
           debugShowCheckedModeBanner: false,
           theme: AppTheme.light,

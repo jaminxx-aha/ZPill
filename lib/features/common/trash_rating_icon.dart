@@ -17,29 +17,47 @@ import '../../design/app_colors.dart';
 const Color trashChipColor = Color(0xE61A1600);
 
 class TrashRatingIcon extends StatelessWidget {
-  const TrashRatingIcon({super.key, this.size = 16, this.onDarkChip = false});
+  const TrashRatingIcon(
+      {super.key,
+      this.size = 16,
+      this.onDarkChip = false,
+      this.color,
+      this.holeColor});
 
   final double size;
 
   /// 深底胶囊上:星用底色(镂空);浅色底:星用深字色。
   final bool onDarkChip;
 
+  /// 覆写桶身颜色(默认 brandYellow;单色语境传 IconTheme 色)。
+  final Color? color;
+
+  /// 覆写镂空星颜色(默认 trashChipColor / onBrandYellow;单色语境传
+  /// 所在面板底色)。
+  final Color? holeColor;
+
   @override
-  Widget build(BuildContext context) =>
-      CustomPaint(size: Size.square(size), painter: _TrashBinPainter(onDarkChip));
+  Widget build(BuildContext context) => CustomPaint(
+        size: Size.square(size),
+        painter: _TrashBinPainter(onDarkChip,
+            color: color, holeColor: holeColor),
+      );
 }
 
 class _TrashBinPainter extends CustomPainter {
-  _TrashBinPainter(this.onDarkChip);
+  _TrashBinPainter(this.onDarkChip, {this.color, this.holeColor});
 
   final bool onDarkChip;
+  final Color? color;
+  final Color? holeColor;
 
   @override
   void paint(Canvas canvas, Size size) {
     final u = size.width / 100;
-    final bin = Paint()..color = AppColors.brandYellow;
+    final bin = Paint()..color = color ?? AppColors.brandYellow;
     final star = Paint()
-      ..color = onDarkChip ? trashChipColor : AppColors.onBrandYellow;
+      ..color = holeColor ??
+          (onDarkChip ? trashChipColor : AppColors.onBrandYellow);
 
     Path tf(List<List<double>> pts, {double deg = 0, (int, int)? rc}) {
       final path = Path();
@@ -112,5 +130,7 @@ class _TrashBinPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_TrashBinPainter oldDelegate) =>
-      oldDelegate.onDarkChip != onDarkChip;
+      oldDelegate.onDarkChip != onDarkChip ||
+      oldDelegate.color != color ||
+      oldDelegate.holeColor != holeColor;
 }
