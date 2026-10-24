@@ -119,6 +119,11 @@ class ThumbnailCache {
   }
   final Map<(ThumbSource, String), Future<String>> _pending = {};
 
+  /// FHD 席位非 JPEG 黑名单(本会话):0x920F 对 HIF 等对象会协议成功
+  /// 但回 HEVC 编码预览(非 JPEG,引擎解不开)—— 记键免逐次重试浪费
+  /// RTT,不落盘(垃圾字节不进缓存,同 getLargeThumb 的 SOI 纪律)。
+  final Set<String> _fhdNonJpegKeys = {};
+
   /// 原文件 EXIF 方向(内容键 → 1-8;0 = 未知/无转正含义)。取一次
   /// 2KB 头读(见 [_orientThumb]),网格缩略与预览两档共用。
   final Map<String, Future<int>> _orientationOf = {};
@@ -306,7 +311,7 @@ class ThumbnailCache {
     _fhdPictureDegraded = false;
   }
 
-  static const _fmtMarker = '.fmt-v2';
+  static const _fmtMarker = '.fmt-v3'; // v3:清 v2 时代未验签落盘的非 JPEG FHD 垃圾档
 
   Future<String> _fetch(
       ObjectEntry entry, ThumbSource source, String key) async {
@@ -331,14 +336,22 @@ class ThumbnailCache {
           await _evictIfNeeded(source);
           return fhdPath;
         }
-        if (!_fhdPictureDegraded) {
+        if (!_fhdPictureDegraded && !_fhdNonJpegKeys.contains(key)) {
           try {
-            final data = await _orientThumb(
-                entry, await _session.getFhdPicture(entry.handle));
-            await fhdFile.writeAsBytes(data, flush: true);
-            _remember(source, 'fhd_$key', fhdPath, data.length);
-            await _evictIfNeeded(source);
-            return fhdPath;
+            final raw = await _session.getFhdPicture(entry.handle);
+            if (!_isJpegBytes(raw)) {
+              // HIF 等对象:0x920F 协议成功但载荷是 HEVC 编码预览(非
+              // JPEG,Flutter/容器都解不开)—— 不落盘、不置会话降级
+              // (旗标是 JPG 共用的,格式专属失败不能连累),本会话记
+              // 键直走小图链(2026-10-25 卓易通相机相册破图复报根修)。
+              _fhdNonJpegKeys.add(key);
+            } else {
+              final data = await _orientThumb(entry, raw);
+              await fhdFile.writeAsBytes(data, flush: true);
+              _remember(source, 'fhd_$key', fhdPath, data.length);
+              await _evictIfNeeded(source);
+              return fhdPath;
+            }
           } on PtpResponseException {
             _fhdPictureDegraded = true; // 错误应答:本会话不再逐张试
           } on TimeoutException {
@@ -467,6 +480,10 @@ class ThumbnailCache {
         fmt == ObjectFormatCode.exifJpeg ||
         fmt == ObjectFormatCode.jfif;
   }
+
+  /// JPEG SOI 验签(0x920F 载荷是否真 JPEG:HIF 的 FHD 回 HEVC 编码)。
+  static bool _isJpegBytes(Uint8List d) =>
+      d.length >= 3 && d[0] == 0xFF && d[1] == 0xD8 && d[2] == 0xFF;
 
   /// 小图末档回退(仅非 JPG 对象会到这里 —— JPG 已分流 [_fetchJpg];
   /// 照片到此处 = FHD 席位失败/会话降级,视频 = 海报):GetThumb 直取

@@ -470,7 +470,7 @@ void main() {
     final thumbsDir = await gallery.thumbsDir();
     // 旧档位小图缓存(同族 plain 键)+ 格式标记(免被清空闸扫掉):
     // 键不分档的话这里会被当成高清档直接命中(小图键 = 高清键去 lt_)。
-    File('$thumbsDir/.fmt-v2').writeAsStringSync('cleared');
+    File('$thumbsDir/.fmt-v3').writeAsStringSync('cleared');
     final smallJpeg = Uint8List.fromList([0xFF, 0xD8, 0xFF, 0xD9]);
     File('$thumbsDir/v2_DSC_0001.JPG_100.jpg').writeAsBytesSync(smallJpeg);
 
@@ -717,6 +717,72 @@ void main() {
         reason: 'reset 后重探 0x920F');
   });
 
+  test('preview:HIF 的 0x920F 协议成功但回非 JPEG(HEVC 预览)→ 不落盘'
+      '不降级,记键后走 0x90C4 高清档(fmt 缺省视同 JPG 对象)', () async {
+    final hevc = Uint8List.fromList(
+        [0x00, 0x00, 0x00, 0x01, 0x67, 0x64, 0x00, 0x1F, 0xAC, 0xD9]);
+    final fake = FakePtpTransport()
+      ..reply(_okData(hevc)) // 0x920F:协议 OK,载荷非 JPEG
+      ..reply(_okData(_jpeg)) // 0x90C4 高清档(真 JPEG)
+      ..reply(_okData(_jpgHead(1))); // 方向头读
+    final cache = ThumbnailCache(
+        session: PtpSession(transport: fake), gallery: FakeGallerySaver());
+
+    final path = await cache.pathFor(
+        _entry(0x12, name: 'DSC_0001.HIF', size: 100), ThumbSource.preview);
+    expect(path, endsWith('lt_v2_DSC_0001.HIF_100.jpg'));
+    expect(File(path).readAsBytesSync(), _jpeg);
+    expect(fake.requests.map((r) => r.opcode), [
+      NikonOperationCode.getFhdPicture,
+      NikonOperationCode.getLargeThumb,
+      PtpOperationCode.getPartialObject,
+    ]);
+    // fhd_ 垃圾档不落盘(高清档在)
+    expect(
+        File(path.replaceAll('lt_v2_DSC_0001.HIF_100.jpg',
+                'fhd_v2_DSC_0001.HIF_100.jpg'))
+            .existsSync(),
+        isFalse);
+
+    // 再取:高清磁盘命中 + FHD 黑名单记键,零新请求
+    final again = await cache.pathFor(
+        _entry(0x12, name: 'DSC_0001.HIF', size: 100), ThumbSource.preview);
+    expect(again, path);
+    expect(fake.requests.length, 3);
+  });
+
+  test('preview:HIF 的 0x920F/0x90C4 都回非 JPEG → 后者置会话降级,'
+      '回落 GetThumb 小图;二取零新请求', () async {
+    final hevc = Uint8List.fromList(
+        [0x00, 0x00, 0x00, 0x01, 0x67, 0x64, 0x00, 0x1F, 0xAC, 0xD9]);
+    final fake = FakePtpTransport()
+      ..reply(_okData(hevc)) // 0x920F:非 JPEG
+      ..reply(_okData(hevc)) // 0x90C4:也非 JPEG → 会话降级
+      ..reply(_okData(_jpeg)) // 回落 getThumb(0x100A)
+      ..reply(_okData(_jpgHead(1)));
+    final session = PtpSession(transport: fake);
+    final cache = ThumbnailCache(session: session, gallery: FakeGallerySaver());
+
+    final path = await cache.pathFor(
+        _entry(0x12, name: 'DSC_0001.HIF', size: 100), ThumbSource.preview);
+    expect(path, endsWith('v2_DSC_0001.HIF_100.jpg'));
+    expect(File(path).readAsBytesSync(), _jpeg);
+    expect(session.largeThumbDegraded, isTrue,
+        reason: '0x90C4 非 SOI 载荷按既有纪律置会话降级(JPG 高清同受影响)');
+    expect(fake.requests.map((r) => r.opcode), [
+      NikonOperationCode.getFhdPicture,
+      NikonOperationCode.getLargeThumb,
+      PtpOperationCode.getThumb,
+      PtpOperationCode.getPartialObject,
+    ]);
+
+    // 再取:FHD 黑名单记键 + 降级秒拒(不发)+ 小图磁盘命中,零新请求
+    final again = await cache.pathFor(
+        _entry(0x12, name: 'DSC_0001.HIF', size: 100), ThumbSource.preview);
+    expect(again, path);
+    expect(fake.requests.length, 4);
+  });
+
   test('preview:视频海报直走 GetThumb(不试 0x90C4,不拖垮降级旗标)', () async {
     final fake = FakePtpTransport()..reply(_okData(_jpeg));
     final session = PtpSession(transport: fake);
@@ -931,7 +997,7 @@ void main() {
 
     final path = await cache.pathFor(entry, ThumbSource.grid);
     expect(jpegExifOrientation(File(path).readAsBytesSync()), 8); // 新档带注入
-    expect(File('$thumbsDir/.fmt-v2').existsSync(), isTrue); // 标记档在
+    expect(File('$thumbsDir/.fmt-v3').existsSync(), isTrue); // 标记档在
 
     // 新实例:标记在 → 不再清,磁盘命中零请求
     final fake2 = FakePtpTransport();

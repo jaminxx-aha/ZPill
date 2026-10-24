@@ -10,6 +10,7 @@ library;
 
 import 'dart:async';
 import 'dart:io' show Directory, File, FileMode, Platform;
+import 'dart:typed_data' show Uint8List;
 
 import 'package:flutter/foundation.dart' show debugPrint, kDebugMode;
 import 'package:flutter/widgets.dart' show AppLifecycleListener, AppLifecycleState;
@@ -17,6 +18,7 @@ import 'package:flutter/widgets.dart' show AppLifecycleListener, AppLifecycleSta
 import 'core/ble/ble_camera_session.dart';
 import 'core/log/app_log.dart';
 import 'core/browser/camera_file_ops.dart';
+import 'core/browser/object_entry.dart';
 import 'core/browser/object_repository.dart';
 import 'core/browser/photo_group.dart';
 import 'core/browser/thumbnail_cache.dart';
@@ -227,6 +229,7 @@ final class AppServices {
       // 文件键(图库徽标/筛选数据面;键 = 文件名|字节)。best-effort:
       // 组不在册/未评级/写盘失败都静默,传输照常。
       onAppFileSaved: (entry, path) async {
+        await _saveHeifCompanion(entry, path);
         if (!repository.ratingsLoaded) return;
         final group = repository.groupOf(entry.handle);
         if (group == null) return;
@@ -484,6 +487,46 @@ final class AppServices {
   // ------------------------------------------------------------------
 
   static const int _tailCapBytes = 256 * 1024;
+
+  /// HIF 伴生预览(app 目的地落盘沿,2026-10-25):卓易通等无 HEIF 解码
+  /// 环境,本地图库缩略/查看器读这份相机 JPEG——优先拷相机相册已拉的
+  /// 0x90C4 高清档(lt_v2_ 同内容键,零 RTT 零副作用),缺则 0x100A 小图
+  /// (标准 op,不触碰 0x90C4 的会话降级旗标);载荷过 SOI 验签才落盘。
+  /// 键 = 图库缩略约定 `libv4_<安全名>_<字节数>`,网格缓存命中直读、
+  /// 查看器解码失败回退同读。best-effort:失败静默(真 Android 走原生
+  /// 解码,不依赖此件)。
+  Future<void> _saveHeifCompanion(ObjectEntry entry, String path) async {
+    if (!isHeifFilename(entry.name)) return;
+    try {
+      final len = await File(path).length();
+      final safe = entry.name.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
+      final thumbs = await PlatformServices.gallery.thumbsDir();
+      final companion = File('$thumbs/libv4_${safe}_$len.jpg');
+      if (companion.existsSync()) return;
+      Uint8List? jpeg;
+      final lt = File('$thumbs/lt_v2_${safe}_${entry.sizeInBytes}.jpg');
+      if (lt.existsSync()) {
+        // 相机相册网格已拉过的高清档:同内容键,直接拷。
+        jpeg = await lt.readAsBytes();
+      } else {
+        jpeg = await session.getThumb(entry.handle);
+      }
+      // SOI 验签:0x100A 对 HIF 也可能回 HEVC 编码载荷,垃圾不落盘。
+      if (jpeg.length < 3 ||
+          jpeg[0] != 0xFF ||
+          jpeg[1] != 0xD8 ||
+          jpeg[2] != 0xFF) {
+        AppLog.w(AppLog.browser,
+            'HIF 伴生预览:${entry.name} 相机 JPEG 缺席/非 JPEG,跳过');
+        return;
+      }
+      await companion.writeAsBytes(jpeg, flush: true);
+      AppLog.i(AppLog.browser,
+          'HIF 伴生预览:${entry.name} → libv4_${safe}_$len.jpg');
+    } on Exception {
+      // 尽力而为:失败静默,传输照常完成
+    }
+  }
 
   /// 控制台镜像(debug 构建接 debugPrint → hilog,release 无出口)+
   /// error 尾巴文件:环形缓冲之外的崩溃保险,error 级即时追加

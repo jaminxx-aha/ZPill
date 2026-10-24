@@ -9,6 +9,7 @@ import com.aha.nikonpill.log.NativeLog
 import com.aha.nikonpill.motion.MotionPlugin
 import com.aha.nikonpill.network.NetworkPlugin
 import com.aha.nikonpill.nsd.NsdPlugin
+import com.aha.nikonpill.raw.RawDecodePlugin
 import com.aha.nikonpill.usb.UsbHostPlugin
 import com.aha.nikonpill.video.VideoLutExportPlugin
 import com.aha.nikonpill.video.VideoPlugin
@@ -44,6 +45,7 @@ class MainActivity : FlutterActivity() {
         flutterEngine.plugins.add(BgPlugin())
         flutterEngine.plugins.add(VideoPlugin())
         flutterEngine.plugins.add(VideoLutExportPlugin())
+        flutterEngine.plugins.add(RawDecodePlugin())
         flutterEngine.plugins.add(NetworkPlugin())
         volumeChannel = MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,

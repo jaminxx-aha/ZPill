@@ -43,6 +43,7 @@ import '../../core/media/cube_lut.dart';
 import '../../core/media/jpeg_orientation.dart';
 import '../../core/media/letterbox.dart';
 import '../../core/media/nef_thumb.dart';
+import '../../core/log/app_log.dart';
 import '../../core/media/video_duration.dart';
 import '../../core/media/xmp_rgb_table.dart' show parseXmpRgbTable;
 import '../../core/ptpip/object_format.dart';
@@ -320,14 +321,35 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
 
   bool _isViewable(File file) => _isViewableName(_nameOf(file));
 
+  /// 负缓存(带 TTL):HIF 解码失败(容器无 HEIF)驻留 10s,过期后格子
+  /// 重建时重试一次 —— 伴生预览在传输完成沿才补写,补写后的首次重建即
+  /// 命中;TTL 内返回同一失败 future(可沉降,不无限重试,2026-10-25
+  /// 无限重试 churn 撞 pumpAndSettle 超时的教训)。
+  static const _negThumbTtl = Duration(seconds: 10);
+  final Map<String, DateTime> _negThumbAt = {};
+
   /// 缩略小档路径(磁盘缓存命中即回;否则排队解码/抽帧)。可解码图
   /// (JPG/PNG)与 NEF/MOV 同管线:格双源之一与查看器海报帧共用,
   /// 不重复解码。
   Future<String?> _thumbFor(File file) {
     final key = _contentKey(file);
+    final existing = _mediaThumbs[key];
+    if (existing != null) {
+      final failedAt = _negThumbAt[key];
+      if (failedAt == null ||
+          DateTime.now().difference(failedAt) < _negThumbTtl) {
+        return existing;
+      }
+      _mediaThumbs.remove(key); // 负缓存过期:重建沿重试一次
+      _negThumbAt.remove(key);
+    }
     return _mediaThumbs.putIfAbsent(key, () {
-      _thumbQueue = _thumbQueue.then((_) => _decodeThumb(file, key));
-      return _thumbQueue;
+      final future = _thumbQueue.then((_) => _decodeThumb(file, key));
+      _thumbQueue = future;
+      unawaited(future.then((path) {
+        if (path == null) _negThumbAt[key] = DateTime.now();
+      }));
+      return future;
     });
   }
 
@@ -358,6 +380,12 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
           final embedded =
               isRawFilename(name) ? await extractNefEmbeddedThumb(file.path) : null;
           if (embedded == null) {
+            // HIF:伴生预览诊断(键位/在否),容器排障唯一观测面。
+            if (isHeifFilename(name)) {
+              final companion = File('$dir/libv4_$key.jpg');
+              AppLog.w(AppLog.browser,
+                  'HIF 缩略解码失败:${companion.path} exists=${companion.existsSync()}');
+            }
             return null;
           }
           jpeg = injectJpegOrientation(embedded.jpeg, embedded.orientation);
@@ -1164,6 +1192,21 @@ class _LibraryViewerState extends State<_LibraryViewer> {
     try {
       return await widget.rawDecoder.decodeJpeg(file.path, maxPixelSize: 2560);
     } on Object {
+      if (isHeifFilename(_nameOf(file))) {
+        // 容器等无 HEIF 解码:HIF 读伴生预览(传输完成沿抓的相机 JPEG,
+        // ~1024px 预览画质);无伴生(旧档/抓取失败)原样上抛报错占位。
+        // 键与页面态 _contentKey 同式(安全名_字节数)。
+        try {
+          final name = _nameOf(file);
+          final safe = name.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
+          final key = '${safe}_${file.lengthSync()}';
+          final dir = await widget.gallery.thumbsDir();
+          final bytes = await File('$dir/libv4_$key.jpg').readAsBytes();
+          if (bytes.isNotEmpty) return bytes;
+        } on Object {
+          // 落到底:原样上抛
+        }
+      }
       if (!isRawFilename(_nameOf(file))) rethrow;
       final jpeg = await nefEmbeddedJpeg(file.path);
       if (jpeg == null) rethrow;
