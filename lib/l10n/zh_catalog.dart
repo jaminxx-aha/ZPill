@@ -675,6 +675,7 @@ const Map<String, String> zhCatalog = {
   'transfers.clearHistory': '清空历史',
   'transfers.empty': '暂无传输任务\n(在相机相册里多选或大图页单张下载)',
   'transfers.queued': '排队中',
+  'transfers.processing': '处理中…',
   'transfers.secondsLeft': '剩 {n}s',
   'transfers.importedAlbum': '已导入相册',
   'transfers.completedNotImported': '已完成 · 未导入(可重新下载再试)',

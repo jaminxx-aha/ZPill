@@ -215,6 +215,8 @@ class _TaskTile extends StatelessWidget {
         icon: const Icon(Icons.close),
       );
     } else {
+      // processing 也不给取消钮:文件已完整落盘,后处理收尾后照常完成,
+      // 取消钮点了没反应,不如不给。
       trailing = const SizedBox(width: 40); // 占位对齐
     }
 
@@ -229,6 +231,8 @@ class _TaskTile extends StatelessWidget {
           if (speed != null) '${(speed / 1024 / 1024).toStringAsFixed(1)}MB/s',
           if (eta != null) context.t('transfers.secondsLeft', {'n': eta.inSeconds + 1}),
         ].join(' · '),
+      // 已收满但还在拆分/水印/XMP(与下一文件的下载并行)。
+      TransferState.processing => context.t('transfers.processing'),
       TransferState.completed => switch (task.destination) {
           TransferDestination.gallery => task.galleryUri != null
               ? context.t('transfers.importedAlbum')
@@ -265,6 +269,11 @@ class _TaskTile extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.only(top: 4),
               child: LinearProgressIndicator(value: task.progress),
+            ),
+          if (task.state == TransferState.processing)
+            const Padding(
+              padding: EdgeInsets.only(top: 4),
+              child: LinearProgressIndicator(), // 不定进度:后处理无确定性刻度
             ),
         ],
       ),

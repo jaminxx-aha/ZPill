@@ -1,12 +1,17 @@
 /// 传输引擎:入队去重、顺序下载、指数退避重试、相册导入编排。
 ///
-/// 队列模型:并发 = 1(相机 PTP 会话本就一次一个事务,PtpSession 锁
-/// 兜底;这里再按 FIFO 泵任务,进度/速度/取消的编排都在本层)。
+/// 两级流水:下载泵(并发 = 1,相机 PTP 会话本就一次一个事务)只管把
+/// 文件拉落盘;落盘后的拆分/水印/XMP/mtime 链入独立 FIFO 后处理链,
+/// 与下载重叠 —— 相机链路不再为 CPU 后处理空转(该段以
+/// [TransferState.processing] 表达;水印重活本就在子 isolate,这里再
+/// 消除的是「后处理期间泵停摆」的串行)。后处理一次一个(多 isolate
+/// 并发解码高像素 JPG 的内存峰值不值得)。
 ///
 /// gallery 目的地两段式:整批先流式下载到 tempDir → 全部落定后调
 /// **一次** [GallerySaver.importFiles](系统保存对话框只弹一次)→
-/// 回填 galleryUri、删临时文件。对话框期间泵暂停(排在后面的批次
-/// 等用户确认,避免对话框叠罗汉)。
+/// 回填 galleryUri、删临时文件。导入段走引擎级串行闸:泵与后处理都
+/// 不等导入,前后两批先后齐员时导入排队,防系统对话框叠罗汉(旧实现
+/// 靠「对话框期间泵暂停」达成同一目的)。
 ///
 /// app 目的地:直接流式写入 downloadsDir,文件名冲突加 ` (n)` 序号。
 library;
@@ -33,9 +38,9 @@ abstract interface class TransferEngine {
   Future<void> enqueue(Iterable<ObjectEntry> entries,
       {required TransferDestination destination});
 
-  /// 取消单个任务:queued 直接标 cancelled;running 置标志
-  /// (downloader 对在途块发 Cancel-Drain、删半成品;链路不支持时
-  /// 等当前块完成 —— 旗标在块间兜底)。
+  /// 取消单个任务:queued 直接标 cancelled;running 置标志(下载器块间
+  /// 旗标兜底,排空后以 cancelled 落定);processing 置标志但不可中断
+  /// (文件已完整,后处理收尾后照常 completed)。
   Future<void> cancel(String taskId);
 
   /// 清空历史(仅已完成/已取消/已失败)。
@@ -178,8 +183,12 @@ final class TransferEngineImpl implements TransferEngine {
   Future<void> cancel(String taskId) async {
     final job = _jobs[taskId];
     if (job == null || job.task.isTerminal) return;
-    if (job.task.state == TransferState.running) {
-      job.cancelRequested = true; // downloader 排空后以 cancelled 落定
+    if (job.task.state == TransferState.running ||
+        job.task.state == TransferState.processing) {
+      // running:downloader 排空后以 cancelled 落定;processing:后处理
+      // 不可中断(文件已完整落盘),旗标无人再查,等自然落 completed
+      // —— 与旧实现「下载完成后无法取消」一致。
+      job.cancelRequested = true;
     } else {
       _settle(job, TransferState.cancelled, null);
     }
@@ -199,7 +208,7 @@ final class TransferEngineImpl implements TransferEngine {
     try {
       _Job? job;
       while ((job = _firstQueued()) != null) {
-        await _run(job!);
+        await _runDownload(job!);
       }
     } finally {
       _pumping = false;
@@ -213,7 +222,9 @@ final class TransferEngineImpl implements TransferEngine {
     return null;
   }
 
-  Future<void> _run(_Job job) async {
+  /// 下载段(泵内):一个任务的相机传输。成功即把后处理链入独立 FIFO
+  /// 链(**不 await**)并返回,泵随即开下一个文件;失败/取消在本段收终态。
+  Future<void> _runDownload(_Job job) async {
     job.cancelRequested = false;
     job.task = job.task.copyWith(state: TransferState.running, clearError: true);
     _notify();
@@ -233,6 +244,55 @@ final class TransferEngineImpl implements TransferEngine {
         isCancelled: () => job.cancelRequested,
       );
       job.batch.downloads[job.task.id] = dl;
+      // 移交后处理:任务落 processing(非终态,批次不收尾),由
+      // [_runPostproc] 在后处理链上收场。
+      job.task = job.task.copyWith(state: TransferState.processing);
+      _notify();
+      _enqueuePostproc(job, dl);
+    } on DownloadCancelledException {
+      job.task = job.task.copyWith(state: TransferState.cancelled, clearError: true);
+      _settleAfterDownload(job);
+    } catch (e) {
+      // 链路/写盘失败(StateError、PtpResponseException、FileSystemException…)
+      final attempts = job.task.attempts + 1;
+      if (attempts <= maxAttempts) {
+        await Future<void>.delayed(_backoffFor(attempts));
+        job.task = job.task.copyWith(
+            state: TransferState.queued, attempts: attempts, error: e.toString());
+        _notify();
+      } else {
+        // 放弃:attempts 保留已用重试数(不含本次放弃的尝试)。
+        job.task = job.task.copyWith(state: TransferState.failed, error: e.toString());
+        _settleAfterDownload(job);
+      }
+    }
+  }
+
+  /// 下载段终态收尾(取消/放弃失败):记账 + 通知 + 批次收尾检查。
+  void _settleAfterDownload(_Job job) {
+    if (job.task.isTerminal) {
+      job.batch.terminalIds.add(job.task.id);
+    }
+    _notify();
+    _finishBatchIfDone(job.batch);
+  }
+
+  /// 后处理全局 FIFO(串行链,与下载泵并行):失败不断链,同
+  /// PtpSession._serialized 口径。
+  Future<void> _postprocGate = Future<void>.value();
+
+  void _enqueuePostproc(_Job job, ObjectDownload dl) {
+    final run = _postprocGate.then((_) => _runPostproc(job, dl));
+    _postprocGate = run.then<void>((_) {}, onError: (_) {});
+  }
+
+  /// 后处理段:拆分 → 水印 → XMP → mtime 回写 → 收尾回调,与旧泵内
+  /// 实现同序;完成后任务落 completed。文件在下载段已完整落盘,各步骤
+  /// 皆 best-effort(内部吞异常),故出乎意料的错误(Error 级)也按
+  /// 完成收场 —— 旧实现此时会把任务打成失败重下整档,是文件已完整时
+  /// 的误伤。
+  Future<void> _runPostproc(_Job job, ObjectDownload dl) async {
+    try {
       await _splitMotionPhoto(job, dl); // 先拆(水印重编码会毁内嵌视频段)
       await _applyWatermark(job, dl.path); // 先水印(重编码丢段,XMP 后补)
       await _injectMetadata(job, dl.path);
@@ -258,25 +318,12 @@ final class TransferEngineImpl implements TransferEngine {
       }
       job.task =
           job.task.copyWith(state: TransferState.completed, receivedBytes: dl.bytes);
-    } on DownloadCancelledException {
-      job.task = job.task.copyWith(state: TransferState.cancelled, clearError: true);
-    } catch (e) {
-      // 链路/写盘失败(StateError、PtpResponseException、FileSystemException…)
-      final attempts = job.task.attempts + 1;
-      if (attempts <= maxAttempts) {
-        await Future<void>.delayed(_backoffFor(attempts));
-        job.task = job.task.copyWith(
-            state: TransferState.queued, attempts: attempts, error: e.toString());
-      } else {
-        // 放弃:attempts 保留已用重试数(不含本次放弃的尝试)。
-        job.task = job.task.copyWith(state: TransferState.failed, error: e.toString());
-      }
+    } on Object {
+      // 后处理意外抛错:文件已完整,不重下,按完成落定(见方法注释)
     }
-    if (job.task.isTerminal) {
-      job.batch.terminalIds.add(job.task.id);
-    }
+    job.batch.terminalIds.add(job.task.id);
     _notify();
-    await _finishBatchIfDone(job.batch);
+    _finishBatchIfDone(job.batch);
   }
 
   /// 运动照片拆分(实况照片导出):尼康运动照片是 JPG 尾部
@@ -348,7 +395,9 @@ final class TransferEngineImpl implements TransferEngine {
   /// MP4 挂到 [GalleryImportRequest.videoPath] 配对导入,并入的视频成员
   /// 不再单发、回填同一实况 Uri);其余文件按入队序在后。native 不识别
   /// videoPath 时按普通图片落库。
-  Future<void> _finishBatchIfDone(_Batch batch) async {
+  ///
+  /// 导入段链入 [_importGate] 串行(见字段注释),本方法同步返回。
+  void _finishBatchIfDone(_Batch batch) {
     if (batch.finished || batch.destination != TransferDestination.gallery) {
       return;
     }
@@ -393,6 +442,23 @@ final class TransferEngineImpl implements TransferEngine {
       owners.add([m.id]);
     }
 
+    final run =
+        _importGate.then((_) => _importBatch(requests, owners, batch));
+    _importGate = run.then<void>((_) {}, onError: (_) {});
+  }
+
+  /// 导入串行闸:gallery 系统导入对话框一次只弹一个。泵与后处理都不等
+  /// 导入后,前后两批可能先后齐员 —— 导入段在此排队,防对话框叠罗汉
+  /// (旧「对话框期间泵暂停」语义的替代实现);失败不断链。
+  Future<void> _importGate = Future<void>.value();
+
+  /// 导入段(importGate 内):调导入、回填 Uri、删临时文件、通知。
+  ///
+  /// 临时文件 = 请求的 path + videoPath(拆出的 `_live.mp4` / 配对 MOV)
+  /// ∪ [batch] 的 liveVideos 全集 —— 后者兜「运动照片与同基名 MOV 同批,
+  /// videoPath 位被 MOV 占走」的边角,拆出的视频段也不落孤儿。
+  Future<void> _importBatch(List<GalleryImportRequest> requests,
+      List<List<String>> owners, _Batch batch) async {
     var uris = const <Uri>[];
     try {
       uris = await gallery.importFiles(requests);
@@ -410,8 +476,11 @@ final class TransferEngineImpl implements TransferEngine {
     // 临时文件清理:导入成功(字节已进媒体库)与未导入都删,
     // 重试导入走重新入队(全新下载)。
     final tempPaths = <String>[
-      for (final (_, dl) in pairs) dl.path,
       ...batch.liveVideos.values,
+      for (final r in requests) ...[
+        r.path,
+        if (r.videoPath case final v?) v,
+      ],
     ];
     for (final path in tempPaths) {
       try {

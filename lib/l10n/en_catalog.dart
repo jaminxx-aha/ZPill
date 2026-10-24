@@ -798,6 +798,7 @@ const Map<String, String> enCatalog = {
   'transfers.empty':
       'No transfer tasks yet\n(select multiple in the camera album, or download single items from the photo viewer)',
   'transfers.queued': 'Queued',
+  'transfers.processing': 'Processing…',
   'transfers.secondsLeft': '{n}s left',
   'transfers.importedAlbum': 'Imported to the album',
   'transfers.completedNotImported':

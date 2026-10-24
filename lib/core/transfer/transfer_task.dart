@@ -1,7 +1,12 @@
 /// 传输任务模型。
 library;
 
-enum TransferState { queued, running, completed, failed, cancelled }
+/// 任务状态机:queued → running(下载中)→ processing(落盘后处理:
+/// 拆分/水印/XMP/mtime/收尾回调)→ completed;失败/取消见各自终态。
+/// running 与 processing 拆开的缘由:后处理不占相机链路,可与下一个
+/// 文件的下载重叠(见 TransferEngineImpl);running 保持「至多一个」
+/// 的下载语义,processing 可与 running 并存。
+enum TransferState { queued, running, processing, completed, failed, cancelled }
 
 /// 下载目的地:系统相册(ohos 经系统保存对话框导入)/ 应用内存储。
 enum TransferDestination { gallery, app }

@@ -44,6 +44,10 @@ final class FakeGallerySaver implements GallerySaver {
   /// importFiles 的应答(默认空列表 = 用户取消对话框)。
   List<Uri> importResult = const [];
 
+  /// 挂闸:importFiles 记账后挂起(模拟系统导入对话框开着/导入进行中),
+  /// complete 后才返回 —— 导入串行闸用例用。
+  Completer<void>? importGate;
+
   @override
   Future<String> dataDir() async => _ensure('${root.path}/data');
 
@@ -71,6 +75,10 @@ final class FakeGallerySaver implements GallerySaver {
           (_readIfExists(r.path),
               r.videoPath == null ? null : _readIfExists(r.videoPath!)),
       ]);
+    }
+    final gate = importGate;
+    if (gate != null) {
+      await gate.future;
     }
     return importResult;
   }
@@ -714,8 +722,10 @@ void main() {
     final (motion, still) = _motionPhotoJpg(mp4);
     fake.reply(_okData(motion));
 
-    final done = waitUntil(
-        engine, (ts) => ts.length == 1 && ts.single.isTerminal);
+    // completed 通知先于批次导入(出泵后任务完成与批次导入解耦,导入
+    // 信号 = importCalls/galleryUri),等待条件须含导入沿。
+    final done = waitUntil(engine, (ts) =>
+        ts.single.isTerminal && gallery.importCalls.isNotEmpty);
     await engine.enqueue([_entry(1, 'DSC_0001.JPG', motion.length)],
         destination: TransferDestination.gallery);
     await done;
@@ -834,5 +844,97 @@ void main() {
         destination: TransferDestination.app);
     final tasks3 = await done3;
     expect(tasks3.single.state, TransferState.completed);
+  });
+
+  // ── 出泵后处理(processing 状态与下载重叠)──
+
+  test('出泵重叠:A 后处理挂闸期间 B 照常下载,泵不为后处理停摆', () async {
+    final jpeg = _gradientJpeg();
+    // A 的文本光栅挂闸:后处理停在 processing,rasterCalls==2 起(若有)
+    // 不受闸影响。
+    final rasterGate = Completer<void>();
+    var rasterCalls = 0;
+    Future<img.Image> gatedRaster(String text, double fontSizePx, int color) async {
+      rasterCalls++;
+      if (rasterCalls == 1) await rasterGate.future;
+      return _fakeRaster(text, fontSizePx, color);
+    }
+    // B 的下载挂闸:B 卡在 running,A 才能与 B 同帧共存。
+    final bGate = Completer<void>();
+    final fake = FakePtpTransport();
+    final gallery = FakeGallerySaver();
+    final engine = TransferEngineImpl(
+      downloader: ObjectDownloader(session: PtpSession(transport: fake)),
+      gallery: gallery,
+      watermarkFor: (entry) async =>
+          const WatermarkOptions(style: WatermarkStyle.corner),
+      watermarkRaster: gatedRaster,
+      backoffFor: (_) => Duration.zero,
+    );
+    fake..reply(_okData(jpeg))..replyAfter(bGate.future, _okBytes(9));
+
+    final done = waitUntil(engine, (ts) =>
+        ts.length == 2 && ts.every((t) => t.isTerminal));
+    await engine.enqueue([
+      _entry(1, 'DSC_1.JPG', jpeg.length),
+      _entry(2, 'DSC_2.NEF', 9), // NEF 不问水印,闸只挂 A
+    ], destination: TransferDestination.app);
+
+    // 旧实现里 B 要等 A 水印完才开跑;现在 A 进 processing 当拍,B 就在下载。
+    final overlap = waitUntil(engine, (ts) =>
+        ts.any((t) => t.filename == 'DSC_1.JPG' &&
+            t.state == TransferState.processing) &&
+        ts.any((t) => t.filename == 'DSC_2.NEF' &&
+            t.state == TransferState.running));
+    final overlapTasks = await overlap;
+    expect(
+        overlapTasks.firstWhere((t) => t.filename == 'DSC_1.JPG').state,
+        TransferState.processing);
+    expect(
+        overlapTasks.firstWhere((t) => t.filename == 'DSC_2.NEF').state,
+        TransferState.running);
+
+    rasterGate.complete();
+    bGate.complete();
+    final tasks = await done;
+    final byName = {for (final t in tasks) t.filename: t};
+    expect(byName['DSC_1.JPG']!.state, TransferState.completed);
+    expect(byName['DSC_2.NEF']!.state, TransferState.completed);
+    // A 的水印确实合成了(闸放行后重编码,字节非原样)
+    final jpgBytes =
+        await File('${gallery.root.path}/downloads/DSC_1.JPG').readAsBytes();
+    expect(jpgBytes, isNot(equals(jpeg)));
+  });
+
+  test('gallery 导入串行闸:前批导入挂起时后批照常下载,导入排队不叠', () async {
+    final (engine, fake, gallery) = _engine();
+    gallery.importGate = Completer<void>(); // 首次导入挂起(对话框开着)
+    fake..reply(_okBytes(11))..reply(_okBytes(22));
+    gallery.importResult = [Uri.parse('content://media/x')];
+
+    await engine.enqueue([_entry(1, 'DSC_1.JPG', 11)],
+        destination: TransferDestination.gallery);
+    while (gallery.importCalls.isEmpty) {
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+    }
+    expect(gallery.importCalls, hasLength(1));
+
+    // 闸未放:批 B 立即入队、照常下载完成(泵不再被导入挡住)
+    final bDone = waitUntil(engine, (ts) =>
+        ts.length == 2 &&
+        ts.last.filename == 'DSC_2.JPG' &&
+        ts.last.state == TransferState.completed);
+    await engine.enqueue([_entry(2, 'DSC_2.JPG', 22)],
+        destination: TransferDestination.gallery);
+    await bDone;
+    expect(gallery.importCalls, hasLength(1)); // B 的导入还排在前批后面
+
+    gallery.importGate!.complete();
+    final allDone = waitUntil(engine, (ts) =>
+        ts.length == 2 && ts.every((t) => t.galleryUri != null));
+    await allDone;
+    expect(gallery.importCalls, hasLength(2)); // 排队生效,依次各导一次
+    expect(gallery.importCalls[1].map((r) => r.filename), ['DSC_2.JPG']);
+    expect(Directory('${gallery.root.path}/temp').listSync(), isEmpty);
   });
 }
