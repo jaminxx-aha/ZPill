@@ -16,10 +16,10 @@
  *   不阻塞主线程;返回传输字节数,-1 异常,timeout=0 表示无限等待;
  * - libusb 层的读请求长度必须 ≥ 单个事务突发数据量:请求 12B 容器头
  *   而相机整只 DATA 容器(~180B)到达时,以 babble 报
- *   LIBUSB_ERROR_OVERFLOW(-8)—— bulkRead 内部按 ≥16KB、≤64KB 读入
- *   (上限为实测安全粒度:1MB 整缓冲直读真机恒 rc=-1,2026-10-25 定案,
- *   详见 BULK_IN_MAX_READ_BYTES 注),超出 maxLen 的字节暂存,
- *   下次调用先掏暂存(对 Dart 是普通短读流);
+ *   LIBUSB_ERROR_OVERFLOW(-8)—— bulkRead 内部按 ≥16KB、64KB 起步
+ *   自适应探大至 ≤128KB 读入(阶梯实测:256KB 挂死、1MB 恒 rc=-1,
+ *   2026-10-25 定案;AIMD 见 bulkInReadBytes 注),超出 maxLen 的字节
+ *   暂存,下次调用先掏暂存(对 Dart 是普通短读流);
  * - usbControlTransfer 的 controlParam **必须带 data 属性**(运行时
  *   401,比 d.ts 严格):零长 OUT 请求也要传 data: new Uint8Array(0);
  * - 上轮失败会在设备侧留下脏状态:OUT 端点 data toggle 停在 DATA1,
@@ -80,12 +80,20 @@ const BULK_OUT_TIMEOUT_MS = 5000;
 /// babble → LIBUSB_ERROR_OVERFLOW -8)。超出 maxLen 的字节进 leftover。
 const BULK_IN_MIN_READ_BYTES = 16 * 1024;
 
-/// bulk IN 单次 libusb 读的上限:64KB(2026-09-27 真机闭环实测安全粒度)。
-/// T1-T4(1ff5e58)把 Dart 流块提到 1MB 后,native 曾把整只 1MB 缓冲
-/// 一次递给 bulkTransfer —— 真机(2026-10-25 复报)大数据相(下载
-/// 整档/0x920F/0x9805)恒 rc=-1 全灭。native 改按此上限子块循环组装,
-/// 一次通道调用仍读满 maxLen(通道往返 1MB/次的收益保留)。
-const BULK_IN_MAX_READ_BYTES = 64 * 1024;
+/// bulk IN 子块读尺寸(AIMD,见 bulkInReadBytes 注):起步 64KB =
+/// 2026-09-27 真机闭环实测安全粒度(当时通道往返即 64KB/次,吞吐
+/// 3.7-4.5MB/s);1MB 整缓冲直读真机恒 rc=-1(2026-10-25 定案,
+/// 详见 fix 提交)。
+const BULK_IN_READ_BYTES_START = 64 * 1024;
+
+/// bulk IN 子块读尺寸上限:128KB(2026-10-25 真机阶梯实测:64KB ✓、
+/// 128KB ✓、**256KB 挂死**—— Promise 永不返回,读超时窗对其无效,
+/// 看门狗 21s 掐链重连后重置重探再挂 = 无限卡死循环(用户实证「下载
+/// 到 2M 就卡死」,卡点 = 升档 256KB 的首笔读);1MB 秒拒 rc=-1)。
+/// 故封顶钉在实测安全档,不探入未知区;吞吐 ≈ 128KB ÷ 单次开销 ~9ms
+/// ≈ 13-14MB/s。要再上去得换路(usbSubmitTransfer 异步流水/原生肖块),
+/// 等有 SDK 通路再说。
+const BULK_IN_READ_BYTES_MAX = 128 * 1024;
 
 /// interrupt 事件缓冲:PTP 事件容器 ≤64B(Zf 实测 12/16B)。
 const INTERRUPT_BUF_BYTES = 64;
@@ -159,6 +167,16 @@ export class UsbHostPlugin implements FlutterPlugin {
   private assembler: InterruptAssembler = new InterruptAssembler();
   /// bulk IN 超读余量(≥maxLen 之外的突发字节),下次 bulkRead 先掏这里。
   private bulkInLeftover: Uint8Array = new Uint8Array(0);
+
+  /// bulk IN 子块读尺寸(AIMD 自适应,会话内跨调用记忆):起步 64KB
+  /// (实测安全粒度),一次通道调用全程满块收满(saturated)后 ×2 探大,
+  /// 上限 128KB(256KB 挂死实证,见常量注);负值回退并把该尺寸记入
+  /// 坏档(≥ bulkInBadFrom 不再试)。
+  /// 为什么自适应:bulkTransfer 单次固定开销 ~9ms 不随尺寸摊薄,
+  /// 吞吐 = 尺寸/开销,64KB 档顶死 ~7MB/s;128KB 档 ≈ 13-14MB/s。
+  private bulkInReadBytes: number = BULK_IN_READ_BYTES_START;
+  /// 最小已知坏档尺寸(此值及以上不再尝试;MAX_SAFE_INTEGER = 尚无)。
+  private bulkInBadFrom: number = Number.MAX_SAFE_INTEGER;
 
   getUniqueClassName(): string {
     return 'UsbHostPlugin';
@@ -338,6 +356,10 @@ export class UsbHostPlugin implements FlutterPlugin {
       `bulkOut=0x${bulkOut.address.toString(16)}` +
       (interruptIn !== null ? ` interruptIn=0x${interruptIn.address.toString(16)}` : ' interruptIn=无'));
     this.session = new UsbSession(device, pipe, iface, bulkIn, bulkOut, interruptIn);
+    // 自适应子块读状态随链路重置:新管道重探(升级在前几个满块调用内
+    // 完成,代价可忽略),旧会话的坏档记号不作数。
+    this.bulkInReadBytes = BULK_IN_READ_BYTES_START;
+    this.bulkInBadFrom = Number.MAX_SAFE_INTEGER;
     // 上轮失败会在设备侧留下脏状态(OUT toggle 停在 DATA1 → 后续写全被
     // 丢,真机实测 ret=-7 超时;IN 端点可能还压着未读残数据)。USB 2.0:
     // ClearFeature(ENDPOINT_HALT) 无条件把两端 data toggle 重置回 DATA0。
@@ -388,14 +410,18 @@ export class UsbHostPlugin implements FlutterPlugin {
   }
 
   /// bulk IN:单次通道调用读满 maxLen(短读/ZLB 即返),Dart 契约不变;
-  /// native 内部按 [BULK_IN_MAX_READ_BYTES] 子块循环请求并组装。
+  /// native 内部按自适应子块(bulkInReadBytes,64KB 起步探大至 512KB)
+  /// 循环请求并组装。
   /// - 单次请求下限 ≥[BULK_IN_MIN_READ_BYTES](防 OVERFLOW babble,同旧),
-  ///   上限 64KB 实测安全粒度(1MB 整缓冲直读真机恒 rc=-1,见常量注);
+  ///   尺寸自适应(AIMD,见 bulkInReadBytes 注 —— 单次开销 ~9ms 固定,
+  ///   提尺寸是吞吐唯一杠杆;256KB 挂死/1MB rc=-1 故封 128KB);
   /// - 超出 maxLen 的字节暂存 leftover,下次调用先掏(对 Dart 是普通
   ///   短读流);
-  /// - 空手负值 CLEAR_FEATURE 后原地重读一次(Android 同款:STALL 是
-  ///   相机流控,负值分不清 STALL 与超时 —— STALL 即时失败、超时吃满
-  ///   窗,窗口尚有余量才值得重试);有部分数据则优先交付短读。
+  /// - 空手负值:rc=-1 且子块尺寸可回退时先回退重读(预提交拒收零字节
+  ///   损耗,每调用一探);否则 CLEAR_FEATURE 后原地重读一次(Android
+  ///   同款:STALL 是相机流控,负值分不清 STALL 与超时 —— STALL 即时
+  ///   失败、超时吃满窗,窗口尚有余量才值得重试);有部分数据则优先
+  ///   交付短读。
   private async bulkRead(maxLen: number, timeoutMs: number, result: MethodResult): Promise<void> {
     const s = this.session;
     if (s === null) {
@@ -415,14 +441,15 @@ export class UsbHostPlugin implements FlutterPlugin {
         return;
       }
       const buffer = new Uint8Array(maxLen);
-      const scratch = new Uint8Array(
-        Math.min(Math.max(maxLen, BULK_IN_MIN_READ_BYTES), BULK_IN_MAX_READ_BYTES));
+      let scratch = new Uint8Array(
+        Math.min(Math.max(maxLen, BULK_IN_MIN_READ_BYTES), this.bulkInReadBytes));
       const finite = timeoutMs > 0;
       const start = Date.now();
       const deadline = start + timeoutMs;
       let filled = 0;
       let haltRetried = false;
       let lastRc = 0;
+      let saturated = true; // 本调用全程满块收满(探大判据)
       while (filled < maxLen) {
         if (finite && deadline - Date.now() <= 0) {
           break; // 窗口耗尽:有数据交付短读,无数据走超时
@@ -438,8 +465,10 @@ export class UsbHostPlugin implements FlutterPlugin {
           if (take < n) {
             // 超读余量(小 maxLen 撞上大突发;仅此一次,take<n 即已满格)
             this.bulkInLeftover = scratch.slice(take, n);
+            saturated = false;
           }
           if (n < scratch.length) {
+            saturated = false;
             break; // 短读 = 突发结束
           }
           continue; // 满块继续组装
@@ -447,18 +476,32 @@ export class UsbHostPlugin implements FlutterPlugin {
         if (n === 0) {
           // 零长包:传输边界标记(容器恰为 wMaxPacketSize 整数倍时出现),
           // 真数据在下一个传输里。
+          saturated = false;
           if (filled > 0) break; // 交付
           continue; // 未见数据的 ZLB:耗窗口续等
         }
-        // 负值:空手清 halt 原地重读一次(STALL 即时失败、超时吃满窗,
-        // 窗口已尽不再重试);已有部分数据则优先交付(数据是真实的)。
+        // 负值:rc=-1 且子块尺寸可回退 → 逐级折半重读(服务预提交拒收
+        // 特征码,1MB 档实测恒 -1,零字节损耗;若 256KB 也拒就一路退回
+        // 64KB 实测安全档,失败尺寸逐档记坏);否则 CLEAR_FEATURE 原地
+        // 重读一次(STALL 是相机流控,负值分不清 STALL 与超时,窗口已尽
+        // 不再重试);已有部分数据则优先交付。
+        if (filled === 0 && n === -1 && scratch.length > BULK_IN_READ_BYTES_START) {
+          this.bulkInBadFrom = Math.min(this.bulkInBadFrom, scratch.length);
+          this.bulkInReadBytes = Math.max(BULK_IN_READ_BYTES_START, scratch.length >> 1);
+          scratch = new Uint8Array(
+            Math.min(Math.max(maxLen, BULK_IN_MIN_READ_BYTES), this.bulkInReadBytes));
+          saturated = false;
+          continue;
+        }
         if (filled === 0 && !haltRetried && (!finite || deadline - Date.now() > 0)) {
           haltRetried = true;
+          saturated = false;
           Log.w(TAG, `bulkRead rc=${n},CLEAR_FEATURE 后原地重读`);
           await this.clearHalt(s.bulkIn.address);
           continue;
         }
         if (filled > 0) break;
+        saturated = false;
         NativeLog.e('usb', `bulkRead 失败:rc=${n}(max=${maxLen}B,窗=${timeoutMs}ms,实耗=${Date.now() - start}ms)`);
         if (finite) {
           // 窗口内无数据:对齐 Dart 的 TimeoutException 语义
@@ -475,6 +518,14 @@ export class UsbHostPlugin implements FlutterPlugin {
       if (this.session !== s) {
         result.error('usb_stale', '会话已轮换,旧链路读结果丢弃', null);
         return;
+      }
+      if (saturated && filled === maxLen) {
+        // 全程满块收满 = 流连续:×2 探大(顶到上限/坏档线为止),下次
+        // 调用生效。读请求尺寸对相机不可见(主机 NAK 节拍),协议无感。
+        const next = this.bulkInReadBytes << 1;
+        if (next <= BULK_IN_READ_BYTES_MAX && next < this.bulkInBadFrom) {
+          this.bulkInReadBytes = next;
+        }
       }
       if (filled > 0) {
         result.success(buffer.slice(0, filled));
