@@ -17,6 +17,7 @@ import 'package:nikon_pill/core/utils/byte_writer.dart';
 import 'package:nikon_pill/data/ratings_store.dart';
 import 'package:nikon_pill/features/common/trash_rating_icon.dart';
 import 'package:nikon_pill/features/common/sort_bars_icon.dart';
+import 'package:nikon_pill/features/common/widgets/hero_zoom.dart';
 import 'package:nikon_pill/data/ui_prefs_store.dart';
 import 'package:nikon_pill/features/library/library_ratings.dart';
 import 'package:nikon_pill/features/library/local_library_page.dart';
@@ -1217,12 +1218,19 @@ void main() {
 
     // 点 NEF 格进查看器:标题 + 2560px 全尺寸解码(假 JPEG 解不开走
     // errorBuilder,Image 组件在即可)。格键 = 文件名(缩略解码后
-    // 图标格文案不再保证在场,按格点)。
+    // 图标格文案不再保证在场,按格点)。查看器两枚 Image = 300px 防黑闪
+    // 垫底(ResizeImage contain,缓存命中即显)+ 解码大图(MemoryImage)。
     await tester.tap(find.byKey(const ValueKey('c.nef')));
     await tester.pumpAndSettle();
     expect(find.text('c.nef'), findsWidgets); // 查看器 AppBar
     expect(decoder.calls.last, ('${dir.path}/c.nef', 2560));
-    expect(find.byType(Image), findsOneWidget);
+    expect(
+        find.byWidgetPredicate((w) => w is Image && w.image is MemoryImage),
+        findsOneWidget);
+    expect(
+        find.byWidgetPredicate(
+            (w) => w is Image && w.image is ResizeImage),
+        findsOneWidget);
   });
 
   testWidgets('NEF 无解码器:网格图标格顶位,查看器报错占位', (tester) async {
@@ -1267,12 +1275,19 @@ void main() {
     expect(File('${gallery.thumbs.path}/libv4_c.hif_3.jpg').existsSync(), isTrue);
 
     // 点 HIF 格进查看器:标题 + 2560px 全尺寸解码(假 JPEG 解不开走
-    // errorBuilder,Image 组件在即可)。
+    // errorBuilder,Image 组件在即可)。两枚 Image = 300px 防黑闪垫底 +
+    // 解码大图(同 NEF 口径)。
     await tester.tap(find.byKey(const ValueKey('c.hif')));
     await tester.pumpAndSettle();
     expect(find.text('c.hif'), findsWidgets); // 查看器 AppBar
     expect(decoder.calls.last, ('${dir.path}/c.hif', 2560));
-    expect(find.byType(Image), findsOneWidget);
+    expect(
+        find.byWidgetPredicate((w) => w is Image && w.image is MemoryImage),
+        findsOneWidget);
+    expect(
+        find.byWidgetPredicate(
+            (w) => w is Image && w.image is ResizeImage),
+        findsOneWidget);
   });
 
   testWidgets('HIF 无解码器:网格图标格顶位,查看器报错占位', (tester) async {
@@ -2084,5 +2099,93 @@ void main() {
     for (var i = 1; i <= 14; i++) {
       expect(bigDecodes('f$i.nef'), 1, reason: 'f$i 全程驻留');
     }
+  });
+
+  testWidgets('渐进放大动效:格缩略挂 HeroZoom,点格查看器初始页同 tag 配对+缩略垫底',
+      (tester) async {
+    useTallSurface(tester);
+    // 真字节(可解码):查看器缩略垫底层无 errorBuilder 语义外另有
+    // 断言(提供器同源),假字节走错误道测不出。
+    File writeReal(String name, DateTime modified) {
+      final f = File('${dir.path}/$name');
+      f.writeAsBytesSync(img.encodePng(img.Image(width: 8, height: 6)));
+      f.setLastModifiedSync(modified);
+      return f;
+    }
+
+    final a = writeReal('a.jpg', DateTime(2026, 10, 1));
+    final gallery = _FakeGallery(dir);
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    await tester.pumpWidget(host(gallery, controller));
+    await drainAppFiles(tester, controller);
+
+    // 格缩略挂动效锚(HeroZoom 包 Image,tag = 图库侧配对键)。
+    expect(find.byType(HeroZoom), findsOneWidget);
+    expect(find.byWidgetPredicate((w) => w is Hero && w.tag == 'lib-grid-${a.path}'),
+        findsOneWidget);
+
+    // 点格进查看器:初始页挂同 tag 配对件(PageView 只建初始页,恰一枚;
+    // 下方网格 tab offstage 不计)+ 同源缩略垫底(contain)。
+    await tester.tap(find.byType(HeroZoom));
+    await tester.pumpAndSettle();
+    expect(find.text('a.jpg'), findsWidgets); // 查看器 AppBar 标题
+    expect(find.byWidgetPredicate((w) => w is Hero && w.tag == 'lib-grid-${a.path}'),
+        findsOneWidget);
+    expect(
+        find.byWidgetPredicate((w) =>
+            w is Image &&
+            w.fit == BoxFit.contain &&
+            w.image == gridThumbImageProvider(a.path)),
+        findsOneWidget);
+
+    // 收查看器:配对件回格位(回程航班终点)。
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    expect(find.byType(HeroZoom), findsOneWidget);
+  });
+
+  testWidgets('动效锚:NEF/MOV 缩略上格挂 HeroZoom,点格查看器同 tag 配对',
+      (tester) async {
+    useTallSurface(tester);
+    // 假件回真路径(libv4 落盘),字节假 → 格/查看器 Image 走 errorBuilder,
+    // 但 HeroZoom/锚组件在场 —— 显档记账与配对链正是本用例断言面。
+    final nef = writeFile('a.nef', modified: DateTime(2026, 10, 1));
+    final mov = writeFile('b.mov', modified: DateTime(2026, 10, 2));
+    final gallery = _FakeGallery(dir);
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    await tester.pumpWidget(host(
+      gallery,
+      controller,
+      rawDecoder: _FakeRawDecoder(fail: false),
+      videoPlayer: _FakeVideoPlayer(failThumbs: false),
+    ));
+    await drainAppFiles(tester, controller);
+
+    // 两格都挂动效锚(NEF 原生缩略 + MOV 抽帧)。
+    expect(find.byType(HeroZoom), findsNWidgets(2));
+    expect(find.byWidgetPredicate(
+        (w) => w is Hero && w.tag == 'lib-grid-${nef.path}'), findsOneWidget);
+    expect(find.byWidgetPredicate(
+        (w) => w is Hero && w.tag == 'lib-grid-${mov.path}'), findsOneWidget);
+
+    // 点 NEF 格进查看器:初始页同 tag 配对(_nativeBody aspectBox)。
+    await tester.tap(find.byKey(const ValueKey('a.nef')));
+    await tester.pumpAndSettle();
+    expect(find.text('a.nef'), findsWidgets); // 查看器 AppBar 标题
+    expect(find.byWidgetPredicate(
+        (w) => w is Hero && w.tag == 'lib-grid-${nef.path}'), findsOneWidget);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+
+    // 点 MOV 格进查看器:_VideoPlayPage 海报显示位锚。
+    await tester.tap(find.byKey(const ValueKey('b.mov')));
+    await tester.pumpAndSettle();
+    expect(find.text('b.mov'), findsWidgets);
+    expect(find.byWidgetPredicate(
+        (w) => w is Hero && w.tag == 'lib-grid-${mov.path}'), findsOneWidget);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
   });
 }

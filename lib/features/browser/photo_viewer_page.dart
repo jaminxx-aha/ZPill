@@ -44,6 +44,7 @@ import '../../platform/video_player.dart';
 import '../common/format.dart';
 import '../common/widgets/de_squeezed_image.dart';
 import '../common/widgets/embedded_video_player.dart';
+import '../common/widgets/hero_zoom.dart';
 import '../common/widgets/loading_overlay.dart';
 import '../common/widgets/photo_info_sheet.dart';
 import '../edit/edit_page.dart';
@@ -64,6 +65,9 @@ class PhotoViewerPage extends StatefulWidget {
     this.session,
     this.onOpenTransfers,
     this.formats = const <MediaFormat>{},
+    this.heroTag,
+    this.heroThumbPath,
+    this.heroImage,
   });
 
   final List<PhotoGroup> items;
@@ -104,6 +108,18 @@ class PhotoViewerPage extends StatefulWidget {
   /// 下载 SnackBar 的「查看进度」动作注入(测试;AppServices 里的传输
   /// 控制器在裸测试树不可建)。null = 默认推 TransfersPage(生产)。
   final VoidCallback? onOpenTransfers;
+
+  /// 渐进放大动效配对(网格页点格沿传入,见 hero_zoom.dart):初始页
+  /// 挂同 tag 的 HeroZoom,航班图源 = 格缩略。三者同给同缺;[heroTag]
+  /// 为空 = 无动效(降级普通转场)。
+  final Object? heroTag;
+
+  /// 格缩略盘档路径:初始页先显(航班落点即同图不闪白;预览/高清到
+  /// 位置换),也是航班梭子的图源。空 = 无动效。
+  final String? heroThumbPath;
+
+  /// 格缩略的 300px 缓存命中提供器([gridThumbImageProvider])。
+  final ImageProvider<Object>? heroImage;
 
   @override
   State<PhotoViewerPage> createState() => _PhotoViewerPageState();
@@ -571,7 +587,8 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
                 _setFullscreen(false);
               }
             },
-            itemBuilder: (_, i) => _page(widget.items[i], active: i == _index),
+            itemBuilder: (_, i) => _page(widget.items[i],
+                active: i == _index, isInitial: i == widget.initialIndex),
           ),
           bottomNavigationBar: _fullscreen ? null : _infoBar(context, group),
         );
@@ -579,22 +596,47 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
     );
   }
 
-  Widget _page(PhotoGroup group, {required bool active}) {
-    final zoomable = InteractiveViewer(
+  Widget _page(PhotoGroup group,
+      {required bool active, bool isInitial = false}) {
+    final ds = AppServices.instance.settingsController.value.deSqueeze;
+    final heroPage = isInitial &&
+        widget.heroTag != null &&
+        widget.heroImage != null &&
+        widget.heroThumbPath != null;
+    final content = _PreviewImage(
+      entry: group.primary,
+      thumbs: _thumbnails,
+      // 初始页先显格缩略(航班落点即同图不闪白;预览/高清到位置换),
+      // 其余页照旧走预览管线。
+      heroThumbPath: isInitial ? widget.heroThumbPath : null,
+    );
+    // 渐进放大动效只在初始页挂 HeroZoom(aspectBox:按图比定显示盒,
+    // hero 盒 = 图片 contain 显示位 —— 框架航班终点追踪 toHero 盒原点,
+    // 盒必须是显示位本身,落点才不错位);其余页照旧 Center + 预览管线。
+    // 视频页包的是海报(播放钮不随航班)。
+    final body = InteractiveViewer(
       maxScale: 8,
       child: Center(
-        child: _PreviewImage(entry: group.primary, thumbs: _thumbnails),
+        child: heroPage
+            ? HeroZoom(
+                tag: widget.heroTag!,
+                thumbPath: widget.heroThumbPath!,
+                deSqueeze: ds,
+                aspectBox: true,
+                child: content,
+              )
+            : content,
       ),
     );
     if (!group.isVideo) {
-      return zoomable;
+      return body;
     }
     // 视频页:自带 海报(未下载时垫底)/播放钮/下载/内嵌播放。
     return _CameraVideoPage(
       key: ValueKey(group.key),
       group: group,
       active: active,
-      poster: zoomable,
+      poster: body,
       player: _videoPlayer,
       viewBuilder: widget.embeddedVideoView ?? embeddedVideoViewBuilder,
       fullscreen: _fullscreen,
@@ -704,12 +746,21 @@ Future<void> _deleteQuietly(String path) async {
 /// 大图预览(小图先显 → 高清换图):打开即取小图席位(0x90C4 /
 /// GetThumb,缓存层已注入 EXIF 方向,引擎解码即转正);页 settle 后
 /// 宿主 [ThumbnailCache.warmPreview] 后台拉整档解码,升级事件到即换
-/// 高清(AnimatedSwitcher 淡切,长边 ≤ 2560 与变宽还原同享)。
+/// 高清(AnimatedSwitcher 淡切,长边 ≤ 2560 与变宽还原同享)。初始页
+/// 可带 [heroThumbPath](格缩略,渐进放大动效的落点图):先显它,
+/// 预览席位到位置换(网格档 JPG = 0x90C4 ~1024px,后续席位只升不降)。
 class _PreviewImage extends StatefulWidget {
-  const _PreviewImage({required this.entry, required this.thumbs});
+  const _PreviewImage({
+    required this.entry,
+    required this.thumbs,
+    this.heroThumbPath,
+  });
 
   final ObjectEntry entry;
   final ThumbnailCache thumbs;
+
+  /// 格缩略盘档路径(渐进放大动效的初始先显;空 = 走原预览管线)。
+  final String? heroThumbPath;
 
   @override
   State<_PreviewImage> createState() => _PreviewImageState();
@@ -745,8 +796,11 @@ class _PreviewImageState extends State<_PreviewImage> {
     return FutureBuilder<String>(
       future: _future,
       builder: (context, snap) {
+        // 席位链:高清 > 预览 > 格缩略(动效初始先显);前席未到由后席
+        // 顶位,到位置换(AnimatedSwitcher 淡切)。
         final path = _hqPath ??
-            (snap.connectionState == ConnectionState.done ? snap.data : null);
+            (snap.connectionState == ConnectionState.done ? snap.data : null) ??
+            widget.heroThumbPath;
         if (path != null) {
           // 变宽还原:设置 >1 时按倍率水平拉伸(见 DeSqueezedImage)。
           // key 跟路径:小图 → 高清走 AnimatedSwitcher 淡切(高清到时

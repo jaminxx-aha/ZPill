@@ -19,6 +19,10 @@
 /// 磁盘缓存)。缩略图 Future 按 handle 缓存在本页 State(setState 重建
 /// 不闪、不重发请求;PtpSession 串行锁 + ThumbnailCache 并发合并兜底)。
 /// 查看器仍按打开时刻的快照浏览(同步继续不追新,重进本页即刷新)。
+///
+/// 点格进查看器走渐进放大动效(iOS 图库式,HeroZoom 航班:格缩略从格
+/// 位放大展开到全屏,收查看器反向落回格位);缩略未就绪的格无动效,
+/// 照旧普通转场 —— 见 common/widgets/hero_zoom.dart。
 library;
 
 import 'dart:async';
@@ -43,6 +47,7 @@ import '../../l10n/l10n.dart';
 import '../common/media_grid.dart';
 import '../common/rating_filter.dart';
 import '../common/widgets/confirm_dialog.dart';
+import '../common/widgets/hero_zoom.dart';
 import '../common/widgets/states.dart';
 import '../../design/app_dimens.dart';
 import 'album_ratings_controller.dart';
@@ -543,23 +548,37 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
     }
   }
 
+  /// 动效配对键(格身份键;[_cell] 的 HeroZoom 与查看器侧同款)。
+  String _heroTag(_GridItem cell) => 'camera-grid-${cell.key}';
+
   /// 打开查看器:按可见格去重后的组序翻页(同组两格同看一张照片),
   /// 初始页 = 被点格的组;被点格的格式跟随进查看器(查看器内下载按
   /// 该格式收集,翻页后各组的下载同样按它 —— 与网格筛选预定一致)。
+  /// 渐进放大动效:格缩略已落盘才挂配对件(盘档路径作航班图源,
+  /// 缓存命中首帧即真图);未就绪降级普通转场。
   void _openViewer(List<_GridItem> cells, int index) {
+    final cell = cells[index];
     final groups = <PhotoGroup>[];
     for (final c in cells) {
       if (!groups.any((g) => g.key == c.group.key)) groups.add(c.group);
     }
+    final thumbPath = _thumbPaths[cell.rep.handle];
+    // ZoomPageRoute:整页淡入 + 网格原地不动(动效底图),与 Hero 航班
+    // 同拍 —— 系统 zoom 转场的缩退/快隐会与飞行图打架(原生图库缩放里
+    // 网格不动)。
     Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => PhotoViewerPage(
+      ZoomPageRoute<void>(
+        pageBuilder: (_, __, ___) => PhotoViewerPage(
           items: groups,
-          initialIndex: groups.indexOf(cells[index].group),
+          initialIndex: groups.indexOf(cell.group),
           ratings: widget.ratings,
-          formats: cells[index].format == null
+          formats: cell.format == null
               ? const <MediaFormat>{}
-              : {cells[index].format!},
+              : {cell.format!},
+          heroTag: thumbPath == null ? null : _heroTag(cell),
+          heroThumbPath: thumbPath,
+          heroImage:
+              thumbPath == null ? null : gridThumbImageProvider(thumbPath),
         ),
       ),
     );
@@ -986,20 +1005,27 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
                 child: const Center(child: Icon(Icons.broken_image_outlined)),
               );
             }
-            return Image.file(
-              File(path),
-              fit: BoxFit.cover,
-              // 三列格宽约 130 逻辑像素(与本地图库网格同几何):0x90C4
-              // ~1024px 缩略按 300 降采样解码(同图库网格 cacheWidth
-              // 口径),免全尺寸解码白耗内存。
-              cacheWidth: 300,
-              errorBuilder: (context, error, stackTrace) {
-                _retryThumbAfterFileError(cell.rep); // 死路径/坏档:自愈
-                return ColoredBox(
-                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                  child: const Center(child: Icon(Icons.broken_image_outlined)),
-                );
-              },
+            // 渐进放大动效锚(tag 与查看器侧配对);图像用共享提供器
+            // 构造(ResizeImage 300),航班梭子命中同一份已解码缓存。
+            return HeroZoom(
+              tag: _heroTag(cell),
+              thumbPath: path,
+              child: Image(
+                image: gridThumbImageProvider(path),
+                fit: BoxFit.cover,
+                // 三列格宽约 130 逻辑像素(与本地图库网格同几何):0x90C4
+                // ~1024px 缩略按 300 降采样解码(同图库网格 cacheWidth
+                // 口径),免全尺寸解码白耗内存。
+                errorBuilder: (context, error, stackTrace) {
+                  _retryThumbAfterFileError(cell.rep); // 死路径/坏档:自愈
+                  return ColoredBox(
+                    color:
+                        Theme.of(context).colorScheme.surfaceContainerHighest,
+                    child:
+                        const Center(child: Icon(Icons.broken_image_outlined)),
+                  );
+                },
+              ),
             );
           },
         ),
