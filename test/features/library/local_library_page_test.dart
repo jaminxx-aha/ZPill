@@ -1211,9 +1211,9 @@ void main() {
     await drainAppFiles(tester, controller);
 
     // 网格缩略:512px 解码一次(会话内合并),落盘 thumbsDir
-    // (内容键 + libv3_ 前缀,不与相机侧缩略键串台;键全量升版 = 黑边裁剪放开到全部缩略)。
+    // (内容键 + libv4_ 前缀,不与相机侧缩略键串台;键全量升版 = 黑边裁剪放开到全部缩略)。
     expect(decoder.calls, [('${dir.path}/c.nef', 512)]);
-    expect(File('${gallery.thumbs.path}/libv3_c.nef_3.jpg').existsSync(), isTrue);
+    expect(File('${gallery.thumbs.path}/libv4_c.nef_3.jpg').existsSync(), isTrue);
 
     // 点 NEF 格进查看器:标题 + 2560px 全尺寸解码(假 JPEG 解不开走
     // errorBuilder,Image 组件在即可)。格键 = 文件名(缩略解码后
@@ -1264,7 +1264,7 @@ void main() {
 
     // 与 NEF 同管线:格缩略 512px 解码一次,落盘 thumbsDir(libv3 键)。
     expect(decoder.calls, [('${dir.path}/c.hif', 512)]);
-    expect(File('${gallery.thumbs.path}/libv3_c.hif_3.jpg').existsSync(), isTrue);
+    expect(File('${gallery.thumbs.path}/libv4_c.hif_3.jpg').existsSync(), isTrue);
 
     // 点 HIF 格进查看器:标题 + 2560px 全尺寸解码(假 JPEG 解不开走
     // errorBuilder,Image 组件在即可)。
@@ -1310,7 +1310,7 @@ void main() {
     await drainAppFiles(tester, controller);
 
     final cache =
-        File('${gallery.thumbs.path}/libv3_c.nef_${nef.length}.jpg');
+        File('${gallery.thumbs.path}/libv4_c.nef_${nef.length}.jpg');
     // 缩略串行链内嵌缩略提取是真 IO(RandomAccessFile 头读/段读):
     // FakeAsync 域完成回调只在 runAsync 出窗上浮,逐窗排水至小档落盘。
     var written = false;
@@ -1346,7 +1346,7 @@ void main() {
 
     // 网格先行:格缩略兜底同链,排完才可按格键点进查看器。
     final thumbCache =
-        File('${gallery.thumbs.path}/libv3_c.nef_${nef.length}.jpg');
+        File('${gallery.thumbs.path}/libv4_c.nef_${nef.length}.jpg');
     var written = false;
     for (var i = 0; i < 40 && !written; i++) {
       await tester.runAsync(
@@ -1572,12 +1572,12 @@ void main() {
     await tester.pumpWidget(host(gallery, controller, videoPlayer: player));
     await drainAppFiles(tester, controller);
 
-    // 抽帧一次(会话内合并),落盘 thumbsDir(libv3_ 前缀内容键,与
+    // 抽帧一次(会话内合并),落盘 thumbsDir(libv4_ 前缀内容键,与
     // NEF 同管线)。
     expect(player.thumbs, [('${dir.path}/c.mov', 512)]);
-    // 键全量升版(libv3_):黑边裁剪放开到全部缩略。
+    // 键全量升版(libv4_):黑边裁剪放开到全部缩略。
     expect(
-        File('${gallery.thumbs.path}/libv3_c.mov_3.jpg').existsSync(), isTrue);
+        File('${gallery.thumbs.path}/libv4_c.mov_3.jpg').existsSync(), isTrue);
 
     await tester.tap(find.byKey(const ValueKey('c.mov')));
     await tester.pumpAndSettle();
@@ -1693,13 +1693,13 @@ void main() {
 
     // 小档解码一次、落盘 thumbsDir(与 NEF/MOV 同管线同键式)
     expect(decoder.calls, [('${dir.path}/a.jpg', 512)]);
-    expect(File('${gallery.thumbs.path}/libv3_a.jpg_3.jpg').existsSync(), isTrue);
+    expect(File('${gallery.thumbs.path}/libv4_a.jpg_3.jpg').existsSync(), isTrue);
 
     // 格已换小档源:provider 指向小档文件,gapless 换源保帧不闪
     final image = tester.widget<Image>(find.byType(Image).first);
     expect(image.gaplessPlayback, isTrue);
     final inner = (image.image as ResizeImage).imageProvider as FileImage;
-    expect(inner.file.path, '${gallery.thumbs.path}/libv3_a.jpg_3.jpg');
+    expect(inner.file.path, '${gallery.thumbs.path}/libv4_a.jpg_3.jpg');
   });
 
   testWidgets('查看器:图片滑到视频不自动播放(装载即暂停)', (tester) async {

@@ -3,12 +3,18 @@
  *
  * 对应 Dart 契约 lib/platform/raw_decoder.dart(MethodChannel
  * `nikonpill/raw`,`decode({path, maxPixelSize})` → JPEG 字节):
- * @ohos.multimedia.image 的 ImageSource 解码 → 长边压档(desiredSize
- * 按比缩放,不变形)→ ImagePacker 打包 JPEG(0.85)回传。
+ * - **HIF/HEIF**:@ohos.multimedia.image 的 ImageSource 解码 → 长边
+ *   压档(desiredSize 按比缩放,不变形)→ ImagePacker 打包 JPEG(0.85)
+ *   回传;
+ * - **NEF/NRW**:**LibRaw 真解码**(rawdecoder.so,LibRaw 0.21.2 静态
+ *   编入,LICENSE.LGPL/CDDL)—— 全显影管线(相机白平衡/sRGB/8bit/
+ *   自动亮度),halfSize superpixel 半尺寸免 demosaic 提速(长边减半
+ *   仍罩 2560 观看档),RGBA → createPixelMap → 长边压档(scale)→
+ *   ImagePacker 同出口。方向由 LibRaw flip 语义自理(随 EXIF Orientation
+ *   转正),与 iOS ImageIO 同为真解码直出,网格缩略/查看器大图共用
+ *   (nef_thumb.dart 内嵌 160×120 兜底仅作 LibRaw 失败时的最后回落)。
  *
- * **只接 HIF/HEIF**(扩展名闸,其余一律 FlutterError):ohos image
- * kit 无 RAW 解码(NEF 网格缩略由 Dart 侧内嵌缩略提取兜底,
- * core/media/nef_thumb.dart);JPG/PNG 等引擎可解格式也留在引擎原图
+ * 其余扩展名一律 FlutterError:JPG/PNG 等引擎可解格式留在引擎原图
  * 源 —— 方向引擎自理,避免 image kit 的 EXIF 方向语义与引擎解码不一致
  * 造成二次旋转。iOS 侧 RawDecodePlugin.swift 无门槛全接,平台差集见
  * 各自文件头。
@@ -19,10 +25,12 @@
  * Uint8List(iOS FlutterStandardTypedData 同款教训)。
  *
  * 通道调用在平台线程,解码重活全异步(await 链),result 回调在完成
- * 时交付(与 iOS 后台队列 + 主线程回投同语义)。
+ * 时交付(与 iOS 后台队列 + 主线程回投同语义)。LibRaw 解码进一步
+ * 落在 napi 异步工作线程(见 cpp/napi_init.cpp),JS 线程零阻塞。
  */
 import image from '@ohos.multimedia.image';
 import fs from '@ohos.file.fs';
+import rawdecoder from 'librawdecoder.so';
 import {
   FlutterPlugin,
   FlutterPluginBinding,
@@ -38,6 +46,27 @@ const CHANNEL = 'nikonpill/raw';
 
 /** 头读窗口:HEIF meta 链在 mdat 之前(Zf HIF 实测 ~1.8KB),64KB 罩住。 */
 const HEAD_BYTES = 65536;
+
+/** napi 返回人设(cpp/napi_init.cpp 的 decodeToRgba 契约)。 */
+interface RawRgbaResult {
+  width: number;
+  height: number;
+  ms: string;
+  data: Uint8Array;
+}
+
+/** rawdecoder.so 人设(静态 .so 导入无类型,显式收口防 any 漫溢)。 */
+interface RawDecoderNapi {
+  decodeToRgba(path: string, halfSize: boolean): Promise<RawRgbaResult>;
+}
+
+const rawdecoderNapi = rawdecoder as RawDecoderNapi;
+
+/** decodeRaw 出产:JPEG 字节 + napi 侧分段耗时(调观测用)。 */
+interface RawJpeg {
+  jpeg: Uint8Array;
+  ms: string;
+}
 
 /** `nikonpill/raw` 通道实现(ohos:仅 HIF/HEIF,长边压档出 JPEG)。 */
 export class RawDecodePlugin implements FlutterPlugin {
@@ -73,9 +102,20 @@ export class RawDecodePlugin implements FlutterPlugin {
       return;
     }
     const lower = path.toLowerCase();
+    if (lower.endsWith('.nef') || lower.endsWith('.nrw')) {
+      const started = Date.now();
+      this.decodeRaw(path, maxPixelSize).then((r) => {
+        Log.w(TAG, `NEF 真解码 ${maxPixelSize}px 总 ${Date.now() - started}ms [${r.ms}] ${r.jpeg.length}B`);
+        result.success(r.jpeg);
+      }).catch((err: Object) => {
+        Log.w(TAG, `NEF decode 异常:${JSON.stringify(err)}`);
+        result.error('decode_failed', `NEF 解码失败:${JSON.stringify(err)}`, null);
+      });
+      return;
+    }
     if (!lower.endsWith('.hif') && !lower.endsWith('.heif')) {
-      // NEF 等交 Dart 侧内嵌缩略兜底;JPG 等留引擎原图源(见文件头)。
-      result.error('unsupported_format', `ohos 解码只接 HIF/HEIF:${path}`, null);
+      // JPG 等留引擎原图源(见文件头)。
+      result.error('unsupported_format', `ohos 解码只接 HIF/HEIF/NEF/NRW:${path}`, null);
       return;
     }
     this.decode(path, maxPixelSize).then((bytes) => {
@@ -84,6 +124,54 @@ export class RawDecodePlugin implements FlutterPlugin {
       Log.w(TAG, `decode 异常:${JSON.stringify(err)}`);
       result.error('decode_failed', `HIF 解码失败:${JSON.stringify(err)}`, null);
     });
+  }
+
+  /** NEF/NRW:LibRaw 真解码(halfSize superpixel)→ RGBA → PixelMap
+   *  → 长边压档(scale 保比)→ JPEG 0.85。方向随 LibRaw flip 转正。 */
+  private async decodeRaw(path: string, maxPixelSize: number):
+    Promise<RawJpeg> {
+    let packer: image.ImagePacker | null = null;
+    let pixelMap: image.PixelMap | null = null;
+    try {
+      const out = await rawdecoderNapi.decodeToRgba(path, true);
+      // 同步形建面(24MB 拷贝 ~10ms,异步形重载与回调形归并出
+      // void&Promise 歧义,ArkTS 严模式拒收);srcPixelFormat = 源即
+      // RGBA8888(napi 侧产出),PixelMap 本体按默认格式持有。
+      pixelMap = image.createPixelMapSync(out.data.buffer as ArrayBuffer, {
+        size: { width: out.width, height: out.height },
+        srcPixelFormat: image.PixelMapFormat.RGBA_8888,
+      });
+      const long = Math.max(out.width, out.height);
+      if (long > maxPixelSize && long > 0) {
+        const ratio = maxPixelSize / long;
+        try {
+          await pixelMap.scale(ratio, ratio);
+        } catch (err) {
+          Log.w(TAG, `scale 失败,用原尺寸:${JSON.stringify(err)}`);
+        }
+      }
+      packer = image.createImagePacker();
+      const buf = await packer.packToData(pixelMap, {
+        format: 'image/jpeg',
+        quality: 85,
+      });
+      return { jpeg: new Uint8Array(buf), ms: out.ms };
+    } finally {
+      if (packer !== null) {
+        try {
+          await packer.release();
+        } catch (_) {
+          // 释放尽力而为
+        }
+      }
+      if (pixelMap !== null) {
+        try {
+          await pixelMap.release();
+        } catch (_) {
+          // 释放尽力而为
+        }
+      }
+    }
   }
 
   /** 解码:长边压档(desiredSize 保比)→ JPEG 0.85 → Uint8Array。 */
