@@ -671,7 +671,7 @@ const Map<String, String> zhCatalog = {
   'lut.exportFailed': '导出失败',
   'lut.parseFailed': 'LUT 解析失败',
   'libpage.savedToAlbum': '已保存到系统相册',
-  'libpage.rawDecodeFailed': 'RAW 解码失败(该平台可能不支持)',
+  'libpage.decodeFailed': '解码失败(该平台可能不支持)',
   'transfers.clearHistory': '清空历史',
   'transfers.empty': '暂无传输任务\n(在相机相册里多选或大图页单张下载)',
   'transfers.queued': '排队中',

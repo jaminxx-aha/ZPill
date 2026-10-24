@@ -9,11 +9,11 @@
 ///([LibraryRatings],下载落盘沿按所在组相机评级写入、相册改评沿传播,
 /// 见 [fileRatingKey]);「连拍聚合」开时相邻拍摄时刻的同段文件合为
 /// 一格(×N 角标,与相机相册连拍簇同参,见 [groupLocalBurstRuns];
-/// mtime = 拍摄时刻由下载引擎落盘回写)。可解码图与 NEF/MOV 同走缩略
-/// 小档管线(≤512px 落盘,格双源 gapless 切换 —— cache 被系统内存警告
+/// mtime = 拍摄时刻由下载引擎落盘回写)。可解码图与 NEF/HIF/MOV 同走
+/// 缩略小档管线(≤512px 落盘,格双源 gapless 切换 —— cache 被系统内存警告
 /// 清空后重解的也是毫秒级小档,2026-10-20「看大图返回缩略重刷新」根治);
 /// 点任意可看件进黑底查看器:PageView 左右滑翻页(网格过滤序同源),
-/// 图片双指缩放、NEF 原生解码长边 ≤2560(会话缓存,翻回不重解)。视频
+/// 图片双指缩放、NEF/HIF 原生解码长边 ≤2560(会话缓存,翻回不重解)。视频
 /// 在页面内直接播放(2026-10-09:点开即播,不再「海报帧 + 播放钮 +
 /// 弹全屏新页」三步走;iOS 平台视图嵌 AVPlayerViewController,播放控制
 /// 在 Flutter 侧自绘 —— 原生传输条关掉,横滑才归 PageView 翻页不抢手势;
@@ -61,7 +61,7 @@ import '../transfers/transfers_page.dart';
 import 'library_ratings.dart';
 import 'lut_export_sheet.dart';
 
-/// Flutter 可解码的图片扩展名(NEF 等原生格式走解码管线)。
+/// Flutter 可解码的图片扩展名(NEF/HIF 等原生解码格式走解码管线)。
 const _viewableExts = {'.jpg', '.jpeg', '.png', '.webp', '.gif'};
 
 bool _isViewableName(String name) =>
@@ -318,7 +318,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
             await _videoPlayer.thumbnail(file.path, maxPixelSize: 512);
         jpeg = await trimLetterboxJpeg(extracted) ?? extracted;
       } else {
-        // NEF 与可解码图(JPG/PNG)同走原生小图通道:iOS 实现是
+        // NEF/HIF 与可解码图(JPG/PNG)同走原生小图通道:iOS 实现是
         // CGImageSource 对格式无门槛(CreateThumbnailFromImageAlways,
         // 45MP 全图下采样解码 ~50ms,内存友好)。原生通道缺失
         // (Android/ohos)抛 MissingPluginException —— Error 族,
@@ -681,11 +681,12 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     );
   }
 
-  /// 可点进查看器:Flutter 可解码图片 / NEF 原生解码 / MOV 原生抽帧。
+  /// 可点进查看器:Flutter 可解码图片 / NEF·HIF 原生解码 / MOV 原生抽帧。
   bool _openable(File file) {
     final name = _nameOf(file);
     return _isViewableName(name) ||
         isRawFilename(name) ||
+        isHeifFilename(name) ||
         isVideoFilename(name);
   }
 
@@ -731,7 +732,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     );
   }
 
-  /// 格内容(可解码图片铺格 / NEF·MOV 原生缩略 / 图标格)。
+  /// 格内容(可解码图片铺格 / NEF·HIF·MOV 原生缩略 / 图标格)。
   ///
   /// 可解码图双源:小档未生成读原图(cacheWidth 300,首显速度不变),
   /// 小档生成完静默换小档源(gaplessPlayback 保帧无感切换)。cache 被
@@ -741,6 +742,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     final viewable = _isViewable(file);
     final name = _nameOf(file);
     final raw = !viewable && isRawFilename(name);
+    final heif = !viewable && isHeifFilename(name);
     final video = !viewable && isVideoFilename(name);
     return Stack(
       fit: StackFit.expand,
@@ -762,8 +764,8 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
               );
             },
           )
-        else if (raw || video)
-          // NEF/MOV:原生解码/抽帧缩略(缓存命中/解码完成后铺图);
+        else if (raw || heif || video)
+          // NEF/HIF/MOV:原生解码/抽帧缩略(缓存命中/解码完成后铺图);
           // 无解码器/失败 → 图标格。视频格叠摄像机角标(与相机相册
           // 网格同款)。
           FutureBuilder<String?>(
@@ -965,8 +967,8 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   }
 }
 
-/// 应用内文件查看(黑底,PageView 左右滑翻页):双指缩放(JPG/NEF)、
-/// NEF 原生解码长边 ≤2560(会话缓存,翻回不重解)、MOV 页内播放
+/// 应用内文件查看(黑底,PageView 左右滑翻页):双指缩放(JPG/NEF/HIF)、
+/// NEF/HIF 原生解码长边 ≤2560(会话缓存,翻回不重解)、MOV 页内播放
 /// (iOS 平台视图 + Flutter 自绘播放控制,见 EmbeddedVideoPlayer,
 /// 点开不自动播)。视频页可全屏(原地旋转:锁横屏 + 隐顶栏,同一播
 /// 放器,无新视图无跳变)。顶栏动作(导入系统相册/删除)作用于当前
@@ -1060,8 +1062,8 @@ class _LibraryViewerState extends State<_LibraryViewer> {
     DeviceOrientation.landscapeRight,
   ];
 
-  /// NEF 大图解码缓存(会话内合并:页滑出视口被 dispose 后 future 仍
-  /// 在,翻回不重解 —— 整档 RAW 解码是秒级重活)。
+  /// NEF/HIF 大图解码缓存(会话内合并:页滑出视口被 dispose 后 future
+  /// 仍在,翻回不重解 —— 整档原生解码是秒级重活)。
   ///
   /// LRU 封顶 16 张:解码产物 JPEG 每张 ~1-2MB,无界驻留会在大库翻页
   /// 时把内存吃穿(16 × ~2MB ≈ 32MB 上限,即单手翻页的回看窗口);
@@ -1118,7 +1120,7 @@ class _LibraryViewerState extends State<_LibraryViewer> {
   /// 邻页预解码(i±1,视频跳过):滑到前把邻居解好,上屏即缓存命中
   /// —— 旧版邻页上屏才开始解码全幅 JPG,解码窗里只有黑底在屏(翻页
   /// 黑闪的根)。JPG 走 precacheImage(与页内 DeSqueezedImage 同一
-  /// FileImage 缓存键);NEF 走会话解码缓存([_decodes] 天然去重)。
+  /// FileImage 缓存键);NEF/HIF 走会话解码缓存([_decodes] 天然去重)。
   /// 视频跳过:平台视图只在真滑到时装载,预建等于白装(不引
   /// allowImplicitScrolling 同因)。解码在引擎线程不占 UI;失败静默
   /// (真滑到走原路兜底)。
@@ -1129,8 +1131,8 @@ class _LibraryViewerState extends State<_LibraryViewer> {
       final file = _files[j];
       final name = _nameOf(file);
       if (isVideoFilename(name)) continue;
-      if (isRawFilename(name)) {
-        unawaited(_warmNefDecode(file));
+      if (isRawFilename(name) || isHeifFilename(name)) {
+        unawaited(_warmNativeDecode(file));
       } else if (_isViewableName(name)) {
         // 静默收口走 onError:precache 失败(邻档被删/不可解码)走
         // FlutterError.reportError 框架错误道,不进返回 future 的错误
@@ -1142,9 +1144,9 @@ class _LibraryViewerState extends State<_LibraryViewer> {
     }
   }
 
-  /// NEF 邻页预热(吞错:catchError 对带值 Future 须回值,包装一层;
+  /// NEF/HIF 邻页预热(吞错:catchError 对带值 Future 须回值,包装一层;
   /// 失败不拦 —— 真滑到时 FutureBuilder 原路报错)。
-  Future<void> _warmNefDecode(File file) async {
+  Future<void> _warmNativeDecode(File file) async {
     try {
       await _decodeFor(file);
     } on Object {
@@ -1221,10 +1223,10 @@ class _LibraryViewerState extends State<_LibraryViewer> {
             )
           : _VideoFallbackPage(file: file, thumbFor: widget.thumbFor);
     }
-    if (isRawFilename(name)) {
+    if (isRawFilename(name) || isHeifFilename(name)) {
       return InteractiveViewer(
         maxScale: 8,
-        child: Center(child: _rawBody(file)),
+        child: Center(child: _nativeBody(file)),
       );
     }
     if (_isViewableName(name)) {
@@ -1259,7 +1261,7 @@ class _LibraryViewerState extends State<_LibraryViewer> {
         ),
       );
 
-  Widget _rawBody(File file) => FutureBuilder<Uint8List>(
+  Widget _nativeBody(File file) => FutureBuilder<Uint8List>(
         future: _decodeFor(file),
         builder: (context, snap) {
           if (snap.hasData) {
@@ -1278,7 +1280,7 @@ class _LibraryViewerState extends State<_LibraryViewer> {
             return Padding(
               padding: const EdgeInsets.all(24),
               child: Text(
-                context.t('libpage.rawDecodeFailed'),
+                context.t('libpage.decodeFailed'),
                 textAlign: TextAlign.center,
                 style: TextStyle(color: AppMedia.onMediaSubtle),
               ),
