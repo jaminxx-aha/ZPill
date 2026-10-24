@@ -804,6 +804,8 @@ const Map<String, String> enCatalog = {
       'Completed · not imported (download again to retry)',
   'transfers.savedInApp': 'Saved to the app',
   'transfers.failedRetries': 'Failed: {e} (after {n} attempts)',
+  'transfers.durationSec': '{n}s',
+  'transfers.durationMinSec': '{m}m{n}s',
   'edit.reset': 'Reset',
   'edit.saveToAlbum': 'Save to Album',
   'edit.jpegOnly': 'Cannot edit this file (JPEG only)',

@@ -59,6 +59,9 @@ final class FakeEngine implements TransferEngine {
   Future<void> cancel(String taskId) async {}
 
   @override
+  Future<void> removeRecord(String taskId) async {}
+
+  @override
   Future<void> clearHistory() async {}
 }
 

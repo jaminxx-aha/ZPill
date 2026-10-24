@@ -27,10 +27,12 @@ import '../media/xmp_metadata.dart';
 import '../ptpip/object_format.dart' show ObjectKind;
 import '../../platform/gallery_saver.dart';
 import 'object_downloader.dart';
+import 'transfer_history.dart';
 import 'transfer_task.dart';
 
 abstract interface class TransferEngine {
-  /// 任务快照流(进行中 + 历史,入队序);UI 的数据源。
+  /// 任务快照流(进行中 + 历史,入队序);UI 的数据源。启动时持久化
+  /// 的历史记录(见 [TransferHistoryStore])会先于此流发出。
   Stream<List<TransferTask>> get tasks;
 
   /// 入队一批对象到 [destination]。去重只对进行中(queued/running)的
@@ -43,8 +45,12 @@ abstract interface class TransferEngine {
   /// (文件已完整,后处理收尾后照常 completed)。
   Future<void> cancel(String taskId);
 
-  /// 清空历史(仅已完成/已取消/已失败)。
+  /// 清空历史(仅已完成/已取消/已失败;持久化历史一并清)。
   Future<void> clearHistory();
+
+  /// 删除单条历史记录(传输页左滑单独删除;仅终态,进行中不响应 ——
+  /// 取消走 [cancel])。
+  Future<void> removeRecord(String taskId);
 }
 
 /// 一次 enqueue 对应一个批次:gallery 批次共享同一次导入对话框。
@@ -67,6 +73,12 @@ final class _Job {
   TransferTask task; // 就地替换的快照
   final _Batch batch;
   var cancelRequested = false; // running 中被 cancel 置位
+
+  /// 首跑起点(elapsed 墙钟口径;重试不重盖)。
+  DateTime? firstStart;
+
+  /// 本次尝试的起点(downloadMs 纯下载口径;重试逐次重盖)。
+  DateTime? attemptStart;
 }
 
 /// 默认指数退避:第 [retry] 次重试等 200ms * 2^(retry-1)。
@@ -77,16 +89,27 @@ final class TransferEngineImpl implements TransferEngine {
   TransferEngineImpl({
     required this.downloader,
     required this.gallery,
+    this.history,
     this.maxAttempts = 3,
     this.metadataFor,
     this.watermarkFor,
     this.watermarkRaster,
     this.onAppFileSaved,
     Duration Function(int retry)? backoffFor,
-  }) : _backoffFor = backoffFor ?? _defaultBackoff;
+  }) : _backoffFor = backoffFor ?? _defaultBackoff {
+    // 持久化历史恢复(异步):终态记录拼回快照流,重启后传输页仍有账。
+    // 失败静默(空账起家,不反噬传输主链路)。
+    if (history != null) {
+      _ready = _restoreHistory();
+    }
+  }
 
   final ObjectDownloader downloader;
   final GallerySaver gallery;
+
+  /// 终态历史持久化(null = 不持久化,测试/进程内用);构造沿异步
+  /// 恢复,终态沿 [TransferHistoryStore.upsert] 落盘。
+  final TransferHistoryStore? history;
 
   /// 元数据提供器:JPG 下载落盘后按此注入 XMP
   ///(版权/作者/评分/GPS);null 或返回 null = 不注入。注入失败
@@ -116,6 +139,10 @@ final class TransferEngineImpl implements TransferEngine {
   var _seq = 0;
   String? _tempDir;
   String? _downloadsDir;
+
+  /// 恢复就绪闸:入队沿等账本恢复完(id 序号与去重都以全量任务表为
+  /// 基线,半恢复期入队会撞历史号)。无账本即值。
+  Future<void> _ready = Future<void>.value();
 
   @override
   Stream<List<TransferTask>> get tasks => _ctrl.stream;
@@ -156,6 +183,7 @@ final class TransferEngineImpl implements TransferEngine {
   @override
   Future<void> enqueue(Iterable<ObjectEntry> entries,
       {required TransferDestination destination}) async {
+    await _ready; // 恢复闸:账本拼回后才有正确的 id 起号基线
     final batch = _Batch(destination);
     for (final entry in entries) {
       final active = _jobs.values.any((j) =>
@@ -197,7 +225,45 @@ final class TransferEngineImpl implements TransferEngine {
   @override
   Future<void> clearHistory() async {
     _jobs.removeWhere((_, job) => job.task.isTerminal);
+    await history?.clear();
     _notify();
+  }
+
+  @override
+  Future<void> removeRecord(String taskId) async {
+    final job = _jobs[taskId];
+    if (job == null || !job.task.isTerminal) return; // 进行中:取消走 cancel
+    _jobs.remove(taskId);
+    _notify();
+    await history?.remove(taskId);
+  }
+
+  /// 持久化历史恢复:终态记录拼回任务表(批次用已完结的哑批次,导入
+  /// 收尾短路),id 序号跳过历史最大值防新任务撞号。
+  Future<void> _restoreHistory() async {
+    List<TransferTask> records;
+    try {
+      records = await history!.load();
+    } on Object {
+      return; // 恢复失败 = 空账起家,不反噬传输主链路
+    }
+    if (records.isEmpty) return;
+    for (final task in records) {
+      if (!task.isTerminal) continue; // 账本只收终态;脏数据不计
+      final seq = RegExp(r'^t(\d+)$').firstMatch(task.id);
+      if (seq != null) {
+        _seq = _seq > int.parse(seq.group(1)!) ? _seq : int.parse(seq.group(1)!) + 1;
+      }
+      final batch = _Batch(task.destination)..finished = true;
+      _jobs[task.id] = _Job(task, batch);
+    }
+    _notify();
+  }
+
+  /// 终态沿落盘账本(best-effort,失败静默;store 自带内存快照兜底)。
+  void _recordHistory(TransferTask task) {
+    if (!task.isTerminal) return;
+    unawaited(history?.upsert(task));
   }
 
   // ---- 队列泵 ----------------------------------------------------------
@@ -224,9 +290,19 @@ final class TransferEngineImpl implements TransferEngine {
 
   /// 下载段(泵内):一个任务的相机传输。成功即把后处理链入独立 FIFO
   /// 链(**不 await**)并返回,泵随即开下一个文件;失败/取消在本段收终态。
+  ///
+  /// 时间口径:startAt 首跑不重盖;attemptStart 逐次重盖(重试从头下,
+  /// downloadMs 只记末次);终态沿盖 finishedAt(= 下载时间)。
   Future<void> _runDownload(_Job job) async {
     job.cancelRequested = false;
-    job.task = job.task.copyWith(state: TransferState.running, clearError: true);
+    final now = DateTime.now();
+    job.firstStart ??= now;
+    job.attemptStart = now;
+    job.task = job.task.copyWith(
+        state: TransferState.running,
+        clearError: true,
+        startedAt: job.firstStart,
+        downloadMs: 0);
     _notify();
     final dir = job.task.destination == TransferDestination.gallery
         ? _tempDir ??= await gallery.tempDir()
@@ -246,11 +322,16 @@ final class TransferEngineImpl implements TransferEngine {
       job.batch.downloads[job.task.id] = dl;
       // 移交后处理:任务落 processing(非终态,批次不收尾),由
       // [_runPostproc] 在后处理链上收场。
-      job.task = job.task.copyWith(state: TransferState.processing);
+      job.task = job.task.copyWith(
+          state: TransferState.processing, downloadMs: _attemptMs(job));
       _notify();
       _enqueuePostproc(job, dl);
     } on DownloadCancelledException {
-      job.task = job.task.copyWith(state: TransferState.cancelled, clearError: true);
+      job.task = job.task.copyWith(
+          state: TransferState.cancelled,
+          clearError: true,
+          downloadMs: _attemptMs(job),
+          finishedAt: DateTime.now());
       _settleAfterDownload(job);
     } catch (e) {
       // 链路/写盘失败(StateError、PtpResponseException、FileSystemException…)
@@ -262,16 +343,27 @@ final class TransferEngineImpl implements TransferEngine {
         _notify();
       } else {
         // 放弃:attempts 保留已用重试数(不含本次放弃的尝试)。
-        job.task = job.task.copyWith(state: TransferState.failed, error: e.toString());
+        job.task = job.task.copyWith(
+            state: TransferState.failed,
+            error: e.toString(),
+            downloadMs: _attemptMs(job),
+            finishedAt: DateTime.now());
         _settleAfterDownload(job);
       }
     }
   }
 
-  /// 下载段终态收尾(取消/放弃失败):记账 + 通知 + 批次收尾检查。
+  /// 末次尝试的纯下载耗时(毫秒);无起点(理论不可达)记 0。
+  int _attemptMs(_Job job) {
+    final start = job.attemptStart;
+    return start == null ? 0 : DateTime.now().difference(start).inMilliseconds;
+  }
+
+  /// 下载段终态收尾(取消/放弃失败):记账 + 落盘账本 + 通知 + 批次收尾检查。
   void _settleAfterDownload(_Job job) {
     if (job.task.isTerminal) {
       job.batch.terminalIds.add(job.task.id);
+      _recordHistory(job.task);
     }
     _notify();
     _finishBatchIfDone(job.batch);
@@ -316,12 +408,15 @@ final class TransferEngineImpl implements TransferEngine {
           // 收尾扩展点失败(评级快照等)不挡传输
         }
       }
-      job.task =
-          job.task.copyWith(state: TransferState.completed, receivedBytes: dl.bytes);
+      job.task = job.task.copyWith(
+          state: TransferState.completed,
+          receivedBytes: dl.bytes,
+          finishedAt: DateTime.now());
     } on Object {
       // 后处理意外抛错:文件已完整,不重下,按完成落定(见方法注释)
     }
     job.batch.terminalIds.add(job.task.id);
+    _recordHistory(job.task);
     _notify();
     _finishBatchIfDone(job.batch);
   }
@@ -471,6 +566,9 @@ final class TransferEngineImpl implements TransferEngine {
         final job = _jobs[id];
         if (job == null) continue; // 历史已被清:只删文件,不回填
         job.task = job.task.copyWith(galleryUri: uri);
+        // 导入结果晚于 completed 沿(账本已按无 Uri 记过):回填沿重记,
+        // 持久化账本的「已导入」口径与快照一致。
+        _recordHistory(job.task);
       }
     }
     // 临时文件清理:导入成功(字节已进媒体库)与未导入都删,
@@ -504,8 +602,10 @@ final class TransferEngineImpl implements TransferEngine {
 
   /// 终态落定 + 通知(queued 取消用;running 取消经 downloader 走)。
   void _settle(_Job job, TransferState state, String? error) {
-    job.task = job.task.copyWith(state: state, error: error);
+    job.task = job.task.copyWith(state: state, error: error,
+        finishedAt: DateTime.now());
     job.batch.terminalIds.add(job.task.id);
+    _recordHistory(job.task);
     _notify();
   }
 }

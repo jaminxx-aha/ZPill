@@ -23,6 +23,9 @@ final class TransferTask {
     this.error,
     this.attempts = 0,
     this.galleryUri,
+    this.startedAt,
+    this.finishedAt,
+    this.downloadMs = 0,
   });
 
   final String id;
@@ -42,6 +45,31 @@ final class TransferTask {
   /// 导入失败)或非 gallery 任务。重新入队可重试导入。
   final Uri? galleryUri;
 
+  /// 首次进入 running 的时刻(重试不重盖);排队即取消则 null。
+  final DateTime? startedAt;
+
+  /// 终态落定时刻(completed/failed/cancelled 即「下载时间」,持久化
+  /// 后按它倒序;非终态 null)。
+  final DateTime? finishedAt;
+
+  /// 末次尝试的纯下载耗时(重试逐次清零重计):速度 = 字节 ÷ 它,
+  /// 重试退避与后处理不摊进下载速度。
+  final int downloadMs;
+
+  /// 全程墙钟耗时(首跑起跑到终态,含重试退避与后处理);缺起点或
+  /// 终点(非终态/排队即取消)返回 null。
+  Duration? get elapsed {
+    final s = startedAt, f = finishedAt;
+    return (s == null || f == null) ? null : f.difference(s);
+  }
+
+  /// 下载速度 bytes/s;只对 completed 且下过字节有意义(失败半程/
+  /// 取消半程不设速度口径)。
+  double? get downloadSpeed =>
+      state == TransferState.completed && downloadMs > 0 && receivedBytes > 0
+          ? receivedBytes * 1000 / downloadMs
+          : null;
+
   bool get isTerminal =>
       state == TransferState.completed ||
       state == TransferState.failed ||
@@ -58,6 +86,9 @@ final class TransferTask {
     int? attempts,
     Uri? galleryUri,
     bool clearGalleryUri = false,
+    DateTime? startedAt,
+    DateTime? finishedAt,
+    int? downloadMs,
   }) =>
       TransferTask(
         id: id,
@@ -70,5 +101,8 @@ final class TransferTask {
         error: clearError ? null : (error ?? this.error),
         attempts: attempts ?? this.attempts,
         galleryUri: clearGalleryUri ? null : (galleryUri ?? this.galleryUri),
+        startedAt: startedAt ?? this.startedAt,
+        finishedAt: finishedAt ?? this.finishedAt,
+        downloadMs: downloadMs ?? this.downloadMs,
       );
 }

@@ -42,6 +42,19 @@ String? formatDateRange(DateTime? newest, DateTime? oldest) {
   return '$one – ${_two(b.month)}-${_two(b.day)}';
 }
 
+/// 近期时刻(传输记录「下载时间」列):当年 'MM-dd HH:mm',跨年补
+/// 'yyyy-' 前缀;null 原样返回 null。数字格式产物不进词表(与字节
+/// 量/速度同口径)。
+String? formatRecentDateTime(DateTime? d) {
+  if (d == null) {
+    return null;
+  }
+  final local = d.toLocal();
+  final hm = '${_two(local.month)}-${_two(local.day)} '
+      '${_two(local.hour)}:${_two(local.minute)}';
+  return local.year == DateTime.now().year ? hm : '${local.year}-$hm';
+}
+
 /// 本地日期分段头(相册网格按日分段,键+参记录,显示点 tm() 落地):
 /// 'date.today' / 'date.yesterday' / 同年 'date.day'{m,d,w} /
 /// 跨年 'date.dayYear'{y,m,d,w}(w = 'date.weekdayN' 嵌套记录,tMsg
