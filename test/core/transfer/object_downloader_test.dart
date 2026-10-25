@@ -237,6 +237,58 @@ void main() {
     expect(await dir.list().toList(), isEmpty);
   });
 
+  // ── 取景在场钳块(chunkCap,2026-10-25「拍照后取景卡一下」根修)──
+
+  test('取景在场钳块:闸在时每块钳到闸值,整档照常拼回', () async {
+    final fake = FakePtpTransport();
+    final downloader = ObjectDownloader(
+        session: PtpSession(transport: fake),
+        partialChunkBytes: 50,
+        chunkCap: () => 10);
+
+    final payload = Uint8List.fromList(List.generate(120, (i) => i));
+    fake.reply(deviceInfoWithPartial());
+    for (var off = 0; off < 120; off += 10) {
+      fake.reply(_okData(Uint8List.sublistView(payload, off, off + 10)));
+    }
+
+    final result = await downloader.download(
+        _entry('DSC_0010.NEF', 120), targetDir: dir.path);
+
+    expect(fake.requests.length, 13, reason: '门禁 + 12 块(策略块 50 被闸钳到 10)');
+    for (var i = 1; i <= 12; i++) {
+      expect(fake.requests[i].params, [0x12, (i - 1) * 10, 10],
+          reason: '第 $i 块请求量 = 闸值(钳制只改请求)');
+    }
+    expect(await File(result.path).readAsBytes(), payload);
+  });
+
+  test('取景闸撤:返回 null 即恢复策略块(AIMD 演化不受钳制期影响)', () async {
+    final fake = FakePtpTransport();
+    var gateOpen = true;
+    final downloader = ObjectDownloader(
+        session: PtpSession(transport: fake),
+        partialChunkBytes: 50,
+        chunkCap: () => gateOpen ? 10 : null);
+
+    final payload = Uint8List.fromList(List.generate(120, (i) => i));
+    fake.reply(deviceInfoWithPartial());
+    fake.reply(_okData(Uint8List.sublistView(payload, 0, 10)));
+    fake.reply(_okData(Uint8List.sublistView(payload, 10, 60)));
+    fake.reply(_okData(Uint8List.sublistView(payload, 60, 110)));
+    fake.reply(_okData(Uint8List.sublistView(payload, 110, 120)));
+
+    final result = await downloader.download(_entry('DSC_0011.NEF', 120),
+        targetDir: dir.path, onProgress: (_) => gateOpen = false);
+
+    expect(fake.requests[1].params, [0x12, 0, 10], reason: '闸在:钳 10');
+    expect(fake.requests[2].params, [0x12, 10, 50],
+        reason: '闸撤:回策略块(初始 50,钳制期未喂策略不改变演化)');
+    expect(fake.requests[3].params, [0x12, 60, 50]);
+    expect(fake.requests[4].params, [0x12, 110, 10], reason: '末块要足不越界');
+    expect(await File(result.path).readAsBytes(), payload);
+  });
+
   // ── 分块在途取消(软取消:不发 Cancel 包,2026-10-16 真机定案)──
 
   test(

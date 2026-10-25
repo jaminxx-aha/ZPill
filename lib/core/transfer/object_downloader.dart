@@ -88,6 +88,7 @@ class ObjectDownloader {
     AimdChunkPolicy? chunkPolicy,
     bool enablePartialObjectEx = false,
     AimdChunkPolicy? exChunkPolicy,
+    int? Function()? chunkCap,
   })  : // 每下载器(= 传输会话)一个策略实例:跨 download 调用延续学习,
         // 不跨下载器/会话共享。注入是测试口径(小数值 + 判快阈值可控);
         // 缺省自建,上限随 [partialChunkBytes](生产 iOS = 1MB)。
@@ -109,6 +110,7 @@ class ObjectDownloader {
               stepBytes: 1024 * 1024,
             ),
         _enablePartialObjectEx = enablePartialObjectEx,
+        _chunkCap = chunkCap,
         _session = session;
 
   final PtpSession _session;
@@ -118,6 +120,14 @@ class ObjectDownloader {
   /// GetObject 流式(见库注释)。相机 op 表无 0x101B 时忽略,回落
   /// GetObject。
   final int? partialChunkBytes;
+
+  /// 每块上限的外部闸(缺省 null = 不钳):每块请求前调用,返回本块
+  /// 字节数上限(小于策略块时钳制),null = 本块不钳。取景保帧用
+  /// (装配沿接「帧在流」):下载与取景共享会话串行锁,大块独占锁
+  /// 期间取景帧只能等块界 —— 在场时钳小块让帧插缝。钳制只改请求量
+  /// **不喂 AIMD 策略**(演化口径不受扰,闸撤即回策略块)。
+  /// 私有持有(implements 面不扩,类注纪律)。
+  final int? Function()? _chunkCap;
 
   /// 0x9431 GetPartialObjectEx 路线开关(默认关,生产 iOS 开,见库
   /// 注释)。开着也不查 op 表:首块真发试探,0x2005/0x2006 一次即
@@ -176,8 +186,11 @@ class ObjectDownloader {
           }
           final useEx = _enablePartialObjectEx && (_exUsable ?? true);
           final policy = useEx ? _exPolicy : _chunkPolicy;
-          final want =
-              math.min(policy.currentBytes, entry.sizeInBytes - offset);
+          var want = math.min(policy.currentBytes, entry.sizeInBytes - offset);
+          // 外部块闸(取景在场保帧,见 [_chunkCap]):只钳本块请求,
+          // 不喂策略 —— AIMD 演化照常,闸撤即回策略块。
+          final cap = _chunkCap?.call();
+          if (cap != null && cap < want) want = cap;
           final chunkWatch = Stopwatch()..start();
           final Uint8List chunk;
           try {
