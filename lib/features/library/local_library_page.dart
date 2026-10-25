@@ -146,33 +146,34 @@ void _showSaveCard(BuildContext context, String text) {
     barrierDismissible: false,
     builder: (ctx) {
       dialogCtx = ctx;
-      // 尺寸对齐微信保存卡(~136dp 方卡,图标+短文案竖排)。
-      return Dialog(
-        backgroundColor: Colors.white,
-        insetPadding: const EdgeInsets.symmetric(horizontal: 40),
-        shape: RoundedRectangleBorder(
+      // 尺寸对齐微信保存卡(~136dp 方卡,图标+短文案竖排)。勿用
+      // Dialog:其 minWidth 280 硬约束会架空自定义宽(真机实证)。
+      return Center(
+        child: Material(
+          color: Colors.white,
           borderRadius: BorderRadius.circular(14),
-        ),
-        child: SizedBox(
-          width: 136,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(10, 24, 10, 20),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.check_rounded, size: 42, color: Colors.black87),
-                const SizedBox(height: 8),
-                Text(
-                  text,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    fontSize: 13,
-                    height: 1.25,
-                    color: Colors.black87,
-                    fontWeight: FontWeight.w500,
+          child: SizedBox(
+            width: 142,
+            height: 142,
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.check_rounded, size: 46, color: Colors.black87),
+                  const SizedBox(height: 10),
+                  Text(
+                    text,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      height: 1.25,
+                      color: Colors.black87,
+                      fontWeight: FontWeight.w500,
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
