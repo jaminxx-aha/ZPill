@@ -1174,8 +1174,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     _exitSelect();
     if (mounted) {
       if (imported) {
-        _showSaveCard(context,
-            context.t('libpage.exportedAlbum', {'n': files.length}));
+        _showSaveCard(context, context.t('libpage.exportedAlbum'));
       } else {
         ScaffoldMessenger.of(context)
           ..hideCurrentSnackBar()
