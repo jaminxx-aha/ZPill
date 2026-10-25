@@ -1865,7 +1865,11 @@ class _LibraryViewerState extends State<_LibraryViewer>
       } on FileSystemException {
         // 删不掉不挡(cache 目录,系统会收)。
       }
-      toast = uris.isNotEmpty ? 'libpage.savedToAlbum' : 'libpage.notImported';
+      // ohos:createAsset 落库时系统自己弹「已保存」提示(微信同款),
+      // 我们的 SnackBar 叠上去是重复提示 → 成功态留系统卡,只报失败。
+      toast = uris.isNotEmpty
+          ? (Platform.operatingSystem == 'ohos' ? '' : 'libpage.savedToAlbum')
+          : 'libpage.notImported';
     } on PlatformException catch (e) {
       toast = e.code == 'cancelled' ? '' : 'lut.exportFailed';
     } on Exception {
