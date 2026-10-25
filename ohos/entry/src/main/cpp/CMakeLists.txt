@@ -82,9 +82,46 @@ set(LIBRAW_SOURCES
   libraw/src/x3f/x3f_parse_process.cpp
   libraw/src/x3f/x3f_utils_patched.cpp
 )
+
+# fdk-aac 2.0.2(Fraunhofer FDK AAC,NOTICE 见 libfdkaac/ 内许可文件)静态
+# 编入:本机音频编码器仅 Vendor.AAC 且创建即败、无软编,MP4 muxer 又只
+# 收 AAC 音轨 —— 导出有声 = 自带软编 AAC 的唯一通路(2026-10-25 实锤)。
+file(GLOB FDKAAC_SOURCES
+  libfdkaac/libAACenc/src/*.cpp
+  libfdkaac/libSBRenc/src/*.cpp
+  libfdkaac/libMpegTPEnc/src/*.cpp
+  libfdkaac/libPCMutils/src/*.cpp
+  libfdkaac/libSACenc/src/*.cpp
+  libfdkaac/libFDK/src/*.cpp
+  libfdkaac/libSYS/src/*.cpp
+)
+set(FDKAAC_INCLUDES
+  ${CMAKE_CURRENT_SOURCE_DIR}/libfdkaac/libAACenc/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/libfdkaac/libFDK/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/libfdkaac/libSYS/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/libfdkaac/libMpegTPEnc/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/libfdkaac/libSBRenc/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/libfdkaac/libPCMutils/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/libfdkaac/libSACenc/include
+)
 add_library(rawdecoder SHARED
   napi_init.cpp
+  video_lut.cpp
   ${LIBRAW_SOURCES}
+  ${FDKAAC_SOURCES}
 )
+target_include_directories(rawdecoder PRIVATE ${FDKAAC_INCLUDES})
 target_compile_definitions(rawdecoder PRIVATE USE_ZLIB)
-target_link_libraries(rawdecoder PUBLIC libz.so libace_napi.z.so)
+target_link_libraries(
+  rawdecoder
+  PUBLIC libz.so
+         libace_napi.z.so
+         libnative_media_core.so
+         libnative_media_codecbase.so
+         libnative_media_vdec.so
+         libnative_media_venc.so
+         libnative_media_acodec.so
+         libnative_media_aenc.so
+         libnative_media_avdemuxer.so
+         libnative_media_avmuxer.so
+         libnative_media_avsource.so)
