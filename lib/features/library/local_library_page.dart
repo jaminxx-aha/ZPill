@@ -146,27 +146,34 @@ void _showSaveCard(BuildContext context, String text) {
     barrierDismissible: false,
     builder: (ctx) {
       dialogCtx = ctx;
+      // 尺寸对齐微信保存卡(~136dp 方卡,图标+短文案竖排)。
       return Dialog(
         backgroundColor: Colors.white,
+        insetPadding: const EdgeInsets.symmetric(horizontal: 40),
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(14),
         ),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 26),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.check_rounded, size: 46, color: Colors.black87),
-              const SizedBox(height: 10),
-              Text(
-                text,
-                style: const TextStyle(
-                  fontSize: 15,
-                  color: Colors.black87,
-                  fontWeight: FontWeight.w500,
+        child: SizedBox(
+          width: 136,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(10, 24, 10, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.check_rounded, size: 42, color: Colors.black87),
+                const SizedBox(height: 8),
+                Text(
+                  text,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    height: 1.25,
+                    color: Colors.black87,
+                    fontWeight: FontWeight.w500,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       );
