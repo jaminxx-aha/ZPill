@@ -18,6 +18,7 @@
  * FlutterEngineConnectionRegistry 自动回调,无需额外接线)。
  */
 import fs from '@ohos.file.fs';
+import abilityAccessCtrl from '@ohos.abilityAccessCtrl';
 import common from '@ohos.app.ability.common';
 import UIAbility from '@ohos.app.ability.UIAbility';
 import {
@@ -142,6 +143,7 @@ export class GalleryPlugin implements FlutterPlugin, AbilityAware {
       result.error('gallery_error', 'UIAbility 未挂载(AbilityAware 未回调)', null);
       return;
     }
+    const ability = this.ability; // 收窄:UIAbility(createAsset 要它的 context)
     try {
       // 标准编解码把 Dart Map 落成 ES Map(string 键)。
       // arkts 禁 any/unknown:args(ESObject)先 as 成具体形参类型,
@@ -175,6 +177,18 @@ export class GalleryPlugin implements FlutterPlugin, AbilityAware {
         result.error('gallery_error', '已有保存面板在进行中', null);
         return;
       }
+      if (this.hasWritePermission(ability)) {
+        // ACL 直授:WRITE_IMAGEVIDEO 常权在手,免面板静默落库
+        Log.i(TAG, `importFiles: 已持 WRITE_IMAGEVIDEO,静默直存 ${requests.length} 个`);
+        SaveSession.openSilent(ability.context,
+          requests, (uris: Array<string>) => {
+          Log.i(TAG, `静默保存完成:${uris.length}/${requests.length} 个 URI`);
+          result.success(uris);
+        }, (msg: string) => {
+          result.error('gallery_error', `保存失败:${msg}`, null);
+        });
+        return;
+      }
       Log.i(TAG, `importFiles: 登记 ${requests.length} 个文件,亮出保存面板`);
       const opened = SaveSession.open(requests, (uris: Array<string>) => {
         Log.i(TAG, `保存面板结束:${uris.length}/${requests.length} 个授权 URI`);
@@ -186,6 +200,21 @@ export class GalleryPlugin implements FlutterPlugin, AbilityAware {
     } catch (e) {
       Log.e(TAG, `importFiles 异常: ${e}`);
       result.error('gallery_error', `importFiles: ${e}`, null);
+    }
+  }
+
+  /// WRITE_IMAGEVIDEO 是否已持权(ACL 直授/临时授权均算):持权 =
+  /// 免面板直存,否则走 SaveButton 面板。
+  private hasWritePermission(ability: UIAbility): boolean {
+    try {
+      const at: abilityAccessCtrl.AtManager = abilityAccessCtrl.createAtManager();
+      const state: abilityAccessCtrl.GrantStatus = at.verifyAccessTokenSync(
+        ability.context.applicationInfo.accessTokenId,
+        'ohos.permission.WRITE_IMAGEVIDEO');
+      return state === abilityAccessCtrl.GrantStatus.PERMISSION_GRANTED;
+    } catch (e) {
+      Log.e(TAG, `hasWritePermission: ${e}`);
+      return false;
     }
   }
 
