@@ -109,6 +109,13 @@ final class LiveViewEngine {
 
   final status = ValueNotifier<LiveViewStatus>(LiveViewStatus.idle);
 
+  /// 帧是否真在流:轮询中且未挂起/未在看门狗处置。取景在场闸(下载
+  /// 钳块保帧,装配沿接 ObjectDownloader 的 chunkCap)的口径 —— 挂起窗
+  /// (拍照/对焦/直拍收尾)帧本就不流,闸放下载全速;帧恢复流动即钳
+  /// 块插缝。
+  bool get framesFlowing =>
+      status.value == LiveViewStatus.running && !_paused && !_recovering;
+
   /// 取景流健康度(帧签名看门狗驱动;UI 横幅「相机忙/画面保持」等)。
   final health = ValueNotifier<LiveViewHealth>(LiveViewHealth.ok);
 

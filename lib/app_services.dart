@@ -74,6 +74,13 @@ import 'platform/usb/watchdog_usb_host.dart';
 /// 窗);门含楔死自愈梯,正常 ~1-3s,超时兜底防押死。
 const Duration kConnectStartGateTimeout = Duration(seconds: 3);
 
+/// 取景在场下载钳块(2026-10-25「拍照后取景卡一下」根修):速传/
+/// 直拍收尾的整档下载与取景轮询共享会话串行锁,Ex 账 8MB 块独占锁
+/// ~250ms(USB)/~1s+(无线),帧只能等块界 —— 帧在流时把块钳到
+/// 1MB 插缝(USB 固定事务开销 ~48ms/块 ≈ ~13MB/s,20MB JPEG 多花
+/// ~1s),挂起窗(拍照/对焦)帧本就不流,闸放全速不受钳。
+const int kViewfinderChunkCapBytes = 1024 * 1024;
+
 final class AppServices {
   AppServices._() {
     // 幂等:测试直接 pumpWidget 不经 main(),这里保证平台服务就绪。
@@ -166,6 +173,15 @@ final class AppServices {
       session: session,
       partialChunkBytes: Platform.isIOS ? 1024 * 1024 : null,
       enablePartialObjectEx: Platform.isIOS,
+      // 取景在场钳块(见 [kViewfinderChunkCapBytes]):闸懒取 —— 引擎
+      // 在本方法之后才创建,闭包在块沿才跑,装配早已收口;引擎缺席按
+      // 不钳走(不因装配时序牺牲下载)。
+      chunkCap: () {
+        final engine = _liveViewEngine;
+        return (engine != null && engine.framesFlowing)
+            ? kViewfinderChunkCapBytes
+            : null;
+      },
     );
     thumbnails = ThumbnailCache(
       session: session,
@@ -353,6 +369,7 @@ final class AppServices {
       onEscalateToLinkRecovery: () =>
           connection.requestRecovery('conn.errStreamRestart'),
     );
+    _liveViewEngine = lvEngine;
     remoteController = RemoteController(
       session: session,
       connection: connection,
@@ -656,6 +673,11 @@ final class AppServices {
   late final CameraOverviewController cameraOverview;
   late final StorageOverviewController storageOverview;
   late final RemoteController remoteController;
+
+  /// 取景引擎引用(下载钳块闸用,见 [kViewfinderChunkCapBytes]):
+  /// 引擎创建晚于下载器装配,闭包经此转发;nullable 防晚绑期读炸 ——
+  /// 缺席即闸放行(不钳)。
+  LiveViewEngine? _liveViewEngine;
 
   /// 侧链放行门:等当前连接沿的起景段落定(超时兜底见
   /// kConnectStartGateTimeout)。概览/双卡槽/清事件/对时/轮询/相册预热

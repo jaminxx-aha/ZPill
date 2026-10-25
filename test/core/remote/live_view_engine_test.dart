@@ -1007,5 +1007,31 @@ void main() {
       expect(lines.where((l) => l.contains('节拍账')), hasLength(1));
       expect(transport.liveViewFetches, 101);
     });
+
+    test('framesFlowing:running 且未挂起为真;pause/stop 即假(下载钳块闸口径)',
+        () async {
+      final transport = _ScriptTransport()
+        ..ok() // startLiveView
+        ..ok(data: _frame(1));
+      final delay = _GatedDelay();
+      final engine = LiveViewEngine(
+        session: PtpSession(transport: transport),
+        delay: delay.call,
+      );
+      expect(engine.framesFlowing, isFalse, reason: 'idle 未在轮询');
+
+      await engine.start();
+      await pumpEventQueue();
+      expect(engine.framesFlowing, isTrue, reason: 'running 帧在流');
+
+      engine.pause();
+      expect(engine.framesFlowing, isFalse,
+          reason: '挂起窗(拍照/对焦)帧不流,闸放下载全速');
+      engine.resume();
+      expect(engine.framesFlowing, isTrue);
+
+      await engine.stop();
+      expect(engine.framesFlowing, isFalse, reason: '停轮回 idle');
+    });
   });
 }
