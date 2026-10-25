@@ -585,6 +585,31 @@ mixin _BrowseOps on _SessionCore {
     return result.data ?? Uint8List(0);
   }
 
+  /// Nikon GetPartialObjectEx(0x9431,S-SDKZ-200BF §6.2.3.4):
+  /// GetPartialObject 的 64 位扩展 —— 偏移与长度各拆 u32 低/高两参,
+  /// 规格未记单块上限(0x101B 的 1MB 钳制是实测方言);应答参数携带
+  /// 实发字节数(低/高各 u32),**短发合法**,调用方按 offset 续拉,
+  /// 不得把中段短读当 EOF。能力探测不查 op 表(无线假门教训:表不可
+  /// 信),由调用方真发试探、0x2005/0x2006 即降级 0x101B。
+  Future<Uint8List> getPartialObjectEx(
+    int handle,
+    int offset,
+    int maxBytes,
+  ) async {
+    final result = await _serialized(() => transport.execute(PtpRequest(
+          opcode: NikonOperationCode.getPartialObjectEx,
+          params: [
+            handle,
+            offset & 0xFFFFFFFF,
+            (offset >> 32) & 0xFFFFFFFF,
+            maxBytes & 0xFFFFFFFF,
+            (maxBytes >> 32) & 0xFFFFFFFF,
+          ],
+        )));
+    _ensureOk(result, NikonOperationCode.getPartialObjectEx);
+    return result.data ?? Uint8List(0);
+  }
+
   /// Nikon GetLargeThumb(0x90C4):高清缩略 JPEG(N-link 口径约 1024px,
   /// 单张数百 KB)。相机不支持时抛 [UnsupportedError](上层回落
   /// GetThumb)。

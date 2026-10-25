@@ -24,6 +24,17 @@
 ///   整 app 断连(缩略图/点击全挂)。64KB 分块与镜头头读同款(IC 链
 ///   已验证粒度);ohos/Android 通道一次调用本就读满 1MB 流块(内部
 ///   子块组装,ohos 64KB / Android 16KB),保持 GetObject 不降速。
+/// - GetPartialObjectEx 优先(构造参数 enablePartialObjectEx,生产
+///   iOS 开):0x101B 的 u64 扩展(S-SDKZ-200BF §6.2.3.4),**规格未记单块上限**
+///   —— AIMD 单开策略(起步 1MB 已证安全域,+1MB/次加性升,8MB 封顶
+///   = 相机 PTP-IP 帧上限证据,超时/错误减半自纠),大档每 MB 摊到的
+///   事务开销随块大反比下降。能力不查 op 表(无线假门教训):首块真发
+///   试探,0x2005/0x2006 即本会话降级 0x101B(不惩罚、本块原样重发);
+///   应答实发可小于请求(规格应答参数),**中段短读续拉不当 EOF**
+///   (0x101B 无此许可,短读=提前收尾交对账,防病态流死循环)。
+///   候选留账:GetPartialObjectHighSpeed(0x9400)读卡更快,但有状态
+///   (60s 间隔超时+一票命令即复位文件头),与本 app 高频交错操作不
+///   兼容,未采用。
 library;
 
 import 'dart:async';
@@ -69,11 +80,23 @@ class ObjectDownloader {
     required PtpSession session,
     this.partialChunkBytes,
     AimdChunkPolicy? chunkPolicy,
+    bool enablePartialObjectEx = false,
+    AimdChunkPolicy? exChunkPolicy,
   })  : // 每下载器(= 传输会话)一个策略实例:跨 download 调用延续学习,
         // 不跨下载器/会话共享。注入是测试口径(小数值 + 判快阈值可控);
         // 缺省自建,上限随 [partialChunkBytes](生产 iOS = 1MB)。
         _chunkPolicy =
             chunkPolicy ?? AimdChunkPolicy(maxBytes: partialChunkBytes),
+        // 0x9431 单开策略:起步 1MB(0x101B 已证安全域)+1MB/次升到
+        // 8MB 封顶(规格未记上限,8MB = 相机 PTP-IP 帧上限证据);
+        // 超时/错误乘性减半自纠,拒绝不惩罚(能力问题不归 AIMD 管)。
+        _exPolicy = exChunkPolicy ??
+            AimdChunkPolicy(
+              maxBytes: 8 * 1024 * 1024,
+              initialBytes: 1024 * 1024,
+              stepBytes: 1024 * 1024,
+            ),
+        _enablePartialObjectEx = enablePartialObjectEx,
         _session = session;
 
   final PtpSession _session;
@@ -84,9 +107,23 @@ class ObjectDownloader {
   /// GetObject。
   final int? partialChunkBytes;
 
-  /// 分块路线的 AIMD 策略(块大小演化,见库注释)。私有字段是刻意的:
+  /// 0x9431 GetPartialObjectEx 路线开关(默认关,生产 iOS 开,见库
+  /// 注释)。开着也不查 op 表:首块真发试探,0x2005/0x2006 一次即
+  /// 本会话降级 0x101B(无线假门教训:表不可信,真发才算数)。
+  /// 私有持有(implements 面不扩,类注纪律)。
+  final bool _enablePartialObjectEx;
+
+  /// 能力探针状态:null = 未探(首块真发)/ true = 已证可用 /
+  /// false = 已降级。每下载器(= app 级传输会话)一次。
+  bool? _exUsable;
+
+  /// 0x101B 路线 AIMD 策略(块大小演化,见库注释)。私有字段是刻意的:
   /// 公共成员会进 `implements ObjectDownloader` 的测试假件接口。
   final AimdChunkPolicy _chunkPolicy;
+
+  /// 0x9431 路线 AIMD 策略(与 0x101B 分账:块容量级差 8 倍,演化
+  /// 节奏互不拖拽;降级回 0x101B 时旧账原样续用)。
+  final AimdChunkPolicy _exPolicy;
 
   /// 流式下载 [entry] 到 [targetDir](不存在则创建),文件名冲突自动
   /// 加 ` (n)` 序号。[onProgress] 回调累计字节数(整档路线块大小对齐
@@ -122,32 +159,51 @@ class ObjectDownloader {
             cancelled = true;
             break;
           }
+          final useEx = _enablePartialObjectEx && (_exUsable ?? true);
+          final policy = useEx ? _exPolicy : _chunkPolicy;
           final want =
-              math.min(_chunkPolicy.currentBytes, entry.sizeInBytes - offset);
+              math.min(policy.currentBytes, entry.sizeInBytes - offset);
           final chunkWatch = Stopwatch()..start();
           final Uint8List chunk;
           try {
-            chunk =
-                await _session.getPartialObject(entry.handle, offset, want);
+            chunk = useEx
+                ? await _session
+                    .getPartialObjectEx(entry.handle, offset, want)
+                : await _session.getPartialObject(entry.handle, offset, want);
+          } on PtpResponseException catch (e) {
+            if (useEx && _isExUnsupported(e)) {
+              // 能力拒绝(0x2005/0x2006):≠ 链路信号,不喂策略;本会话
+              // 降级 0x101B,本块原样重发(continue 不推进 offset,
+              // 降级后 useEx 恒假,无循环风险)。
+              _exUsable = false;
+              continue;
+            }
+            (useEx ? _exPolicy : _chunkPolicy).reportError();
+            rethrow;
           } on TimeoutException {
             // 超时(USB 单事务读超时):链路撑不起这个块大小 —— 喂降。
-            _chunkPolicy.reportTimeout();
+            (useEx ? _exPolicy : _chunkPolicy).reportTimeout();
             rethrow;
           } on PtpCancelledException {
             rethrow; // 取消收口(若上层有取消通道):不惩罚(用户行为 ≠ 链路质量)
           } on Exception {
             // 传输错误(相机拒绝应答 / PTP-IP 看门狗断链 / …):喂降。
-            _chunkPolicy.reportError();
+            (useEx ? _exPolicy : _chunkPolicy).reportError();
             rethrow;
           }
+          if (useEx) _exUsable = true; // 真发成功:能力坐实
           // 成功:带耗时喂策略(快 → 加性升;慢 → 不动,见策略口径)。
-          _chunkPolicy.reportSuccess(chunkWatch.elapsed);
+          policy.reportSuccess(chunkWatch.elapsed);
           if (chunk.isEmpty) break; // 相机提前收尾
           sink.add(chunk);
           received += chunk.length;
           onProgress?.call(received);
           offset += chunk.length;
-          if (chunk.length < want) break; // 短读 = EOF
+          if (offset >= entry.sizeInBytes) break; // 收齐(对账必平)
+          // 中段短读:0x9431 应答实发可小于请求(规格应答参数),续拉
+          // 下一段;0x101B 无此许可 —— 短读 = 提前收尾,交收尾对账判
+          // 失败(旧语义,防病态流死循环)。
+          if (!useEx && chunk.length < want) break;
         }
       } else {
         await _session.getObject(entry.handle, onData: (chunk) {
@@ -237,6 +293,14 @@ class ObjectDownloader {
       }
     }
   }
+
+  /// 0x9431 能力拒绝判定:仅 Operation/Parameter_Not_Supported 算
+  /// 「本机不支持」(降级 0x101B 的信号);InvalidObjectHandle /
+  /// Access_Denied(视频播放中,规格 §6.2.3.4)等是场景性错误,照旧
+  /// 上抛走重试,不降级。
+  static bool _isExUnsupported(PtpResponseException e) =>
+      e.responseCode == PtpResponseCode.operationNotSupported ||
+      e.responseCode == PtpResponseCode.parameterNotSupported;
 
   /// 只取最后一段作文件名(PTP 相机文件名本不含分隔符,防御性处理)。
   static String _safeBasename(String name) {
