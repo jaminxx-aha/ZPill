@@ -12,7 +12,9 @@
 ///   LICENSE 只借思路,激进档无真机 A/B 不做);
 /// - 成功但慢(> 阈值)→ 不动(链路在喘,别加压);
 /// - 超时/传输错误 → **乘性减半**,下限 [minChunkBytes] 不降穿;
-/// - 封顶 ≤ [hardMaxChunkBytes] = 1MB(0x101B 单块上限,勿越);
+/// - 封顶:缺省 ≤ [AimdChunkPolicy.hardMaxChunkBytes] = 1MB(0x101B
+///   单块上限,勿越);0x9431 Ex 账经 [AimdChunkPolicy.hardCapBytes]
+///   显式换 16MB 闸(见 [AimdChunkPolicy.exHardMaxChunkBytes]);
 /// - **取消不惩罚**:用户取消 ≠ 链路差 —— 协议上就没有 report 取消
 ///   的方法,调用方对取消路径不喂任何信号,块大小原样带入下次传输。
 ///
@@ -55,8 +57,18 @@ final class AimdChunkPolicy {
   /// 保守档定值:起步 = 下限(64KB)。
   static const int minChunkBytes = 64 * 1024;
 
-  /// 0x101B 单块上限(勿越):默认封顶,显式更大的 [maxBytes] 也被钳回。
+  /// 0x101B 单块上限(勿越):缺省硬闸,显式更大的 [maxBytes] 也被钳回。
+  /// 只对 0x101B 路线是契约;0x9431 Ex 账经 [hardCapBytes] 显式换闸。
   static const int hardMaxChunkBytes = 1024 * 1024;
+
+  /// 0x9431 GetPartialObjectEx 账的硬闸:规格 §6.2.3.4 未记单块上限。
+  /// 2026-10-25 四点真机 A/B(UI 口径):4MB≈27 / 8MB≈32 / 16MB≈36 /
+  /// 32MB≈38 —— 拟合固定 ~48ms + 渐近 ~40。**终值 8MB(用户定案)**:
+  /// 32MB 的 +6 要 4 倍内存瞬态(~110MB)与 3.7 倍取消延迟换,不值;
+  /// 8MB 内存 ~30MB、取消 ~0.3s。候选链留档:提速需求复发时一行抬闸
+  /// (16MB 均衡档 / 32MB 顶格档),快阈须同步抬 900ms(400ms 旧阈会
+  /// 把账钉死在 ~15-16MB,16MB 块 430ms>400 判「喘」)。
+  static const int exHardMaxChunkBytes = 8 * 1024 * 1024;
 
   /// 加性增长步长(+32KB/次)。
   static const int additiveStepBytes = 32 * 1024;
@@ -67,7 +79,8 @@ final class AimdChunkPolicy {
   /// 全参可注入(测试用小数值小周期;生产走默认定值)。
   ///
   /// 界内钳制规则:
-  /// - [maxBytes] 上限 [hardMaxChunkBytes](显式传更大也钳回,协议上限);
+  /// - [maxBytes] 上限 [hardCapBytes](缺省 = [hardMaxChunkBytes],即
+  ///   0x101B 契约闸;Ex 账显式传 [exHardMaxChunkBytes] 换 8MB 闸);
   /// - [minBytes] 高于上界时随上界收缩(退化但自洽 —— 定值小粒度
   ///   分块的小于 64KB 上界照样工作,块大小恒等于上界);
   /// - [initialBytes](缺省 = 下限)钳入 [下限, 上界]。
@@ -77,8 +90,10 @@ final class AimdChunkPolicy {
     int? initialBytes,
     int? stepBytes,
     Duration? fastThreshold,
+    int? hardCapBytes,
   }) {
-    final max = math.min(maxBytes ?? hardMaxChunkBytes, hardMaxChunkBytes);
+    final cap = hardCapBytes ?? hardMaxChunkBytes;
+    final max = math.min(maxBytes ?? cap, cap);
     final min = math.min(minBytes ?? minChunkBytes, max);
     final step = stepBytes ?? additiveStepBytes;
     final threshold = fastThreshold ?? fastChunkThreshold;

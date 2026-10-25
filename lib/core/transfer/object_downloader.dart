@@ -26,12 +26,13 @@
 ///   子块组装,ohos 64KB / Android 16KB),保持 GetObject 不降速。
 /// - GetPartialObjectEx 优先(构造参数 enablePartialObjectEx,生产
 ///   iOS 开):0x101B 的 u64 扩展(S-SDKZ-200BF §6.2.3.4),**规格未记单块上限**
-///   —— AIMD 单开策略(起步 1MB 已证安全域,+1MB/次加性升,8MB 封顶
-///   = 相机 PTP-IP 帧上限证据,超时/错误减半自纠),大档每 MB 摊到的
-///   事务开销随块大反比下降。能力不查 op 表(无线假门教训):首块真发
-///   试探,0x2005/0x2006 即本会话降级 0x101B(不惩罚、本块原样重发);
-///   应答实发可小于请求(规格应答参数),**中段短读续拉不当 EOF**
-///   (0x101B 无此许可,短读=提前收尾交对账,防病态流死循环)。
+///   —— AIMD 单开策略(起步 1MB 已证安全域,+1MB/次加性升,封顶见
+///   [AimdChunkPolicy.exHardMaxChunkBytes],四点 A/B 后用户定案 8MB;
+///   超时/错误减半自纠),大档每 MB 摊到的事务开销随块大反比下降。能力不查 op
+///   表(无线假门教训):首块真发试探,0x2005/0x2006 即本会话降级
+///   0x101B(不惩罚、本块原样重发);应答实发可小于请求(规格应答参数),
+///   **中段短读续拉不当 EOF**(0x101B 无此许可,短读=提前收尾交对账,
+///   防病态流死循环)。
 ///   候选留账:GetPartialObjectHighSpeed(0x9400)读卡更快,但有状态
 ///   (60s 间隔超时+一票命令即复位文件头),与本 app 高频交错操作不
 ///   兼容,未采用。
@@ -43,10 +44,15 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import '../browser/object_entry.dart';
+import '../log/app_log.dart';
 import '../ptp/operation_codes.dart';
 import '../ptp/ptp_session.dart';
 import '../ptp/ptp_transport.dart';
 import 'aimd_chunk.dart';
+
+/// 逐块记账门槛(真机标定数据源,2026-10-25):实收大档(≥4MB)才
+/// 逐块记 AppLog —— 缩略图/头读走同一下载器,不吵日志环。
+const int _kLoudChunkLogBytes = 4 * 1024 * 1024;
 
 /// 下载被取消:半成品已删,数据流已排空。
 final class DownloadCancelledException implements Exception {
@@ -88,11 +94,17 @@ class ObjectDownloader {
         _chunkPolicy =
             chunkPolicy ?? AimdChunkPolicy(maxBytes: partialChunkBytes),
         // 0x9431 单开策略:起步 1MB(0x101B 已证安全域)+1MB/次升到
-        // 8MB 封顶(规格未记上限,8MB = 相机 PTP-IP 帧上限证据);
-        // 超时/错误乘性减半自纠,拒绝不惩罚(能力问题不归 AIMD 管)。
+        // exHardMaxChunkBytes 封顶(真机四点 A/B 后用户定案 8MB,演化
+        // 账与候选链见该常量注释);超时/错误乘性减半自纠,拒绝不惩罚
+        // (能力问题不归 AIMD 管)。快阈维持缺省 400ms:8MB 块 ~250ms
+        // 恒判快、封顶即约束,无需抬阈(900ms 是 32MB 档的使能闸,随
+        // 32MB 一起撤)。
+        // 硬闸必须显式过(hardCapBytes):缺省闸是 0x101B 的 1MB 契约
+        // —— 2026-10-25 修复前 8MB 账被它静默钳回,块恒 1MB。
         _exPolicy = exChunkPolicy ??
             AimdChunkPolicy(
-              maxBytes: 8 * 1024 * 1024,
+              maxBytes: AimdChunkPolicy.exHardMaxChunkBytes,
+              hardCapBytes: AimdChunkPolicy.exHardMaxChunkBytes,
               initialBytes: 1024 * 1024,
               stepBytes: 1024 * 1024,
             ),
@@ -147,6 +159,9 @@ class ObjectDownloader {
     var chunked = false;
     try {
       chunked = partialChunkBytes != null && await _partialReadable();
+      // 逐块记账只在实收大档(见 _kLoudChunkLogBytes):同一下载器
+      // 还服务缩略图/头读,小档不吵日志环。
+      final loud = entry.sizeInBytes >= _kLoudChunkLogBytes;
       if (chunked) {
         // 分块路线:每块是完整事务,取消/失败即停,不再发新命令。取消 =
         // 旗标等**在途块跑完**(≤AIMD 封顶,亚秒级)再停 —— **不对在途
@@ -175,6 +190,9 @@ class ObjectDownloader {
               // 能力拒绝(0x2005/0x2006):≠ 链路信号,不喂策略;本会话
               // 降级 0x101B,本块原样重发(continue 不推进 offset,
               // 降级后 useEx 恒假,无循环风险)。
+              AppLog.w(AppLog.transfer,
+                  '0x9431 被拒(0x${e.responseCode.toRadixString(16).toUpperCase()})'
+                  ',本会话降级 0x101B');
               _exUsable = false;
               continue;
             }
@@ -191,9 +209,21 @@ class ObjectDownloader {
             (useEx ? _exPolicy : _chunkPolicy).reportError();
             rethrow;
           }
-          if (useEx) _exUsable = true; // 真发成功:能力坐实
+          if (useEx && _exUsable != true) {
+            _exUsable = true; // 真发成功:能力坐实
+            AppLog.i(AppLog.transfer,
+                '0x9431 接受,Ex 账块 ${_exPolicy.currentBytes ~/ 1024}KB 起爬');
+          }
           // 成功:带耗时喂策略(快 → 加性升;慢 → 不动,见策略口径)。
           policy.reportSuccess(chunkWatch.elapsed);
+          if (loud) {
+            // 逐块账(真机标定数据源):路线/偏移/请求量/实收/块耗时
+            // —— AIMD 演化与每 MB 摊的事务开销都从这里读。
+            AppLog.i(AppLog.transfer,
+                '下载块 ${useEx ? '0x9431' : '0x101B'} ${entry.name}'
+                ' off=$offset want=$want got=${chunk.length}'
+                ' ${chunkWatch.elapsed.inMilliseconds}ms');
+          }
           if (chunk.isEmpty) break; // 相机提前收尾
           sink.add(chunk);
           received += chunk.length;

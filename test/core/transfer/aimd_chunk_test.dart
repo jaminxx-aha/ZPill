@@ -105,6 +105,26 @@ void main() {
     expect(p.currentBytes, 1024 * 1024);
   });
 
+  test('hardCapBytes 显式过闸:超缺省闸的账真实爬顶(8MB 示值解耦生产常量)',
+      () {
+    // 机制用例:显式 8MB 闸 —— 生产常量(exHardMaxChunkBytes)是调参
+    // 旋钮,不进测试锚(16MB 实验档随真机 A/B 演化)。
+    final p = AimdChunkPolicy(
+        maxBytes: 8 * 1024 * 1024,
+        hardCapBytes: 8 * 1024 * 1024,
+        initialBytes: 1024 * 1024,
+        stepBytes: 1024 * 1024,
+        fastThreshold: const Duration(days: 1));
+    for (var i = 0; i < 7; i++) {
+      p.reportSuccess(const Duration(milliseconds: 1)); // 1→2→…→8 封顶
+    }
+    expect(p.maxBytes, 8 * 1024 * 1024);
+    expect(p.currentBytes, 8 * 1024 * 1024);
+    // 超时减半自纠照常在闸内工作。
+    p.reportTimeout();
+    expect(p.currentBytes, 4 * 1024 * 1024);
+  });
+
   test('退化解:上界低于默认下限时下界随上界收缩(小粒度定值兼容)', () {
     final p = AimdChunkPolicy(maxBytes: 50);
     expect(p.currentBytes, 50);

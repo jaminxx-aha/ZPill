@@ -513,6 +513,39 @@ void main() {
     expect(exPolicy.currentBytes, 160); // 64→96→128→160 加性升(与 0x101B 账分立)
   });
 
+  test('Ex 生产缺省策略:块爬过 1MB(hardCap 8MB 真实生效;此前被缺省闸钳死恒 1MB)',
+      () async {
+    const mb = 1024 * 1024;
+    final fake = FakePtpTransport();
+    // 不注入 exChunkPolicy:生产缺省策略(起步 1MB,+1MB/次,8MB 闸)。
+    final downloader = ObjectDownloader(
+      session: PtpSession(transport: fake),
+      partialChunkBytes: mb,
+      enablePartialObjectEx: true,
+    );
+
+    fake.reply(deviceInfoWithPartial());
+    fake.reply(_okData(filler(mb)));
+    fake.reply(_okData(filler(2 * mb)));
+    fake.reply(_okData(filler(mb + mb ~/ 2)));
+
+    final result = await downloader.download(
+        _entry('DSC_0030.NEF', 4 * mb + mb ~/ 2),
+        targetDir: dir.path);
+
+    expect(result.bytes, 4 * mb + mb ~/ 2);
+    // 门禁 + 三块 0x9431:want 1MB → 2MB → 1.5MB(末块要足不越界)。
+    // 第二块 want=2MB 是本回归的守闸线 —— 2026-10-25 修复前缺省闸
+    // (1MB)把 8MB 账静默钳回,块恒 1MB,快路线名存实亡。
+    expect(fake.requests.skip(1).map((r) => r.opcode),
+        List.filled(3, NikonOperationCode.getPartialObjectEx));
+    expect(fake.requests.skip(1).map((r) => r.params), [
+      [0x12, 0, 0, mb, 0],
+      [0x12, mb, 0, 2 * mb, 0],
+      [0x12, 3 * mb, 0, mb + mb ~/ 2, 0],
+    ]);
+  });
+
   test('Ex 被拒(0x2005):本会话降级 0x101B,本块原样重发,后续不再探',
       () async {
     final fake = FakePtpTransport();
