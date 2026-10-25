@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:nikon_pill/core/log/app_log.dart';
 import 'package:nikon_pill/core/ptp/operation_codes.dart';
 import 'package:nikon_pill/core/ptp/ptp_session.dart';
 import 'package:nikon_pill/core/ptp/ptp_transport.dart';
@@ -47,6 +48,26 @@ final class _ScriptTransport implements PtpTransport {
           r.opcode == NikonOperationCode.getLiveViewImageEx ||
           r.opcode == NikonOperationCode.getLiveViewImage)
       .length;
+}
+
+/// 事务耗时注入的假传输:取帧事务前推进注入时钟(模拟链路耗时),
+/// 供「节拍从帧起步计」的睡眠断言 —— 引擎的 [clock] 时钟即此钟。
+/// 只推进取帧码:startLiveView/探测等命令事务不计入节拍窗。
+final class _SlowTxnTransport extends _ScriptTransport {
+  _SlowTxnTransport(this.clock, this.advance);
+
+  final _TestClock clock;
+  final Duration advance;
+
+  @override
+  Future<PtpResult> execute(PtpRequest request,
+      {void Function(Uint8List chunk)? onData}) async {
+    if (request.opcode == NikonOperationCode.getLiveViewImageEx ||
+        request.opcode == NikonOperationCode.getLiveViewImage) {
+      clock.advance(advance);
+    }
+    return super.execute(request, onData: onData);
+  }
 }
 
 /// 手动放行的 delay:记录时长并挂门,测试逐个 release 控制循环节拍。
@@ -895,6 +916,96 @@ void main() {
       expect(engine.health.value, LiveViewHealth.ok,
           reason: '恢复后新帧到达,无冻结误报');
       expect(transport.liveViewFetches, 2);
+    });
+  });
+
+  group('帧起步节拍(2026-10-25:睡眠 = 节拍 − 上帧事务耗时,钳 0)', () {
+    test('纯函数钳位:事务快补差额、事务吃满零睡', () {
+      expect(
+          liveViewPaceSleep(
+              txn: Duration.zero,
+              interval: const Duration(milliseconds: 50)),
+          const Duration(milliseconds: 50),
+          reason: '零耗时(测试假传输常态)保持旧 50ms 睡眠,老用例不搅');
+      expect(
+          liveViewPaceSleep(
+              txn: const Duration(milliseconds: 30),
+              interval: const Duration(milliseconds: 50)),
+          const Duration(milliseconds: 20));
+      expect(
+          liveViewPaceSleep(
+              txn: const Duration(milliseconds: 80),
+              interval: const Duration(milliseconds: 50)),
+          Duration.zero,
+          reason: '事务慢于节拍:零睡直取下一拍,不吃死时间');
+    });
+
+    test('慢事务链路(事务 80ms ≥ 节拍 50ms)→ 睡眠钳 0', () async {
+      final clock = _TestClock();
+      final transport = _SlowTxnTransport(clock, const Duration(milliseconds: 80))
+        ..ok() // startLiveView
+        ..ok(data: _frame(1))
+        ..ok(data: _frame(2));
+      final delay = _GatedDelay();
+      final engine = LiveViewEngine(
+        session: PtpSession(transport: transport),
+        delay: delay.call,
+        clock: clock.call,
+      );
+
+      await engine.start();
+      await pumpEventQueue(); // 首帧:事务 80ms(时钟推进)→ 睡眠门 0
+      expect(delay.durations, [Duration.zero],
+          reason: '节拍从帧起步计:事务已吃满节拍,零睡直取下一拍');
+
+      delay.release();
+      await pumpEventQueue();
+      expect(engine.frame.value![2], 2);
+      expect(delay.durations, [Duration.zero, Duration.zero]);
+      expect(transport.liveViewFetches, 2);
+    });
+
+    test('节拍账:满 100 帧经 AppLog(live) 报 fps/事务/睡眠/零睡并清账', () async {
+      final lines = <String>[];
+      AppLog.mirror = lines.add;
+      addTearDown(() => AppLog.mirror = null);
+      final clock = _TestClock();
+      // 每帧事务 40ms → 账窗 100×40ms = 4s,fps=25.0;睡眠 50−40=10ms。
+      final transport = _SlowTxnTransport(clock, const Duration(milliseconds: 40))
+        ..ok(); // startLiveView
+      for (var i = 1; i <= 100; i++) {
+        transport..ok(data: _frame(i)); // 逐帧换签名,不触发看门狗冻结
+      }
+      final delay = _GatedDelay();
+      final engine = LiveViewEngine(
+        session: PtpSession(transport: transport),
+        delay: delay.call,
+        clock: clock.call,
+      );
+
+      await engine.start();
+      await pumpEventQueue(); // 第 1 帧入账
+      for (var i = 2; i <= 99; i++) {
+        delay.release();
+        await pumpEventQueue();
+      }
+      expect(lines.where((l) => l.contains('节拍账')), isEmpty,
+          reason: '未满窗不报');
+
+      delay.release(); // 第 100 帧 → 满窗报账
+      await pumpEventQueue();
+      final report = lines.singleWhere((l) => l.contains('节拍账'));
+      expect(report, contains('[I/${AppLog.live}]'));
+      expect(report, contains('n=100'));
+      expect(report, contains('fps=25.0'));
+      expect(report, contains('事务avg=40.0/max=40.0ms'));
+      expect(report, contains('睡眠avg=10.0ms'));
+      expect(report, contains('零睡=0'));
+
+      delay.release(); // 第 101 帧:清账后重新起窗,不产生第二条
+      await pumpEventQueue();
+      expect(lines.where((l) => l.contains('节拍账')), hasLength(1));
+      expect(transport.liveViewFetches, 101);
     });
   });
 }

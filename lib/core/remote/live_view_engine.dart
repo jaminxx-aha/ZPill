@@ -2,13 +2,17 @@
 ///
 /// 生命周期:0x9201 StartLiveView(候选码)→ 轮询 0x9203 GetLiveViewImage
 /// → 0x9202 EndLiveView。每帧一个短事务,与拍照/属性读在 PtpSession 的
-/// 全局串行锁上自然交错;间隔从**上一帧完成时刻**起算。
+/// 全局串行锁上自然交错;节拍从**帧起步**计(睡眠 = 节拍 − 上帧事务
+/// 耗时,见 [liveViewPaceSleep])。
 ///
 /// 失败策略:指数退避(200ms 起步 ×2,封顶 2s),连续 5 帧失败转
 /// failed 并停轮 —— 链路死亡(拔线/无线断)时 5s 内收口,不会无限
-/// 打链路。健康路径帧间睡眠 50ms(2026-10-13:200ms 写死把吞吐钳在
-/// ~4fps,是相对 SnapBridge 流畅度差距的主项;50ms + 事务耗时 ≈
-/// USB 12fps / WiFi 5fps 起,真机再收)。
+/// 打链路。健康路径按**帧起步节拍**走([liveViewPaceSleep]):睡眠 =
+/// 节拍 − 上帧事务耗时钳 0 —— 事务慢(无线单事务 ~百 ms)零睡直取
+/// 下一拍,不吃死时间;事务快(USB)补差额保下限节奏(2026-10-13
+/// 先把 200ms 写死收到 50ms 摘掉 ~4fps 主项;2026-10-25 再改从起步
+/// 计)。每 [_ledgerEvery] 帧经 AppLog(live) 报一版节拍账(fps/事务/
+/// 睡眠/零睡),真机调速仪器。
 /// 0xC10C LiveViewStateChanged 事件**不参与启停**:引擎纯轮询自治
 /// (事件语义未实证,待真机核对)。
 ///
@@ -33,10 +37,26 @@ import 'package:flutter/foundation.dart';
 import '../ptp/operation_codes.dart';
 import '../ptp/ptp_session.dart';
 import '../../l10n/message.dart';
+import '../log/app_log.dart';
 import 'live_view_header.dart';
 import 'live_view_watchdog.dart';
 
 enum LiveViewStatus { idle, running, failed }
+
+/// 帧起步节拍的睡眠量:睡眠 = [interval](节拍)− [txn](上帧事务
+/// 耗时),钳 0。
+///
+/// 节拍从「帧起步」计而非「帧完成」计(2026-10-25):旧口径「完成 +
+/// 50ms」把节拍恒钉在 1/(事务+50ms),事务慢的链路(无线单事务
+/// ~百 ms)白吃 50ms 死时间;改从起步计后零睡直取下一拍,事务快
+/// (USB)时补齐差额维持下限节奏。纯函数,单测钳位。
+Duration liveViewPaceSleep({
+  required Duration txn,
+  required Duration interval,
+}) {
+  final rest = interval.inMicroseconds - txn.inMicroseconds;
+  return rest > 0 ? Duration(microseconds: rest) : Duration.zero;
+}
 
 /// 取景流健康度(看门狗产物,UI 横幅用):ok = 正常;busy = 机身忙
 /// (写卡/下载 flush 中),画面保持不重启;frozen = 冻结判死重启中。
@@ -56,8 +76,9 @@ final class LiveViewEngine {
 
   final PtpSession session;
 
-  /// 轮询基础间隔(健康路径帧间睡眠,从上一帧完成起算;失败退避基数
-  /// 独立 [_backoffBase],不随它缩水)。
+  /// 帧起步节拍:健康路径两帧**起步**的最小周期(睡眠 = 节拍 − 上帧
+  /// 事务耗时,钳 0,见 [liveViewPaceSleep])。失败退避基数独立
+  /// [_backoffBase],不随它缩水。
   final Duration interval;
 
   /// 帧签名看门狗:事务成功但内容冻结的检测与分级(纯值类,阈值全
@@ -128,6 +149,7 @@ final class LiveViewEngine {
     lastError = null;
     health.value = LiveViewHealth.ok;
     _watchdog.reset();
+    _ledgerReset();
     try {
       await _startLiveViewHealing();
     } on Exception catch (e) {
@@ -301,6 +323,7 @@ final class LiveViewEngine {
         continue;
       }
       try {
+        final startedAt = _now();
         final raw = await session.getLiveViewObject();
         if (run != _runId) return; // 停止后的迟到结果不发布
         final jpeg = extractLiveViewJpeg(raw);
@@ -318,7 +341,12 @@ final class LiveViewEngine {
           //(看门狗新签名即清零,无信号可发,由宿主就地收口)。
           health.value = LiveViewHealth.ok;
         }
-        await _delay(interval);
+        // 帧起步节拍:睡眠 = 节拍 − 本帧事务耗时,钳 0(零睡直取下一
+        // 拍不吃死时间);账本随帧记账,满窗经 AppLog 报一版节拍账。
+        final txn = _now().difference(startedAt);
+        final sleep = liveViewPaceSleep(txn: txn, interval: interval);
+        _paceLedgerNote(txn: txn, sleep: sleep);
+        await _delay(sleep);
       } on Object catch (e) {
         if (run != _runId) return;
         _failures++;
@@ -430,4 +458,54 @@ final class LiveViewEngine {
     final capped = ms < _maxBackoff.inMilliseconds ? ms : _maxBackoff.inMilliseconds;
     return Duration(milliseconds: capped);
   }
+
+  // ---- 节拍账(真机调速仪器) ----
+
+  /// 账窗长度(帧数):每 N 帧报一版节拍账并清账。10fps 下 ≈ 每 10s
+  /// 一条,常态音量;AppLog(live) 域。
+  static const int _ledgerEvery = 100;
+
+  DateTime? _ledgerWindowStart;
+  int _ledgerFrames = 0;
+  Duration _ledgerTxnSum = Duration.zero;
+  Duration _ledgerTxnMax = Duration.zero;
+  Duration _ledgerSleepSum = Duration.zero;
+
+  /// 睡眠被钳 0 的帧数(事务 ≥ 节拍):占比高 = 该链路的节拍已被事务
+  /// 吃满,再降 [interval] 无益。
+  int _ledgerZeroSleep = 0;
+
+  void _paceLedgerNote({required Duration txn, required Duration sleep}) {
+    _ledgerFrames++;
+    _ledgerTxnSum += txn;
+    if (txn > _ledgerTxnMax) _ledgerTxnMax = txn;
+    _ledgerSleepSum += sleep;
+    if (sleep == Duration.zero) _ledgerZeroSleep++;
+    if (_ledgerFrames >= _ledgerEvery) _reportPaceLedger();
+  }
+
+  void _reportPaceLedger() {
+    final windowUs =
+        _now().difference(_ledgerWindowStart ?? _now()).inMicroseconds;
+    final fps = windowUs > 0 ? _ledgerFrames * 1e6 / windowUs : 0.0;
+    final n = _ledgerFrames;
+    AppLog.i(AppLog.live,
+        '节拍账 n=$n fps=${fps.toStringAsFixed(1)} '
+        '事务avg=${_ledgerMs(_ledgerTxnSum.inMicroseconds / n)}'
+        '/max=${_ledgerMs(_ledgerTxnMax.inMicroseconds.toDouble())}ms '
+        '睡眠avg=${_ledgerMs(_ledgerSleepSum.inMicroseconds / n)}ms '
+        '零睡=$_ledgerZeroSleep');
+    _ledgerReset();
+  }
+
+  void _ledgerReset() {
+    _ledgerWindowStart = _now();
+    _ledgerFrames = 0;
+    _ledgerTxnSum = _ledgerTxnMax = Duration.zero;
+    _ledgerSleepSum = Duration.zero;
+    _ledgerZeroSleep = 0;
+  }
 }
+
+/// 账面微秒 → 毫秒(一位小数)。
+String _ledgerMs(double us) => (us / 1000).toStringAsFixed(1);
