@@ -610,6 +610,41 @@ mixin _BrowseOps on _SessionCore {
     return result.data ?? Uint8List(0);
   }
 
+  /// Nikon GetPartialObjectHighSpeed(0x9400,S-SDKZ-200BF §6.2.3.5):
+  /// **游标式顺序整档读** —— 参数只有 (ObjectHandle, TransferMaxSize,
+  /// Terminate),无 offset 参,相机自维护读卡游标;规格明文「读卡耗时
+  /// 短于 GetPartialObject」,大文件传输首选。**强状态**:游标在整档
+  /// 读完 / Terminate=1 / 与上一应答间隔超 ~60s / 卡插拔 / 文件删除 /
+  /// 起录像回放 / 一批黑名单命令(GetObjectInfo/GetPartialObjectEx/
+  /// GetObjectHandles 等,规格 §6.2.3.5 清单)即释放,再发**从文件头
+  /// 重读** —— 只配「下载专态独占会话」使用,随机访问(缩略/头读/
+  /// 断点续传)仍归 0x101B/0x9431。应答参 1=实发字节数、参 2/3=执行前
+  /// 游标 offset(u32 低/高),调用方逐块对账游标,复位篡流当场现形。
+  /// 终止/收场发 Terminate=1(规格:此时数据相恒 0 字节)。前置
+  /// application mode ON(连接沿已发 0x9435),没开时相机回
+  /// Invalid_Status。黑名单命令一律不得插在游标存续期。
+  Future<({Uint8List data, int sentBytes, int cursorOffset})>
+      getPartialObjectHighSpeed(
+    int handle, {
+    required int maxBytes,
+    bool terminate = false,
+  }) async {
+    final result = await _serialized(() => transport.execute(PtpRequest(
+          opcode: NikonOperationCode.getPartialObjectHiSpeed,
+          params: [handle, maxBytes & 0xFFFFFFFF, terminate ? 1 : 0],
+        )));
+    _ensureOk(result, NikonOperationCode.getPartialObjectHiSpeed);
+    final p = result.params;
+    final sent = p.isNotEmpty ? p[0] : (result.data?.length ?? 0);
+    final cursor =
+        p.length > 2 ? ((p[2] << 32) | (p[1] & 0xFFFFFFFF)) : (p.length > 1 ? p[1] : 0);
+    return (
+      data: result.data ?? Uint8List(0),
+      sentBytes: sent,
+      cursorOffset: cursor,
+    );
+  }
+
   /// Nikon GetLargeThumb(0x90C4):高清缩略 JPEG(N-link 口径约 1024px,
   /// 单张数百 KB)。相机不支持时抛 [UnsupportedError](上层回落
   /// GetThumb)。

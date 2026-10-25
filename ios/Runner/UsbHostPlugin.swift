@@ -613,6 +613,14 @@ public final class UsbHostPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
         old?.close(timeoutMs: 10_000)
         result(nil)
       }
+    case "icProbeDownload":
+      let args = call.arguments as? [String: Any]
+      let filename = args?["filename"] as? String ?? ""
+      let cancelAfterMs = args?["cancelAfterMs"] as? Int ?? 0
+      usbQueue.async {
+        self.icProbeDownloadLocked(
+          filename: filename, cancelAfterMs: cancelAfterMs, result: result)
+      }
     default:
       result(FlutterMethodNotImplemented)
     }
@@ -709,5 +717,118 @@ public final class UsbHostPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
     }
     session = newSession
     result(nil)
+  }
+
+  // ── IC 下载探针(诊断专用,可整体回收)──────────────────────────
+  //
+  // requestDownloadWithOptions 高速路线三点核验(吞吐/进度/取消):
+  // 守护进程整文件直落盘,无逐块 XPC —— 与分块路线(0x9431/0x101B)
+  // 的对照基线由 Dart 侧探针(lib/debug/ic_download_probe.dart)同靶
+  // 记录。NSProgress.cancel 是否被 IC 采纳 iOS 未证:cancelAfterMs > 0
+  // 到点 cancel,以完成错误 + 落盘字节数判定真停与否(未采纳则整档拉完)。
+  private func icProbeDownloadLocked(
+    filename: String, cancelAfterMs: Int, result: @escaping FlutterResult
+  ) {
+    guard let camera = session?.camera else {
+      result(UsbError.closed(message: "USB 会话未打开").flutterError)
+      return
+    }
+    // Zf 双格式(NEF+HIF)同对象族:钉 .originalAssets,防守护进程按
+    // .convertedAssets 默认档把 HEIF 原档换成转码 JPG。
+    if #available(iOS 14.0, *) {
+      camera.mediaPresentation = .originalAssets
+    }
+    // 目录就绪轮询:contents 由守护进程填,**须等它自己的全卡枚举收完
+    // 才有货**(2026-10-25 真机:大卡 5s 不够,两次探针双双「目录未含
+    // 文件」)—— 5s 只是小卡窗;IC 路线对照在分块路线达标(32MB/s)
+    // 后已降级为留档诊断,不再追窗。
+    var file: ICCameraFile?
+    for _ in 0..<25 {
+      file = camera.contents?.compactMap { $0 as? ICCameraFile }
+        .first { $0.originalFilename == filename }
+      if file != nil { break }
+      Thread.sleep(forTimeInterval: 0.2)
+    }
+    guard let file = file else {
+      result(UsbError.platform(
+        code: "usb_error", message: "IC 目录未含文件:\(filename)").flutterError)
+      return
+    }
+    let dirUrl = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+      .appendingPathComponent("ic_probe", isDirectory: true)
+    try? FileManager.default.createDirectory(
+      at: dirUrl, withIntermediateDirectories: true)
+    let options: [ICDownloadOption: Any] = [
+      ICDownloadOption.downloadsDirectoryURL: dirUrl,
+      ICDownloadOption.saveAsFilename: filename,
+      ICDownloadOption.overwrite: NSNumber(true),
+    ]
+    let startedAt = Date()
+    // 进度采样(200ms):[tMs, fractionCompleted, cancelled]。
+    // 锁保护:采样在 utility 队列,完成回调在 IC 队列。
+    let samplesLock = NSLock()
+    var samples: [[Double]] = []
+    var timer: DispatchSourceTimer?
+    // Swift 导入形态(Xcode 26 SDK typecheck 实证):常量挂
+    // ICDownloadOption 静态成员(downloadsDirectoryURL/saveAsFilename/
+    // overwrite);方法 = requestDownload(options:completion:),options
+    // 默认 nil。NSProgress 在 Swift 侧改名 Progress。
+    let progress = file.requestDownload(options: options, completion: {
+      savedName, error in
+      samplesLock.lock()
+      timer?.cancel()
+      let taken = samples
+      samplesLock.unlock()
+      let ms = Int(Date().timeIntervalSince(startedAt) * 1000)
+      var bytes = 0
+      var landed = ""
+      if let saved = savedName {
+        let url = dirUrl.appendingPathComponent(saved)
+        landed = url.path
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+          let n = attrs[.size] as? NSNumber
+        {
+          bytes = n.intValue
+        }
+      }
+      NativeLog.i(
+        "usb",
+        "icProbe 完成:\(filename) ok=\(error == nil) bytes=\(bytes) ms=\(ms)")
+      result([
+        "ok": error == nil,
+        "savedAs": savedName ?? "",
+        "bytes": bytes,
+        "ms": ms,
+        "dir": dirUrl.path,
+        "landed": landed,
+        "samples": taken,
+        "error": error.map { "\($0)" } ?? "",
+      ])
+    })
+    guard let progress = progress else {
+      result(UsbError.platform(
+        code: "usb_error",
+        message: "requestDownload 未返回 NSProgress").flutterError)
+      return
+    }
+    let src = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
+    timer = src
+    src.schedule(deadline: .now() + 0.2, repeating: 0.2)
+    src.setEventHandler { [weak progress] in
+      guard let progress = progress, !progress.isFinished else { return }
+      let tMs = Date().timeIntervalSince(startedAt) * 1000
+      if cancelAfterMs > 0, tMs >= Double(cancelAfterMs), !progress.isCancelled {
+        NativeLog.e(
+          "usb",
+          "icProbe 到点取消:\(Int(tMs))ms fraction=\(progress.fractionCompleted)")
+        progress.cancel()
+      }
+      samplesLock.lock()
+      samples.append([
+        tMs.rounded(), progress.fractionCompleted, progress.isCancelled ? 1 : 0,
+      ])
+      samplesLock.unlock()
+    }
+    src.resume()
   }
 }
