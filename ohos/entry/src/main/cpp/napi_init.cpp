@@ -26,6 +26,9 @@
 #include <string>
 #include <vector>
 
+/** video_lut.cpp 提供(全局链接,勿放匿名空间)。 */
+void RegisterVideoLut(napi_env env, napi_value exports);
+
 namespace {
 
 /** 在途闸:通道虽单飞,防御并发调用(双开即 throw busy)。 */
@@ -226,6 +229,7 @@ napi_value Init(napi_env env, napi_value exports) {
     };
     napi_define_properties(env, exports,
                            sizeof(desc) / sizeof(desc[0]), desc);
+    RegisterVideoLut(env, exports);
     return exports;
 }
 

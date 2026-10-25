@@ -9,6 +9,7 @@ import { LocationPlugin } from '../location/LocationPlugin';
 import { BgPlugin } from '../bg/BgPlugin';
 import { VideoPlugin } from '../video/VideoPlugin';
 import { RawDecodePlugin } from '../raw/RawDecodePlugin';
+import { VideoLutExportPlugin } from '../lut/VideoLutExportPlugin';
 import { BlePlugin } from '../ble/BlePlugin';
 import { NetworkPlugin } from '../network/NetworkPlugin';
 import { NativeLog } from '../log/NativeLog';
@@ -29,6 +30,7 @@ export default class EntryAbility extends FlutterAbility {
     flutterEngine.getPlugins()?.add(new BgPlugin())
     flutterEngine.getPlugins()?.add(new VideoPlugin())
     flutterEngine.getPlugins()?.add(new RawDecodePlugin())
+    flutterEngine.getPlugins()?.add(new VideoLutExportPlugin())
     flutterEngine.getPlugins()?.add(new BlePlugin())
     flutterEngine.getPlugins()?.add(new NetworkPlugin())
   }
