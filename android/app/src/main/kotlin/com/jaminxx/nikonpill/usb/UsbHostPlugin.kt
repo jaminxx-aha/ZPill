@@ -1,4 +1,4 @@
-package com.aha.nikonpill.usb
+package com.jaminxx.nikonpill.usb
 
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
@@ -16,7 +16,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
-import com.aha.nikonpill.log.NativeLog
+import com.jaminxx.nikonpill.log.NativeLog
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel

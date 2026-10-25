@@ -1,4 +1,4 @@
-package com.aha.nikonpill.video
+package com.jaminxx.nikonpill.video
 
 import android.graphics.Bitmap
 import android.graphics.Matrix

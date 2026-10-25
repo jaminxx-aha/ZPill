@@ -1,4 +1,4 @@
-package com.aha.nikonpill.motion
+package com.jaminxx.nikonpill.motion
 
 import android.content.Context
 import android.hardware.Sensor

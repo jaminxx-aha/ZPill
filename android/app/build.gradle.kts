@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace = "com.aha.nikonpill"
+    namespace = "com.jaminxx.nikonpill"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -15,7 +15,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.aha.nikonpill"
+        applicationId = "com.jaminxx.nikonpill"
         // minSdk 29(Android 10):相册导入走现代 MediaStore 免权限路径
         // (RELATIVE_PATH + IS_PENDING 自有贡献零弹窗);不兼容更旧机型
         // (2026-10-04 用户定)。
@@ -38,11 +38,9 @@ android {
     }
 }
 
-kotlin {
-    compilerOptions {
-        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
-    }
-}
+// 顶层 kotlin{} 扩展在当前工具链(AGP 9.1.0 内置 Kotlin,未 apply
+// KGP)下不注册,2026-10-25 起报 unresolved;jvmTarget 由 flutter
+// gradle 插件按 compileOptions(17)对齐,无需显式声明。
 
 flutter {
     source = "../.."

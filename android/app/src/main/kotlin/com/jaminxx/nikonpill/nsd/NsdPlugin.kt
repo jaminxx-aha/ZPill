@@ -1,4 +1,4 @@
-package com.aha.nikonpill.nsd
+package com.jaminxx.nikonpill.nsd
 
 import android.content.Context
 import android.net.nsd.NsdManager

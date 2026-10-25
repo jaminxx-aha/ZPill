@@ -1,4 +1,4 @@
-package com.aha.nikonpill.log
+package com.jaminxx.nikonpill.log
 
 import android.os.Handler
 import android.os.Looper

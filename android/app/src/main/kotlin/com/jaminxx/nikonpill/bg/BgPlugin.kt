@@ -1,4 +1,4 @@
-package com.aha.nikonpill.bg
+package com.jaminxx.nikonpill.bg
 
 import android.content.Context
 import android.content.Intent

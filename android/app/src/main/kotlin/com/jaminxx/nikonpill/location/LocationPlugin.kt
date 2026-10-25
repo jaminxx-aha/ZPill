@@ -1,4 +1,4 @@
-package com.aha.nikonpill.location
+package com.jaminxx.nikonpill.location
 
 import android.Manifest
 import android.app.Activity

@@ -1,8 +1,8 @@
-package com.aha.nikonpill.raw
+package com.jaminxx.nikonpill.raw
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import com.aha.nikonpill.log.NativeLog
+import com.jaminxx.nikonpill.log.NativeLog
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel

@@ -1,4 +1,4 @@
-package com.aha.nikonpill.video
+package com.jaminxx.nikonpill.video
 
 import android.content.Context
 import android.net.Uri

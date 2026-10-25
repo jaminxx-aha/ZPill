@@ -1,4 +1,4 @@
-package com.aha.nikonpill.ble
+package com.jaminxx.nikonpill.ble
 
 import android.Manifest
 import android.annotation.SuppressLint
@@ -20,7 +20,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
-import com.aha.nikonpill.log.NativeLog
+import com.jaminxx.nikonpill.log.NativeLog
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding

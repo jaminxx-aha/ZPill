@@ -1,4 +1,4 @@
-package com.aha.nikonpill.bg
+package com.jaminxx.nikonpill.bg
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -29,7 +29,7 @@ import android.os.IBinder
  */
 class TransferForegroundService : Service() {
     companion object {
-        const val ACTION_START = "com.aha.nikonpill.bg.START"
+        const val ACTION_START = "com.jaminxx.nikonpill.bg.START"
         private const val CHANNEL_ID = "nikonpill_transfer"
         private const val NOTIF_ID = 42
     }
@@ -64,7 +64,7 @@ class TransferForegroundService : Service() {
             )
         }
         return Notification.Builder(this, CHANNEL_ID)
-            .setSmallIcon(com.aha.nikonpill.R.mipmap.ic_launcher)
+            .setSmallIcon(com.jaminxx.nikonpill.R.mipmap.ic_launcher)
             .setContentTitle("正在传输照片")
             .setContentText("NikonPill 正在后台接收相机照片")
             .setOngoing(true)

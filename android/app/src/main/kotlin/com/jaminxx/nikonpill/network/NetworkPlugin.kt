@@ -1,4 +1,4 @@
-package com.aha.nikonpill.network
+package com.jaminxx.nikonpill.network
 
 import android.content.Context
 import android.net.ConnectivityManager

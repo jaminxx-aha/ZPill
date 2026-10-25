@@ -1,4 +1,4 @@
-package com.aha.nikonpill.video
+package com.jaminxx.nikonpill.video
 
 import android.app.Activity
 import android.graphics.SurfaceTexture

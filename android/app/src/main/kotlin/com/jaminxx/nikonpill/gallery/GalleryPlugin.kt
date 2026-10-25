@@ -1,4 +1,4 @@
-package com.aha.nikonpill.gallery
+package com.jaminxx.nikonpill.gallery
 
 import android.content.ContentValues
 import android.content.Context
