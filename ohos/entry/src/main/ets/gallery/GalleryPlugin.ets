@@ -177,38 +177,26 @@ export class GalleryPlugin implements FlutterPlugin, AbilityAware {
         result.error('gallery_error', '已有保存面板在进行中', null);
         return;
       }
-      this.ensureWritePermission(ability).then((granted: boolean) => {
-        if (granted) {
-          // WRITE_IMAGEVIDEO 在手(ACL 安装授予或一次系统授权后永久):
-          // 免面板静默落库
-          Log.i(TAG, `importFiles: WRITE_IMAGEVIDEO 在手,静默直存 ${requests.length} 个`);
-          SaveSession.openSilent(ability.context,
-            requests, (uris: Array<string>) => {
-            Log.i(TAG, `静默保存完成:${uris.length}/${requests.length} 个 URI`);
-            result.success(uris);
-          }, (msg: string) => {
-            result.error('gallery_error', `保存失败:${msg}`, null);
-          });
-          return;
-        }
-        Log.i(TAG, `importFiles: 登记 ${requests.length} 个文件,亮出保存面板`);
-        const opened = SaveSession.open(requests, (uris: Array<string>) => {
-          Log.i(TAG, `保存面板结束:${uris.length}/${requests.length} 个授权 URI`);
+      // 直存优先:ACL 声明在 profile 时,createAsset 首调会弹一次
+      // 系统媒体写授权(用户确认即永久生效),此后零弹窗零面板;
+      // 系统拒/异常 → 落回 SaveButton 面板兜底。勿在此前调
+      // requestPermissionsFromUser:该 API 对 WRITE_IMAGEVIDEO 是
+      // 瞬态自动应答,每次保存都闪一帧(真机实证)。
+      SaveSession.openSilent(ability.context, requests)
+        .then((uris: Array<string>) => {
+          Log.i(TAG, `静默保存完成:${uris.length}/${requests.length} 个 URI`);
           result.success(uris);
+        })
+        .catch(async (e: Object) => {
+          Log.i(TAG, `静默直存未成(${e}),落回保存面板`);
+          const opened = SaveSession.open(requests, (uris: Array<string>) => {
+            Log.i(TAG, `保存面板结束:${uris.length}/${requests.length} 个授权 URI`);
+            result.success(uris);
+          });
+          if (!opened) {
+            result.error('gallery_error', '保存面板 UI 未挂载(Index 未注册)', null);
+          }
         });
-        if (!opened) {
-          result.error('gallery_error', '保存面板 UI 未挂载(Index 未注册)', null);
-        }
-      }).catch((e: Object) => {
-        result.error('gallery_error', `权限检查异常: ${e}`, null);
-      });
-      const opened = SaveSession.open(requests, (uris: Array<string>) => {
-        Log.i(TAG, `保存面板结束:${uris.length}/${requests.length} 个授权 URI`);
-        result.success(uris);
-      });
-      if (!opened) {
-        result.error('gallery_error', '保存面板 UI 未挂载(Index 未注册)', null);
-      }
     } catch (e) {
       Log.e(TAG, `importFiles 异常: ${e}`);
       result.error('gallery_error', `importFiles: ${e}`, null);

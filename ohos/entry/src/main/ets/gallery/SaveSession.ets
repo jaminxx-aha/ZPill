@@ -79,27 +79,24 @@ export class SaveSession {
   }
 
   /**
-   * ACL 直授静默路径(WRITE_IMAGEVIDEO 常权在手):登记请求后直接
-   * 执行保存,不亮面板。成功走 onSuccess(URI 列表),失败走 onError
-   *(Dart 侧按保存失败提示)——与面板通路的全有或全无语义一致。
+   * ACL 静默直存路径:登记请求后直接执行保存,不亮面板。resolve =
+   * URI 列表;reject = 保存失败(调用方落回面板兜底)。
    */
   static openSilent(context: common.Context,
-                    requests: Array<SaveRequest>,
-                    onSuccess: SaveFinish,
-                    onError: (msg: string) => void): void {
+                    requests: Array<SaveRequest>): Promise<Array<string>> {
     SaveSession.requests = requests;
-    SaveSession.finishCallback = onSuccess;
-    SaveSession.performSave(context, (_done: number, _total: number) => {})
-      .then((uris: Array<string>) => {
-        SaveSession.finish(uris);
-      })
-      .catch((e: Object) => {
-        const msg = `${e}`;
-        Log.e(TAG, `openSilent: ${msg}`);
-        SaveSession.requests = [];
-        SaveSession.finishCallback = null;
-        onError(msg);
-      });
+    return new Promise<Array<string>>((resolve: (v: Array<string>) => void,
+                                        reject: (e: Object) => void) => {
+      SaveSession.performSave(context, (_done: number, _total: number) => {})
+        .then((uris: Array<string>) => {
+          SaveSession.requests = [];
+          resolve(uris);
+        })
+        .catch((e: Object) => {
+          SaveSession.requests = [];
+          reject(e);
+        });
+    });
   }
 
   /** 用户取消(遮罩/取消按钮/返回键);保存进行中则忽略(防半途删源)。 */
