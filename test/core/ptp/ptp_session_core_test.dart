@@ -252,4 +252,30 @@ void main() {
       expect(pipe.outWrites[1][8], 1); // txid=1
     });
   });
+
+  group('GetPartialObjectEx(0x9431)', () {
+    test('u64 偏移/长度低高拆参,数据相原样返回', () async {
+      final fake = FakePtpTransport();
+      final session = PtpSession(transport: fake);
+      final payload = Uint8List.fromList([1, 2, 3, 4]);
+      fake.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: payload,
+        params: const [4, 0], // 实发字节数低/高(规格 §6.2.3.4 应答参数)
+      ));
+
+      // 偏移跨 4GB 边界(0x1_0000_0004)+ 长度 8MB:u64 拆分对账。
+      final out =
+          await session.getPartialObjectEx(0x1234, 0x100000004, 8 * 1024 * 1024);
+
+      expect(out, payload);
+      expect(
+          fake.requests.single.opcode, NikonOperationCode.getPartialObjectEx);
+      expect(fake.requests.single.params, [
+        0x1234, // ObjectHandle
+        4, 1, // Offset 低/高 32 位
+        0x800000, 0, // MaxSize 低/高 32 位
+      ]);
+    });
+  });
 }

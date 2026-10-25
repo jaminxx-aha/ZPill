@@ -153,9 +153,13 @@ final class AppServices {
     // 无线(PTP/IP)上每块一个完整事务,小块的事务往返开销摊大 ——
     // 2026-10-09 复报「准备播放太长」起块升 1MB(单块仍在看门狗时限
     // 内)。其余平台通道内部本就流式,保持 GetObject 不降速。
+    // 块首选取 Nikon GetPartialObjectEx(0x9431,u64 扩展,规格未记单
+    // 块上限,AIMD 可升到 8MB):大档每 MB 事务数直减;相机不认时首块
+    // 即本会话降级 0x101B( downloader 内真发试探,不查无线假门表)。
     downloader = ObjectDownloader(
       session: session,
       partialChunkBytes: Platform.isIOS ? 1024 * 1024 : null,
+      enablePartialObjectEx: Platform.isIOS,
     );
     thumbnails = ThumbnailCache(
       session: session,

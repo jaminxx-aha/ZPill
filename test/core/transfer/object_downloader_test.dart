@@ -463,4 +463,121 @@ void main() {
     expect(fake.requests.last.params, [0x12, 0, 160]);
     expect(policy.currentBytes, 192);
   });
+
+  // ── GetPartialObjectEx 路线(0x9431,生产 iOS 开,见库注释)────────
+
+  /// Ex 开着的下载器:Ex 策略注入小数值(64 起步 +32 升 200 封顶,
+  /// 一律判快);0x101B 策略走缺省(封顶=partialChunkBytes,与 Ex 分账)。
+  ObjectDownloader exDownloaderFor(FakePtpTransport fake,
+          {AimdChunkPolicy? exPolicy}) =>
+      ObjectDownloader(
+        session: PtpSession(transport: fake),
+        partialChunkBytes: 50,
+        enablePartialObjectEx: true,
+        exChunkPolicy: exPolicy ??
+            AimdChunkPolicy(
+                minBytes: 64,
+                maxBytes: 200,
+                stepBytes: 32,
+                initialBytes: 64,
+                fastThreshold: const Duration(days: 1)),
+      );
+
+  test('Ex 首选:首块即 0x9431,u64 参数低高拆分,AIMD 单独演化', () async {
+    final fake = FakePtpTransport();
+    final exPolicy = fastAlwaysPolicy(maxBytes: 200, initialBytes: 64);
+    final downloader = ObjectDownloader(
+      session: PtpSession(transport: fake),
+      partialChunkBytes: 50,
+      enablePartialObjectEx: true,
+      exChunkPolicy: exPolicy,
+    );
+
+    fake.reply(deviceInfoWithPartial());
+    fake.reply(_okData(filler(64)));
+    fake.reply(_okData(filler(96)));
+    fake.reply(_okData(filler(40)));
+
+    final result = await downloader.download(_entry('DSC_0020.NEF', 200),
+        targetDir: dir.path);
+
+    expect(result.bytes, 200);
+    // 门禁 + 三块全走 0x9431;参数 = [handle, 偏移低, 偏移高, 长度低, 长度高]。
+    expect(fake.requests.skip(1).map((r) => r.opcode),
+        List.filled(3, NikonOperationCode.getPartialObjectEx));
+    expect(fake.requests.skip(1).map((r) => r.params), [
+      [0x12, 0, 0, 64, 0],
+      [0x12, 64, 0, 96, 0],
+      [0x12, 160, 0, 40, 0], // 末块要足不越界
+    ]);
+    expect(exPolicy.currentBytes, 160); // 64→96→128→160 加性升(与 0x101B 账分立)
+  });
+
+  test('Ex 被拒(0x2005):本会话降级 0x101B,本块原样重发,后续不再探',
+      () async {
+    final fake = FakePtpTransport();
+    final downloader = exDownloaderFor(fake);
+
+    final payload = Uint8List.fromList(List.generate(120, (i) => i));
+    fake.reply(deviceInfoWithPartial());
+    fake.fail(const PtpResponseException(
+      opcode: NikonOperationCode.getPartialObjectEx,
+      responseCode: PtpResponseCode.operationNotSupported,
+    ));
+    fake.reply(_okData(Uint8List.sublistView(payload, 0, 50)));
+    fake.reply(_okData(Uint8List.sublistView(payload, 50, 100)));
+    fake.reply(_okData(Uint8List.sublistView(payload, 100, 120)));
+
+    final result = await downloader.download(_entry('DSC_0021.NEF', 120),
+        targetDir: dir.path);
+
+    expect(await File(result.path).readAsBytes(), payload);
+    // 门禁 + 探针(0x9431 拒,不喂策略)+ 全程 0x101B:降级后不再探。
+    expect(fake.requests.map((r) => r.opcode), [
+      PtpOperationCode.getDeviceInfo,
+      NikonOperationCode.getPartialObjectEx,
+      PtpOperationCode.getPartialObject,
+      PtpOperationCode.getPartialObject,
+      PtpOperationCode.getPartialObject,
+    ]);
+  });
+
+  test('Ex 中段短读:规格应答实发可小于请求,续拉不当 EOF', () async {
+    final fake = FakePtpTransport();
+    final downloader = exDownloaderFor(fake);
+
+    final payload = Uint8List.fromList(List.generate(120, (i) => i));
+    fake.reply(deviceInfoWithPartial());
+    fake.reply(_okData(Uint8List.sublistView(payload, 0, 30))); // 30 < want 64
+    fake.reply(_okData(Uint8List.sublistView(payload, 30, 90))); // 60 < want 90
+    fake.reply(_okData(Uint8List.sublistView(payload, 90, 120)));
+
+    final result = await downloader.download(_entry('DSC_0022.NEF', 120),
+        targetDir: dir.path);
+
+    expect(await File(result.path).readAsBytes(), payload);
+    // 短读续拉:偏移跟实发走(0 → 30 → 90),不按 want 对齐。
+    expect(fake.requests.skip(1).map((r) => r.params), [
+      [0x12, 0, 0, 64, 0],
+      [0x12, 30, 0, 90, 0],
+      [0x12, 90, 0, 30, 0],
+    ]);
+  });
+
+  test('Ex 场景性错误不降级:Access_Denied(视频播放中)照旧上抛走重试',
+      () async {
+    final fake = FakePtpTransport();
+    final downloader = exDownloaderFor(fake);
+
+    fake.reply(deviceInfoWithPartial());
+    fake.fail(const PtpResponseException(
+      opcode: NikonOperationCode.getPartialObjectEx,
+      responseCode: PtpResponseCode.accessDenied,
+    ));
+
+    await expectLater(
+      downloader.download(_entry('DSC_0023.NEF', 120), targetDir: dir.path),
+      throwsA(isA<PtpResponseException>()),
+    );
+  });
 }
