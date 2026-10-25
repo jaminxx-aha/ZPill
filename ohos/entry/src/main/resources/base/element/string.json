@@ -19,6 +19,10 @@
     {
       "name": "bluetooth_reason",
       "value": "与尼康相机建立蓝牙连接,完成配对并注入 GPS 定位"
+    },
+    {
+      "name": "media_save_reason",
+      "value": "保存拍摄的照片/视频到系统相册"
     }
   ]
 }
