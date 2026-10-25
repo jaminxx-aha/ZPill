@@ -243,9 +243,11 @@ class ObjectDownloader {
       await _deleteQuietly(file);
       throw const DownloadCancelledException();
     }
-    if (chunked && received != entry.sizeInBytes) {
-      // 分块路线对账:实收不足(ObjectInfo 谎报/相机中途断流)= 半档,
-      // 不能当成功落盘。
+    if (received != entry.sizeInBytes) {
+      // 对账(整档与分块两路同闸):实收不足 = 半档,不能当成功落盘 —
+      // DataStart 声明短于 ObjectInfo(相机中途收尾/ObjectInfo 谎报)时
+      // 流式路线会「干净」收尾,截断件一旦以最终名进图库,缩略半图/
+      // 解码必败(2026-10-25 真机复报)。
       await _deleteQuietly(file);
       throw FormatException(
           '下载数据不完整:${entry.name} 期望 ${entry.sizeInBytes}B,'
