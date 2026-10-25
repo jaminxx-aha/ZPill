@@ -278,4 +278,44 @@ void main() {
       ]);
     });
   });
+
+  group('GetPartialObjectHighSpeed(0x9400)', () {
+    test('三参打包(handle/块长/终止位),应答游标低高拼合', () async {
+      final fake = FakePtpTransport();
+      final session = PtpSession(transport: fake);
+      final payload = Uint8List.fromList([9, 8, 7]);
+      fake.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: payload,
+        // 实发字节数 + 执行前游标 offset 低/高(规格 §6.2.3.5 应答参数)
+        params: const [3, 4, 1], // offset = 0x1_0000_0004
+      ));
+
+      final r = await session
+          .getPartialObjectHighSpeed(0x1234, maxBytes: 16 * 1024 * 1024);
+
+      expect(r.data, payload);
+      expect(r.sentBytes, 3);
+      expect(r.cursorOffset, 0x100000004);
+      expect(fake.requests.single.opcode,
+          NikonOperationCode.getPartialObjectHiSpeed);
+      // 无 offset 参:游标在相机侧;Terminate 缺省 0。
+      expect(fake.requests.single.params, [0x1234, 0x1000000, 0]);
+    });
+
+    test('Terminate=1 收态:终止位入参(规格:数据相恒 0 字节)', () async {
+      final fake = FakePtpTransport();
+      final session = PtpSession(transport: fake);
+      fake.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: Uint8List(0),
+        params: const [0, 0x800000, 0],
+      ));
+
+      await session.getPartialObjectHighSpeed(0x1234,
+          maxBytes: 16 * 1024 * 1024, terminate: true);
+
+      expect(fake.requests.single.params, [0x1234, 0x1000000, 1]);
+    });
+  });
 }

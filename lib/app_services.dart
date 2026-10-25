@@ -43,6 +43,7 @@ import 'data/ratings_store.dart';
 import 'data/transfer_history_store.dart';
 import 'data/ui_prefs_store.dart';
 import 'data/settings_store.dart';
+import 'debug/ic_download_probe.dart';
 import 'debug/nikon_exif_probe.dart';
 import 'debug/ptp_diagnostics.dart';
 import 'debug/rating_diagnostics.dart';
@@ -471,10 +472,22 @@ final class AppServices {
         PtpDiagnostics.run(session: session, repository: repository);
       },
       // 评级定向诊断(显式开才跑,--dart-define=PTP_RATING_DIAG=true;
-      // 门放行沿、相册预热之后,不挤起景链)。
-      onConnectedSettled: kRatingDiagnostics
-          ? () => RatingDiagnostics.run(
-              session: session, repository: repository)
+      // 门放行沿、相册预热之后,不挤起景链)。IC 高速下载探针
+      // (USB_DL_PROBE=true)同沿挂:同靶对照分块路线与 IC 整档直落盘。
+      onConnectedSettled: kRatingDiagnostics || kUsbDlProbe
+          ? () {
+              if (kRatingDiagnostics) {
+                RatingDiagnostics.run(
+                    session: session, repository: repository);
+              }
+              if (kUsbDlProbe) {
+                unawaited(IcDownloadProbe.run(
+                  session: session,
+                  downloader: downloader,
+                  tempDir: () => PlatformServices.gallery.tempDir(),
+                ));
+              }
+            }
           : null,
     ).attach();
 
