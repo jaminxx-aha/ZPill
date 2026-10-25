@@ -13,6 +13,11 @@
 /// 小档管线(≤512px 落盘,格双源 gapless 切换 —— cache 被系统内存警告
 /// 清空后重解的也是毫秒级小档,2026-10-20「看大图返回缩略重刷新」根治;
 /// NEF 原生解码缺席时回内嵌 160×120 缩略兜底 nef_thumb.dart)。
+/// 滚动供数三件(2026-10-26 快速下滑黑块根修):前瞻预取(构建锚点沿
+/// 把窗外一窗 24 格的封面先拉起来,与相机相册页同款)、格首帧就绪表
+/// 直显(FutureBuilder 首帧空窗不再踢全幅原图解码,见 [_knownThumbSync])、
+/// ohos JPG 小档(插件放行 .jpg/.jpeg,EXIF 方向原生转正,与 iOS
+/// ImageIO WithTransform 同形)。
 /// 点任意可看件进黑底查看器:PageView 左右滑翻页(网格过滤序同源),
 /// 图片双指缩放、NEF/HIF 原生解码长边 ≤2560(会话缓存,翻回不重解;
 /// NEF 在无原生解码平台回内嵌缩略兜底可看,见 [nefEmbeddedJpeg])。视频
@@ -289,6 +294,18 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   /// 视频时长探测(容器 mvhd 行走,本地小读;会话内合并)。
   final Map<String, Future<Duration?>> _videoDurations = {};
 
+  /// thumbsDir 路径(initState 沿取一次):[_knownThumbSync] 是同步
+  /// 通道,路径未就位(头几帧)回 null = 原图源,与旧行为同。
+  String? _thumbsDirPath;
+
+  /// 缩略就绪路径表(内容键 → 已落盘小档路径):`_thumbFor` 完成沿
+  /// 记账 + [_knownThumbSync] 探盘沿补记。格构建沿**同步**可查 ——
+  /// FutureBuilder 首帧快照必无数据,没有这张表,每个新滚入的格(即便
+  /// 小档早已在盘/在会话缓存)都会先踢一次全幅原图解码、微任务后才换
+  /// 小档源;快速滑动 = 原图解码风暴,黑块雪上加霜。表在手,首帧直接
+  /// 小档提供器(几十 KB,毫秒级),不再黑。
+  final Map<String, String> _resolvedThumbs = {};
+
   /// 格当前显示档(文件路径 → 缩略小档路径或原图路径):渐进放大动效
   /// 在点按沿取同源图源用(见 [_cellBody] 记账、[_openViewer] 消费);
   /// build 沿记账不 setState,点按时同步可查。
@@ -341,6 +358,10 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     super.initState();
     _controller.refreshAppFiles();
     unawaited(_restorePrefs()); // 弹层选项:上次退出时的状态
+    unawaited(_gallery.thumbsDir().then(
+          (d) => _thumbsDirPath = d, // 小档盘路径(首帧直显通道)
+          onError: (Object _) {}, // 通道缺席(壳层测试/平台缺口):留空 = 原图源
+        ));
   }
 
   /// 恢复弹层选项(排序/格式/评级/显示/连拍聚合;文件夹不入账)。
@@ -430,10 +451,43 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
         _thumbQueue = future;
       }
       unawaited(future.then((path) {
-        if (path == null) _negThumbAt[key] = DateTime.now();
+        if (path == null) {
+          _negThumbAt[key] = DateTime.now();
+        } else {
+          _resolvedThumbs[key] = path; // 就绪记账:格重建首帧同步直取
+        }
       }));
       return future;
     });
+  }
+
+  /// 格首帧小档路径(同步解析,build 热路径直用):优先就绪表
+  /// ([_resolvedThumbs],命中再验一次存在 —— cache 盘被系统回收时自动
+  /// 出表),未记过才探盘上双档(libv4hi_ 优先,与 [_decodeNefThumb] 的
+  /// 「hi 优先」同口径),探中回填就绪表。全 miss 回 null = 原图源
+  /// (首显原图是既有行为,小档生成完 gapless 换档)。
+  ///
+  /// 有了它,FutureBuilder 首帧快照必无数据的空窗不再踢全幅原图解码
+  /// —— 快速滑动黑块根之一。成本 = 每格 1-3 次 stat(µs 级,与既有
+  /// _contentKey 的 lengthSync 同量级),不摸像素。
+  String? _knownThumbSync(File file) {
+    final dir = _thumbsDirPath;
+    if (dir == null) return null;
+    final key = _contentKey(file);
+    final known = _resolvedThumbs[key];
+    if (known != null) {
+      if (File(known).existsSync()) return known;
+      _resolvedThumbs.remove(key); // 盘档被回收:出表,重探双档
+    }
+    final hi = File('$dir/libv4hi_$key.jpg');
+    if (hi.existsSync()) {
+      return _resolvedThumbs[key] = hi.path;
+    }
+    final small = File('$dir/libv4_$key.jpg');
+    if (small.existsSync()) {
+      return _resolvedThumbs[key] = small.path;
+    }
+    return null;
   }
 
   /// NEF 网格缩略快车道:内嵌 160×120 缩略就地装配(IFD0 头读 + 缩略
@@ -510,14 +564,21 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
       } else {
         // 原生小图通道:iOS = CGImageSource 对格式无门槛(HIF 一并接,
         // CreateThumbnailFromImageAlways,45MP 全图下采样解码 ~50ms,
-        // 内存友好);ohos = image kit 只接 HIF(插件侧扩展名闸 ——
-        // image kit 无 RAW 解码,JPG 留给引擎原图源方向自理)。通道
+        // 内存友好);ohos = image kit 接 HIF + JPG(2026-10-26 放行
+        // .jpg/.jpeg,EXIF 方向插件侧转正,与 iOS 同形;NEF 等真 RAW
+        // 仍走 LibRaw 通道,见 RawDecodePlugin 文件头)。通道
         // 缺失/拒绝/失败:NEF 回内嵌 160×120 缩略兜底(裸 JPEG 无
         // EXIF,注入方向引擎解码即转正,与相机相册 GetThumb 同源),
         // 其余回落 null → 格走原图源(双源 gapless),不毒化串行链。
         try {
           jpeg = await _rawDecoder.decodeJpeg(file.path, maxPixelSize: 512);
-        } on Object {
+        } on Object catch (e) {
+          // 通道缺失/拒绝/失败:落一条诊断(ohos JPG 首接期的排障唯一
+          // 观测面,与下方 HIF 伴生预览诊断同位);NEF 回内嵌 160×120
+          // 缩略兜底(裸 JPEG 无 EXIF,注入方向引擎解码即转正,与相机
+          // 相册 GetThumb 同源),其余回落 null → 格走原图源(双源
+          // gapless),不毒化串行链。
+          AppLog.w(AppLog.browser, '网格小档解码失败 $name: $e');
           final embedded =
               isRawFilename(name) ? await extractNefEmbeddedThumb(file.path) : null;
           if (embedded == null) {
@@ -644,6 +705,83 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   /// 单文件段保持现状平铺格。聚合在 filtered(已排序已筛选)列表上做,
   /// 排序/筛选与聚合的叠加不用特判:两向排序、格式/类型筛选天然生效
   ///(筛 RAW 时连拍段只剩 NEF 成员,如实显示)。
+  // ── 前瞻预取(与相机相册页同款锚点机制,数据源 = 图库 runs)──
+
+  /// 构建沿记最深/最浅全局 run 序号,新锚点沿把窗外一窗(24 格)的封面
+  /// 缩略先拉起来 —— 滚到即现,不再「滚到才排队」。post-frame 批量发起
+  ///(本帧可视格的请求随 build 先入串行队列,预取不插队);已发过的
+  /// path 记账去重(重建/锚点回退不重发;失败重试走格内 `_thumbFor` 的
+  /// 负缓存 TTL 通道)。runs 换实例(刷新/排序/筛选/聚合开关)重置锚点
+  ///(_prefetchSent 不清 —— 文件还在,缩略 future 也还在,重发是空转)。
+  static const _prefetchWindow = 24;
+  int _builtMaxRun = -1;
+  int _builtMinRun = 1 << 30;
+  List<List<File>>? _prefetchRuns;
+  final Set<String> _prefetchSent = {};
+
+  void _resetPrefetchAnchors(List<List<File>> runs) {
+    if (identical(runs, _prefetchRuns)) return;
+    _prefetchRuns = runs;
+    _builtMaxRun = -1;
+    _builtMinRun = 1 << 30;
+  }
+
+  void _noteBuilt(int index, List<List<File>> runs) {
+    final newMax = index > _builtMaxRun;
+    final newMin = index < _builtMinRun;
+    if (!newMax && !newMin) return;
+    if (newMax) _builtMaxRun = index;
+    if (newMin) _builtMinRun = index;
+    final targets = <File>[];
+    void window(int lo, int hi) {
+      for (var i = lo; i <= hi && i < runs.length; i++) {
+        if (i < 0) continue;
+        final cover = _coverOf(runs[i]);
+        if (_prefetchSent.add(cover.path)) {
+          targets.add(cover);
+        }
+      }
+    }
+
+    if (newMax) window(index + 1, index + _prefetchWindow);
+    if (newMin) window(index - _prefetchWindow, index - 1);
+    if (targets.isEmpty) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      for (final f in targets) {
+        final future = _thumbFor(f);
+        // 解码缓存预热(与格内同一提供器 → 同一缓存键,命中即不重复
+        // 解码):已知小档直预热小档;未知的先预热原图源(原就是格首
+        // 显源,提前 = 首过不再黑),小档落地后补预热。缺了这层,首次
+        // 猛滑的格滚走了解码才落地,只能回滚才秒出(「第一遍黑、后续
+        // 不黑」的真身);预热后首过即有图,Apple 图库同级。
+        final known = _knownThumbSync(f);
+        if (known != null) {
+          _precacheGridThumb(known);
+        } else {
+          _precacheGridThumb(f.path);
+          unawaited(future.then((path) {
+            if (path != null && mounted) _precacheGridThumb(path);
+          }));
+        }
+      }
+    });
+  }
+
+  /// 解码缓存预热(静默口:precache 失败走 onError 官方静默道,不进
+  /// future 错误道 —— 与查看器 _warmNeighbors 同款,测试假 JPEG 不外冒)。
+  void _precacheGridThumb(String path) {
+    unawaited(precacheImage(gridThumbImageProvider(path), context,
+        onError: (Object _, StackTrace? __) {}));
+  }
+
+  /// 连拍段封面(段内首个 JPG,无 JPG 用段首):预取与 [_burstCell]
+  /// 显示同一文件,不打错工。
+  File _coverOf(List<File> run) => run.firstWhere(
+        (f) => isJpgFilename(_nameOf(f)),
+        orElse: () => run.first,
+      );
+
   /// 网格主体:按修改日期分段(共享 [groupMediaByDate],与相机相册
   /// 同款段头;多选段头点按整日勾选)。条目 = 平铺单文件格或连拍聚合
   /// 段([groupLocalBurstRuns] 的段,成段合为一格 ×N,段日期取封面
@@ -655,6 +793,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
         : [
             for (final f in filtered) [f]
           ];
+    _resetPrefetchAnchors(runs); // runs 换实例沿 = 预取锚点重置沿
     return CustomScrollView(
       slivers: [
         // 时间排序才按修改日分段;文件名/文件大小排序平铺(与相机相册
@@ -683,6 +822,8 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
                 itemCount: section.items.length,
                 itemBuilder: (_, i) {
                   final run = section.items[i];
+                  // 构建沿 = 预取锚点沿(全局序 = 段首全局下标 + 段内位)。
+                  _noteBuilt(section.firstIndex + i, runs);
                   return _isBurstRun(run)
                       ? _burstCell(context, run)
                       : _cell(context, run.single, filtered);
@@ -698,6 +839,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
               itemCount: runs.length,
               itemBuilder: (_, i) {
                 final run = runs[i];
+                _noteBuilt(i, runs); // 构建沿 = 预取锚点沿
                 return _isBurstRun(run)
                     ? _burstCell(context, run)
                     : _cell(context, run.single, filtered);
@@ -719,8 +861,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   /// 评级不显(段是多次快门)。点开查看器 peers = 段内全部文件(可翻张),
   /// 初始页 = 封面;多选中整段成员原子勾/取消(格选中 = 段内全部都在)。
   Widget _burstCell(BuildContext context, List<File> run) {
-    final cover = run.firstWhere((f) => isJpgFilename(_nameOf(f)),
-        orElse: () => run.first);
+    final cover = _coverOf(run);
     final shots = run.map((f) => baseNameOf(_nameOf(f))).toSet().length;
     return MediaGridCell(
       key: ValueKey(_nameOf(cover)), // 测试/定位锚:格 = 封面文件名
@@ -969,8 +1110,11 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
             builder: (context, snap) {
               // 显档记账(点按沿同步可查,动效图源与格同源;小档未生成
               // 显原图)。真缩略上格后小档可能再被 LRU 驱逐,以最近记账
-              // 为准,解码失败沿 errorBuilder 自见。
-              final shown = snap.data ?? file.path;
+              // 为准,解码失败沿 errorBuilder 自见。取值链 ② =
+              // [_knownThumbSync] 同步通道:FutureBuilder 首帧快照必无
+              // 数据,表命中即小档直显,不再踢全幅原图解码(快速滑动
+              // 黑块根之一);future 落地同路径 → 同 provider 零闪。
+              final shown = snap.data ?? _knownThumbSync(file) ?? file.path;
               _recordShownThumb(file, shown);
               return HeroZoom(
                 tag: 'lib-grid-${file.path}',
@@ -996,15 +1140,18 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
           FutureBuilder<String?>(
             future: _thumbFor(file),
             builder: (context, snap) {
-              if (!(snap.hasData && snap.data != null)) {
+              // 快照未到先查就绪表(同 viewable 分支):NEF 升级档换档
+              // 重建沿(_mediaThumbs 出键 → 新 future)不再闪图标格。
+              final known = snap.data ?? _knownThumbSync(file);
+              if (known == null) {
                 return _iconCell(context, name);
               }
-              _recordShownThumb(file, snap.data!);
+              _recordShownThumb(file, known);
               return HeroZoom(
                 tag: 'lib-grid-${file.path}',
-                thumbPath: snap.data!,
+                thumbPath: known,
                 child: Image(
-                  image: gridThumbImageProvider(snap.data!),
+                  image: gridThumbImageProvider(known),
                   fit: BoxFit.cover,
                   gaplessPlayback: true,
                   errorBuilder: (context, error, stackTrace) =>

@@ -307,7 +307,7 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
     SchedulerBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       for (final c in targets) {
-        _thumbFuture(c.rep);
+        final future = _thumbFuture(c.rep);
         // 评级轻量段(0xDC8A 一笔)与缩略图同窗预热:格滚到视口时星档
         // 已在手,不再落后整个预热窗(重发由仓库去重集空转)。
         _ratings.ensure(c.group);
@@ -315,8 +315,30 @@ class _PhotoGridPageState extends State<PhotoGridPage> {
         if (c.isVideo) {
           _ratings.repository.requestVideoDuration(c.rep.handle);
         }
+        // 解码缓存预热(与本地图库页同款,2026-10-26 首过猛滑黑格
+        // 同案):小图路径在账直预热;在途的落地沿补预热 —— 缺了这层,
+        // 首次猛滑的格滚走了解码才落地,回滚才秒出。失败人设已有重试,
+        // onError 吞掉防未处理异常(_thumbFuture 失败会 rethrow)。
+        final known = _thumbPaths[c.rep.handle];
+        if (known != null) {
+          _precacheGridThumb(known);
+        } else {
+          unawaited(future.then<void>(
+            (path) {
+              if (mounted) _precacheGridThumb(path);
+            },
+            onError: (Object _) {},
+          ));
+        }
       }
     });
+  }
+
+  /// 解码缓存预热(静默口同本地图库页:precache 失败走 onError 官方
+  /// 静默道,不进 future 错误道,测试假 JPEG 不外冒)。
+  void _precacheGridThumb(String path) {
+    unawaited(precacheImage(gridThumbImageProvider(path), context,
+        onError: (Object _, StackTrace? __) {}));
   }
 
   /// 最后一次解析到的可见内容(断连后控制器清空,以它保持网格快照)。

@@ -1803,6 +1803,61 @@ void main() {
     expect(inner.file.path, '${gallery.thumbs.path}/libv4_a.jpg_3.jpg');
   });
 
+  testWidgets(
+      '已知小档首帧直显:盘上小档首帧即小档源,解码器零调用'
+      '(2026-10-26 快速下滑黑块根修:不再踢全幅原图解码)', (tester) async {
+    writeFile('a.jpg', modified: DateTime(2026, 10, 1));
+    final gallery = _FakeGallery(dir);
+    // 预置小档(上一会话留下的盘上状态):就绪表冷启即命中
+    final thumbPath = '${gallery.thumbs.path}/libv4_a.jpg_3.jpg';
+    File(thumbPath).writeAsBytesSync([0xFF, 0xD8, 0xFF, 0xD9]);
+    final decoder = _FakeRawDecoder();
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    await tester.pumpWidget(host(gallery, controller, rawDecoder: decoder));
+    await drainAppFiles(tester, controller);
+
+    // 盘上小档在手:_thumbFor 走 existsSync 直回(零解码),格首帧经
+    // 就绪表同步取小档路径(不等 future 快照)
+    expect(decoder.calls, isEmpty, reason: '盘上小档命中,不再踢解码');
+    final image = tester.widget<Image>(find.byType(Image).first);
+    final inner = (image.image as ResizeImage).imageProvider as FileImage;
+    expect(inner.file.path, thumbPath);
+  });
+
+  testWidgets(
+      '前瞻预取:构建锚点沿把窗外一窗封面的缩略先拉起来'
+      '(滚到即现,不再「滚到才排队」)', (tester) async {
+    useTallSurface(tester);
+    // 30 文件逐日一张(段 = 格,全局序 = 倒序):视口只建得进头几段
+    for (var i = 0; i < 30; i++) {
+      writeFile('f${i.toString().padLeft(2, '0')}.jpg',
+          modified: DateTime(2026, 9, 1 + i, 12));
+    }
+    final decoder = _FakeRawDecoder();
+    final gallery = _FakeGallery(dir);
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    await tester.pumpWidget(host(gallery, controller, rawDecoder: decoder));
+    await drainAppFiles(tester, controller, 30);
+
+    // 预取作业是串行链上的真 IO:逐窗排水到解码台账收口(上限兜底)
+    for (var i = 0; i < 120 && decoder.calls.length < 30; i++) {
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)));
+      await tester.pump();
+    }
+    await tester.pumpAndSettle();
+    final requested =
+        decoder.calls.map((c) => c.$1.split('/').last).toSet();
+    // 倒序 index 25 = f04、index 12 = f17:都在视口外,预取窗照拉
+    expect(requested.contains('f04.jpg'), isTrue,
+        reason: '视口外文件已预取(requested=${requested.length})');
+    expect(requested.contains('f17.jpg'), isTrue);
+    expect(requested.length, greaterThanOrEqualTo(27),
+        reason: '预取窗成规模(30 个封面应基本全进窗)');
+  });
+
   testWidgets('查看器:图片滑到视频不自动播放(装载即暂停)', (tester) async {
     writeFile('a.jpg', modified: DateTime(2026, 10, 2));
     writeFile('b.mov', modified: DateTime(2026, 10, 3));
