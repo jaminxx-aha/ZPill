@@ -36,13 +36,13 @@ abstract final class AppTheme {
       // 随包字体后双端逐像素同源;汉字走 NotoSansSC 回落。
       fontFamily: 'InterBadge',
       filledButtonTheme: filledButtonTheme,
-      // 顶栏高度钉 46:对齐微信导航栏(2026-10-24 截图实测 3x 162→301px
+      // 顶栏高度钉 46(2026-10-24 截图实测 3x 162→301px
       // ≈ 46.3pt,M3 默认 56 偏高);各页一律 46,居中与否仍归各页。
       appBarTheme: const AppBarTheme(toolbarHeight: 46),
       // 选中指示胶囊:亮色 = 黑底(其上图标/文字取 onSecondaryContainer
       // = 品牌黄,图标同款反转),暗色 = 拍摄页金胶囊。导航栏整条
       // surface(亮色即整条品牌黄,拒绝默认 surfaceContainer 淡黄条)。
-      // 高度钉 53:上下两栏几何对齐微信(2026-10-24 截图实测底栏带
+      // 高度钉 53:上下两栏几何(2026-10-24 截图实测底栏带
       // 87.3pt = 内容区 53.3 + 安全区 34)。labelPadding 清零:胶囊
       // 32 + 文字 16 = 48,53 栏内余 2.5/2.5,胶囊不贴顶、文字不贴底
       // (默认 4 的间隙会把内容顶成 0.5 贴边)。

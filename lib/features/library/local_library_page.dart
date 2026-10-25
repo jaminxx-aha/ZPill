@@ -133,7 +133,7 @@ const _gridDelegate = SliverGridDelegateWithFixedCrossAxisCount(
   crossAxisSpacing: 2,
 );
 
-/// 保存成功反馈:微信式居中 ✓ 卡片,~1.6s 自动散(替代底部
+/// 保存成功反馈:居中 ✓ 卡片,~1.6s 自动散(替代底部
 /// SnackBar 的成功态;失败态仍走 SnackBar 保留可读时长)。
 void _showSaveCard(BuildContext context, String text) {
   if (!context.mounted) {
@@ -146,7 +146,7 @@ void _showSaveCard(BuildContext context, String text) {
     barrierDismissible: false,
     builder: (ctx) {
       dialogCtx = ctx;
-      // 尺寸对齐微信保存卡(~136dp 方卡,图标+短文案竖排)。勿用
+      // 142×142 方卡,图标+短文案竖排。勿用
       // Dialog:其 minWidth 280 硬约束会架空自定义宽(真机实证)。
       return Center(
         child: Material(
@@ -1924,7 +1924,7 @@ class _LibraryViewerState extends State<_LibraryViewer>
       } on FileSystemException {
         // 删不掉不挡(cache 目录,系统会收)。
       }
-      // ohos:createAsset 落库时系统自己弹「已保存」提示(微信同款),
+      // ohos:createAsset 落库时系统自己弹「已保存」提示,
       // 我们的 SnackBar 叠上去是重复提示 → 成功态留系统卡,只报失败。
       toast = uris.isNotEmpty
           ? (Platform.operatingSystem == 'ohos' ? '' : 'libpage.savedToAlbum')

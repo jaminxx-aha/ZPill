@@ -141,12 +141,12 @@ class _HomeShellState extends State<HomeShell> {
       ),
       bottomNavigationBar: wide
           ? null
-          // 上下两栏几何对齐微信(2026-10-24 三轮定标,截图实测 3x:
+          // 上下两栏几何(2026-10-24 三轮定标,截图实测 3x:
           // 顶栏 46.3、底栏带 87.3 = 栏内容区 53.3 + 安全区 34;图标
           // 心距带顶 ~20)。高度与 labelPadding 钉在 app_theme;此前
           // 两轮的顶垫 6/Transform 下沉 8(对齐 iOS 原生照片栏时期的
           // 微调)被本定标取代撤除 —— 内容在 53 栏内随高居中即落在
-          // 微信位。
+          // 底栏位。
           : NavigationBar(
               selectedIndex: _index,
               onDestinationSelected: _select,
