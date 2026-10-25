@@ -133,6 +133,53 @@ const _gridDelegate = SliverGridDelegateWithFixedCrossAxisCount(
   crossAxisSpacing: 2,
 );
 
+/// 保存成功反馈:微信式居中 ✓ 卡片,~1.6s 自动散(替代底部
+/// SnackBar 的成功态;失败态仍走 SnackBar 保留可读时长)。
+void _showSaveCard(BuildContext context, String text) {
+  if (!context.mounted) {
+    return;
+  }
+  BuildContext? dialogCtx;
+  showDialog<void>(
+    context: context,
+    barrierColor: Colors.transparent,
+    barrierDismissible: false,
+    builder: (ctx) {
+      dialogCtx = ctx;
+      return Dialog(
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 26),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.check_rounded, size: 46, color: Colors.black87),
+              const SizedBox(height: 10),
+              Text(
+                text,
+                style: const TextStyle(
+                  fontSize: 15,
+                  color: Colors.black87,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    },
+  );
+  Future.delayed(const Duration(milliseconds: 1600), () {
+    final ctx = dialogCtx;
+    if (ctx != null && ctx.mounted && Navigator.of(ctx).canPop()) {
+      Navigator.of(ctx).pop();
+    }
+  });
+}
+
 class LocalLibraryPage extends StatefulWidget {
   const LocalLibraryPage({
     super.key,
@@ -1126,12 +1173,15 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     }
     _exitSelect();
     if (mounted) {
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(SnackBar(
-            content: Text(imported
-                ? context.t('libpage.exportedAlbum', {'n': files.length})
-                : context.t('libpage.notImported'))));
+      if (imported) {
+        _showSaveCard(context,
+            context.t('libpage.exportedAlbum', {'n': files.length}));
+      } else {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(SnackBar(
+              content: Text(context.t('libpage.notImported'))));
+      }
     }
   }
 
@@ -1761,60 +1811,13 @@ class _LibraryViewerState extends State<_LibraryViewer>
       return;
     }
     if (imported) {
-      _showSaveCard(context.t('libpage.importedAlbum'));
+      _showSaveCard(context, context.t('libpage.importedAlbum'));
     } else {
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
         ..showSnackBar(SnackBar(
             content: Text(context.t('libpage.notImported'))));
     }
-  }
-
-  /// 保存成功反馈:微信式居中 ✓ 卡片,~1.6s 自动散(替代底部
-  /// SnackBar 的成功态;失败态仍走 SnackBar 保留可读时长)。
-  void _showSaveCard(String text) {
-    if (!mounted) {
-      return;
-    }
-    BuildContext? dialogCtx;
-    showDialog<void>(
-      context: context,
-      barrierColor: Colors.transparent,
-      barrierDismissible: false,
-      builder: (ctx) {
-        dialogCtx = ctx;
-        return Dialog(
-          backgroundColor: Colors.white,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 26),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.check_rounded, size: 46, color: Colors.black87),
-                const SizedBox(height: 10),
-                Text(
-                  text,
-                  style: const TextStyle(
-                    fontSize: 15,
-                    color: Colors.black87,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-    Future.delayed(const Duration(milliseconds: 1600), () {
-      final ctx = dialogCtx;
-      if (ctx != null && ctx.mounted && Navigator.of(ctx).canPop()) {
-        Navigator.of(ctx).pop();
-      }
-    });
   }
 
   void _toastKey(String key) {
@@ -1930,7 +1933,7 @@ class _LibraryViewerState extends State<_LibraryViewer>
       progress.dispose();
       if (toast.isNotEmpty && mounted) {
         if (toast == 'libpage.savedToAlbum') {
-          _showSaveCard(context.t(toast));
+          _showSaveCard(context, context.t(toast));
         } else {
           _toastKey(toast);
         }
