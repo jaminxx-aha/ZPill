@@ -768,7 +768,7 @@ const Map<String, String> enCatalog = {
   'libpage.viewOptions': 'View Options',
   'libpage.groupBursts': 'Group Bursts',
   'libpage.exportedAlbum':
-      'Exported {n} items to the system album (in-app files are kept)',
+      'Exported {n} items to the system album',
   'libpage.deleteSelected': 'Delete Selected',
   'libpage.deleteBody':
       'This will delete {n} files.\nThis cannot be undone (the originals on the camera are unaffected).',
@@ -785,7 +785,7 @@ const Map<String, String> enCatalog = {
       'This will delete "{name}".\nThis cannot be undone (the original on the camera is unaffected).',
   'libpage.importAlbum': 'Import to System Album',
   'libpage.importedAlbum':
-      'Imported to the system album (the in-app file is kept)',
+      'Imported to the system album',
   'libpage.notImported': 'Not imported (cancelled or failed)',
   'lut.exportTitle': 'LUT Export',
   'lut.style': 'LUT Style',

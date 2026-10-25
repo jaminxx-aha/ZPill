@@ -831,7 +831,7 @@ void main() {
     expect(calls, hasLength(1));
     expect(calls.single.single.filename, 'b.jpg');
     expect(calls.single.single.kind, ObjectKind.image);
-    expect(find.text('已导入系统相册(应用内文件保留)'), findsOneWidget);
+    expect(find.text('已导入系统相册'), findsOneWidget);
     // 文件本体保留(导入是复制不是移动)
     expect(File('${dir.path}/b.jpg').existsSync(), isTrue);
 
@@ -1139,7 +1139,7 @@ void main() {
     expect(
         call.map((r) => r.kind).toSet(), {ObjectKind.image, ObjectKind.video});
     expect(call.map((r) => r.filename).toSet(), {'a.jpg', 'v.mov'});
-    expect(find.text('已导出 2 项到系统相册(应用内文件保留)'), findsOneWidget);
+    expect(find.text('已导出 2 项到系统相册'), findsOneWidget);
     // 复制不是移动:两文件原位保留
     expect(File('${dir.path}/a.jpg').existsSync(), isTrue);
     expect(File('${dir.path}/v.mov').existsSync(), isTrue);
