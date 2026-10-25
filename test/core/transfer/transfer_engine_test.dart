@@ -153,6 +153,15 @@ Future<List<TransferTask>> waitUntil(TransferEngine engine,
   return (engine, fake, gallery);
 }
 
+
+/// downloads 成品名单为空:目录缺(取消/失败沿从未落终名)或空都算 ——
+/// 暂存在 tempDir/.staging-app,本目录只见完成沿改名进来的成品文件。
+void expectDownloadsEmpty(FakeGallerySaver gallery) {
+  final d = Directory('${gallery.root.path}/downloads');
+  expect(!d.existsSync() || d.listSync().isEmpty, isTrue,
+      reason: 'downloads 成品名单为空');
+}
+
 /// 内存账本(引擎侧持久化钩子的记账器;新→旧语义同实现)。
 final class FakeHistoryStore implements TransferHistoryStore {
   final records = <TransferTask>[]; // 新→旧
@@ -260,6 +269,58 @@ void main() {
     }
   });
 
+  test('app 目的地:暂存直写、完成沿改名进 downloadsDir(半成品不进扫描面)', () async {
+    final (engine, fake, gallery) = _engine();
+    fake.reply(_okBytes(12));
+
+    final done = waitUntil(
+        engine, (ts) => ts.length == 1 && ts.single.state == TransferState.completed);
+    await engine.enqueue([_entry(1, 'DSC_1.NEF', 12)],
+        destination: TransferDestination.app);
+    await done;
+
+    // 终名落 downloadsDir、字节对;暂存目录在而空(改名移走,不留副本)
+    final file = File('${gallery.root.path}/downloads/DSC_1.NEF');
+    expect(await file.readAsBytes(), List.generate(12, (i) => i & 0xFF));
+    final staging = Directory('${gallery.root.path}/temp/.staging-app');
+    expect(staging.existsSync(), isTrue);
+    expect(staging.listSync(), isEmpty);
+  });
+
+  test('app 目的地残留暂存清扫:进程死亡半成品首用沿除名', () async {
+    final (engine, fake, gallery) = _engine();
+    final staging = Directory('${gallery.root.path}/temp/.staging-app')
+      ..createSync(recursive: true);
+    File('${staging.path}/DSC_0.NEF').writeAsBytesSync([1, 2, 3]);
+    fake.reply(_okBytes(6));
+
+    final done = waitUntil(
+        engine, (ts) => ts.length == 1 && ts.single.state == TransferState.completed);
+    await engine.enqueue([_entry(1, 'DSC_1.NEF', 6)],
+        destination: TransferDestination.app);
+    await done;
+
+    expect(File('${staging.path}/DSC_0.NEF').existsSync(), isFalse);
+    expect(staging.listSync(), isEmpty);
+    expect(File('${gallery.root.path}/downloads/DSC_1.NEF').existsSync(), isTrue);
+  });
+
+  test('流式路线对账:GetObject 实收少于 ObjectInfo = 失败不留半档', () async {
+    final (engine, fake, gallery) = _engine();
+    fake.reply(_okBytes(50)); // ObjectInfo 谎报 100B:流式路线干净收尾的半档
+
+    final done = waitUntil(engine,
+        (ts) => ts.length == 1 && ts.single.state == TransferState.failed);
+    await engine.enqueue([_entry(1, 'DSC_1.JPG', 100)],
+        destination: TransferDestination.app);
+    await done;
+
+    // 半档绝不以最终名落 downloadsDir(重试的脚本耗尽失败同因,不追
+    // 具体错误文案)。
+    await gallery.downloadsDir();
+    expectDownloadsEmpty(gallery);
+  });
+
   test('gallery 两段式:先全部落 tempDir,再一次性导入,回填 Uri、删临时', () async {
     final (engine, fake, gallery) = _engine();
     fake..reply(_okBytes(11))..reply(_okBytes(22));
@@ -290,7 +351,7 @@ void main() {
     // (gallery 批次不调 downloadsDir,目录因此不存在,先确保建好再查空)。
     await gallery.downloadsDir();
     expect(Directory('${gallery.root.path}/temp').listSync(), isEmpty);
-    expect(Directory('${gallery.root.path}/downloads').listSync(), isEmpty);
+    expectDownloadsEmpty(gallery);
   });
 
   test('gallery 用户取消对话框:任务完成、galleryUri=null、临时文件照删', () async {
@@ -369,7 +430,7 @@ void main() {
     await enqueue;
     await done;
 
-    expect(Directory('${gallery.root.path}/downloads').listSync(), isEmpty);
+    expectDownloadsEmpty(gallery);
   });
 
   test('取消 running(分块在途):软取消等在途块跑完,任务 cancelled 不重试',
@@ -415,7 +476,7 @@ void main() {
 
     // 取消成功:不是 failed、零重试、半成品已删
     expect(tasks.single.attempts, 0);
-    expect(Directory('${gallery.root.path}/downloads').listSync(), isEmpty);
+    expectDownloadsEmpty(gallery);
   });
 
   test('进度通知节流:高频块进度合并广播,终态即时', () async {
@@ -523,7 +584,7 @@ void main() {
 
     expect(tasks.single.attempts, 3);
     expect(tasks.single.error, contains('0x2002')); // generalError
-    expect(Directory('${gallery.root.path}/downloads').listSync(), isEmpty);
+    expectDownloadsEmpty(gallery);
   });
 
   test('metadataFor:JPG 落盘后注入 XMP;NEF 不问也不改', () async {

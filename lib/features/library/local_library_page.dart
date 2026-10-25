@@ -223,6 +223,14 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   final Map<String, Future<String?>> _mediaThumbs = {};
   Future<String?> _thumbQueue = Future.value();
 
+  /// NEF 缩略两档制(2026-10-25 真机复报「NEF 半天加载不出来」):
+  /// 小档 = 内嵌 160×120 就地装配(毫秒级,快车道不排串行链),大档 =
+  /// LibRaw 512 真解码(串行链后台升级)。[_nefHiScheduled] 每键一次
+  /// (成败都不重试,小档永远顶着);升级落盘沿 [_thumbUpgrades] 通知
+  /// 重建,下次 build 重查换 hi 档(gapless 不闪)。
+  final Set<String> _nefHiScheduled = {};
+  final _ThumbUpgrades _thumbUpgrades = _ThumbUpgrades();
+
   /// 视频时长探测(容器 mvhd 行走,本地小读;会话内合并)。
   final Map<String, Future<Duration?>> _videoDurations = {};
 
@@ -355,13 +363,80 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
       _negThumbAt.remove(key);
     }
     return _mediaThumbs.putIfAbsent(key, () {
-      final future = _thumbQueue.then((_) => _decodeThumb(file, key));
-      _thumbQueue = future;
+      final name = _nameOf(file);
+      // NEF 快车道:内嵌缩略就地装配(毫秒级双小读),不排串行链 ——
+      // 链上视频抽帧/LibRaw 各是秒级重活,NEF 排队尾 = 图标格挂半天;
+      // LibRaw 真解码降级为后台升级档(见 [_scheduleNefHi])。
+      final isNef = isRawFilename(name) && !isVideoFilename(name);
+      final future = isNef
+          ? _decodeNefThumb(file, key)
+          : _thumbQueue.then((_) => _decodeThumb(file, key));
+      if (!isNef) {
+        _thumbQueue = future;
+      }
       unawaited(future.then((path) {
         if (path == null) _negThumbAt[key] = DateTime.now();
       }));
       return future;
     });
+  }
+
+  /// NEF 网格缩略快车道:内嵌 160×120 缩略就地装配(IFD0 头读 + 缩略
+  /// 段读两次小 IO,毫秒级)→ 落 libv4_ 小档上格,顺手排 LibRaw 升级
+  /// 档;无内嵌缩略(异常头/截断件)才排队走旧链(LibRaw 512 → 内嵌
+  /// 兜底)。返回值永不抛(失败回 null 交负缓存,不毒化串行链)。
+  Future<String?> _decodeNefThumb(File file, String key) async {
+    try {
+      final dir = await _gallery.thumbsDir();
+      final hi = File('$dir/libv4hi_$key.jpg');
+      if (hi.existsSync()) return hi.path; // 升级档已就位:直给
+      final small = File('$dir/libv4_$key.jpg');
+      if (small.existsSync()) {
+        _scheduleNefHi(file, key, dir); // 旧会话小档:补排升级
+        return small.path;
+      }
+      final embedded = await extractNefEmbeddedThumb(file.path);
+      if (embedded != null) {
+        final oriented =
+            injectJpegOrientation(embedded.jpeg, embedded.orientation);
+        final jpeg = await trimLetterboxJpeg(oriented) ?? oriented;
+        small.writeAsBytesSync(jpeg, flush: true);
+        _scheduleNefHi(file, key, dir);
+        return small.path;
+      }
+      // 无内嵌缩略:排队走旧链(LibRaw 512 → 内嵌兜底)。快车道不在
+      // 链上,回落须自己接尾巴,否则多个 NEF 同拍会并发解码挤内存。
+      final job = _thumbQueue.then((_) => _decodeThumb(file, key));
+      _thumbQueue = job;
+      return await job;
+    } on Object {
+      return null;
+    }
+  }
+
+  /// NEF 升级档排程(每键本会话一次):串行链上 LibRaw 512 真解码 →
+  /// libv4hi_ 落盘 → 记忆表出键 + 通知重建(下次 build 缓存命中换 hi
+  /// 档)。失败静默:内嵌小档继续顶着,不重试。链尾吞错(队列消费者
+  /// 依赖链不抛)。
+  void _scheduleNefHi(File file, String key, String dir) {
+    if (_nefHiScheduled.contains(key)) return;
+    _nefHiScheduled.add(key);
+    _thumbQueue = _thumbQueue.then((_) => _decodeNefHi(file, key, dir));
+  }
+
+  /// 升级档解码落盘(串行链工作单元):成功出键 + 通知;任何失败静默。
+  Future<String?> _decodeNefHi(File file, String key, String dir) async {
+    try {
+      final jpeg = await _rawDecoder.decodeJpeg(file.path, maxPixelSize: 512);
+      final trimmed = await trimLetterboxJpeg(jpeg) ?? jpeg;
+      await File('$dir/libv4hi_$key.jpg').writeAsBytes(trimmed, flush: true);
+      unawaited(_mediaThumbs.remove(key));
+      _negThumbAt.remove(key);
+      _thumbUpgrades.fire();
+    } on Object {
+      // 升级失败:内嵌小档顶着(本会话不再试)
+    }
+    return null;
   }
 
   Future<String?> _decodeThumb(File file, String key) async {
@@ -426,7 +501,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: Listenable.merge([_controller, _ratings]),
+      listenable: Listenable.merge([_controller, _ratings, _thumbUpgrades]),
       builder: (context, _) {
         // 排序(共享件):时间/文件名/文件大小 × 双向;默认新在前。
         // stat 走缓存(见 _statOf),进度事件高频重建不逐文件摸盘。
@@ -1307,6 +1382,18 @@ class _LibraryViewerState extends State<_LibraryViewer>
         }
       }
       if (!isRawFilename(_nameOf(file))) rethrow;
+      // 网格升级档优先(libv4hi_ = LibRaw 512 真解码,比内嵌 160×120
+      // 清晰):LibRaw 大图解码失败时多半 512 档也失败,但升级档在场
+      // 就用。无升级档回内嵌缩略装配(方向注入 + 黑边裁剪)。
+      try {
+        final name = _nameOf(file);
+        final safe = name.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
+        final key = '${safe}_${file.lengthSync()}';
+        final dir = await widget.gallery.thumbsDir();
+        return await File('$dir/libv4hi_$key.jpg').readAsBytes();
+      } on Object {
+        // 无升级档:落回内嵌缩略
+      }
       final jpeg = await nefEmbeddedJpeg(file.path);
       if (jpeg == null) rethrow;
       return jpeg;
@@ -1902,4 +1989,11 @@ class _VideoPlayPageState extends State<_VideoPlayPage> {
       ],
     );
   }
+}
+
+/// NEF 升级档换图通知(libv4hi_ 落盘沿 fire;网格 ListenableBuilder
+/// 合并监听,重建沿 _thumbFor 重查换 hi 档)。裸 ChangeNotifier 的
+/// notifyListeners 是 protected,子类包一层。
+class _ThumbUpgrades extends ChangeNotifier {
+  void fire() => notifyListeners();
 }

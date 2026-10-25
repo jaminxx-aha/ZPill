@@ -140,6 +140,9 @@ final class TransferEngineImpl implements TransferEngine {
   String? _tempDir;
   String? _downloadsDir;
 
+  /// app 目的地暂存清扫是否已做(每实例一次,见 [_stagingDirFor])。
+  bool _stagingSwept = false;
+
   /// 恢复就绪闸:入队沿等账本恢复完(id 序号与去重都以全量任务表为
   /// 基线,半恢复期入队会撞历史号)。无账本即值。
   Future<void> _ready = Future<void>.value();
@@ -288,6 +291,33 @@ final class TransferEngineImpl implements TransferEngine {
     return null;
   }
 
+  /// app 目的地暂存目录(tempDir 专用子目录 `.staging-app`):下载段
+  /// 整段写完 → 成功沿原子改名进 downloadsDir,半成品永不以最终名进
+  /// 图库扫描面 —— 流式直写最终名时,进程死亡(杀 App/崩溃)留下的
+  /// 截断件会被图库当正常文件扫入:引擎部分解码出「半张图」格、NEF
+  /// 缩略解码必败(2026-10-25 真机复报)。不放 downloadsDir 本体:那里
+  /// 是「成品名单」语义,列目录方(图库/导出)只该见到完整文件。
+  /// tempDir 是共享面(warmPreview 等在用),清扫只动本子目录。首用沿
+  /// 清扫一次:进程死亡残留的半成品在此除名。
+  Future<String> _stagingDirFor() async {
+    final temp = _tempDir ??= await gallery.tempDir();
+    final dir = '$temp/.staging-app';
+    if (!_stagingSwept) {
+      _stagingSwept = true;
+      final d = Directory(dir);
+      if (d.existsSync()) {
+        try {
+          await for (final e in d.list()) {
+            await e.delete(recursive: true);
+          }
+        } on Exception {
+          // 清扫尽力而为:残留件不挡新下载(download 段 uniquePath 防撞)
+        }
+      }
+    }
+    return dir;
+  }
+
   /// 下载段(泵内):一个任务的相机传输。成功即把后处理链入独立 FIFO
   /// 链(**不 await**)并返回,泵随即开下一个文件;失败/取消在本段收终态。
   ///
@@ -304,11 +334,17 @@ final class TransferEngineImpl implements TransferEngine {
         startedAt: job.firstStart,
         downloadMs: 0);
     _notify();
+    // app 目的地先落暂存子目录(tempDir/.staging-app,见 [_stagingDirFor];
+    // download 段整段写完 → 成功沿改名进 downloadsDir):流式直写最终名
+    // 时,进程死亡(杀 App/崩溃)留下的截断件会被图库当正常文件扫入 ——
+    // 引擎部分解码出「半张图」格、NEF 缩略解码必败(2026-10-25 真机复
+    // 报);改名沿之前图库扫描面永远见不到半成品。gallery 目的地维持
+    // tempDir 直写(导入后即删)。
     final dir = job.task.destination == TransferDestination.gallery
         ? _tempDir ??= await gallery.tempDir()
-        : _downloadsDir ??= await gallery.downloadsDir();
+        : await _stagingDirFor();
     try {
-      final dl = await downloader.download(
+      var dl = await downloader.download(
         _entryOf(job),
         targetDir: dir,
         onProgress: (received) {
@@ -319,6 +355,27 @@ final class TransferEngineImpl implements TransferEngine {
         },
         isCancelled: () => job.cancelRequested,
       );
+      if (job.task.destination == TransferDestination.app) {
+        // 暂存件改名进 downloadsDir:同卷 rename 原子;跨卷被拒时拷贝
+        // 兜底(拷的是已完整的暂存件)。终名冲突按 uniquePath 加序号
+        // (app 持久目录保留会撞名,与 download 段同规)。
+        final downloads =
+            Directory(_downloadsDir ??= await gallery.downloadsDir());
+        final basename = dl.path.split('/').last;
+        final target = await ObjectDownloader.uniquePath(downloads, basename);
+        try {
+          await File(dl.path).rename(target);
+        } on FileSystemException {
+          await File(dl.path).copy(target);
+          await File(dl.path).delete();
+        }
+        dl = ObjectDownload(
+          path: target,
+          bytes: dl.bytes,
+          elapsed: dl.elapsed,
+          averageBytesPerSecond: dl.averageBytesPerSecond,
+        );
+      }
       job.batch.downloads[job.task.id] = dl;
       // 移交后处理:任务落 processing(非终态,批次不收尾),由
       // [_runPostproc] 在后处理链上收场。

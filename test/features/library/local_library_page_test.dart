@@ -1213,6 +1213,15 @@ void main() {
 
     // 网格缩略:512px 解码一次(会话内合并),落盘 thumbsDir
     // (内容键 + libv4_ 前缀,不与相机侧缩略键串台;键全量升版 = 黑边裁剪放开到全部缩略)。
+    // NEF 先走快车道内嵌缩略提取(真 IO,FakeAsync 逐窗排水),3 字节
+    // 假档无内嵌缩略 → 回落串行链 512 解码。
+    var decoded = false;
+    for (var i = 0; i < 40 && !decoded; i++) {
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)));
+      decoded = decoder.calls.isNotEmpty;
+      await tester.pump();
+    }
     expect(decoder.calls, [('${dir.path}/c.nef', 512)]);
     expect(File('${gallery.thumbs.path}/libv4_c.nef_3.jpg').existsSync(), isTrue);
 
@@ -1349,6 +1358,75 @@ void main() {
     expect(cached.length, greaterThan(jpeg.length)); // 注入 APP1 变长
     expect(String.fromCharCodes(cached.sublist(0, 24)), contains('Exif'));
     expect(find.text('NEF'), findsNothing); // 不再图标格
+    expect(find.byType(Image), findsOneWidget);
+  });
+
+  testWidgets('NEF 有解码器:内嵌小档快车道即显,LibRaw 升级档后台换图', (tester) async {
+    // 两档制(2026-10-25 真机复报「NEF 半天加载不出来」):小档 = 内嵌
+    // 缩略就地装配(不占串行链、不调解码器),大档 = LibRaw 512 串行链
+    // 后台升级(libv4hi_),落盘沿通知重建换图。
+    final jpeg =
+        Uint8List.fromList(img.encodeJpg(img.Image(width: 4, height: 4)));
+    final nef = _nefWithEmbeddedThumb(jpeg, orientation: 8);
+    File('${dir.path}/c.nef').writeAsBytesSync(nef);
+    final gallery = _FakeGallery(dir);
+    final decoder = _FakeRawDecoder();
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    await tester.pumpWidget(host(gallery, controller, rawDecoder: decoder));
+    await drainAppFiles(tester, controller);
+
+    final small = File('${gallery.thumbs.path}/libv4_c.nef_${nef.length}.jpg');
+    final hi = File('${gallery.thumbs.path}/libv4hi_c.nef_${nef.length}.jpg');
+    // 快车道小档 + 升级档都是真 IO 链:逐窗排水至 hi 档落盘。
+    var upgraded = false;
+    for (var i = 0; i < 40 && !upgraded; i++) {
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)));
+      upgraded = hi.existsSync();
+      await tester.pump();
+    }
+    expect(upgraded, isTrue, reason: '升级档落盘');
+    await tester.pumpAndSettle();
+
+    // 小档来自内嵌缩略(方向注入变长),升级档来自解码器 512 恰一次 ——
+    // 小档不占解码器调用是快车道的意义。
+    expect(small.existsSync(), isTrue);
+    final cached = small.readAsBytesSync();
+    expect(cached.length, greaterThan(jpeg.length));
+    expect(String.fromCharCodes(cached.sublist(0, 24)), contains('Exif'));
+    expect(decoder.calls, [('${dir.path}/c.nef', 512)]);
+    expect(find.byType(Image), findsOneWidget); // 格有图(小档或 hi 档)
+  });
+
+  testWidgets('NEF 升级档失败:内嵌小档顶着,不重试不毒化', (tester) async {
+    // LibRaw 升级失败(如截断件):小档继续在格,解码器恰一次调用。
+    final jpeg =
+        Uint8List.fromList(img.encodeJpg(img.Image(width: 4, height: 4)));
+    final nef = _nefWithEmbeddedThumb(jpeg);
+    File('${dir.path}/c.nef').writeAsBytesSync(nef);
+    final gallery = _FakeGallery(dir);
+    final decoder = _FakeRawDecoder(fail: true);
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    await tester.pumpWidget(host(gallery, controller, rawDecoder: decoder));
+    await drainAppFiles(tester, controller);
+
+    final small = File('${gallery.thumbs.path}/libv4_c.nef_${nef.length}.jpg');
+    var written = false;
+    for (var i = 0; i < 40 && !written; i++) {
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)));
+      written = small.existsSync();
+      await tester.pump();
+    }
+    expect(written, isTrue, reason: '快车道小档落盘(不依赖解码器)');
+    await tester.pumpAndSettle();
+
+    expect(
+        File('${gallery.thumbs.path}/libv4hi_c.nef_${nef.length}.jpg')
+            .existsSync(),
+        isFalse);
     expect(find.byType(Image), findsOneWidget);
   });
 
@@ -2170,6 +2248,16 @@ void main() {
       videoPlayer: _FakeVideoPlayer(failThumbs: false),
     ));
     await drainAppFiles(tester, controller);
+
+    // NEF 快车道先试内嵌缩略提取(真 IO,FakeAsync 逐窗排水),3 字节
+    // 假档无内嵌 → 回落串行链 512;MOV 抽帧同链。逐窗排水至两格都挂锚。
+    var anchored = false;
+    for (var i = 0; i < 40 && !anchored; i++) {
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)));
+      anchored = find.byType(HeroZoom).evaluate().length >= 2;
+      await tester.pump();
+    }
 
     // 两格都挂动效锚(NEF 原生缩略 + MOV 抽帧)。
     expect(find.byType(HeroZoom), findsNWidgets(2));
