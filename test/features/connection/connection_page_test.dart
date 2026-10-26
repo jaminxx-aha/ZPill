@@ -1995,8 +1995,16 @@ void main() {
       await tester.pumpAndSettle();
       expect(joiner.joinedSsid, 'Zf_80114411', reason: '凭据在手仍尝试加入,失败才回落');
       expect(conn.connectIp, isNull, reason: 'join 失败不发射连接');
-      expect(find.textContaining('自动加入热点失败'), findsOneWidget);
+      // 失败沿弹凭据层:SSID/密码直呈(行尾复制),不让用户回相机屏幕
+      // 抄(2026-10-27 真机:无 entitlement internal error)。
+      expect(find.text('自动加入失败,请手动加入'), findsOneWidget);
       expect(find.textContaining('unavailable'), findsOneWidget);
+      expect(find.text('Zf_80114411'), findsOneWidget);
+      expect(find.text('wpa2pass99'), findsOneWidget);
+      // 关层即收。
+      await tester.tap(find.text('知道了'));
+      await tester.pumpAndSettle();
+      expect(find.text('自动加入失败,请手动加入'), findsNothing);
       // 收尾:拆树。
       await tester.pumpWidget(const SizedBox());
       await tester.pumpAndSettle();
