@@ -18,10 +18,12 @@
  *   不阻塞主线程;返回传输字节数,-1 异常,timeout=0 表示无限等待;
  * - libusb 层的读请求长度必须 ≥ 单个事务突发数据量:请求 12B 容器头
  *   而相机整只 DATA 容器(~180B)到达时,以 babble 报
- *   LIBUSB_ERROR_OVERFLOW(-8)—— bulkRead 内部按 ≥16KB、64KB 起步
- *   自适应探大至 ≤128KB 读入(阶梯实测:256KB 挂死、1MB 恒 rc=-1,
- *   2026-10-25 定案;AIMD 见 bulkInReadBytes 注),超出 maxLen 的字节
- *   暂存,下次调用先掏暂存(对 Dart 是普通短读流);
+ *   LIBUSB_ERROR_OVERFLOW(-8)—— 读路分两级:**生产主路 =
+ *   usbSubmitTransfer URB 流水(bulkReadPipe,512KB 定档)**,每笔
+ *   URB 缓冲即 ≥16KB 下限的天然满足;回落/探针 A/B 的 sync 路 bulkRead
+ *   内部按 ≥16KB、64KB 起步自适应探大至 ≤128KB 读入(阶梯实测:256KB
+ *   挂死、1MB 恒 rc=-1,2026-10-25 定案;AIMD 见 bulkInReadBytes 注),
+ *   超出 maxLen 的字节暂存,下次调用先掏暂存(对 Dart 是普通短读流);
  * - usbControlTransfer 的 controlParam **必须带 data 属性**(运行时
  *   401,比 d.ts 严格):零长 OUT 请求也要传 data: new Uint8Array(0);
  * - 上轮失败会在设备侧留下脏状态:OUT 端点 data toggle 停在 DATA1,
@@ -101,8 +103,8 @@ const BULK_IN_READ_BYTES_START = 64 * 1024;
 /// 看门狗 21s 掐链重连后重置重探再挂 = 无限卡死循环(用户实证「下载
 /// 到 2M 就卡死」,卡点 = 升档 256KB 的首笔读);1MB 秒拒 rc=-1)。
 /// 故封顶钉在实测安全档,不探入未知区;吞吐 ≈ 128KB ÷ 单次开销 ~9ms
-/// ≈ 13-14MB/s。要再上去得换路(usbSubmitTransfer 异步流水/原生肖块),
-/// 等有 SDK 通路再说。
+/// ≈ 13-14MB/s。**生产读路已切 usbSubmitTransfer 流水(见 PIPE_*/
+/// bulkReadPipe),本 AIMD 只兜流水不可用/空闲回落场景。**
 const BULK_IN_READ_BYTES_MAX = 128 * 1024;
 
 /// usbSubmitTransfer 回调 status 数值(UsbTransferStatus,libusb 同源
@@ -122,6 +124,16 @@ const DRAIN_QUIET_MS = 300;
 /// drainIn 轮数上限:数据持续到达也最多吸 32 轮(有界,别无限等;
 /// 残余超过此量的极端只能靠上层断链重连兜底)。
 const DRAIN_MAX_ROUNDS = 32;
+
+/// ===== submit 流水线生产策略(2026-10-26 真机探针 4 轮定案)=====
+/// 缺省 URB 缓冲 512KB:d=1 尺寸阶梯 64K=10.6/128K=15.1/256K=17.4/
+/// 512K=19.9MB/s,512K 零间隙连下持续 21.8-22.9MB/s(2.5× sync);
+/// 1M-2M 未在零间隙验证,4M 两次流错位(垃圾 txid)—— 钉 512K 甜点。
+const PIPE_DEFAULT_BUF_BYTES = 512 * 1024;
+/// 空闲回落阈值:管道闲置超过此时长,下一笔读回落 sync 路(实测
+/// 「下载后 ~500ms 间隙 → 下笔事务相机沉默 15s」病只咬间隙后首笔,
+/// sync 路无此病;连续下载零间隙无病)。走完回落笔即回流水。
+const PIPE_IDLE_FALLBACK_MS = 1000;
 
 /// interrupt 事件缓冲:PTP 事件容器 ≤64B(Zf 实测 12/16B)。
 const INTERRUPT_BUF_BYTES = 64;
@@ -228,17 +240,20 @@ export class UsbHostPlugin implements FlutterPlugin {
   /// 最小已知坏档尺寸(此值及以上不再尝试;MAX_SAFE_INTEGER = 尚无)。
   private bulkInBadFrom: number = Number.MAX_SAFE_INTEGER;
 
-  /// ===== submit 流水线(探针临时口,生产缺省关)=====
-  /// 开闸时 bulkRead 走 usbSubmitTransfer URB 流水(见 bulkReadPipe):
+  /// ===== submit 流水线(生产读路,探针可 A/B)=====
+  /// 缺省开:bulkRead 走 usbSubmitTransfer URB 流水(见 bulkReadPipe):
   /// 恒保 depth 笔读在途,「提交→等完成」串行等待被预提交摊掉 ——
-  /// sync 路 128KB 墙(~9ms/次固定开销)的唯一换路候选。随 open() 重置。
-  private pipeEnabled: boolean = false;
+  /// sync 路 128KB 墙(~9ms/次固定开销)的换路。探针 setSubmitPipe
+  /// 可关闸回 sync A/B;随 open() 重置为缺省开。
+  private pipeEnabled: boolean = true;
   private pipeDepth: number = 1;
-  private pipeBufBytes: number = 64 * 1024;
+  private pipeBufBytes: number = PIPE_DEFAULT_BUF_BYTES;
   private pipeSlots: PipeSlot[] = [];
   private pipeStats: PipeStats = new PipeStats();
   /// 本档开闸时刻(stats 汇总耗时/吞吐用)。
   private pipeStartedAt: number = 0;
+  /// 最近一次读活动时刻(任一路径收发都刷新)—— 空闲回落判据。
+  private pipeLastActivityMs: number = 0;
 
   getUniqueClassName(): string {
     return 'UsbHostPlugin';
@@ -439,10 +454,14 @@ export class UsbHostPlugin implements FlutterPlugin {
     // 完成,代价可忽略),旧会话的坏档记号不作数。
     this.bulkInReadBytes = BULK_IN_READ_BYTES_START;
     this.bulkInBadFrom = Number.MAX_SAFE_INTEGER;
-    // submit 流水线随链路重置:新管道默认 sync 路(探针每档显式开闸)。
-    this.pipeEnabled = false;
+    // submit 流水随链路重置:生产缺省开(512K 定档);探针 setSubmitPipe
+    // 可 A/B 覆盖,换链后回缺省。
+    this.pipeEnabled = true;
+    this.pipeDepth = 1;
+    this.pipeBufBytes = PIPE_DEFAULT_BUF_BYTES;
     this.pipeSlots = [];
     this.pipeStats = new PipeStats();
+    this.pipeLastActivityMs = 0;
     // 上轮失败会在设备侧留下脏状态(OUT toggle 停在 DATA1 → 后续写全被
     // 丢,真机实测 ret=-7 超时;IN 端点可能还压着未读残数据)。USB 2.0:
     // ClearFeature(ENDPOINT_HALT) 无条件把两端 data toggle 重置回 DATA0。
@@ -504,9 +523,12 @@ export class UsbHostPlugin implements FlutterPlugin {
     }
   }
 
-  /// bulk IN:单次通道调用读满 maxLen(短读/ZLB 即返),Dart 契约不变;
-  /// native 内部按自适应子块(bulkInReadBytes,64KB 起步探大至 512KB)
-  /// 循环请求并组装。
+  /// bulk IN:单次通道调用读满 maxLen(短读/ZLB 即返),Dart 契约不变。
+  /// 生产主路 = usbSubmitTransfer URB 流水(bulkReadPipe,512K 定档,
+  /// 零间隙持续 22MB/s);**空闲 >1s 或取消沿后首笔回落 sync 路**(实测
+  /// 「间隙后首笔 15s 沉默」病只咬流水路,sync 无病),走完回流水。
+  /// sync 路(回落/探针 A/B 用):native 内部按自适应子块(bulkInReadBytes,
+  /// 64KB 起步探大至 128KB)循环请求并组装。
   /// - 单次请求下限 ≥[BULK_IN_MIN_READ_BYTES](防 OVERFLOW babble,同旧),
   ///   尺寸自适应(AIMD,见 bulkInReadBytes 注 —— 单次开销 ~9ms 固定,
   ///   提尺寸是吞吐唯一杠杆;256KB 挂死/1MB rc=-1 故封 128KB);
@@ -536,9 +558,17 @@ export class UsbHostPlugin implements FlutterPlugin {
         return;
       }
       if (this.pipeEnabled) {
-        // 探针路:URB 预提交流水(消费语义与 sync 对齐,见 bulkReadPipe)。
-        await this.bulkReadPipe(maxLen, timeoutMs, result);
-        return;
+        // 生产读路:URB 预提交流水(消费语义与 sync 对齐,见
+        // bulkReadPipe)。空闲超阈值回落 sync 一笔 —— 「下载后间隙 →
+        // 下笔事务相机沉默 15s」病只咬间隙后首笔,sync 路实测无病;
+        // 走完回落笔即回流水(连续下载零间隙,全程流水)。
+        const idle = this.pipeSlots.length === 0 &&
+          Date.now() - this.pipeLastActivityMs > PIPE_IDLE_FALLBACK_MS;
+        if (!idle) {
+          await this.bulkReadPipe(maxLen, timeoutMs, result);
+          return;
+        }
+        hlog(`pipe 空闲回落 sync 一笔(max=${maxLen})`);
       }
       const buffer = new Uint8Array(maxLen);
       let scratch = new Uint8Array(
@@ -628,6 +658,7 @@ export class UsbHostPlugin implements FlutterPlugin {
         }
       }
       if (filled > 0) {
+        this.pipeLastActivityMs = Date.now(); // 空闲回落笔也算活动
         result.success(buffer.slice(0, filled));
         return;
       }
@@ -815,6 +846,7 @@ export class UsbHostPlugin implements FlutterPlugin {
         this.pipeSlots.shift();
         this.pipeStats.urbs++;
         callUrbs++;
+        this.pipeLastActivityMs = Date.now();
         const n = head.actual;
         if (head.status === TRANSFER_STATUS_COMPLETED && n > 0) {
           zlbRun = 0;
@@ -856,7 +888,7 @@ export class UsbHostPlugin implements FlutterPlugin {
         }
         break; // TIMED_OUT/CANCELLED/ERROR:有数据交付,无数据走收尾
       }
-      hlog(`pipe read: max=${maxLen} filled=${filled} urbs=${callUrbs}` +
+      hlog(`pipe read 异常收口: max=${maxLen} filled=${filled} urbs=${callUrbs}` +
         ` ms=${Date.now() - start} zlbRun=${zlbRun} recovered=${recovered}`);
       if (filled > 0) {
         result.success(buffer.slice(0, filled));
@@ -879,6 +911,8 @@ export class UsbHostPlugin implements FlutterPlugin {
 
   /// 取消全部在途 URB(teardown/换配置沿)。回调随后以 CANCELLED 到来,
   /// 槽表即刻清空;取消失败(传输已完/管道已坏)尽力而为不上抛。
+  /// 活动时刻归零:取消沿的下一笔读必走空闲回落 sync 一笔(取消态后
+  /// 的链路行为未标定,回落笔是实测安全路)。
   private cancelPipeUrbs(): void {
     for (const slot of this.pipeSlots) {
       if (slot.params === null) {
@@ -891,6 +925,7 @@ export class UsbHostPlugin implements FlutterPlugin {
       }
     }
     this.pipeSlots = [];
+    this.pipeLastActivityMs = 0;
   }
 
   /// bulk IN 有界冲刷:吸干残余字节,下一事务不从错位字节开始(nico/
