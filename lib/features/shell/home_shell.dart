@@ -100,18 +100,30 @@ class _HomeShellState extends State<HomeShell> {
         children: [
           if (wide)
             SafeArea(
-              child: NavigationRail(
-                selectedIndex: _index,
-                onDestinationSelected: _select,
-                labelType: NavigationRailLabelType.all,
-                destinations: [
-                  for (final t in _tabs)
-                    NavigationRailDestination(
-                      icon: Icon(t.icon),
-                      selectedIcon: Icon(t.selectedIcon),
-                      label: Text(context.t(t.label)),
-                    ),
-                ],
+              // rail 的按压涟漪/hover 色硬编码取 colorScheme.primary
+              // (12%/4%,主题无钩子):局部把 primary 覆成透明,涟漪随
+              // 胶囊一并消失(2026-10-26 用户明示)。rail 子树内 primary
+              // 仅涟漪/hover 二处消费(图标/文字/指示器已在 app_theme
+              // 显式接管),此覆盖无涟漪之外的副作用。
+              child: Theme(
+                data: Theme.of(context).copyWith(
+                  colorScheme: Theme.of(context)
+                      .colorScheme
+                      .copyWith(primary: Colors.transparent),
+                ),
+                child: NavigationRail(
+                  selectedIndex: _index,
+                  onDestinationSelected: _select,
+                  labelType: NavigationRailLabelType.all,
+                  destinations: [
+                    for (final t in _tabs)
+                      NavigationRailDestination(
+                        icon: Icon(t.icon),
+                        selectedIcon: Icon(t.selectedIcon),
+                        label: Text(context.t(t.label)),
+                      ),
+                  ],
+                ),
               ),
             ),
           Expanded(
