@@ -559,7 +559,7 @@ class BlePairPanelState extends State<BlePairPanel>
       // 剧本,配对成功沿自动进行,无手动按钮)。断链先行:相机等 BLE
       // 释放才暴露经典蓝牙;manualOff 先压驱动回链(防回链扫描与经典
       // 发现抢相机)。断链后留让位窗 —— 相机收拾 BLE 链路才在菜单配
-      // 对态暴露经典蓝牙(探针断链让位窗同款;首测零缓冲直发配对把
+      // 对态暴露经典蓝牙(首测零缓冲直发配对把
       // 相机射频楔死,杀应用才解)。绑定收口后 manualResume 绕深睡闸
       // 显式接回:刚配对完的相机多半已回待机,驱动自动回链会守闸干等
       // 唤醒;注册在回链的复用握手上落地(NOT1 随 bond 落地后才出现)。
@@ -639,16 +639,6 @@ class BlePairPanelState extends State<BlePairPanel>
     var hintedForeign = false;
     for (var attempt = 1; attempt <= 6; attempt++) {
       if (gen != _retryGen || !mounted) break;
-      // 配对码探针进行中(含断链二段):让路等收尾 —— 探针自己的
-      // 重连在跑,这里再扫会原生单槽互掐(2026-10-19 真机实证)。
-      // 成功 = ready(下轮止步);失败 = idle/reconnecting(下轮接力)。
-      if (_session.bondProbeActive) {
-        _log('配对码探针进行中,自动重连让路…');
-        while (_session.bondProbeActive && gen == _retryGen && mounted) {
-          await Future<void>.delayed(const Duration(milliseconds: 300));
-        }
-        continue;
-      }
       if (_session.state == BleSessionState.ready) {
         _log('已就绪 ✓');
         break;

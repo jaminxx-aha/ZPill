@@ -194,28 +194,6 @@ final class BleCameraSession {
   /// 深睡闸门连续跳过轮数(episode 限频日志用;非闸沿归零)。
   int _standbySkips = 0;
   DateTime? _gateWritesUntil;
-  /// 首配注册等待(NOT1 01 00 = 相机侧注册完成信号;2026-10-13 定案:
-  /// 注册在配对事务的 bond 落地后完成,NOT1 此前从不出现)。
-  Completer<bool>? _registrationWait;
-  /// 第二段静默窗(相机 DEEP_SLEEP_WAIT 周期:配对后半段相机进深睡,
-  /// 醒来才发 SMP 安全请求;期间任何 GATT 流量都会被打断掐线 ——
-  /// SnapBridge 同名 Progress 阶段实证)。0 = 不静默。
-  Duration silentBondWait = Duration.zero;
-
-  /// iOS 首配 bond 探针静默窗旗标([runIosBondProbe] 挂窗期间置位):
-  /// onFix / _flushDueWrites / 手发件(0x2005 写、0x2004 读)共查,
-  /// 窗内除探针自身写外零 GATT 流量。
-  bool _bondProbeActive = false;
-
-  /// 最近一次连接发现的全特征表(权限掩码;iOS properties 不标加密,
-  /// 加密门只在访问沿现形,v9 面扫用)。
-  Map<String, String>? _lastCharacteristics;
-  /// NOT1 Time 位粘性记忆:注册完成信号可能早于挂等待(握手期读面
-  /// 触发弹窗、用户秒确认即属此路径),先到先记;BleConnected 沿复位
-  /// (防换相机串台)。
-  bool _registrationDoneSeen = false;
-  /// 握手期特征面读收口句柄(探针起步前等它落定,防读溢出静默窗)。
-  Future<void>? _introReads;
 
   GeoFix? _pendingFix;
   /// 上次成功注入的定位与时刻(去重门/保鲜锚;失败沿不更新)。
@@ -335,11 +313,6 @@ final class BleCameraSession {
       e.code == 'writeFailed' &&
       (e.message?.contains('被拒') ?? false);
 
-  /// 配对码探针进行中(面板自动重连/注入驱动让路;真机 2026-10-19
-  /// 实证:探针断链后面板重挂自动重连与注入驱动的重扫会掐死探针二段
-  /// 的扫描 —— iOS 原生扫描单槽,新扫描起即收掉旧扫描)。
-  bool get bondProbeActive => _bondProbeActive;
-
   /// 断连重连一次尝试:按已存身份 deviceId 扫广播,命中即连接并以
   /// 已存 device/nonce 复用握手。无命中只推进退避(返回 false)。
   /// reconnecting = 断连退避档;idle 且已有身份 = 冷启恢复档(盘载
@@ -351,7 +324,6 @@ final class BleCameraSession {
   /// 相机;闸门期退避冻结在 2s,相机唤醒(半按快门,bit0=0)后下一
   /// 轮即快连。手动重连(显式用户意图)传 false 绕闸。
   Future<bool> retryReconnect({bool gateStandby = true}) async {
-    if (_bondProbeActive) return false; // 探针期让路(防扫描互掐)
     if (identity == null ||
         (_state != BleSessionState.reconnecting &&
             _state != BleSessionState.idle)) {
@@ -430,16 +402,13 @@ final class BleCameraSession {
     _setState(BleSessionState.idle);
   }
 
-  /// 直连重连(iOS 首配第二段):相机静默等待态无广播可扫,直接按
-  /// 本会话已知 peripheralUuid 连(iOS retrievePeripherals 能找回本
-  /// 会话已见外设)。连接沿相机可能发 SMP 安全请求 → iOS 弹配对码 →
-  /// 确认后 bond 落、注册完成。握手超时放宽(60s):等用户确认弹窗。
-  /// v8b(2026-10-19 v8 真机订正)升为探针二段主路:leg-1 收口后
-  /// 断链,相机**零广播** 2 分钟+ —— 静默等待态唯直连可及。
-  Future<bool> reconnectDirect() async {
-    if (_bondProbeActive) return false; // 探针期让路(核由探针自调)
-    return _reconnectDirect();
-  }
+  /// 直连重连:相机静默等待态无广播可扫,直接按本会话已知
+  /// peripheralUuid 连(iOS retrievePeripherals 能找回本会话已见外设)
+  /// —— 首配 bond 收尾断链后的相机零广播,唯直连可及(重连路经
+  /// [retryReconnect] 的 directFirst 武装走同款)。连接沿相机可能发
+  /// SMP 安全请求 → 系统弹配对码 → 确认后 bond 落。握手超时放宽
+  /// (60s):等用户确认弹窗。
+  Future<bool> reconnectDirect() => _reconnectDirect();
 
   Future<bool> _reconnectDirect() async {
     if (identity == null ||
@@ -490,14 +459,11 @@ final class BleCameraSession {
   /// SnapBridge BLE2ND 的 FIND_CAMERA_BLE 一样**重扫**,拿新广播的新
   /// uuid 连接;连上**立即**跑复用握手(device/nonce 在 stage1 里走,
   /// 与 BLE 地址无关),静默等待反而会被相机当死客户端掐线。握手超时
-  /// 放宽(45s):等用户确认可能出现的系统配对码弹窗。v8b(2026-10-19
-  /// v8 真机订正)降为探针二段兜底:leg-1 收口后断链相机零广播 2
-  /// 分钟+,主路改 [reconnectDirect],此路只在直连未成时兜底。
+  /// 放宽(45s):等用户确认可能出现的系统配对码弹窗。[retryReconnect]
+  /// 直连未成后落回此路(未注册相机 RPA 轮换,重扫拿新 uuid 唯一可走)。
   Future<bool> reconnectScan(
-      {Duration scanTimeout = const Duration(seconds: 10)}) async {
-    if (_bondProbeActive) return false; // 探针期让路(核由探针自调)
-    return _reconnectScan(scanTimeout: scanTimeout);
-  }
+          {Duration scanTimeout = const Duration(seconds: 10)}) =>
+      _reconnectScan(scanTimeout: scanTimeout);
 
   Future<bool> _reconnectScan(
       {Duration scanTimeout = const Duration(seconds: 10)}) async {
@@ -506,7 +472,6 @@ final class BleCameraSession {
             _state != BleSessionState.reconnecting)) {
       return false;
     }
-    silentBondWait = Duration.zero;
     final epoch = _cancelEpoch; // 十三轮:取消沿迟到收口不推态。
     final devices = await _host.scan(timeout: scanTimeout);
     if (devices.isEmpty) {
@@ -585,10 +550,6 @@ final class BleCameraSession {
       lastError = (key: 'ble.notConnectedReadCred', args: null);
       return null;
     }
-    if (_bondProbeActive) {
-      lastError = (key: 'ble.probeGateReadCred', args: null);
-      return null;
-    }
     try {
       final blob = await _host.read(kNikonCharConfig);
       if (blob == null) {
@@ -639,10 +600,6 @@ final class BleCameraSession {
   Future<bool> _writeEstablishment(int value, String label) async {
     if (_state != BleSessionState.ready) {
       lastError = (key: 'ble.notConnectedOp', args: {'label': label});
-      return false;
-    }
-    if (_bondProbeActive) {
-      lastError = (key: 'ble.probeGateOp', args: {'label': label});
       return false;
     }
     try {
@@ -708,7 +665,7 @@ final class BleCameraSession {
     if (_state != BleSessionState.ready) return;
     if (!geoEnabled) return;
     final t = _now();
-    if (_gated(t) || _bondProbeActive) {
+    if (_gated(t)) {
       _pendingFix = fix;
       return;
     }
@@ -729,9 +686,7 @@ final class BleCameraSession {
     await _flushDueWrites(t);
   }
 
-  /// 过闸写入体(tick 与首写自发沿 [_deferredFirstWrite] 共用)。探针
-  /// 静默窗期整闸 —— 旗标查在顶部,ready 沿睡着、窗内醒来的 deferred
-  /// 也拦得住;缓存点由探针收口沿 re-arm 回补。
+  /// 过闸写入体(tick 与首写自发沿 [_deferredFirstWrite] 共用)。
   ///
   /// 十六轮单飞:tick(驱动周期)与首写自发沿并发进入会对同一特征
   /// (TIME/GEO)各发一笔 withResponse 写,后笔撞原生「同特征已有写在
@@ -740,7 +695,6 @@ final class BleCameraSession {
   bool _flushing = false;
 
   Future<void> _flushDueWrites(DateTime t) async {
-    if (_bondProbeActive) return;
     if (_flushing) return;
     _flushing = true;
     try {
@@ -845,18 +799,8 @@ final class BleCameraSession {
       case BleConnected(:final uuid, :final characteristics):
         if (_state != BleSessionState.pairing) return;
         _connectedUuid = uuid;
-        _lastCharacteristics = characteristics;
         // 写闸不在此设:握手期无注入写,Ready 沿统一起闸(_completeIfReady)。
         try {
-          // 第二段静默窗:深睡周期内零 GATT 流量(SnapBridge 的
-          // DEEP_SLEEP_WAIT 同款);窗内相机发安全请求 → 系统配对码。
-          if (_resuming && silentBondWait > Duration.zero) {
-            _trace('第二段静默 ${silentBondWait.inSeconds}s'
-                '(等相机唤醒/安全请求/配对码)…');
-            await Future<void>.delayed(silentBondWait);
-            silentBondWait = Duration.zero;
-            _trace('静默窗结束 → 复用握手');
-          }
           _trace('握手起始:setNotify → 2000');
           await _host.setNotify(kNikonCharPairing);
           _trace('setNotify 2000 ✓');
@@ -866,11 +810,11 @@ final class BleCameraSession {
           // v7 全表扫描读(2026-10-19 v5/v6 双阴性后):connected 事件
           // 带全服务全特征表,iOS 弹配对窗的经典触发 = 访问挂「加密读」
           // 权限的特征 —— 旧流程只读 6 个已知 LSS 特征,非 LSS 服务与
-          // 0x2080s 未知族从未碰过。除握手信道 0x2000 与探针自读的
-          // 0x2008 外,凡权限含 read 一律读;失败照常继续不挡握手。
+          // 0x2080s 未知族从未碰过。除握手信道 0x2000 与 0x2008 外,
+          // 凡权限含 read 一律读;失败照常继续不挡握手。
           _trace('全特征表 ${characteristics.length} 项:'
               '${characteristics.entries.map((c) => '${_shortId(c.key)}(${c.value})').join(' ')}');
-          _introReads = () async {
+          unawaited(() async {
             for (final c in characteristics.entries) {
               if (!c.value.contains('read')) continue;
               if (c.key == kNikonCharPairing || c.key == kNikonCharNot1) {
@@ -884,7 +828,7 @@ final class BleCameraSession {
                 _trace('read ${_shortId(c.key)} 失败:$e');
               }
             }
-          }();
+          }());
           // 会话控制面观察(SnapBridge 方言):帧落诊断日志,不参与状态机。
           await _host.setNotify(kNikonCharStatusForControl);
           await _host.setNotify(kNikonCharControlPoint);
@@ -895,7 +839,6 @@ final class BleCameraSession {
           _stage1 = stage1;
           _stage3Sent = false;
           _nameWritten = false;
-          _registrationDoneSeen = false;
           await _host.write(kNikonCharPairing, stage1.encode());
           _trace('stage1 → device=${stage1.device.toRadixString(16)} '
               'nonce=${stage1.nonce.toRadixString(16)}'
@@ -1038,7 +981,7 @@ final class BleCameraSession {
   /// 0x2008 LSS_CONTROL_POINT 跟踪(SnapBridge smali 定案:2B LE 位域
   /// `(Connection<<8)|(Location<<4)|Time`,相机经 notify 发布自己的请求
   /// 位,app 读后清位应答;`01 00` = TimeRequest ON「要时间」而非配对
-  /// 成功标志)。此帧若到,顺带完结注册等待(注册后相机才会发请求位)。
+  /// 成功标志)。
   Future<void> _onNot1(Uint8List data) async {
     if (data.length == 2) {
       final time = data[0] & 0x0F;
@@ -1046,11 +989,6 @@ final class BleCameraSession {
       final conn = data[1] & 0x0F;
       _trace('0x2008 ← ${hex(data)} '
           '(Time=$time Loc=$loc Conn=$conn)');
-      if (time >= 1) {
-        _registrationDoneSeen = true;
-        final w = _registrationWait;
-        if (w != null && !w.isCompleted) w.complete(true);
-      }
       // 清位应答(SnapBridge 常规语义,2026-10-21 从探针提为常轨):
       // 相机 notify 请求位 = 开口要时间/位置/连接;app 供给(TIME/GEO
       // 帧)后写回清位值确认 —— 不清位则相机悬等、位置会话不开、GEO
@@ -1090,213 +1028,6 @@ final class BleCameraSession {
   /// (2026-10-19 v7 首测实证)。短串原样,全长取 4-8。
   static String _shortId(String uuid) =>
       uuid.length <= 8 ? uuid : uuid.substring(4, 8);
-
-  /// 挂在原连接上等注册完成信号(NOT1 01 00;相机在注册挂起态可能于
-  /// 原连接上延迟发安全请求 → 用户确认 → bond → 注册 → NOT1)。
-  /// 到窗未至返回 false(调用方转第二段直连)。信号先于挂等待到达的
-  /// 场景(握手读面触发弹窗、用户秒确认)由 [_registrationDoneSeen]
-  /// 粘性兜住,入口即返 true。
-  Future<bool> waitRegistration({Duration window = const Duration(seconds: 45)}) async {
-    if (_registrationDoneSeen) return true;
-    if (_state != BleSessionState.ready) {
-      return false;
-    }
-    final wait = _registrationWait = Completer<bool>();
-    final got = await wait.future.timeout(window, onTimeout: () => false);
-    if (identical(_registrationWait, wait)) {
-      _registrationWait = null;
-    }
-    return got;
-  }
-
-  /// 探针全访问面扫(v9):除握手协议特征外逐特征 读 → 写(零长,
-  /// 信息量最小、相机命令解析必然拒长)→ 订阅(CCCD 写同为访问)。
-  /// 任一访问撞「Insufficient Authentication」→ iOS 自动弹配对码,
-  /// 确认后链路加密、后续访问自然续通。错误只落 trace 不中断(弹窗
-  /// 由系统接管,探针不参与)。
-  Future<void> _bondAccessSweep() async {
-    final chars = _lastCharacteristics;
-    if (chars == null) return;
-    const protocol = {
-      kNikonCharPairing,
-      kNikonCharName,
-      kNikonCharWifi,
-      kNikonCharTime,
-      kNikonCharGeo,
-      kNikonCharNot1,
-      kNikonCharNot2,
-      kNikonCharStatusForControl,
-      kNikonCharControlPoint,
-    };
-    for (final c in chars.entries) {
-      if (protocol.contains(c.key)) continue;
-      final id = _shortId(c.key);
-      final props = c.value;
-      if (props.contains('read')) {
-        try {
-          final v = await _host.read(c.key);
-          _trace('面扫 read $id → ${v == null ? 'null' : '${v.length}B'}');
-        } on Exception catch (e) {
-          _trace('面扫 read $id → $e');
-        }
-      }
-      if (props.contains('write')) {
-        try {
-          await _host.write(c.key, Uint8List(0));
-          _trace('面扫 write $id(零长)→ OK');
-        } on Exception catch (e) {
-          _trace('面扫 write $id → $e');
-        }
-      }
-      if (props.contains('notify') || props.contains('indicate')) {
-        try {
-          await _host.setNotify(c.key);
-          _trace('面扫 sub $id → OK');
-        } on Exception catch (e) {
-          _trace('面扫 sub $id → $e');
-        }
-      }
-    }
-    _trace('面扫完毕(${chars.length} 项)');
-  }
-
-  /// iOS 首配 bond 探针(TODO「二」实验链)。**2026-10-20 退役**:手机
-  /// unified log 取证定案 —— 弹码机制 = SnapBridge 程序化拉起系统配件选
-  /// 择器(ExternalAccessory,见 ble_pair_panel),与线上触发器无关;相
-  /// 机对谁都发 SMP 安全请求(本探针九轮阴性系误判其不存在)。本方法留
-  /// 档不再被面板调用。
-  ///
-  /// v5/v6/v7 三轮真机阴性
-  /// (2026-10-19):原链清 Conn 位/写 btEstablishment/全表明文读均
-  /// 不触发 SMP —— 原链路是死路,弹码若发只能在**重连沿**。v8 二段
-  /// 剧本(Android smali BLE1→断开→bond→BLE2ND 的 iOS 形):握手收口
-  /// 校时 → 清 Conn 位 → 0x2005=0x02 → 短安顿窗 → 断链 → 重连复用
-  /// 握手(连接沿相机可能发 SMP 安全请求 → iOS 弹配对码;握手窗等
-  /// 用户确认)→ NOT1 Time 位 = 注册完成。v8 真机:leg-1 全链走通,
-  /// 断链后相机**零广播 2 分钟+**(leg-1 收口把相机推进深睡等待态,
-  /// 与 v2/v3 断链后仍在广播的态不同)→ **v8b 二段主路改直连**
-  /// ([_reconnectDirect],静默等待态唯直连可及),直连未成再重扫兜底
-  /// (相机若回广播已轮换 RPA)。v9 追加:0x2005 写后全访问面扫
-  /// (读/写/订阅全部非协议特征,补 v7 只读的盲区)。v2/v3(2026-10-14)
-  /// 断链前从未答 Conn 位、从未写 btEstablishment —— leg-1 收口后的
-  /// 二段是未测组合,非重测。
-  ///
-  /// 静默纪律:全程除探针自身写外零 GATT 流量(onFix/_flushDueWrites/
-  /// 手发件均被 [_bondProbeActive] 拦下;握手期特征面读先行收口;探针
-  /// 期相机重发 Conn 请求位由 [_onNot1] 自动清位应答;面板自动重连/
-  /// 注入驱动在 [retryReconnect]/[reconnectScan]/[reconnectDirect] 让
-  /// 路 —— 真机实证探针断链沿面板重挂自动重连,原生扫描单槽互掐)。
-  /// [settle] = 0x2005 写后安顿窗,窗内 NOT1 Time 位到(v5/v6 期待的
-  /// 原链收口,三轮真机未再现)则免二段直接成功。[leg2Grace] =
-  /// 断链后直连前的让位窗(相机收拾链路;Android 剧本断开即 bond,
-  /// iOS 直连稍让)。成功返回 true 且保持 ready 链路(收口沿补答校时
-  /// + re-arm 首写);失败(直连/扫描无果/断链/窗满)返回 false,
-  /// ready 态下会话主动断链(未注册链路保持无意义,「去系统蓝牙」
-  /// 按钮兜底),面板回落系统蓝牙兜底。
-  Future<bool> runIosBondProbe(
-      {Duration window = const Duration(seconds: 45),
-      Duration settle = const Duration(seconds: 3),
-      Duration leg2Grace = const Duration(milliseconds: 1500)}) async {
-    if (_state != BleSessionState.ready || _bondProbeActive) {
-      return false;
-    }
-    _bondProbeActive = true;
-    var ok = false;
-    try {
-      // 握手期特征面读收口(最多让 3s,防读溢出静默窗)。
-      try {
-        await _introReads?.timeout(const Duration(seconds: 3));
-      } on Exception {
-        // 读挂起/超时不挡探针。
-      }
-      // 收口校时(SnapBridge 配对事务末环;有意绕写闸 —— 闸是 0x2007
-      // 拒收减灾,0x2006 校时不在其列)。
-      await _sendTime(_now());
-      // v5 主探针:读 0x2008 → 清 ConnectionRequest 位应答(SnapBridge
-      // Z3/J3 同款;读败照发 `00 00`,写败落 lastError 不中止)。
-      var raw = 0;
-      try {
-        final v = await _host.read(kNikonCharNot1);
-        if (v != null && v.length >= 2) {
-          raw = v[0] | (v[1] << 8);
-        }
-      } on Exception catch (e) {
-        _trace('探针读 0x2008 失败:$e(照发清位应答)');
-      }
-      final cleared = raw & ~0x0100;
-      _trace('探针 0x2008 读值 0x${raw.toRadixString(16).padLeft(4, '0')} '
-          '(Time=${raw & 0x0F} Loc=${(raw >> 4) & 0x0F} '
-          'Conn=${(raw >> 8) & 0x01}) → 清位应答 '
-          '0x${cleared.toRadixString(16).padLeft(4, '0')}');
-      try {
-        await _host.write(kNikonCharNot1,
-            Uint8List.fromList([cleared & 0xFF, (cleared >> 8) & 0xFF]));
-      } on Exception catch (e) {
-        lastError = (key: 'ble.probeClearBitWriteFail', args: {'e': e.toString()});
-      }
-      // v6:0x2005 写 bit1=btEstablishment(SnapBridge Z3 序列 = 清位 →
-      // 写 0x2005 建立传输;直发不走 _writeEstablishment —— 那条被
-      // 静默旗标拦,探针自身写例外)。
-      try {
-        await _host.write(kNikonCharWifi, Uint8List.fromList([0x02]));
-        _trace('探针 0x2005=0x02(btEstablishment)已发');
-      } on Exception catch (e) {
-        lastError =
-            (key: 'ble.probeEstablishmentWriteFail', args: {'e': e.toString()});
-      }
-      // v9 全访问面扫(properties 掩码不标加密;加密门只在访问沿以 ATT
-      // Insufficient Authentication 现形 → iOS 自动发起配对弹窗)。v7
-      // 只盖了读面(全读通=可读面无门);写面与 CCCD 订阅面从未碰过
-      // (2083 write、2082/2001/2004/2087 rw、2084/2087 indicate)。
-      await _bondAccessSweep();
-      // 安顿窗:原链 NOT1 Time 位到 = 原链收口(v5/v6 期待的路),免
-      // 二段直接成功;三轮真机 165s+ 静默未再现,只作理论兜收。
-      await Future<void>.delayed(settle);
-      if (_registrationDoneSeen) {
-        _trace('探针原链收口(NOT1 Time 位已到)');
-        ok = true;
-        return ok;
-      }
-      // v8b 二段:断链 → 直连重连(静默等待态零广播,唯直连可及;
-      // 连接沿相机发 SMP → 弹码)→ 直连未成转重扫兜底(RPA 轮换)。
-      _trace('探针二段:断链 → 直连重连(静默等待态)…');
-      await disconnect();
-      await Future<void>.delayed(leg2Grace);
-      var resumed = await _reconnectDirect();
-      if (!resumed) {
-        _trace('二段直连未成(${lastError?.key ?? '连接超时'})→ 转重扫兜底…');
-        resumed = await _reconnectScan();
-      }
-      if (!resumed) {
-        _trace('探针二段未成:${lastError?.key ?? '扫描/连接失败'}');
-        return false;
-      }
-      _trace('二段复用握手完成 → 等注册信号(NOT1 Time 位)…');
-      ok = await waitRegistration(window: window);
-      return ok;
-    } finally {
-      _bondProbeActive = false;
-      if (ok && _state == BleSessionState.ready) {
-        // 成功沿:补答校时(NOT1 Time 位 = 相机开口要时间,协议正答,
-        // 顺带重锚 _lastTimeOkAt)+ 重启首写门收口(deferred 醒来时闸已
-        // 过、TIME 已锚,只回补窗内缓存的定位)。
-        unawaited(_sendTime(_now()));
-        unawaited(_deferredFirstWrite());
-      }
-      if (ok) {
-        AppLog.i(AppLog.ble, '配对码探针:注册完成 ✓(二段页内闭环,链路保持)');
-      } else {
-        // 失败沿:ready 态下会话主动断链(未注册链路保持无意义,且
-        // 面板「去系统蓝牙」按钮只在非 ready 态可见);结论走会话级
-        // I-log —— 探针断链沿页面重挂会拆掉发起面板,面板日志不可靠。
-        if (_state == BleSessionState.ready) {
-          await disconnect();
-        }
-        AppLog.i(AppLog.ble,
-            '配对码探针未成(${lastError?.key ?? '静默窗满'}):失败沿亮宿主红色引导卡,系统蓝牙完成绑定');
-      }
-    }
-  }
 
   /// 写 0x2002 控制器名(32B ASCII 零填充)。真机方言(2026-10-13
   /// Zf):stage4 沿即发;名字落定即收口 —— NOT1 非闸门,实测不回。
@@ -1369,12 +1100,6 @@ final class BleCameraSession {
   void _setState(BleSessionState s) {
     if (_state == s) return;
     _state = s;
-    // 转出 ready 即完结注册等待(断连/断开/握手失败全路径一处收口,
-    // 防悬窗:探针等到窗满才假阴;迟到的 NOT1 由 isCompleted 守卫兜住)。
-    if (s != BleSessionState.ready) {
-      final w = _registrationWait;
-      if (w != null && !w.isCompleted) w.complete(false);
-    }
     if (!_stateCtrl.isClosed) {
       _stateCtrl.add(s);
     }

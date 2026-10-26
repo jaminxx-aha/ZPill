@@ -974,7 +974,7 @@ void main() {
       final transport = _SlowTxnTransport(clock, const Duration(milliseconds: 40))
         ..ok(); // startLiveView
       for (var i = 1; i <= 100; i++) {
-        transport..ok(data: _frame(i)); // 逐帧换签名,不触发看门狗冻结
+        transport.ok(data: _frame(i)); // 逐帧换签名,不触发看门狗冻结
       }
       final delay = _GatedDelay();
       final engine = LiveViewEngine(
