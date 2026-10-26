@@ -88,6 +88,22 @@ enum OrientationLock { auto, landscape, portrait }
 /// 模式条(纯 UI 行为选择,现状)。
 enum CaptureMode { photo, video }
 
+/// 视频档实际工作 ISO(0xD0B5)轮询周期:1s 轻读,远低于取景帧流量。
+const Duration _kActualIsoPollInterval = Duration(seconds: 1);
+
+/// 视频 ISO 复合文案:设定值与机身实际工作值(0xD0B5,视频 auto 增益)
+/// 分叉时并列「{v}(实际 {a})」;同值/缺任一返回 null(单值照旧)。
+/// 2026-10-26 真机:视频档 auto 增益拥有实际曝光(设定 100 实际 720),
+/// 单值显示会被读成「改了没效果」。
+L10nMessage? isoWithActualValue(int? set, int? actual) {
+  if (set == null || actual == null || actual == set) return null;
+  final p = shootingParamByCode[PtpDevicePropCode.movieExposureIndex]!;
+  return (
+    key: 'param.isoWithActual',
+    args: {'v': p.display(set), 'a': p.display(actual)},
+  );
+}
+
 
 
 // ---- 跨域共享的文件级私有常量/构造(原类内静态)------------------------
@@ -437,6 +453,65 @@ mixin _RemoteCore on ChangeNotifier {
     _cameraMode = m;
     shotsRemaining = null;
     videoRemainingMs = null;
+    _syncActualIsoPoller(); // 视频档起 0xD0B5 实际值轮询(1s 轻读)
+  }
+
+  // ---- 实际工作 ISO(0xD0B5 裸读):视频档设定值(0xD1AA)与机身
+  // auto 增益分叉时的第二读数;照片档 ISO 块读码本就是 0xD0B5,无此需。
+
+  int? _actualIso;
+
+  /// 机身实际工作 ISO(视频档随 [_kActualIsoPollInterval] 轻读):与
+  /// 设定值分叉时上屏「{v}(实际 {a})」。照片档不轮询(值路同读码)。
+  int? get actualIso => _actualIso;
+
+  int _actualIsoRun = 0;
+  bool _actualIsoLooping = false;
+
+  /// 视频档起停 0xD0B5 轮询环(唯一入口 = [_setCameraMode])。环走
+  /// [_delay](测试侧 _parkedDelay 停摆)而非 Timer —— 队列型假会话按
+  /// opcode 全局排队,轮询事务会偷 refreshParams 的脚本位;且真定时器
+  /// 在 flutter_test 的 pending-timer invariant 下活不过用例(invariant
+  /// 先于 addTearDown 跑,dispose 撤不掉;2026-10-26 两轮红实证)。
+  /// 断链空转自续,离开视频档才撤值。
+  void _syncActualIsoPoller() {
+    final want = _cameraMode == CaptureMode.video;
+    if (want && !_actualIsoLooping) {
+      _actualIsoLooping = true;
+      unawaited(_actualIsoLoop(++_actualIsoRun));
+    } else if (!want && _actualIsoLooping) {
+      _actualIsoLooping = false;
+      _actualIsoRun++; // 旧环到点自退
+      _setActualIso(null);
+    }
+  }
+
+  Future<void> _actualIsoLoop(int run) async {
+    while (run == _actualIsoRun && !_disposed) {
+      await _delay(_kActualIsoPollInterval);
+      if (run != _actualIsoRun || _disposed) return;
+      if (_cameraMode != CaptureMode.video) return; // 模式沿对账自退
+      if (!_linkUp) continue; // 断链空转,重连自续
+      await _pollActualIso();
+    }
+  }
+
+  /// 0xD0B5 裸读:拒答/断链静默保旧值 —— 展示性第二读数,不参与写路。
+  /// on Object 收口(transport 关闭抛 Error,会逃逸 on Exception)。
+  Future<void> _pollActualIso() async {
+    try {
+      final v = await session
+          .getDevicePropValue(PtpDevicePropCode.isoControlSensitivity);
+      _setActualIso(v.value as int?);
+    } on Object {
+      // 保旧值
+    }
+  }
+
+  void _setActualIso(int? v) {
+    if (v == _actualIso) return;
+    _actualIso = v;
+    if (!_disposed) notifyListeners();
   }
 
   CaptureMode? get dialMode => _dialMode;
@@ -1358,6 +1433,13 @@ mixin _RemotePropOps on _RemoteCore {
   /// null 值 = 「--」;创意校准段位(101-120/201-209/301-309,目录
   /// display 无参通道)在此键化成 {n} 参。
   L10nMessage displayParamValue(int code, int? value) {
+    // 视频 ISO 复合值:设定(0xD1AA)与机身实际工作值(0xD0B5,视频
+    // auto 增益)分叉时并列 —— 2026-10-26 真机:视频档 auto 拥有实际
+    // 曝光,单值显示会被读成「改了没效果」。
+    if (code == PtpDevicePropCode.movieExposureIndex) {
+      final composite = isoWithActualValue(value, _actualIso);
+      if (composite != null) return composite;
+    }
     if (code == PtpDevicePropCode.activePicCtrlItem && value != null) {
       final name = picCtrlNames[value];
       if (name != null) return (key: name, args: null);
@@ -1523,8 +1605,10 @@ mixin _RemotePropOps on _RemoteCore {
             dataType: PtpDataType.uint16,
             value: 0x8012));
       }
-      await session.setDevicePropValue(PtpDevicePropValue(
-          code: writeCode, dataType: dataType, value: writeValue));
+      await _writeWithTakeoverSelfHeal(
+          param,
+          PtpDevicePropValue(
+              code: writeCode, dataType: dataType, value: writeValue));
       lockedProps.remove(propCode); // 写通:解除该参数的锁标
       if (wroteOpenShutter &&
           prevShutter != null &&
@@ -1591,6 +1675,37 @@ mixin _RemotePropOps on _RemoteCore {
     } finally {
       writing = false;
       if (_linkUp) notifyListeners();
+    }
+  }
+
+  /// 拨盘参数写入 + 授权失同步自愈(2026-10-26 真机口径):接管账面为开
+  /// 时吃 0x200F = 相机侧授权已被收回 —— 写授权会话级(会话重建/机身
+  /// 半按快门退闩都收;USB 探针实锤跨会话闩拒、重发 0x90C2(1) 幂等
+  /// 恢复),且机身退闩无事件可对账 → 重打闩后静默重试一次,用户无感。
+  /// 重打/重试仍拒 → 账面落闸(开着的面板沿 needTakeover 自动换出
+  /// 接管门)原样上抛。非 dialOwned / 账面关:原样上抛走正常错误路径。
+  Future<void> _writeWithTakeoverSelfHeal(
+      ShootingParam? param, PtpDevicePropValue value) async {
+    try {
+      await session.setDevicePropValue(value);
+      return;
+    } on PtpResponseException catch (e) {
+      if (e.responseCode != PtpResponseCode.accessDenied ||
+          !(param?.dialOwned ?? false) ||
+          !_takeoverActive) {
+        rethrow;
+      }
+      try {
+        await session.changeCameraMode(1); // 重打闩(幂等,0x2001)
+      } on Object {
+        // 重打失败:账面落闸,原 0x200F 照实上抛(响应码保留,文案/
+        // 锁标判据不变)。
+        _takeoverActive = false;
+        engine.remoteHeld = false;
+        if (!_disposed) notifyListeners();
+        throw e;
+      }
+      await session.setDevicePropValue(value); // 重试;仍拒原样上抛
     }
   }
 
@@ -3210,6 +3325,7 @@ final class RemoteController extends ChangeNotifier
   @override
   void dispose() {
     _disposed = true;
+    _actualIsoRun++; // 实际值轮询环到点自退
     _interval.stop();
     _interval.removeListener(_onIntervalChanged);
     _interval.dispose();

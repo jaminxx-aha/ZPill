@@ -515,6 +515,7 @@ const Map<String, String> enCatalog = {
   'param.movieAperture': 'Movie Aperture',
   'param.movieShutter': 'Movie Shutter',
   'param.movieIso': 'Movie ISO',
+  'param.isoWithActual': '{v} (actual {a})',
   'param.movieEv': 'Movie EV',
   'param.movieWb': 'Movie White Balance',
   'common.on': 'On',

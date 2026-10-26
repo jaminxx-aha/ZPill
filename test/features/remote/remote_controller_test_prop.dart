@@ -239,6 +239,40 @@ void _propGroups() {
         expect(controller.error?.key, 'remote.errPropWriteDial');
         expect(controller.error?.args?['tail'], 'remote.errPropWriteDialLatch');
       });
+
+      test('授权失同步自愈:接管账面开 + 0x200F → 重打闩静默重试(2026-10-26'
+          ' 写授权会话级,跨会话/机身退闩后账面失真)', () async {
+        _scriptParams(transport);
+        _emitConnected(transport, conn);
+        await pumpEventQueue();
+        transport.ok(); // 接管启用 0x90C2(1)
+        expect(await controller.enableTakeover(), isTrue);
+        transport
+          ..reply(PtpResponseCode.accessDenied) // 首写 0x1016 被拒
+          ..ok() // 自愈重打闩 0x90C2(1)(幂等)
+          ..ok() // 重试 0x1016 通
+          ..ok(data: _rawValueBytes(PtpDataType.uint32, 1 << 16 | 100)); // 写后复读 0xD100
+        await controller.setParam(PtpDevicePropCode.exposureTime, 1 << 16 | 100);
+        expect(controller.error, isNull, reason: '自愈成功用户无感');
+        expect(controller.takeoverActive, isTrue);
+        expect(transport.count(NikonOperationCode.changeCameraMode), 2,
+            reason: '启用一发 + 自愈补闩一发,恰两发');
+      });
+
+      test('自愈重打闩仍拒 → 账面落闸(面板换出接管门),原 0x200F 上抛', () async {
+        _scriptParams(transport);
+        _emitConnected(transport, conn);
+        await pumpEventQueue();
+        transport.ok(); // 接管启用
+        expect(await controller.enableTakeover(), isTrue);
+        transport
+          ..reply(PtpResponseCode.accessDenied) // 首写拒
+          ..reply(PtpResponseCode.accessDenied); // 重打闩也拒
+        await controller.setParam(PtpDevicePropCode.exposureTime, 1 << 16 | 100);
+        expect(controller.takeoverActive, isFalse,
+            reason: '账面落闸 → needTakeover 翻真,开着的面板自动换出接管门');
+        expect(controller.error?.key, 'remote.errPropWriteDial');
+      });
     });
     group('曝光变量模式门(OpenZCine stillAllows* 同款;真机:A 模式影控台'
         '同样不能改快门)', () {

@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:nikon_pill/core/ptp/device_prop.dart';
 import 'package:nikon_pill/core/ptp/operation_codes.dart';
 import 'package:nikon_pill/features/remote/remote_capture_strip.dart';
+import 'package:nikon_pill/features/remote/remote_controller.dart';
 import 'package:nikon_pill/features/remote/shooting_param_catalog.dart';
 
 ShootingParam _param(int code) =>
@@ -277,9 +278,33 @@ void main() {
       expect(photo.any((p) => p.videoOnly), isFalse);
       final video = orderedCaptureParams(videoMode: true);
       expect(video.any((p) => p.videoOnly), isTrue);
-      expect(video.length, photo.length + kVideoShootingParams.length);
       expect(video.last.code, PtpDevicePropCode.movieH265ToneMode,
           reason: '视频族按目录序追加在尾部');
+    });
+
+    test('orderedCaptureParams:视频档收起 photoOnly 照片曝光块(ISO/快门)'
+        ',照片档全量', () {
+      final photo = orderedCaptureParams();
+      expect(photo.where((p) => p.photoOnly).map((p) => p.code),
+          [PtpDevicePropCode.exposureIndex, PtpDevicePropCode.exposureTime],
+          reason: 'photoOnly 现役只标照片 ISO/快门(光圈双档共用未证不加)');
+      final video = orderedCaptureParams(videoMode: true);
+      expect(video.any((p) => p.photoOnly), isFalse,
+          reason: '照片码在视频档空转(休眠静照管线),收起');
+      expect(video.any((p) => p.code == PtpDevicePropCode.movieExposureIndex),
+          isTrue, reason: '视频 ISO 孪生码视频档可见');
+      expect(video.any((p) => p.code == PtpDevicePropCode.movieShutterSpeed),
+          isTrue, reason: '视频快门孪生码视频档可见');
+    });
+
+    test('isoWithActualValue:设定/实际分叉并列,同值与缺值回 null', () {
+      final m = isoWithActualValue(1600, 720);
+      expect(m?.key, 'param.isoWithActual');
+      expect(m?.args, {'v': '1600', 'a': '720'},
+          reason: 'display=_formatIso 裸数字;实际值非标准档(720)照实显');
+      expect(isoWithActualValue(1600, 1600), isNull, reason: '同值不并列');
+      expect(isoWithActualValue(1600, null), isNull);
+      expect(isoWithActualValue(null, 720), isNull);
     });
   });
 }

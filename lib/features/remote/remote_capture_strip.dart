@@ -33,14 +33,19 @@ const _stripOrder = <int>[
 /// photographyCaptureValues:MODE/ISO/SHUTTER/IRIS/DRIVE/FOCUS/WB/
 /// METER/PROFILE,见 _stripOrder)+ 目录余量按目录序追加(新参数
 /// 默认上面板)+ **视频档追加视频参数族 [kVideoShootingParams]**
-/// ([videoMode] = 控制器 cameraMode == video;照片档不出现,零噪声)。
+/// ([videoMode] = 控制器 cameraMode == video;照片档不出现,零噪声)
+/// **并收起 [ShootingParam.photoOnly] 照片曝光块**(视频孪生码接管
+/// 曝光,照片码在休眠静照管线空转;2026-10-26 USB 矩阵,用户真机
+/// 「调了 ISO 没效果」根因)。
 /// 2026-10-12 竖屏读出行与横屏左参数栏先后删除,设置面板成为唯一
 /// 消费方。
 List<ShootingParam> orderedCaptureParams({bool videoMode = false}) => [
       for (final code in _stripOrder)
-        if (shootingParamByCode[code] != null) shootingParamByCode[code]!,
+        if (shootingParamByCode[code] != null &&
+            !(videoMode && shootingParamByCode[code]!.photoOnly))
+          shootingParamByCode[code]!,
       for (final p in kShootingParams)
-        if (!_stripOrder.contains(p.code)) p,
+        if (!_stripOrder.contains(p.code) && !(videoMode && p.photoOnly)) p,
       if (videoMode) ...kVideoShootingParams,
     ];
 

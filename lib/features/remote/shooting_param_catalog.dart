@@ -59,6 +59,7 @@ final class ShootingParam {
     this.picksAuthoritative = false,
     this.readOnly = false,
     this.videoOnly = false,
+    this.photoOnly = false,
   });
 
   /// PTP DevicePropCode(0x5004/0x5005/…)—— 展示键与 PropDesc 来源。
@@ -111,6 +112,13 @@ final class ShootingParam {
   /// 视频档专属参数(拨杆视频档生效;只在 [CaptureMode.video] 刷/显,
   /// 照片档不占面板)。官方 §6.5.3/§6.5.12 视频拍摄菜单族。
   final bool videoOnly;
+
+  /// 照片档专属参数(与 [videoOnly] 对偶;视频档不显):静照曝光族的
+  /// 视频孪生码(0xD1AA/D1A8/D1A9)在视频档接管曝光,照片码落在休眠
+  /// 静照管线 —— 2026-10-26 USB 矩阵实证:视频档写 0xD0B4 回 0x2001
+  /// 挂得上,但 0xD0B5(有效值)被视频自动增益拥有(恒 720),面板
+  /// 读写全空转、转盘事件也不改有效值。
+  final bool photoOnly;
 
   /// 当前值展示:null = 未读;枚举表外 → 格式化 → 裸值(语言中性,
   /// 与 ISO 裸值同款口径;2026-10-16 前「值 N」中文兜底在 EN 直通)。
@@ -271,7 +279,8 @@ final kShootingParams = <ShootingParam>[
   // Time)—— 标准码 0x500D 只读且单位存疑(名义 0.0001s 连 1/8000s
   // 都无法整表,OpenZCine 弃用),取值域 = 目录标准档打包表。dialOwned:
   // 机顶快门拨盘拥有,调节前弹「APP 接管控制」确认(0x90C2 remote 模式,
-  // 影控台同款)。
+  // 影控台同款)。photoOnly:视频档曝光由孪生码 0xD1A8 接管,照片快门
+  // 块空转不显(2026-10-26 矩阵,同 ISO)。
   ShootingParam(
       code: PtpDevicePropCode.exposureTime,
       // label 即 t() 键(zh「快门」/en 'Shutter';2026-10-16 EN 抽查:
@@ -283,20 +292,26 @@ final kShootingParams = <ShootingParam>[
       writeCode: PtpDevicePropCode.stillShutterSpeed,
       writeType: PtpDataType.uint32,
       pickValues: _kShutterPickValues,
-      dialOwned: true),
+      dialOwned: true,
+      photoOnly: true),
   // ISO:值读走 0xD0B5(有效 ISO,Auto ISO 时 = 机身当前应用值;标准码
   // 0x500F 不跟厂商写,真机「改了不同步」根因)/ 写 0xD0B4(u32,值 =
   // ISO 数);取值域仍用 0x500F PropDesc 相机自报枚举(Desc 自报
   // getSet=True + FORM 31 值,2026-10-26 USB dump —— 写不生效的谎报,
   // 写路维持 0xD0B4)。dialOwned:机身上 ISO 由按键+指令拨盘调整(拨盘
   // 级)—— 接管后可写(2026-10-06 真机:0xD0B4 写 0x200F,同快门/模式
-  // 的拨盘语义)。
+  // 的拨盘语义)。photoOnly:视频档曝光由孪生码 0xD1AA 接管 —— 矩阵
+  // 实证(2026-10-26):视频档写 0xD0B4 挂得上但 0xD0B5 恒视频 auto
+  // 值,转盘事件也不改有效值,照片 ISO 块视频档空转不显;照片档写后
+  // 相机自报 0x4006/0x500F(0xD0B5 有效值迟滞数秒后跟上,事件驱动
+  // 刷新自愈)。
   ShootingParam(
       code: PtpDevicePropCode.exposureIndex,
       label: 'ISO',
       format: _formatIso,
       prominent: true,
       dialOwned: true,
+      photoOnly: true,
       readCode: PtpDevicePropCode.isoControlSensitivity,
       writeCode: PtpDevicePropCode.exposureIndexEx,
       writeType: PtpDataType.uint32),
@@ -558,23 +573,30 @@ final kVideoShootingParams = <ShootingParam>[
     format: _formatFNumber,
     videoOnly: true,
   ),
+  // 视频曝光三件 dialOwned(2026-10-26 真机:视频档写 0xD1AA 无闩
+  // 0x200F,与照片族同款会话闩语义)—— 接管门(面板 needTakeover)与
+  // 写路 0x200F 自愈重打闩,全套经此旗继承;光圈 0xD1A9 Desc 自报
+  // getSet=True 未证不加。Zf 机顶拨盘在视频档同样拥有这三值。
   ShootingParam(
     code: PtpDevicePropCode.movieShutterSpeed,
     label: 'param.movieShutter',
     format: _formatShutterRaw,
     videoOnly: true,
+    dialOwned: true,
   ),
   ShootingParam(
     code: PtpDevicePropCode.movieExposureIndex,
     label: 'param.movieIso',
     format: _formatIso,
     videoOnly: true,
+    dialOwned: true,
   ),
   ShootingParam(
     code: PtpDevicePropCode.movieExposureBiasCompensation,
     label: 'param.movieEv',
     format: _formatEv,
     videoOnly: true,
+    dialOwned: true,
   ),
   // 视频白平衡(u16):0x8015 = 同照片设置(官方默认值档,§6.5.3.9),
   // 其余复用静照 WB 值空间。

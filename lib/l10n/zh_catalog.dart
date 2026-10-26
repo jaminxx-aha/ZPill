@@ -451,6 +451,7 @@ const Map<String, String> zhCatalog = {
   'param.movieAperture': '视频光圈',
   'param.movieShutter': '视频快门',
   'param.movieIso': '视频 ISO',
+  'param.isoWithActual': '{v}(实际 {a})',
   'param.movieEv': '视频 EV',
   'param.movieWb': '视频白平衡',
   'common.on': '开',
