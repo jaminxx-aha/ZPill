@@ -27,10 +27,16 @@ Future<void> showParamEditSheet(
   // 取值域:相机 PropDesc 枚举优先(权威),拒答/无 FORM 时目录
   // pickValues 直供(快门/对焦模式/图像区域等厂商码场景);目录权威表
   // (picksAuthoritative,EV ±3 真机硬件域)再压过相机描述层。
-  final enums = p.picksAuthoritative
+  // 优化校准(0xD200)按机身菜单序重排(相机 FORM 是协议值序,内置组
+  // 菜单把自动居首;2026-10-27 用户机身菜单逐项对照定案)。
+  final rawEnums = p.picksAuthoritative
       ? p.pickValues
       : desc?.enumValues?.whereType<int>().toList(growable: false) ??
           p.pickValues;
+  final enums =
+      p.code == PtpDevicePropCode.activePicCtrlItem && rawEnums != null
+          ? sortPicCtrlEnumValues(rawEnums)
+          : rawEnums;
   final rangeMin = desc?.rangeMin as int?;
   final rangeMax = desc?.rangeMax as int?;
   final rangeStep = desc?.rangeStep as int? ?? 1;

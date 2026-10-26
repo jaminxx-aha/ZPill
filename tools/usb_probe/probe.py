@@ -91,7 +91,7 @@ NIKON_GET_LIVEVIEW_IMG_EX = 0x9428  # OpenZCine 全系取帧码(应答带 displa
 NIKON_CHANGE_AF_AREA = 0x9205  # p1/p2 = whole-size 坐标(OpenZCine PTPIPClientSession)
 NIKON_CHANGE_APPLICATION_MODE = 0x9435  # 遥控 op 前须切应用模式(app enableAppControl 同款)
 NIKON_DEVICE_READY = 0x90C8
-NIKON_GET_PICTCTRL_DATA = 0x90CC  # 优化校准槽位详情:params[槽位,0],name=数据[3..23) ASCII(libgphoto2 在册;布局 = digiCamControl 实证)
+NIKON_GET_PICTCTRL_DATA = 0x90CC  # 优化校准槽位详情:params[槽位,0],name=数据[2..22) ASCII(官方 §9.9:BasePictureControl 2B + RegistrationName 20B;[3..23) 是 digiCamControl 旧机型口径,会吞首字母)
 DEVICE_BUSY = 0x2019  # ISO 15740 标准响应码(设备忙)
 
 # GetObjectHandles 参数(全部存储 / 全部格式;父对象:0=仅根层,ALL=递归)
@@ -1518,11 +1518,11 @@ def main() -> int:
                 print(f"  0x{prop:04X} Value <- 0x{rc:04X}")
 
     # 步骤 4w(可选,--picctrl):优化校准(0xD200)槽位摸底 —— FORM 枚举
-    # 全量(4r 截 12,这里 46 项全列)+ 每槽位 0x90CC GetPictCtrlData 读
+    # 全量(4r 截 12,这里 46 项全列)+ 每槽位 0x90CC GetPicCtrlData 读
     # 注册名(自定义/云组的真名在机身上由用户起,FORM 只有槽位号)。布局
-    # = digiCamControl NikonBase.GetPictureControl 实证:[0]未知 [1]单色
-    # 标志 [2]自定义标志 [3..23) 20 字节 ASCII 名 NUL 截断。回归点:
-    # FORM 项数(用户真机 46)、getSet、0x90CC 应答形态与名字字节。
+    # = 官方指令书 §9.9(ZfUsbMtpE_02):[0..1] BasePictureControl(2B,
+    # §9.9.1)[2..22) 20 字节 ASCII 名(ASCII 19 + NUL,§9.9.2)。
+    # 回归点:FORM 项数(用户真机 46)、getSet、0x90CC 应答形态与名字字节。
     if args.picctrl:
         print("[4w] 优化校准 0xD200 摸底(FORM 全量 + 0x90CC 槽位名):")
         txid += 1
@@ -1549,12 +1549,11 @@ def main() -> int:
                                   NIKON_GET_PICTCTRL_DATA, [slot, 0])
             if rc == OK and blob is not None:
                 d = blob[HDR:]
-                name = (d[3:23].split(b"\x00")[0].decode("ascii", "replace")
-                        if len(d) >= 23 else "")
-                mono = d[1] if len(d) > 1 else -1
-                custom = d[2] if len(d) > 2 else -1
-                print(f"  0x90CC({slot}) <- OK {len(d)}B  mono={mono}"
-                      f" custom={custom}  name={name!r}")
+                name = (d[2:22].split(b"\x00")[0].decode("ascii", "replace")
+                        if len(d) >= 22 else "")
+                base = (d[0] | (d[1] << 8)) if len(d) > 1 else -1
+                print(f"  0x90CC({slot}) <- OK {len(d)}B  base={base}"
+                      f"  name={name!r}")
                 print("      " + d[:48].hex(" "))
             else:
                 print(f"  0x90CC({slot}) <- 0x{rc:04X}")

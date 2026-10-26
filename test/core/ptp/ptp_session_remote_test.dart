@@ -507,27 +507,29 @@ void main() {
     });
 
     test(
-        'getPictureControlName:0x90CC params=[槽位,0],name=数据[3..23) NUL 截断'
-        '(digiCamControl 布局)', () async {
-      final data = Uint8List(40); // [3..23) 名区,余 NUL 填充
-      data[1] = 1; // 单色标志
-      data[2] = 1; // 自定义标志
+        'getPictureControlName:0x90CC params=[槽位,0],name=数据[2..22) NUL 截断'
+        '(官方 §9.9:BasePictureControl 2B + RegistrationName 20B)', () async {
+      final data = Uint8List(40); // [2..22) 名区,余 NUL 填充
+      data[0] = 1; // BasePictureControl=Standard(§9.9.1)
+      data[1] = 1;
       const name = 'My Landscape';
       for (var i = 0; i < name.length; i++) {
-        data[3 + i] = name.codeUnitAt(i);
+        data[2 + i] = name.codeUnitAt(i);
       }
       final fake = FakePtpTransport()
         ..reply(PtpResult(responseCode: PtpResponseCode.ok, data: data));
       final session = PtpSession(transport: fake);
-      expect(await session.getPictureControlName(201), 'My Landscape');
+      expect(await session.getPictureControlName(201), 'My Landscape',
+          reason: '名字从 BasePictureControl 后起(2B 头),[3..23) 口径'
+              '会吞首字母(2026-10-26 用户真机反馈根因)');
       final req = fake.requests.single;
       expect(req.opcode, NikonOperationCode.getPictCtrlData);
       expect(req.params, [201, 0]);
     });
 
-    test('getPictureControlName:短数据(<23B)/ 空名 / 纯空白 → null 不抛', () async {
+    test('getPictureControlName:短数据(<22B)/ 空名 / 纯空白 → null 不抛', () async {
       final blanks = Uint8List(32);
-      for (var i = 3; i < 8; i++) {
+      for (var i = 2; i < 7; i++) {
         blanks[i] = 0x20; // 空格,trim 后为空
       }
       final fake = FakePtpTransport()

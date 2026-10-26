@@ -1429,9 +1429,10 @@ mixin _RemotePropOps on _RemoteCore {
   }
 
   /// 参数值展示(页面统一入口):优化校准槽位真名优先(0x90CC 缓存),
-  /// 其余走目录静态表;返回键/动态串由渲染端 t(key, args) 落地。
-  /// null 值 = 「--」;创意校准段位(101-120/201-209/301-309,目录
-  /// display 无参通道)在此键化成 {n} 参。
+  /// 其余走目录静态表(内置 1-11 + 创意 101-120 全员有键);返回键/
+  /// 动态串由渲染端 t(key, args) 落地。null 值 = 「--」;段位键化分支
+  /// (param.picCtrlCreative/Custom/Cloud 的 {n} 参)只兜表外值 ——
+  /// 目录键外的 101-120 新值 / 201-209 / 301-309(静态表无占位的槽位)。
   L10nMessage displayParamValue(int code, int? value) {
     // 视频 ISO 复合值:设定(0xD1AA)与机身实际工作值(0xD0B5,视频
     // auto 增益)分叉时并列 —— 2026-10-26 真机:视频档 auto 拥有实际
@@ -1443,6 +1444,9 @@ mixin _RemotePropOps on _RemoteCore {
     if (code == PtpDevicePropCode.activePicCtrlItem && value != null) {
       final name = picCtrlNames[value];
       if (name != null) return (key: name, args: null);
+      final param = shootingParamByCode[code];
+      final label = param?.enumLabels[value];
+      if (label != null) return (key: label, args: null);
       if (value >= 101 && value <= 120) {
         return (key: 'param.picCtrlCreative', args: {'n': value - 100});
       }
