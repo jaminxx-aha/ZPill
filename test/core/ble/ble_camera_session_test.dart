@@ -9,6 +9,8 @@ import 'package:nikon_pill/core/ble/gatt_uuids.dart';
 import 'package:nikon_pill/core/ble/geo_payload.dart';
 import 'package:nikon_pill/core/ble/pairing_engine.dart';
 import 'package:nikon_pill/core/ble/pairing_message.dart';
+import 'package:nikon_pill/core/ble/wifi_credentials.dart'
+    show lssSessionKeyCandidates;
 import 'package:nikon_pill/l10n/message.dart';
 import 'package:nikon_pill/core/log/app_log.dart';
 import 'package:nikon_pill/platform/ble_scanner.dart';
@@ -839,6 +841,23 @@ void main() {
       expect(creds.security, 0x02);
       expect(session.lastError, isNull);
       expect(traces.where((l) => l.startsWith('0x2004 ←')), isNotEmpty);
+    });
+
+    test('握手材料合成;0x2004 按派生主路端到端命中', () async {
+      await runHandshake();
+      final m = session.lssMaterial;
+      expect(m, isNotNull);
+      expect(m!.saltIndex, 0); // harness 的 stage2 按 salts[0] 构造
+      expect(m.key1.length, 8);
+      expect(m.key2.length, 8);
+      final (_, k) = lssSessionKeyCandidates(m).first;
+      host.reads[kNikonCharConfig] =
+          craftBlob('Zf_80114411', 'wpa2pass99', 0x02, cbc: true, key: k);
+      final creds = await session.readWifiCredentials();
+      expect(creds, isNotNull);
+      expect(creds!.ssid, 'Zf_80114411');
+      expect(creds.password, 'wpa2pass99');
+      expect(creds.keySource, startsWith('lss-kdf'));
     });
 
     test('未 ready 拒读;空/短 blob 与解密未中如实带原因', () async {

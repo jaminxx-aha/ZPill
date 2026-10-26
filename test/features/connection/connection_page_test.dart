@@ -1920,7 +1920,8 @@ void main() {
       expect(find.text('相机热点凭据(蓝牙通道解出)'), findsOneWidget);
       expect(find.text('wpa2pass99'), findsOneWidget);
       expect(find.text('SSID'), findsOneWidget);
-      expect(find.textContaining('WPA2'), findsOneWidget);
+      // security=LSS 口径(2026-10-27 真机定案):0x02=WPA3。
+      expect(find.textContaining('WPA3'), findsOneWidget);
     });
 
     testWidgets('唤醒但凭据未解出:错误位红字提醒去系统连 Wi-Fi,提示条撤(十七轮)',
