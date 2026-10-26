@@ -140,8 +140,9 @@ final class MethodChannelUsbHost implements UsbHostChannel {
   @override
   Future<void> close() => channel.invokeMethod('close');
 
-  /// 中止后排空 bulk IN:Android native 有界吸干(残余字节 + 超读暂存,
-  /// 见 UsbBytePipe.drainIn 契约)。iOS/ohos native 未实现该方法 →
+  /// 中止后排空 bulk IN:native 有界吸干(残余字节 + 超读暂存,见
+  /// UsbBytePipe.drainIn 契约)。Android/ohos 已落地(ohos 另在 open
+  /// 成功后开链排空一次);iOS native 未实现该方法 →
   /// MissingPluginException,由调用方(UsbPtpTransport)best-effort 静默。
   @override
   Future<void> drainIn() async {

@@ -8,6 +8,8 @@
  * - 窗口内无数据 → PlatformException code 'usb_timeout'(Dart 映射
  *   TimeoutException);
  * - bulkOut:native 内部 16KB 分块循环写;
+ * - drainIn:中止/开链后的有界冲刷 —— 清超读暂存 + 300ms 静默窗循环吸干
+ *   bulk IN 残余(无它则中止事务的残留字节毒化后续事务,流错位自锁死);
  * - interrupt 事件走 EventChannel,完整事件容器(≤64B)由本文件重组
  *   (12B 头 + u32 长度驱动)。
  *
@@ -94,6 +96,12 @@ const BULK_IN_READ_BYTES_START = 64 * 1024;
 /// ≈ 13-14MB/s。要再上去得换路(usbSubmitTransfer 异步流水/原生肖块),
 /// 等有 SDK 通路再说。
 const BULK_IN_READ_BYTES_MAX = 128 * 1024;
+
+/// drainIn 单轮静默窗:一轮内无数据即认为吸干(Android 同口径 300ms)。
+const DRAIN_QUIET_MS = 300;
+/// drainIn 轮数上限:数据持续到达也最多吸 32 轮(有界,别无限等;
+/// 残余超过此量的极端只能靠上层断链重连兜底)。
+const DRAIN_MAX_ROUNDS = 32;
 
 /// interrupt 事件缓冲:PTP 事件容器 ≤64B(Zf 实测 12/16B)。
 const INTERRUPT_BUF_BYTES = 64;
@@ -225,6 +233,9 @@ export class UsbHostPlugin implements FlutterPlugin {
         break;
       case 'bulkRead':
         this.bulkRead(call.argument('maxLen') as number, call.argument('timeoutMs') as number, result);
+        break;
+      case 'drainIn':
+        this.drainIn(result);
         break;
       case 'close':
         this.teardownSession();
@@ -366,6 +377,18 @@ export class UsbHostPlugin implements FlutterPlugin {
     // clearHalt 内部自吞错误(尽力而为,失败不阻断 open)。
     await this.clearHalt(bulkIn.address);
     await this.clearHalt(bulkOut.address);
+    // 开链排空:clearHalt 只复位 toggle,宿主侧已收进 SDK 暂存/设备端点
+    // FIFO 的上链残余它够不着 —— 上一链中止事务的残留容器会喂给新链第
+    // 一条事务,连接恒报「容器 txid=A 与事务 B 不符(流错位?)」且每次
+    // 失败连接自身的中止又添新残留,自锁死(2026-10-26 真机实证)。
+    // 开链后必无合法在途数据,有即残留,吸到静默为止。
+    const opened = this.session;
+    if (opened !== null) {
+      const drained = await this.drainBulkIn(opened, DRAIN_QUIET_MS);
+      if (drained > 0) {
+        Log.w(TAG, `open 吸干上链残余 ${drained}B(新链从干净流开始)`);
+      }
+    }
     // 先订阅后连接的场景:打开成功时若事件流已在监听,这里补启动轮询
     if (this.sink !== null) {
       this.startInterruptPoll();
@@ -541,6 +564,62 @@ export class UsbHostPlugin implements FlutterPlugin {
     } catch (e) {
       NativeLog.e('usb', `bulkRead 异常:${e}`);
       result.error('usb_error', `bulkRead: ${e}`, null);
+    }
+  }
+
+  /// bulk IN 有界冲刷:吸干残余字节,下一事务不从错位字节开始(nico/
+  /// Android 同款)。残余两处来源都要收:native 超读暂存(bulkInLeftover,
+  /// 属被中止事务,先丢)+ 相机仍在吐的数据相位字节(静默窗循环吸到
+  /// 静默为止)。子块尺寸取当前自适应档与 16KB 下限的较大者 —— 小缓冲
+  /// 撞大突发会 babble 报 -8,被误判成静默提前收工,残留吸不尽。
+  /// 不碰 AIMD 状态(冲刷读不参与升/降档)。返回吸干字节数(仅日志价值)。
+  private async drainBulkIn(s: UsbSession, quietMs: number): Promise<number> {
+    this.bulkInLeftover = new Uint8Array(0);
+    const scratch =
+      new Uint8Array(Math.max(BULK_IN_MIN_READ_BYTES, this.bulkInReadBytes));
+    let drained = 0;
+    for (let rounds = 0; rounds < DRAIN_MAX_ROUNDS; rounds++) {
+      let n = 0;
+      try {
+        n = await usb.bulkTransfer(s.pipe, s.bulkIn, scratch, quietMs);
+      } catch (e) {
+        Log.w(TAG, `drain bulkTransfer 异常:${e}`);
+        break;
+      }
+      if (n < 0) {
+        break; // 静默窗内无数据:已吸干
+      }
+      drained += n; // n==0(ZLB)也耗一轮,继续吸
+    }
+    return drained;
+  }
+
+  /// Dart 契约见 UsbBytePipe.drainIn:事务异常收场后的 best-effort 排空。
+  /// 冲刷发生在 PtpSession 串行门持有期内,与下一事务天然串行不交错
+  /// (Android 同款)。2026-10-26 前 ohos 未实现 → notImplemented 被
+  /// Dart 侧 best-effort 静默,中止事务的残余无排空手段 = 流错位自锁死
+  /// 的直接根因,补齐对齐 Android。
+  private async drainIn(result: MethodResult): Promise<void> {
+    const s = this.session;
+    if (s === null) {
+      result.error('usb_closed', '会话未打开', null);
+      return;
+    }
+    try {
+      const drained = await this.drainBulkIn(s, DRAIN_QUIET_MS);
+      // 会话轮换守卫:与 bulkRead 同款 —— 旧链路的冲刷结果只释放通道,
+      // 不作数(drainBulkIn 里清的 leftover 也随 teardown 重置,无污染)。
+      if (this.session !== s) {
+        result.error('usb_stale', '会话已轮换,冲刷结果丢弃', null);
+        return;
+      }
+      if (drained > 0) {
+        Log.i(TAG, `drainIn 吸干 ${drained}B`);
+      }
+      result.success(drained);
+    } catch (e) {
+      NativeLog.e('usb', `drainIn 异常:${e}`);
+      result.error('usb_error', `drainIn: ${e}`, null);
     }
   }
 

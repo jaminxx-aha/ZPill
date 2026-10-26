@@ -232,6 +232,21 @@ void main() {
       );
     });
 
+    test('txid 不符报错带头 12B 十六进制(真机日志可判错位成因)', () async {
+      final pipe = FakeUsbBytePipe();
+      final t = UsbPtpTransport(pipe: pipe);
+      pipe.enqueue(encodeUsbResponse(responseCode: PtpResponseCode.ok, transactionId: 7));
+      // 头 12B:len=0x0C 00 00 00 | type=03 00 | code=01 20(0x2001 OK) | txid=07 00 00 00
+      await expectLater(
+        t.execute(const PtpRequest(opcode: PtpOperationCode.getDeviceInfo)),
+        throwsA(isA<FormatException>().having(
+          (e) => e.message,
+          'message',
+          contains('头:0c 00 00 00 03 00 01 20 07 00 00 00'),
+        )),
+      );
+    });
+
     test('close 后拒绝新事务', () async {
       final pipe = FakeUsbBytePipe();
       final t = UsbPtpTransport(pipe: pipe);
