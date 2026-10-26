@@ -76,11 +76,6 @@ const Map<String, String> enCatalog = {
       'Open Settings > Bluetooth and tap the camera name to finish pairing',
   'ble.bondStep3': 'When done, return here and tap "Connect"',
   'ble.openSystemBluetooth': 'Open System Bluetooth Settings',
-  'ble.probeGateReadCred':
-      'Bond probe silent window — AP credential read deferred',
-  'ble.probeGateOp': 'Bond probe silent window — {label} deferred',
-  'ble.probeClearBitWriteFail': 'Probe clear-bit write failed: {e}',
-  'ble.probeEstablishmentWriteFail': 'Probe btEstablishment write failed: {e}',
   'ble.scanning': 'Scanning…',
   'ble.scanButton': 'Scan',
   'ble.unpair': 'Unpair',
