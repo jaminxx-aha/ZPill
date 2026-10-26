@@ -932,6 +932,9 @@ def main() -> int:
                          "1016|D1F0=01 后者为 data-out 载荷)。连接脚本对照"
                          "仪器:0x9435 → 0x90C2(1) → 0x9201 哪级解开 Zf "
                          "上传优先模式门(机身屏显由操作者目视对照)")
+    ap.add_argument("--sleep", type=int, metavar="秒", default=0,
+                    help="步骤间原位停顿(同会话延迟复读窗:写后停 N 秒"
+                         "再走 --propdesc 读,甄别定时回弹 vs 会话关闭回弹)")
     args = ap.parse_args()
 
     backend = make_backend()
@@ -1394,6 +1397,9 @@ def main() -> int:
             elif text.startswith("u16:"):
                 # u16 载荷(如 0xD05D AF 区域模式):u16:0x8010
                 payload = struct.pack("<H", int(text[4:], 0) & 0xFFFF)
+            elif text.startswith("u32:"):
+                # u32 载荷(如 0xD1AA 视频 ISO):u32:0x640
+                payload = struct.pack("<I", int(text[4:], 0) & 0xFFFFFFFF)
             elif text.startswith("u8:"):
                 # u8 载荷(如 0xD1A6 LiveViewSelector):u8:0 / u8:1
                 payload = struct.pack("<B", int(text[3:], 0) & 0xFF)
@@ -1457,6 +1463,12 @@ def main() -> int:
                 print(f"    会话重开后 GetDeviceInfo <- 操作码 {len(post_ops)} 个")
             retry_data_ops()
         print(f"  [4s 小结] 数据操作解锁:{'是 ✓' if unlocked else '否 —— 身份假设不成立或需换姿势'}")
+
+    # 步骤 4e(可选,--sleep N):原位停顿 —— 同会话延迟复读观察窗
+    # (写后停 N 秒再走 4r propdesc 读,甄别「定时回弹 vs 会话关闭回弹」)。
+    if args.sleep:
+        print(f"[4e] 原位停顿 {args.sleep}s(同会话,供延迟复读)…")
+        time.sleep(args.sleep)
 
     # 步骤 4r(可选,--propdesc):Desc/Value 解码对照 —— 镜像 Dart
     # device_prop.dart 的解码链(类型来源:Desc 自描述 → ISO 标准表 →
