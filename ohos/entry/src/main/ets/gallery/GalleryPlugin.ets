@@ -177,45 +177,68 @@ export class GalleryPlugin implements FlutterPlugin, AbilityAware {
         result.error('gallery_error', '已有保存面板在进行中', null);
         return;
       }
-      if (this.hasWritePermission(ability)) {
-        // ACL 直授:WRITE_IMAGEVIDEO 常权在手,免面板静默落库
-        Log.i(TAG, `importFiles: 已持 WRITE_IMAGEVIDEO,静默直存 ${requests.length} 个`);
-        SaveSession.openSilent(ability.context,
-          requests, (uris: Array<string>) => {
+      // 直存优先:ACL 声明在 profile 时,createAsset 首调会弹一次
+      // 系统媒体写授权(用户确认即永久生效),此后零弹窗零面板;
+      // 系统拒/异常 → 落回 SaveButton 面板兜底。勿在此前调
+      // requestPermissionsFromUser:该 API 对 WRITE_IMAGEVIDEO 是
+      // 瞬态自动应答,每次保存都闪一帧(真机实证)。
+      SaveSession.openSilent(ability.context, requests)
+        .then((uris: Array<string>) => {
           Log.i(TAG, `静默保存完成:${uris.length}/${requests.length} 个 URI`);
           result.success(uris);
-        }, (msg: string) => {
-          result.error('gallery_error', `保存失败:${msg}`, null);
+        })
+        .catch(async (e: Object) => {
+          Log.i(TAG, `静默直存未成(${e}),落回保存面板`);
+          const opened = SaveSession.open(requests, (uris: Array<string>) => {
+            Log.i(TAG, `保存面板结束:${uris.length}/${requests.length} 个授权 URI`);
+            result.success(uris);
+          });
+          if (!opened) {
+            result.error('gallery_error', '保存面板 UI 未挂载(Index 未注册)', null);
+          }
         });
-        return;
-      }
-      Log.i(TAG, `importFiles: 登记 ${requests.length} 个文件,亮出保存面板`);
-      const opened = SaveSession.open(requests, (uris: Array<string>) => {
-        Log.i(TAG, `保存面板结束:${uris.length}/${requests.length} 个授权 URI`);
-        result.success(uris);
-      });
-      if (!opened) {
-        result.error('gallery_error', '保存面板 UI 未挂载(Index 未注册)', null);
-      }
     } catch (e) {
       Log.e(TAG, `importFiles 异常: ${e}`);
       result.error('gallery_error', `importFiles: ${e}`, null);
     }
   }
 
-  /// WRITE_IMAGEVIDEO 是否已持权(ACL 直授/临时授权均算):持权 =
-  /// 免面板直存,否则走 SaveButton 面板。
-  private hasWritePermission(ability: UIAbility): boolean {
-    try {
-      const at: abilityAccessCtrl.AtManager = abilityAccessCtrl.createAtManager();
-      const state: abilityAccessCtrl.GrantStatus = at.verifyAccessTokenSync(
-        ability.context.applicationInfo.accessTokenId,
-        'ohos.permission.WRITE_IMAGEVIDEO');
-      return state === abilityAccessCtrl.GrantStatus.PERMISSION_GRANTED;
-    } catch (e) {
-      Log.e(TAG, `hasWritePermission: ${e}`);
-      return false;
+  /// 确保 WRITE_IMAGEVIDEO 在手:verify → 没有则 requestPermissionsFromUser
+  ///(ACL 声明后系统会弹一次媒体写授权,授予即永久,后续保存零弹窗);
+  /// 系统不弹(设备策略)或拒绝 → false,调用方落回 SaveButton 面板。
+  private async ensureWritePermission(ability: UIAbility): Promise<boolean> {
+    const granted = (): boolean => {
+      try {
+        const at: abilityAccessCtrl.AtManager =
+          abilityAccessCtrl.createAtManager();
+        return at.verifyAccessTokenSync(
+          ability.context.applicationInfo.accessTokenId,
+          'ohos.permission.WRITE_IMAGEVIDEO') ===
+          abilityAccessCtrl.GrantStatus.PERMISSION_GRANTED;
+      } catch (e) {
+        Log.e(TAG, `ensureWritePermission verify: ${e}`);
+        return false;
+      }
+    };
+    if (granted()) {
+      return true;
     }
+    try {
+      const ctx = ability.context as common.UIAbilityContext;
+      const req = await abilityAccessCtrl.createAtManager()
+        .requestPermissionsFromUser(ctx,
+          ['ohos.permission.WRITE_IMAGEVIDEO']);
+      const names: Array<string> = req.permissions ?? [];
+      const idx = names.indexOf('ohos.permission.WRITE_IMAGEVIDEO');
+      if (idx >= 0 && req.authResults[idx] === 0) {
+        Log.i(TAG, 'WRITE_IMAGEVIDEO 用户授权成功(永久)');
+        return true;
+      }
+      Log.i(TAG, `WRITE_IMAGEVIDEO 未授:authResults=${JSON.stringify(req.authResults)}`);
+    } catch (e) {
+      Log.e(TAG, `ensureWritePermission request: ${e}`);
+    }
+    return granted();
   }
 
   /// Map 取值收敛为 string(缺键/undefined/null → '')。

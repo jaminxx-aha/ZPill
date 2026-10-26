@@ -100,18 +100,30 @@ class _HomeShellState extends State<HomeShell> {
         children: [
           if (wide)
             SafeArea(
-              child: NavigationRail(
-                selectedIndex: _index,
-                onDestinationSelected: _select,
-                labelType: NavigationRailLabelType.all,
-                destinations: [
-                  for (final t in _tabs)
-                    NavigationRailDestination(
-                      icon: Icon(t.icon),
-                      selectedIcon: Icon(t.selectedIcon),
-                      label: Text(context.t(t.label)),
-                    ),
-                ],
+              // rail 的按压涟漪/hover 色硬编码取 colorScheme.primary
+              // (12%/4%,主题无钩子):局部把 primary 覆成透明,涟漪随
+              // 胶囊一并消失(2026-10-26 用户明示)。rail 子树内 primary
+              // 仅涟漪/hover 二处消费(图标/文字/指示器已在 app_theme
+              // 显式接管),此覆盖无涟漪之外的副作用。
+              child: Theme(
+                data: Theme.of(context).copyWith(
+                  colorScheme: Theme.of(context)
+                      .colorScheme
+                      .copyWith(primary: Colors.transparent),
+                ),
+                child: NavigationRail(
+                  selectedIndex: _index,
+                  onDestinationSelected: _select,
+                  labelType: NavigationRailLabelType.all,
+                  destinations: [
+                    for (final t in _tabs)
+                      NavigationRailDestination(
+                        icon: Icon(t.icon),
+                        selectedIcon: Icon(t.selectedIcon),
+                        label: Text(context.t(t.label)),
+                      ),
+                  ],
+                ),
               ),
             ),
           Expanded(
@@ -141,12 +153,12 @@ class _HomeShellState extends State<HomeShell> {
       ),
       bottomNavigationBar: wide
           ? null
-          // 上下两栏几何对齐微信(2026-10-24 三轮定标,截图实测 3x:
+          // 上下两栏几何(2026-10-24 三轮定标,截图实测 3x:
           // 顶栏 46.3、底栏带 87.3 = 栏内容区 53.3 + 安全区 34;图标
           // 心距带顶 ~20)。高度与 labelPadding 钉在 app_theme;此前
           // 两轮的顶垫 6/Transform 下沉 8(对齐 iOS 原生照片栏时期的
           // 微调)被本定标取代撤除 —— 内容在 53 栏内随高居中即落在
-          // 微信位。
+          // 底栏位。
           : NavigationBar(
               selectedIndex: _index,
               onDestinationSelected: _select,

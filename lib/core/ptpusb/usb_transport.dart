@@ -41,8 +41,8 @@ abstract interface class UsbBytePipe {
 
   /// 中止后排空 bulk IN:事务异常收场后吸干残余字节(相机还在吐的
   /// 数据相位尾巴 + native 超读暂存),下一事务不从错位字节开始。
-  /// native 有界(静默窗 + 轮数上限);无冲刷能力的实现(iOS/ohos
-  /// 未实现该通道方法)为 no-op 或抛错,调用方须 best-effort 静默。
+  /// native 有界(静默窗 + 轮数上限);无冲刷能力的实现(iOS 未实现
+  /// 该通道方法)为 no-op 或抛错,调用方须 best-effort 静默。
   Future<void> drainIn();
 
   /// interrupt IN 事件流:每条为一个完整事件容器(native 组帧,≤64B)。
@@ -195,7 +195,12 @@ final class UsbPtpTransport implements PtpTransport {
     final code = r.u16();
     final txid = r.u32();
     if (txid != expectedTxid) {
-      throw FormatException('容器 txid=$txid 与事务 $expectedTxid 不符(流错位?)');
+      // 头 12B 十六进制随报错浮出:txid 位是「旧容器头」还是「数据相位
+      // 负载被当头解析」(如 XMP 文本的 '0\0\0\0' → txid=48)一眼可判,
+      // 真机日志不再靠猜(2026-10-26 ohos 连接自锁死排查的教训)。
+      final hex = head.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ');
+      throw FormatException(
+          '容器 txid=$txid 与事务 $expectedTxid 不符(流错位?头:$hex)');
     }
     if (length < kUsbContainerHeaderLength) {
       throw FormatException('容器长度字段 $length 小于 12 字节头');

@@ -40,6 +40,14 @@
     ],
     "requestPermissions": [
       {"name" :  "ohos.permission.INTERNET"},
+      {"name" :  "ohos.permission.WRITE_IMAGEVIDEO",
+        "reason": "$string:media_save_reason",
+        "usedScene": {
+          "abilities": [
+            "EntryAbility"
+          ],
+          "when": "inuse"
+        }},
       {"name" :  "ohos.permission.ACCESS_BLUETOOTH",
         "reason": "$string:bluetooth_reason",
         "usedScene": {

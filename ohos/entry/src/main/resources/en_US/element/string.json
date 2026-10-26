@@ -11,6 +11,10 @@
     {
       "name": "EntryAbility_label",
       "value": "Nikon Pill"
+    },
+    {
+      "name": "media_save_reason",
+      "value": "Save captured photos and videos to the system gallery"
     }
   ]
 }

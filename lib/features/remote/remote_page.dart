@@ -1054,13 +1054,15 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     _applyOrientationLock(next);
   }
 
-  /// 把方向锁定下发给系统(空列表 = 恢复默认全方向,现无发送方,switch
-  /// 穷举保留)。竖屏锁只发 portraitUp:Info.plist 本就未声明 UpsideDown,
-  /// 双值只留给系统自选余地。OHOS fork 若未实现该 method 会
+  /// 把方向锁定下发给系统。竖屏锁只发 portraitUp:Info.plist 本就未
+  /// 声明 UpsideDown,双值只留给系统自选余地。**auto 同发竖屏表**
+  /// (2026-10-26 禁止旋转契约):空列表在 iOS 是 All mask = 跟随传感
+  /// 器自转,契约下不再存在 —— auto 仅是控制器初始值(点按循环只在
+  /// 横/竖间切换),一旦下发即竖。OHOS fork 若未实现该 method 会
   /// MissingPluginException —— 方向按钮不能因平台差异炸页,静默兜住。
   void _applyOrientationLock(OrientationLock lock) {
     final orientations = switch (lock) {
-      OrientationLock.auto => const <DeviceOrientation>[],
+      OrientationLock.auto => const <DeviceOrientation>[DeviceOrientation.portraitUp],
       OrientationLock.landscape => const [
           DeviceOrientation.landscapeLeft,
           DeviceOrientation.landscapeRight,

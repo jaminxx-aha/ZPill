@@ -15,6 +15,7 @@ import 'package:nikon_pill/core/ptp/ptp_session.dart';
 import 'package:nikon_pill/core/ptp/ptp_transport.dart';
 import 'package:nikon_pill/core/remote/live_view_engine.dart';
 import 'package:nikon_pill/core/utils/byte_writer.dart';
+import 'package:nikon_pill/design/app_theme.dart';
 import 'package:nikon_pill/features/connection/connection_controller.dart';
 import 'package:nikon_pill/features/remote/live_view_overlays.dart';
 import 'package:nikon_pill/features/remote/remote_controller.dart';
@@ -584,6 +585,100 @@ void main() {
             .selectedIndex,
         1,
         reason: 'rail 切台照常');
+  });
+
+  testWidgets('竖屏底栏样式闸:胶囊撤除、选中直充 secondary', (tester) async {
+    tester.view
+      ..physicalSize = const Size(800, 2400)
+      ..devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    final f = _fakes();
+    addTearDown(f.connCtrl.dispose);
+    addTearDown(f.remote.dispose);
+
+    await pumpShell(tester, MaterialApp(
+        theme: AppTheme.light,
+        home: HomeShell(
+            connectionController: f.connCtrl, remoteController: f.remote)));
+
+    // 胶囊撤除(2026-10-26 定案):指示器随布局仍挂件但必须透明,选中
+    // 图标+文字直充 secondary(亮 #8C7400),未选钉 onSurfaceVariant。
+    // 底栏文字带显式 style,直接从 Text 取。
+    const selected = Color(0xFF8C7400);
+    const unselected = Color(0xFF57534A);
+    final indicators = tester
+        .widgetList<NavigationIndicator>(find.byType(NavigationIndicator));
+    expect(indicators.length, 3, reason: '三目的地各挂一枚指示器');
+    for (final indicator in indicators) {
+      expect(indicator.color, Colors.transparent, reason: '胶囊=指示器透明');
+    }
+    final selectedIcon = find.descendant(
+        of: find.byType(NavigationBar), matching: find.byIcon(Icons.photo_camera));
+    expect(IconTheme.of(tester.element(selectedIcon)).color, selected,
+        reason: '选中图标直充(实底相机图标只在选中位渲染)');
+    expect(tester.widget<Text>(_navTab('相机')).style?.color, selected,
+        reason: '选中文字直充');
+    expect(tester.widget<Text>(_navTab('图库')).style?.color, unselected,
+        reason: '未选文字钉 onSurfaceVariant');
+    // 按压涟漪与胶囊同形,随胶囊一并撤(底栏走主题 overlayColor 钩子)。
+    expect(
+        Theme.of(tester.element(find.byType(NavigationBar)))
+            .navigationBarTheme
+            .overlayColor
+            ?.resolve(const {WidgetState.pressed}),
+        Colors.transparent,
+        reason: '点击不闪胶囊涟漪');
+  });
+
+  testWidgets('横屏 rail 样式闸:胶囊撤除、选中直充,三 tab 重排无溢出',
+      (tester) async {
+    tester.view
+      ..physicalSize = const Size(2400, 800)
+      ..devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    final f = _fakes();
+    addTearDown(f.connCtrl.dispose);
+    addTearDown(f.remote.dispose);
+
+    await pumpShell(tester, MaterialApp(
+        theme: AppTheme.light,
+        home: HomeShell(
+            connectionController: f.connCtrl, remoteController: f.remote)));
+
+    // 同底栏一套色;rail 落件方式不同 —— 图标包 IconTheme、文字包
+    // DefaultTextStyle(Text 自身 style 为 null),断言各从其取。
+    const selected = Color(0xFF8C7400);
+    const unselected = Color(0xFF57534A);
+    final indicators = tester
+        .widgetList<NavigationIndicator>(find.byType(NavigationIndicator));
+    expect(indicators.length, 3, reason: '三目的地各挂一枚指示器');
+    for (final indicator in indicators) {
+      expect(indicator.color, Colors.transparent, reason: '胶囊=指示器透明');
+    }
+    final selectedIcon = find.descendant(
+        of: find.byType(NavigationRail), matching: find.byIcon(Icons.photo_camera));
+    expect(IconTheme.of(tester.element(selectedIcon)).color, selected,
+        reason: '选中图标直充');
+    expect(DefaultTextStyle.of(tester.element(_railTab('相机'))).style.color,
+        selected,
+        reason: '选中文字直充');
+    expect(DefaultTextStyle.of(tester.element(_railTab('图库'))).style.color,
+        unselected,
+        reason: '未选文字钉 onSurfaceVariant');
+    // rail 无 overlayColor 钩子(涟漪硬编码 primary),外壳局部 Theme
+    // 把子树 primary 覆透明 → 涟漪/悬停全灭。
+    final railLocalTheme = tester.firstWidget<Theme>(
+        find.ancestor(of: find.byType(NavigationRail), matching: find.byType(Theme)));
+    expect(railLocalTheme.data.colorScheme.primary, Colors.transparent,
+        reason: '点击不闪胶囊涟漪(rail 涟漪=primary)');
+
+    // 三 tab 逐台重排:横屏宽幅下各页回流不溢出(RenderFlex 溢出在
+    // 测试框架即判败,takeException 再兜一层显式断言)。
+    for (final label in const ['相机', '图库', '设置']) {
+      await tester.tap(_railTab(label));
+      await tester.pumpAndSettle();
+    }
+    expect(tester.takeException(), isNull, reason: '三 tab 横屏无溢出/异常');
   });
 
   testWidgets('竖→横旋转:拍摄页状态全程保留(网格在、取景不重启)',

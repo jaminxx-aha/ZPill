@@ -831,7 +831,7 @@ void main() {
     expect(calls, hasLength(1));
     expect(calls.single.single.filename, 'b.jpg');
     expect(calls.single.single.kind, ObjectKind.image);
-    expect(find.text('已导入系统相册(应用内文件保留)'), findsOneWidget);
+    expect(find.text('已保存到系统相册'), findsOneWidget);
     // 文件本体保留(导入是复制不是移动)
     expect(File('${dir.path}/b.jpg').existsSync(), isTrue);
 
@@ -1139,7 +1139,7 @@ void main() {
     expect(
         call.map((r) => r.kind).toSet(), {ObjectKind.image, ObjectKind.video});
     expect(call.map((r) => r.filename).toSet(), {'a.jpg', 'v.mov'});
-    expect(find.text('已导出 2 项到系统相册(应用内文件保留)'), findsOneWidget);
+    expect(find.text('已保存到系统相册'), findsOneWidget);
     // 复制不是移动:两文件原位保留
     expect(File('${dir.path}/a.jpg').existsSync(), isTrue);
     expect(File('${dir.path}/v.mov').existsSync(), isTrue);
@@ -1801,6 +1801,128 @@ void main() {
     expect(image.gaplessPlayback, isTrue);
     final inner = (image.image as ResizeImage).imageProvider as FileImage;
     expect(inner.file.path, '${gallery.thumbs.path}/libv4_a.jpg_3.jpg');
+  });
+
+  testWidgets(
+      '已知小档首帧直显:盘上小档首帧即小档源,解码器零调用'
+      '(2026-10-26 快速下滑黑块根修:不再踢全幅原图解码)', (tester) async {
+    writeFile('a.jpg', modified: DateTime(2026, 10, 1));
+    final gallery = _FakeGallery(dir);
+    // 预置小档(上一会话留下的盘上状态):就绪表冷启即命中
+    final thumbPath = '${gallery.thumbs.path}/libv4_a.jpg_3.jpg';
+    File(thumbPath).writeAsBytesSync([0xFF, 0xD8, 0xFF, 0xD9]);
+    final decoder = _FakeRawDecoder();
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    await tester.pumpWidget(host(gallery, controller, rawDecoder: decoder));
+    await drainAppFiles(tester, controller);
+
+    // 盘上小档在手:_thumbFor 走 existsSync 直回(零解码),格首帧经
+    // 就绪表同步取小档路径(不等 future 快照)
+    expect(decoder.calls, isEmpty, reason: '盘上小档命中,不再踢解码');
+    final image = tester.widget<Image>(find.byType(Image).first);
+    final inner = (image.image as ResizeImage).imageProvider as FileImage;
+    expect(inner.file.path, thumbPath);
+  });
+
+  testWidgets(
+      '前瞻预取:构建锚点沿把窗外一窗封面的缩略先拉起来'
+      '(滚到即现,不再「滚到才排队」)', (tester) async {
+    useTallSurface(tester);
+    // 30 文件逐日一张(段 = 格,全局序 = 倒序):视口只建得进头几段
+    for (var i = 0; i < 30; i++) {
+      writeFile('f${i.toString().padLeft(2, '0')}.jpg',
+          modified: DateTime(2026, 9, 1 + i, 12));
+    }
+    final decoder = _FakeRawDecoder();
+    final gallery = _FakeGallery(dir);
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    await tester.pumpWidget(host(gallery, controller, rawDecoder: decoder));
+    await drainAppFiles(tester, controller, 30);
+
+    // 预取作业是串行链上的真 IO:逐窗排水到解码台账收口(上限兜底)
+    for (var i = 0; i < 120 && decoder.calls.length < 30; i++) {
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)));
+      await tester.pump();
+    }
+    await tester.pumpAndSettle();
+    final requested =
+        decoder.calls.map((c) => c.$1.split('/').last).toSet();
+    // 倒序 index 25 = f04、index 12 = f17:都在视口外,预取窗照拉
+    expect(requested.contains('f04.jpg'), isTrue,
+        reason: '视口外文件已预取(requested=${requested.length})');
+    expect(requested.contains('f17.jpg'), isTrue);
+    expect(requested.length, greaterThanOrEqualTo(27),
+        reason: '预取窗成规模(30 个封面应基本全进窗)');
+  });
+
+  testWidgets(
+      '后台返回重预热:resume 沿清去重重拉锚点窗'
+      '(imageCache 被系统内存告警清空后,回前台猛滑不再黑)', (tester) async {
+    // 两天 30 张:第二日 24 张(f23..f00,index 0..23)+ 第一日 6 张
+    // (f29..f24)。判据 = f03(index 20):段内深处、从未被构建(离屏
+    // SliverGrid 只为几何估算建段首格 —— 段首格全 live,不是黑格场景,
+    // 不做判据;f19 那种「每段一张」布局 30 格全 live 的坑已探针实证)。
+    // 首过预取窗预热它,后台清缓存后只能靠 resume 重预热回缓存。
+    final realJpg =
+        Uint8List.fromList(img.encodeJpg(img.Image(width: 32, height: 32)));
+    final gallery = _FakeGallery(dir);
+    for (var i = 0; i < 24; i++) {
+      // 第二日:f23..f00(index 0..23,分钟粒度保证段内序)
+      final f = writeFile('f${(23 - i).toString().padLeft(2, '0')}.jpg',
+          modified: DateTime(2026, 9, 2, 11, i));
+      File('${gallery.thumbs.path}/libv4_${f.uri.pathSegments.last}_3.jpg')
+          .writeAsBytesSync(realJpg);
+    }
+    for (var i = 24; i < 30; i++) {
+      // 第一日:f29..f24(index 24..29)
+      final f = writeFile('f${(29 - (i - 24)).toString().padLeft(2, '0')}.jpg',
+          modified: DateTime(2026, 9, 1, 12, i - 24));
+      File('${gallery.thumbs.path}/libv4_${f.uri.pathSegments.last}_3.jpg')
+          .writeAsBytesSync(realJpg);
+    }
+    final decoder = _FakeRawDecoder();
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    await tester.pumpWidget(host(gallery, controller, rawDecoder: decoder));
+    await drainAppFiles(tester, controller, 30);
+    // 预热解码是引擎真异步:逐窗排水到 f27 小档入缓存(f27 = 段1
+    // index 26:首段 24 格 + 段1 首格都会被构建(离屏段也建首格做几何
+    // 估算),f27 在所有构建/持有范围之外,是干净的判据)
+    final f27Provider = gridThumbImageProvider(
+        '${gallery.thumbs.path}/libv4_f27.jpg_3.jpg');
+    final f27Key = await f27Provider.obtainKey(ImageConfiguration.empty);
+    final cache = PaintingBinding.instance.imageCache;
+    for (var i = 0; i < 40 && !cache.containsKey(f27Key); i++) {
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)));
+      await tester.pump();
+      debugPrint('F$i pending=${cache.pendingImageCount} live=${cache.liveImageCount} size=${cache.currentSize}');
+    }
+    expect(cache.containsKey(f27Key), isTrue,
+        reason: '首过预取窗已把从未构建的 f27 小档预热进解码缓存');
+    expect(decoder.calls, isEmpty, reason: '盘上小档命中,零解码器调用');
+
+    // 模拟退后台:系统内存告警整体清 imageCache(引擎既有行为)
+    cache.clear();
+    expect(cache.containsKey(f27Key), isFalse);
+    tester.binding
+      ..handleAppLifecycleStateChanged(AppLifecycleState.hidden)
+      ..handleAppLifecycleStateChanged(AppLifecycleState.paused)
+      ..handleAppLifecycleStateChanged(AppLifecycleState.hidden)
+      ..handleAppLifecycleStateChanged(AppLifecycleState.inactive)
+      ..handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    // resume 重预热落地(30 个预解码同帧入队,runAsync 每窗只上浮一个
+    // 完成回调 —— 排队深的要等几十窗,窗口放大兜底)
+    for (var i = 0; i < 80 && !cache.containsKey(f27Key); i++) {
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)));
+      await tester.pump();
+    }
+    expect(cache.containsKey(f27Key), isTrue,
+        reason: 'resume 沿重预热:去重已清,从未构建的 f27 重新入缓存');
   });
 
   testWidgets('查看器:图片滑到视频不自动播放(装载即暂停)', (tester) async {

@@ -6,6 +6,15 @@
  * - **HIF/HEIF**:@ohos.multimedia.image 的 ImageSource 解码 → 长边
  *   压档(desiredSize 按比缩放,不变形)→ ImagePacker 打包 JPEG(0.85)
  *   回传;
+ * - **JPG/JPEG**:同一管线;EXIF 方向原生转正(对齐 iOS ImageIO
+ *   kCGImageSourceCreateThumbnailWithTransform 语义,产物 = 已转正裸
+ *   JPEG,引擎直显不再旋)。kit 是否代转 EXIF 不可假设 —— 换挡类
+ *   (6/8)以解码宽高对照存储宽高自证(与 HIF irot 的纵横比判定同
+ *   手法),未转补 rotate;180°(orientation 3)宽高不变无法自证,按
+ *   kit 已转处理,真机探针定案后收口;镜像类(2/4/5/7)kit 无镜像
+ *   变换,闸上直拒落原图源(宁缺毋歪,相机也不产)。图库 JPG 小档
+ *   管线吃本通道(2026-10-26 快速下滑黑块根修,此前 ohos 上 JPG 恒走
+ *   全幅原图解码,滚动供数跟不上)。
  * - **NEF/NRW**:**LibRaw 真解码**(rawdecoder.so,LibRaw 0.21.2 静态
  *   编入,LICENSE.LGPL/CDDL)—— 全显影管线(相机白平衡/sRGB/8bit/
  *   自动亮度),halfSize superpixel 半尺寸免 demosaic 提速(长边减半
@@ -14,10 +23,9 @@
  *   转正),与 iOS ImageIO 同为真解码直出,网格缩略/查看器大图共用
  *   (nef_thumb.dart 内嵌 160×120 兜底仅作 LibRaw 失败时的最后回落)。
  *
- * 其余扩展名一律 FlutterError:JPG/PNG 等引擎可解格式留在引擎原图
- * 源 —— 方向引擎自理,避免 image kit 的 EXIF 方向语义与引擎解码不一致
- * 造成二次旋转。iOS 侧 RawDecodePlugin.swift 无门槛全接,平台差集见
- * 各自文件头。
+ * 其余扩展名一律 FlutterError:PNG/GIF/WebP 等真引擎可解格式留在引擎
+ * 原图源 —— 方向引擎自理(小档管线的 JPG 已上收,见上)。iOS 侧
+ * RawDecodePlugin.swift 无门槛全接,平台差集见各自文件头。
  *
  * 字节陷阱(同 VideoPlugin):ImagePacker.packToData 回 ArrayBuffer,
  * MethodChannel 序列化不认 ArrayBuffer(落 object 分支序列化成空
@@ -68,7 +76,7 @@ interface RawJpeg {
   ms: string;
 }
 
-/** `nikonpill/raw` 通道实现(ohos:仅 HIF/HEIF,长边压档出 JPEG)。 */
+/** `nikonpill/raw` 通道实现(ohos:HIF/HEIF/JPG 长边压档出 JPEG)。 */
 export class RawDecodePlugin implements FlutterPlugin {
   private channel: MethodChannel | null = null;
 
@@ -113,12 +121,30 @@ export class RawDecodePlugin implements FlutterPlugin {
       });
       return;
     }
-    if (!lower.endsWith('.hif') && !lower.endsWith('.heif')) {
-      // JPG 等留引擎原图源(见文件头)。
-      result.error('unsupported_format', `ohos 解码只接 HIF/HEIF/NEF/NRW:${path}`, null);
+    if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) {
+      // JPG 小档(图库缩略管线吃):镜像类方向直拒落原图源(kit 无
+      // 镜像变换,宁缺毋歪;相机也不产 2/4/5/7)。方向值随解码带入,
+      // decode 内做换挡类自证补转。
+      const ori = RawDecodePlugin.readJpegOrientation(path);
+      if (ori === 2 || ori === 4 || ori === 5 || ori === 7) {
+        result.error('unsupported_format', `JPG 镜像方向不产小档:${path}`, null);
+        return;
+      }
+      this.decode(path, maxPixelSize, ori).then((bytes) => {
+        result.success(bytes);
+      }).catch((err: Object) => {
+        Log.w(TAG, `JPG decode 异常:${JSON.stringify(err)}`);
+        result.error('decode_failed', `JPG 解码失败:${JSON.stringify(err)}`, null);
+      });
       return;
     }
-    this.decode(path, maxPixelSize).then((bytes) => {
+    if (!lower.endsWith('.hif') && !lower.endsWith('.heif')) {
+      // PNG/GIF/WebP 等真引擎可解件留引擎原图源(见文件头)。
+      result.error('unsupported_format',
+        `ohos 解码只接 HIF/HEIF/JPG/JPEG/NEF/NRW:${path}`, null);
+      return;
+    }
+    this.decode(path, maxPixelSize, 0).then((bytes) => {
       result.success(bytes);
     }).catch((err: Object) => {
       Log.w(TAG, `decode 异常:${JSON.stringify(err)}`);
@@ -174,9 +200,11 @@ export class RawDecodePlugin implements FlutterPlugin {
     }
   }
 
-  /** 解码:长边压档(desiredSize 保比)→ JPEG 0.85 → Uint8Array。 */
-  private async decode(path: string, maxPixelSize: number):
-    Promise<Uint8Array> {
+  /** 解码:长边压档(desiredSize 保比)→ JPEG 0.85 → Uint8Array。
+   *  [jpegOrientation] = JPG EXIF Orientation(非 JPG 传 0):换挡类
+   *  6/8 走解码宽高自证补转(见下),其余值按 kit 已转处理。 */
+  private async decode(path: string, maxPixelSize: number,
+    jpegOrientation: number): Promise<Uint8Array> {
     let source: image.ImageSource | null = null;
     let packer: image.ImagePacker | null = null;
     let pixelMap: image.PixelMap | null = null;
@@ -195,24 +223,48 @@ export class RawDecodePlugin implements FlutterPlugin {
         };
       }
       pixelMap = await source.createPixelMap(opts);
-      // HEIF irot 补转:主图展示旋转写在 ipco 的 irot 盒、经 ipma 绑
-      // 主图( exhibiting = 存储图**逆时针**转 angle*90,ISO 23008-12
-      // §6.5.4;Apple ImageIO 样张实锤 Orientation 6=CW90→angle 3、
-      // 8=CCW90→1)。image kit 是否代转不可假设 —— 以解码纵横比对照
-      // ispe 判定(奇数角旋转宽高互换):已转不再补,未转补转,
-      // PixelMap.rotate 正向顺时针故取 (360-ccw)%360。头读另开一只
-      // fd —— 主 fd 已交给 ImageSource,不能挪它的读写位。
-      const t = RawDecodePlugin.readPrimaryTransform(path);
-      const oddTurn = (t.degreesCcw / 90) % 2 === 1;
-      if (t.degreesCcw !== 0) {
-        const outLandscape = info.size.width > info.size.height;
-        const ispeLandscape = t.ispeW > t.ispeH;
-        const kitApplied = oddTurn && (outLandscape !== ispeLandscape);
-        if (!kitApplied) {
+      if (jpegOrientation === 6 || jpegOrientation === 8) {
+        // JPG EXIF 方向转正(对齐 iOS ImageIO WithTransform 语义)。kit
+        // 是否代转 EXIF 不可假设 —— 沿 HIF irot 的纵横比自证手法:换挡
+        // 类(6/8)以解码宽高对照存储宽高(奇数角旋转宽高互换:已换 =
+        // kit 已转,不再补;未换 = 补转,PixelMap.rotate 正向顺时针
+        // 6→90、8→270)。存储方形不可判,按 kit 已转处理(相机传感
+        // 3:2/4:3 不产方图);180°(orientation 3)宽高不变同样无法
+        // 自证,同按 kit 已转处理,真机探针定案后收口;镜像类在闸上
+        // 已拒(宁缺毋歪)。desiredSize 压档不改纵横比,比值对照成立。
+        const dec = await pixelMap.getImageInfo();
+        const square = info.size.width === info.size.height;
+        const kitSwapped = (info.size.width > info.size.height) !==
+          (dec.size.width > dec.size.height);
+        if (!square && !kitSwapped) {
           try {
-            await pixelMap.rotate((360 - t.degreesCcw) % 360);
+            await pixelMap.rotate(jpegOrientation === 6 ? 90 : 270);
           } catch (err) {
-            Log.w(TAG, `rotate 失败,按未转处理:${JSON.stringify(err)}`);
+            Log.w(TAG, `JPG rotate 失败,按未转处理:${JSON.stringify(err)}`);
+          }
+        }
+      }
+      const lower = path.toLowerCase();
+      if (lower.endsWith('.hif') || lower.endsWith('.heif')) {
+        // HEIF irot 补转:主图展示旋转写在 ipco 的 irot 盒、经 ipma 绑
+        // 主图( exhibiting = 存储图**逆时针**转 angle*90,ISO 23008-12
+        // §6.5.4;Apple ImageIO 样张实锤 Orientation 6=CW90→angle 3、
+        // 8=CCW90→1)。image kit 是否代转不可假设 —— 以解码纵横比对照
+        // ispe 判定(奇数角旋转宽高互换):已转不再补,未转补转,
+        // PixelMap.rotate 正向顺时针故取 (360-ccw)%360。头读另开一只
+        // fd —— 主 fd 已交给 ImageSource,不能挪它的读写位。
+        const t = RawDecodePlugin.readPrimaryTransform(path);
+        const oddTurn = (t.degreesCcw / 90) % 2 === 1;
+        if (t.degreesCcw !== 0) {
+          const outLandscape = info.size.width > info.size.height;
+          const ispeLandscape = t.ispeW > t.ispeH;
+          const kitApplied = oddTurn && (outLandscape !== ispeLandscape);
+          if (!kitApplied) {
+            try {
+              await pixelMap.rotate((360 - t.degreesCcw) % 360);
+            } catch (err) {
+              Log.w(TAG, `rotate 失败,按未转处理:${JSON.stringify(err)}`);
+            }
           }
         }
       }
@@ -416,6 +468,115 @@ export class RawDecodePlugin implements FlutterPlugin {
       }
     }
     return result;
+  }
+
+  /** JPEG 头读 + EXIF Orientation 解析(另开 fd,失败回 0 按未转处理)。 */
+  static readJpegOrientation(path: string): number {
+    let headFile: fs.File | null = null;
+    try {
+      headFile = fs.openSync(path, fs.OpenMode.READ_ONLY);
+      const headBuf = new ArrayBuffer(HEAD_BYTES);
+      const headRead = fs.readSync(headFile.fd, headBuf, {
+        offset: 0,
+        length: HEAD_BYTES,
+      });
+      return RawDecodePlugin.jpegOrientationOf(
+        new Uint8Array(headBuf, 0, headRead));
+    } catch (err) {
+      Log.w(TAG, `EXIF 头读失败,按未转处理:${JSON.stringify(err)}`);
+      return 0;
+    } finally {
+      if (headFile !== null) {
+        try {
+          fs.closeSync(headFile);
+        } catch (_) {
+          // 释放尽力而为
+        }
+      }
+    }
+  }
+
+  /** 头字节 → EXIF Orientation(1-8;无段/无标签/非 JPEG 回 0)。
+   *  语义同 Dart 侧 core/media/jpeg_orientation.dart(移植底稿):
+   *  SOI 后段扫至 SOS,APP1(Exif\0\0)内 TIFF IFD0 条目表取 0x0112。
+   *  Exif 段截断容忍(方向条目表在段内前 ~400B;Zf JPG 的 APP1 声明
+   *  65534B,头读盖不住整段)。 */
+  static jpegOrientationOf(head: Uint8Array): number {
+    if (head.length < 4 || head[0] !== 0xFF || head[1] !== 0xD8) {
+      return 0;
+    }
+    let off = 2;
+    while (off + 4 <= head.length) {
+      if (head[off] !== 0xFF) {
+        return 0; // 段失步:不是可解的 JPEG 头
+      }
+      const marker = head[off + 1];
+      if (marker === 0xD8 || marker === 0x01 ||
+        (marker >= 0xD0 && marker <= 0xD7)) {
+        off += 2; // 独立标记,无长度
+        continue;
+      }
+      if (marker === 0xDA) {
+        return 0; // SOS:EXIF 必在其前
+      }
+      const segLen = (head[off + 2] << 8) | head[off + 3];
+      if (segLen < 2) {
+        return 0;
+      }
+      const isExifApp1 = marker === 0xE1 &&
+        head.length >= off + 10 && segLen >= 8 &&
+        head[off + 4] === 0x45 && head[off + 5] === 0x78 &&
+        head[off + 6] === 0x69 && head[off + 7] === 0x66 &&
+        head[off + 8] === 0x00 && head[off + 9] === 0x00;
+      const segEnd = off + 2 + segLen;
+      if (segEnd > head.length && !isExifApp1) {
+        return 0; // 截断的非 Exif 段:后面(即便有数据)读不出段界
+      }
+      if (isExifApp1) {
+        // TIFF 从段载荷 +6 起(跳 Exif\0\0);段尾截断夹到可用字节。
+        return RawDecodePlugin.ifd0Orientation(head, off + 10,
+          segEnd > head.length ? head.length : segEnd);
+      }
+      off += 2 + segLen;
+    }
+    return 0;
+  }
+
+  /** TIFF(IFD0 相对偏移起于 tiffAt,数据止于 end)条目表 Orientation;
+   *  结构不符回 0。II/MM 双端序,条目 = 0x0112 SHORT×1(值内联)。 */
+  static ifd0Orientation(head: Uint8Array, tiffAt: number,
+    end: number): number {
+    if (tiffAt + 8 > end) {
+      return 0;
+    }
+    const little = head[tiffAt] === 0x49;
+    if ((little ? head[tiffAt] : head[tiffAt + 1]) !==
+      (little ? 0x49 : 0x4D)) {
+      return 0;
+    }
+    const u16 = (p: number): number => little
+      ? head[p] | (head[p + 1] << 8)
+      : ((head[p] << 8) | head[p + 1]);
+    const u32 = (p: number): number => little
+      ? (head[p] | (head[p + 1] << 8) | (head[p + 2] << 16) |
+        (head[p + 3] << 24)) >>> 0
+      : ((head[p] << 24) | (head[p + 1] << 16) | (head[p + 2] << 8) |
+        head[p + 3]) >>> 0;
+    const ifd0 = u32(tiffAt + 4);
+    if (ifd0 < 8 || tiffAt + ifd0 + 2 > end) {
+      return 0;
+    }
+    const count = u16(tiffAt + ifd0);
+    for (let i = 0; i < count; i++) {
+      const e = tiffAt + ifd0 + 2 + i * 12;
+      if (e + 12 > end) {
+        break;
+      }
+      if (u16(e) === 0x0112 && u16(e + 2) === 3 && u32(e + 4) === 1) {
+        return u16(e + 8); // 值内联(SHORT×1 ≤ 4B)
+      }
+    }
+    return 0;
   }
 }
 
