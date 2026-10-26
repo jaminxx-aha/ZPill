@@ -27,6 +27,7 @@ import 'package:flutter/foundation.dart';
 
 import '../../core/browser/album.dart';
 import '../../core/browser/object_repository.dart';
+import '../../core/browser/photo_group.dart' show isVideoFile;
 import '../../core/camera/camera_connection.dart';
 import '../../core/exif/nikon_maker_note.dart';
 import '../../core/ptp/operation_codes.dart';
@@ -235,11 +236,17 @@ final class CameraOverviewController extends ChangeNotifier {
     }
   }
 
-  /// 最新照片句柄:相册仓库「全部照片」排序第一(items 新的在前,与
-  /// 用户在相册页看到的最新一张一致)优先;仓库未就绪/为空/失败时
-  /// 回退句柄枚举取最大 —— **Zf 实证句柄序与拍摄序无关**(10-11 拍的
-  /// DSC_6252 句柄 0x691A986C > 10-22 拍的 DSC_6362 0x691958DA),
+  /// 最新照片句柄:相册仓库「全部照片」里最新的**照片**组优先(items
+  /// 新的在前,与用户在相册页看到的最新一张一致);仓库未就绪/为空/
+  /// 失败时回退句柄枚举取最大 —— **Zf 实证句柄序与拍摄序无关**(10-11
+  /// 拍的 DSC_6252 句柄 0x691A986C > 10-22 拍的 DSC_6362 0x691958DA),
   /// 回退路可能读到旧照片,仅供兜底。
+  ///
+  /// 只认照片组(2026-10-26 真机反馈「快门数不显示」根修):汇总相册
+  /// 混排视频且同按拍摄时间新→旧排,最新条目是录像时,视频头无 EXIF
+  /// MakerNote 0x00A7(快门口径 = 静照计数,录像不 +1)—— 旧实现取
+  /// items.first 撞上视频组必回 '--'。跳过纯视频组取最新照片组;相册
+  /// 在但全是视频,枚举兜底也只会命中最新的视频,直接回 null。
   Future<int?> _latestPhotoHandle() async {
     final repo = repository;
     if (repo != null) {
@@ -247,10 +254,16 @@ final class CameraOverviewController extends ChangeNotifier {
         final albums = await repo.loadAlbums();
         for (final album in albums) {
           if (album.folderHandle != CameraAlbum.allPhotosHandle) continue;
-          if (album.items.isEmpty) continue;
-          final g = album.items.first;
-          final e = g.jpg ?? g.raw ?? g.members.first;
-          return e.handle;
+          for (final g in album.items) {
+            final e = g.jpg ??
+                g.raw ??
+                g.members.firstWhere(
+                  (m) => !isVideoFile(m),
+                  orElse: () => g.members.first,
+                );
+            if (!isVideoFile(e)) return e.handle;
+          }
+          return null; // 汇总相册在但全是视频:静照无源
         }
       } catch (_) {/* 仓库失败回落枚举兜底 */}
     }

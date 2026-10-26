@@ -193,11 +193,13 @@ final class _FakeRepo implements ObjectRepository {
       throw UnimplementedError();
 }
 
-ObjectEntry _entry(int handle, DateTime captured) => ObjectEntry(
+ObjectEntry _entry(int handle, DateTime captured,
+        {String? name, ObjectKind kind = ObjectKind.image}) =>
+    ObjectEntry(
       handle: handle,
-      name: 'DSC_${handle.toString().padLeft(4, '0')}.HIF',
+      name: name ?? 'DSC_${handle.toString().padLeft(4, '0')}.HIF',
       sizeInBytes: 1,
-      kind: ObjectKind.values.first,
+      kind: kind,
       capturedAt: captured,
     );
 
@@ -240,6 +242,64 @@ void main() {
       repository: repo,
     );
     expect(await c.fetchShutterCount(), 15964);
+    c.dispose();
+  });
+
+  test('最新条目是视频组:跳过取最新照片组(视频头无 MakerNote 0x00A7)',
+      () async {
+    final t = _FakeTransport();
+    // 汇总相册混排视频同按时间新→旧:最新是录像(新于最后一张照片)。
+    final repo = _FakeRepo([
+      CameraAlbum(
+        folderHandle: CameraAlbum.allPhotosHandle,
+        name: 'grid.allPhotos',
+        items: [
+          PhotoGroup([
+            _entry(200, DateTime(2026, 10, 26, 12),
+                name: 'DSC_0100.MOV', kind: ObjectKind.video),
+          ]),
+          PhotoGroup([
+            _entry(100, DateTime(2026, 10, 25),
+                name: 'DSC_0099.NEF', kind: ObjectKind.image),
+          ]),
+        ],
+      ),
+    ]);
+    // 脚本只放照片句柄的 partial:实现若错取视频组(200),脚本耗尽即败。
+    t.reply(PtpResult(responseCode: 0x2001, data: _buildTiff(15966)));
+    final c = CameraOverviewController(
+      session: PtpSession(transport: t),
+      connection: _FakeConnection(),
+      repository: repo,
+    );
+    expect(await c.fetchShutterCount(), 15966);
+    expect(t.partialHandles, [100]);
+    c.dispose();
+  });
+
+  test('汇总相册全是视频:静照无源回 null,不再枚举兜底', () async {
+    final t = _FakeTransport();
+    final repo = _FakeRepo([
+      CameraAlbum(
+        folderHandle: CameraAlbum.allPhotosHandle,
+        name: 'grid.allPhotos',
+        items: [
+          PhotoGroup([
+            _entry(200, DateTime(2026, 10, 26, 12),
+                name: 'DSC_0100.MOV', kind: ObjectKind.video),
+          ]),
+        ],
+      ),
+    ]);
+    final c = CameraOverviewController(
+      session: PtpSession(transport: t),
+      connection: _FakeConnection(),
+      repository: repo,
+    );
+    // 脚本零应答:实现若仍走 getObjectHandles 兜底(枚举也只会命中
+    // 最新视频)即「脚本耗尽」炸 —— 全视频时静照口径本就无源。
+    expect(await c.fetchShutterCount(), isNull);
+    expect(t.opcodes, isEmpty);
     c.dispose();
   });
 
