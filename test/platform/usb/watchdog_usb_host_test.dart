@@ -19,6 +19,7 @@ final class _FakeInner implements UsbHostChannel {
   List<UsbDeviceHandle> cameras = [_dev];
   int openCalls = 0;
   int closeCalls = 0;
+  int resetCalls = 0;
 
   /// bulkRead 行为:null=正常返回;否则为抛出的异常(挂起用 never-complete)。
   Future<Uint8List> Function(int maxLen)? bulkReadImpl;
@@ -37,6 +38,12 @@ final class _FakeInner implements UsbHostChannel {
 
   @override
   Future<void> close() async => closeCalls++;
+
+  @override
+  Future<bool> recoveryReset() async {
+    resetCalls++;
+    return true;
+  }
 
   @override
   Future<void> bulkOut(Uint8List bytes) =>

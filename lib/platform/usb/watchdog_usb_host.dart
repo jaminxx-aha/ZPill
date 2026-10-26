@@ -128,6 +128,16 @@ final class WatchdogUsbHostChannel implements UsbHostChannel {
   }
 
   @override
+  Future<bool> recoveryReset() async {
+    // 程序化拔插:复位沿等同链路死亡 —— 推进 epoch,旧链路上的挂起
+    // 看门狗不再毒化复位后重建的新链路。
+    _epoch++;
+    _stopPoll();
+    _openIdentifier = null;
+    return inner.recoveryReset();
+  }
+
+  @override
   Future<void> bulkOut(Uint8List bytes) async {
     // async:毒化的同步抛也以失败 Future 交付,调用方统一 try/await。
     _ensureAlive();
