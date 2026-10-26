@@ -1097,11 +1097,15 @@ void main() {
       final conn = FakeConnection()..deviceName = 'NIKON ZF';
       final transport = _ScriptTransport();
       final session = PtpSession(transport: transport);
-      // refresh() 脚本:GetDeviceInfo + 电池/焦距/光圈(全在册)。
+      // refresh() 脚本:GetDeviceInfo + 镜头 ID(早读,名先亮)+ 电池/
+      // 焦距/光圈(全在册)。
       transport.reply(PtpResult(
           responseCode: PtpResponseCode.ok,
           data:
               _deviceInfoDataset(deviceProps: const [0x5001, 0x5008, 0x5007])));
+      transport.reply(PtpResult(
+          responseCode: PtpResponseCode.ok,
+          data: Uint8List.fromList([99, 0]))); // 镜头 ID u16(不在映射表)
       transport.reply(PtpResult(
           responseCode: PtpResponseCode.ok,
           data: Uint8List.fromList([80]))); // 电池 80%
@@ -1112,11 +1116,8 @@ void main() {
       transport.reply(PtpResult(
           responseCode: PtpResponseCode.ok,
           data: Uint8List.fromList([0x18, 0x01]))); // 光圈 ƒ/2.8(280)
-      // 镜头规格五连读(0xD0E0 + 0xD0E3-E6,不在声明表但应答):
-      // ID 99(不在映射表)+ 40-40mm ƒ/2-ƒ/2。
-      transport.reply(PtpResult(
-          responseCode: PtpResponseCode.ok,
-          data: Uint8List.fromList([99, 0]))); // 镜头 ID u16
+      // 镜头规格四连读(0xD0E3-E6,不在声明表但应答,链尾):
+      // 40-40mm ƒ/2-ƒ/2。
       transport.reply(PtpResult(
           responseCode: PtpResponseCode.ok,
           data: Uint8List.fromList([0xA0, 0x0F, 0x00, 0x00]))); // 焦距下限 u32
