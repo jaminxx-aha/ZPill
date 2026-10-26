@@ -84,10 +84,21 @@ Uint8List buildDataset(
 
 /// 镜头 ID 应答(0xD0E0,u16)。默认 99 不在 [kLensIdNames] 映射表 ——
 /// 不影响走规格描述路的既有用例。
-void _scriptLensId(FakePtpTransport transport, {int lensId = 99}) {
+/// 连接沿早读块:0xD0E0 镜头 ID(名先亮)+ 0xD1A6 档位(光圈读码随档
+/// 切,2026-10-26)—— 两事务同属「声明表外直读」的连接沿前置,[mode]
+/// 缺省照片档;消费序 = ID 打头、档位随后(与 refresh() 链序一致)。
+/// **[withMode] 供换镜中途的哨链关闭**:生产流程换镜哨只重读 ID 不重读
+/// 档位,中途脚本多一口档位应答会把后面全部错位一格。
+void _scriptLensId(FakePtpTransport transport,
+    {int lensId = 99, int mode = 0, bool withMode = true}) {
   transport.reply(PtpResult(
       responseCode: PtpResponseCode.ok,
       data: Uint8List.fromList([lensId & 0xFF, (lensId >> 8) & 0xFF])));
+  if (withMode) {
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: Uint8List.fromList([mode])));
+  }
 }
 
 /// 镜头规格四连读应答(0xD0E3-E6;Zf 实证不在声明表但应答,40 SE 回
@@ -115,11 +126,12 @@ void _scriptLensSpecValues(FakePtpTransport transport,
 /// 共用 —— 两处消费序同为 ID 打头。
 void _scriptLensSpec(FakePtpTransport transport,
     {int lensId = 99,
+    bool withMode = true,
     int focalMin = 4000,
     int focalMax = 4000,
     int apWide = 200,
     int apTele = 200}) {
-  _scriptLensId(transport, lensId: lensId);
+  _scriptLensId(transport, lensId: lensId, withMode: withMode);
   _scriptLensSpecValues(transport,
       focalMin: focalMin,
       focalMax: focalMax,
@@ -181,16 +193,18 @@ void main() {
     expect(controller.batteryPercent, 80);
     expect(controller.focalLengthMm, 40); // 4000(0.01mm)÷100
     expect(controller.fNumber, 280);
-    // 请求序:GetDeviceInfo + 镜头 ID(早读,名先亮)+ 三次属性(声明表
-    // 外的码不发)+ 规格四连读(0xD0E3-E6 声明表外但应答,2026-10-12 探针)
+    // 请求序:GetDeviceInfo + 镜头 ID(早读,名先亮)+ 档位 + 三次属性
+    // (声明表外的码不发)+ 规格四连读(0xD0E3-E6 声明表外但应答,
+    // 2026-10-12 探针)
     expect(
         transport.requests.map((r) => r.opcode),
         [
           0x1001,
-          ...List.filled(8, 0x1015),
+          ...List.filled(9, 0x1015),
         ]);
     expect(transport.requests.skip(1).map((r) => r.params.single), [
       PtpDevicePropCode.lensId,
+      PtpDevicePropCode.liveViewSelector,
       0x5001,
       0x5008,
       0x5007,
@@ -314,7 +328,7 @@ void main() {
 
     expect(controller.batteryPercent, isNull);
     expect(controller.lensSpec, isNotNull, reason: '链未被坏值中断');
-    expect(transport.requests, hasLength(7)); // GetDeviceInfo + 电池 + 规格五连读
+    expect(transport.requests, hasLength(8)); // GetDeviceInfo + 档位 + 电池 + 规格五连读
   });
 
   test('标准属性全不在册:只发 GetDeviceInfo,规格五连读绕声明表照发', () async {
@@ -336,8 +350,16 @@ void main() {
     expect(controller.batteryPercent, isNull);
     expect(controller.focalLengthMm, isNull);
     expect(controller.fNumber, isNull);
-    // GetDeviceInfo + 规格五连读(0xD0E0 + 0xD0E3-E6)
-    expect(transport.requests, hasLength(6));
+    // GetDeviceInfo + 档位 + 规格五连读(0xD0E0 + 0xD0E3-E6)
+    expect(transport.requests.skip(1).map((r) => r.params.single).toList(), [
+      PtpDevicePropCode.lensId,
+      PtpDevicePropCode.liveViewSelector,
+      PtpDevicePropCode.lensFocalLengthMin,
+      PtpDevicePropCode.lensFocalLengthMax,
+      PtpDevicePropCode.lensMaxApertureWide,
+      PtpDevicePropCode.lensMaxApertureTele,
+    ]);
+    expect(transport.requests, hasLength(7));
     expect(controller.lensSpec?.description, '40mm ƒ/2');
   });
 
@@ -378,8 +400,8 @@ void main() {
     await Future.delayed(const Duration(milliseconds: 50));
     await pumpEventQueue();
     expect(controller.fNumber, isNull);
-    // GetDeviceInfo + 电池 + 光圈 + 规格五连读,断连后零新增
-    expect(transport.requests, hasLength(8));
+    // GetDeviceInfo + 档位 + 电池 + 光圈 + 规格五连读,断连后零新增
+    expect(transport.requests, hasLength(9));
   });
 
   test('镜头规格直读:0xD0E0 + 0xD0E3-E6 拼装,无 EXIF 时镜头行回规格描述',
@@ -411,9 +433,10 @@ void main() {
     // 不拍照即知:ID 未收录映射表,lensDisplay 退规格描述
     expect(controller.lensId, 99);
     expect(controller.lensDisplay, '24-120mm ƒ/4-6.3');
-    // 五码次序 D0E0 打头 → D0E6,直读不走声明表门禁
+    // 档位 + 五码次序 D0E0 打头 → D0E6,直读不走声明表门禁
     expect(transport.requests.skip(1).map((r) => r.params.single), const [
       PtpDevicePropCode.lensId,
+      PtpDevicePropCode.liveViewSelector,
       PtpDevicePropCode.lensFocalLengthMin,
       PtpDevicePropCode.lensFocalLengthMax,
       PtpDevicePropCode.lensMaxApertureWide,
@@ -431,9 +454,13 @@ void main() {
     transport.reply(PtpResult(
         responseCode: PtpResponseCode.ok,
         data: buildDataset(deviceProps: const [])));
-    // ID 打头拒答(降级容忍)+ 首个规格码拒答(规格循环短路)
+    // ID 打头拒答(降级容忍)+ 档位照常应答 + 首个规格码拒答(规格循环
+    // 短路;档位读 2026-10-26 插入链中,夹在 ID 与规格之间)
     transport.fail(const PtpResponseException(
         opcode: 0x1015, responseCode: PtpResponseCode.generalError));
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: Uint8List.fromList([0])));
     transport.fail(const PtpResponseException(
         opcode: 0x1015, responseCode: PtpResponseCode.generalError));
 
@@ -475,8 +502,8 @@ void main() {
 
     expect(controller.fNumber, 280);
     expect(controller.focalLengthMm, isNull);
-    // GetDeviceInfo + 连接沿 0x5007 + 规格五连读 + 事件一轮 0x5007
-    expect(transport.requests, hasLength(8));
+    // GetDeviceInfo + 档位 + 连接沿 0x5007 + 规格五连读 + 事件一轮 0x5007
+    expect(transport.requests, hasLength(9));
     expect(transport.requests.last.params.single, PtpDevicePropCode.fNumber);
   });
 
@@ -516,8 +543,8 @@ void main() {
     expect(controller.focalLengthMm, 85);
     expect(controller.lensSpec?.description, '24-120mm ƒ/4-6.3',
         reason: '区间内变焦 + ID 同值:规格原样,零重读');
-    // GetDeviceInfo + 连接沿 0x5008 + 规格五连读 + 事件一轮 0x5008+哨
-    expect(transport.requests, hasLength(9));
+    // GetDeviceInfo + 档位 + 连接沿 0x5008 + 规格五连读 + 事件一轮 0x5008+哨
+    expect(transport.requests, hasLength(10));
   });
 
   test('0x4006 焦距挪出规格区间 = 换镜信号:ID 对比实锤,规格五连读 + 光圈对表',
@@ -553,7 +580,12 @@ void main() {
         responseCode: PtpResponseCode.ok,
         data: Uint8List.fromList([31, 0]))); // 换镜哨:ID 变了
     _scriptLensSpec(transport,
-        lensId: 31, focalMin: 2400, focalMax: 12000, apWide: 400, apTele: 400);
+        lensId: 31,
+        withMode: false, // 换镜哨只重读 ID 不重读档位
+        focalMin: 2400,
+        focalMax: 12000,
+        apWide: 400,
+        apTele: 400);
     transport.reply(PtpResult(
         responseCode: PtpResponseCode.ok,
         data: Uint8List.fromList([0x90, 0x01]))); // 新镜头 ƒ/4
@@ -565,9 +597,9 @@ void main() {
     expect(controller.lensSpec?.description, '24-120mm ƒ/4');
     expect(controller.fNumber, 400);
     expect(controller.lensId, 31);
-    // GetDeviceInfo + 连接沿两读 + 规格五连读 + 0x5008+哨 + 新规格五连读
+    // GetDeviceInfo + 档位 + 连接沿两读 + 规格五连读 + 0x5008+哨 + 新规格五连读
     // + 0x5007
-    expect(transport.requests, hasLength(16));
+    expect(transport.requests, hasLength(17));
   });
 
   test('0x4006 能力门禁:焦距/光圈不在声明表,事件零动作', () async {
@@ -592,7 +624,101 @@ void main() {
 
     expect(controller.fNumber, isNull);
     expect(controller.focalLengthMm, isNull);
-    expect(transport.requests, hasLength(6), reason: 'GetDeviceInfo + 规格五连读');
+    expect(transport.requests, hasLength(7), reason: 'GetDeviceInfo + 档位 + 规格五连读');
+  });
+
+  test('视频档:连接沿光圈读 0xD1A9(照片码休眠不读),拧环事件跟视频码',
+      () async {
+    final transport = FakePtpTransport();
+    final session = PtpSession(transport: transport);
+    final conn = FakeConnection();
+    final controller = CameraOverviewController(
+        session: session, connection: conn,
+        propResyncDebounce: const Duration(milliseconds: 20));
+
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: buildDataset(deviceProps: const [0x5001, 0x5008])));
+    _scriptLensId(transport, mode: 1); // 连接沿:ID + 档位(视频)
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: Uint8List.fromList([80]))); // 电池 u8
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: Uint8List.fromList([0xA0, 0x0F, 0x00, 0x00]))); // 焦距 u32
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: Uint8List.fromList([0x30, 0x02]))); // 视频光圈 u16 = 560(ƒ/5.6)
+    _scriptLensSpecValues(transport); // 规格四连读(链尾)
+
+    conn.statesCtrl.add(CameraLinkState.connected);
+    await pumpEventQueue();
+
+    expect(controller.fNumber, 560,
+        reason: '视频档实际光圈走 0xD1A9(0x5007 休眠管线恒旧)');
+    expect(
+        transport.requests
+            .where((r) =>
+                r.params.length == 1 &&
+                r.params.single == PtpDevicePropCode.movieFnumber)
+            .map((r) => r.opcode),
+        containsOnce(0x1015),
+        reason: '视频码不在声明表,门禁不适用直读(在册表不是真相的全部)');
+    expect(
+        transport.requests.where(
+            (r) => r.params.length == 1 && r.params.single == PtpDevicePropCode.fNumber),
+        isEmpty,
+        reason: '照片码视频档不读');
+
+    // 拧环:0xD1A9 事件 → 去抖后重读视频码
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: Uint8List.fromList([0x20, 0x03]))); // ƒ/8.0
+    _emitPropChanged(transport, PtpDevicePropCode.movieFnumber);
+    await Future.delayed(const Duration(milliseconds: 50));
+    await pumpEventQueue();
+    expect(controller.fNumber, 800, reason: '拧环即跟视频码');
+  });
+
+  test('档位翻沿:0xD1A6 事件 → 模式重读,光圈切回照片码 0x5007', () async {
+    final transport = FakePtpTransport();
+    final session = PtpSession(transport: transport);
+    final conn = FakeConnection();
+    final controller = CameraOverviewController(
+        session: session, connection: conn,
+        propResyncDebounce: const Duration(milliseconds: 20));
+
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: buildDataset(deviceProps: const [0x5001, 0x5008, 0x5007])));
+    _scriptLensId(transport, mode: 1); // 连接沿:ID + 档位(视频)
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: Uint8List.fromList([80]))); // 电池 u8
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: Uint8List.fromList([0xA0, 0x0F, 0x00, 0x00]))); // 焦距 u32
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: Uint8List.fromList([0x30, 0x02]))); // 视频光圈 ƒ/5.6
+    _scriptLensSpecValues(transport); // 规格四连读(链尾)
+    conn.statesCtrl.add(CameraLinkState.connected);
+    await pumpEventQueue();
+    expect(controller.fNumber, 560);
+
+    // 拨杆切照片:0xD1A6 事件 → 模式重读 = 照片 → 光圈切 0x5007
+    transport
+      ..reply(PtpResult(
+          responseCode: PtpResponseCode.ok,
+          data: Uint8List.fromList([0]))) // 模式重读 = 照片
+      ..reply(PtpResult(
+          responseCode: PtpResponseCode.ok,
+          data: Uint8List.fromList([0x18, 0x01]))); // 0x5007 ƒ/2.8
+    _emitPropChanged(transport, PtpDevicePropCode.liveViewSelector);
+    await Future.delayed(const Duration(milliseconds: 50));
+    await pumpEventQueue();
+    expect(controller.fNumber, 280, reason: '翻沿后光圈源切照片码');
+    expect(transport.requests.last.params.single, PtpDevicePropCode.fNumber);
   });
 
   test('LensID 映射命中:不拍照出营销名全称,换镜即跟新名', () async {
@@ -636,8 +762,8 @@ void main() {
     expect(controller.lensId, 31);
     expect(controller.lensDisplay, 'NIKKOR Z 24-120mm f/4 S',
         reason: '换镜后映射名即跟');
-    // GetDeviceInfo + 连接沿 0x5008 + 规格五连读 + 0x5008+哨 + 新规格五连读
-    expect(transport.requests, hasLength(14));
+    // GetDeviceInfo + 档位 + 连接沿 0x5008 + 规格五连读 + 0x5008+哨 + 新规格五连读
+    expect(transport.requests, hasLength(15));
   });
 
   test('同区间换镜盲区修复:焦距停在 24 不挪,ID 31→25 变化照样触发规格重读',
@@ -675,7 +801,8 @@ void main() {
     transport.reply(PtpResult(
         responseCode: PtpResponseCode.ok,
         data: Uint8List.fromList([25, 0]))); // 换镜哨:ID 31 → 25
-    _scriptLensSpec(transport, lensId: 25); // 新规格 40-40mm ƒ/2
+    _scriptLensSpec(transport,
+        lensId: 25, withMode: false); // 新规格 40-40mm ƒ/2(哨链无档位)
     transport.reply(PtpResult(
         responseCode: PtpResponseCode.ok,
         data: Uint8List.fromList([0xC8, 0x00]))); // 顺带对表:ƒ/2
@@ -688,9 +815,9 @@ void main() {
     expect(controller.lensSpec?.description, '40mm ƒ/2');
     expect(controller.lensDisplay, 'NIKKOR Z 40mm f/2 SE');
     expect(controller.fNumber, 200);
-    // GetDeviceInfo + 连接沿两读 + 规格五连读 + 0x5008+哨 + 新规格五连读
-    // + 0x5007
-    expect(transport.requests, hasLength(16));
+    // GetDeviceInfo + 档位 + 连接沿两读 + 规格五连读 + 0x5008+哨 + 新规格
+    // 五连读 + 0x5007
+    expect(transport.requests, hasLength(17));
   });
 
   test('未挂镜:lensId 回 0,规格值官方明说不固定,一个都不读', () async {
@@ -706,6 +833,9 @@ void main() {
     transport.reply(PtpResult(
         responseCode: PtpResponseCode.ok,
         data: Uint8List.fromList([0, 0]))); // 0xD0E0 = 0(未挂)
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: Uint8List.fromList([0]))); // 档位(2026-10-26 链中插入)
 
     conn.statesCtrl.add(CameraLinkState.connected);
     await pumpEventQueue();
@@ -713,8 +843,8 @@ void main() {
     expect(controller.lensId, isNull);
     expect(controller.lensSpec, isNull);
     expect(controller.lensDisplay, isNull);
-    // GetDeviceInfo + 0xD0E0(规格四码因未挂被门禁,脚本耗尽即失败)
-    expect(transport.requests, hasLength(2));
+    // GetDeviceInfo + 0xD0E0 + 档位(规格四码因未挂被门禁,脚本耗尽即失败)
+    expect(transport.requests, hasLength(3));
   });
 
   test('0xD0E0 拒答降级:ID 路放弃,规格四码照读(兼容只有规格码的机身)',
@@ -730,6 +860,9 @@ void main() {
         data: buildDataset(deviceProps: const [])));
     transport.fail(const PtpResponseException(
         opcode: 0x1015, responseCode: PtpResponseCode.generalError));
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: Uint8List.fromList([0]))); // 档位(2026-10-26 链中插入)
     transport.reply(PtpResult(
         responseCode: PtpResponseCode.ok,
         data: Uint8List.fromList([0xA0, 0x0F, 0x00, 0x00]))); // 40mm

@@ -294,6 +294,13 @@ final class CameraOverviewController extends ChangeNotifier {
   final Set<int> _pendingPropReads = <int>{};
   Timer? _propTimer;
 
+  /// 视频档(0xD1A6 镜像,连接沿 + 0x4006 事件双路维护):光圈读码随
+  /// 档切 —— 视频档实际光圈走 0xD1A9,照片码 0x5007 在休眠静照管线恒
+  /// 旧值(2026-10-26 真机:视频档拧环连接页光圈不动)。焦距 0x5008
+  /// 是镜头光学量,双档共用不切。
+  bool _videoMode = false;
+  bool _pendingModeRead = false;
+
   StreamSubscription<CameraLinkState>? _statesSub;
   StreamSubscription<PtpEvent>? _eventsSub;
 
@@ -322,10 +329,18 @@ final class CameraOverviewController extends ChangeNotifier {
       final specWanted = await _readLensId();
       if (!_linkUp) return;
       notifyListeners(); // 镜头名先亮(早于规格四连读 4 事务)
+      // 档位先行(1 事务,声明表外直读):光圈读码随档切。
+      try {
+        final m = await session
+            .getDevicePropValue(PtpDevicePropCode.liveViewSelector);
+        if (!_linkUp) return;
+        _videoMode = _asInt(m.value) == 1;
+      } on Exception {
+        // 档位读不到(方言/拒答):按照片档走(旧行为)
+      }
       for (final code in const [
         PtpDevicePropCode.batteryLevel,
         PtpDevicePropCode.focalLength,
-        PtpDevicePropCode.fNumber,
       ]) {
         if (!info.devicePropsSupported.contains(code)) continue;
         try {
@@ -340,12 +355,29 @@ final class CameraOverviewController extends ChangeNotifier {
               // 0x5008 裸值单位 0.01mm(ISO 15740/libgphoto2 ÷100,
               // 与 FNumber ×100 同族定点;40mm 镜头回 4000)。
               focalLengthMm = value / 100;
-            case PtpDevicePropCode.fNumber:
-              fNumber = value;
           }
           notifyListeners(); // 单点亮:电池第 1 事务后即见,不等规格五连读
         } on Exception {
           // 单属性拒答/失败:该行保持缺省,不拖垮整卡
+        }
+      }
+      // 光圈(读码随档):照片码守声明表门禁;视频码 0xD1A9 不在册但
+      // 0x1015 照常应答,门禁不适用(与镜头 ID 同款「在册表不是真相的
+      // 全部」)。
+      if (_videoMode ||
+          info.devicePropsSupported.contains(PtpDevicePropCode.fNumber)) {
+        try {
+          final v = await session.getDevicePropValue(_videoMode
+              ? PtpDevicePropCode.movieFnumber
+              : PtpDevicePropCode.fNumber);
+          if (!_linkUp) return;
+          final value = _asInt(v.value);
+          if (value != null) {
+            fNumber = value;
+            notifyListeners(); // 单点亮口径同上
+          }
+        } on Exception {
+          // 光圈拒答/失败:该行保持缺省,不拖垮整卡
         }
       }
       if (specWanted) {
@@ -376,19 +408,31 @@ final class CameraOverviewController extends ChangeNotifier {
     }
   }
 
-  /// 属性追平(0x4006):只理焦距/光圈两码(信息卡两行的实时源;
-  /// 2026-10-12 探针:拨轮推 0x5007/0x500D、变焦与换镜推 0x5008,
-  /// 规格码 0xD0E3-E6 不推事件)。其余码零动作。
+  /// 属性追平(0x4006):焦距/光圈/档位(信息卡两行的实时源;2026-10-12
+  /// 探针:拨轮推 0x5007/0x500D、变焦与换镜推 0x5008,规格码不推事件;
+  /// 2026-10-26:视频档拧环推 0xD1A9,0x5007 休眠管线恒旧 —— 档外码
+  /// 忽略,档位沿翻面后切读码)。其余码零动作。
   void _onPropChanged(int code) {
-    if (code != PtpDevicePropCode.fNumber &&
-        code != PtpDevicePropCode.focalLength) {
-      return;
+    switch (code) {
+      case PtpDevicePropCode.liveViewSelector:
+        _pendingModeRead = true;
+      case PtpDevicePropCode.focalLength:
+        // 标准码守声明表门禁(能力门禁口径不变)
+        if (deviceInfo?.devicePropsSupported.contains(code) ?? false) {
+          _pendingPropReads.add(code);
+        }
+      case PtpDevicePropCode.fNumber:
+        // 照片码守声明表门禁;视频档下休眠管线恒旧,读了也白读
+        if (!_videoMode &&
+            (deviceInfo?.devicePropsSupported.contains(code) ?? false)) {
+          _pendingPropReads.add(code);
+        }
+      case PtpDevicePropCode.movieFnumber:
+        // 视频码不在册但应答,门禁不适用;照片档下不读(休眠)
+        if (_videoMode) _pendingPropReads.add(code);
+      default:
+        return; // 其余码零动作
     }
-    final info = deviceInfo;
-    if (info == null || !info.devicePropsSupported.contains(code)) {
-      return; // 能力门禁:声明表外的码不发(refresh 就绪前同此)
-    }
-    _pendingPropReads.add(code);
     _propTimer?.cancel();
     _propTimer = Timer(propResyncDebounce, _readLiveProps);
   }
@@ -397,6 +441,20 @@ final class CameraOverviewController extends ChangeNotifier {
     if (_propReading || !_linkUp) return;
     _propReading = true;
     try {
+      if (_pendingModeRead) {
+        _pendingModeRead = false;
+        final v = await session
+            .getDevicePropValue(PtpDevicePropCode.liveViewSelector);
+        if (!_linkUp) return;
+        final video = _asInt(v.value) == 1;
+        if (video != _videoMode) {
+          _videoMode = video;
+          _pendingPropReads.add(video
+              ? PtpDevicePropCode.movieFnumber
+              : PtpDevicePropCode.fNumber); // 档位翻沿:光圈切码重读
+          notifyListeners();
+        }
+      }
       while (_linkUp && _pendingPropReads.isNotEmpty) {
         final codes = _pendingPropReads.toList();
         _pendingPropReads.clear();
@@ -408,7 +466,8 @@ final class CameraOverviewController extends ChangeNotifier {
             if (!_linkUp) return;
             final value = _asInt(v.value);
             if (value == null) continue;
-            if (code == PtpDevicePropCode.fNumber) {
+            if (code == PtpDevicePropCode.fNumber ||
+                code == PtpDevicePropCode.movieFnumber) {
               fNumber = value;
             } else {
               focalLengthMm = value / 100;

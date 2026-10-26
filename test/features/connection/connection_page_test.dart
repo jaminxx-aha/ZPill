@@ -1097,8 +1097,8 @@ void main() {
       final conn = FakeConnection()..deviceName = 'NIKON ZF';
       final transport = _ScriptTransport();
       final session = PtpSession(transport: transport);
-      // refresh() 脚本:GetDeviceInfo + 镜头 ID(早读,名先亮)+ 电池/
-      // 焦距/光圈(全在册)。
+      // refresh() 脚本:GetDeviceInfo + 镜头 ID(早读,名先亮)+ 档位 +
+      // 电池/焦距/光圈(全在册)。
       transport.reply(PtpResult(
           responseCode: PtpResponseCode.ok,
           data:
@@ -1106,6 +1106,9 @@ void main() {
       transport.reply(PtpResult(
           responseCode: PtpResponseCode.ok,
           data: Uint8List.fromList([99, 0]))); // 镜头 ID u16(不在映射表)
+      transport.reply(PtpResult(
+          responseCode: PtpResponseCode.ok,
+          data: Uint8List.fromList([0]))); // 档位:照片(2026-10-26 链中插入)
       transport.reply(PtpResult(
           responseCode: PtpResponseCode.ok,
           data: Uint8List.fromList([80]))); // 电池 80%
