@@ -87,19 +87,41 @@ void main() {
     expect(_param(PtpDevicePropCode.captureAreaCrop).display(5), '16:9');
   });
 
-  test('display:优化校准内置组 + 段位格式化(创意/自定义/云)', () {
+  test('display:优化校准内置组键化(9-11 官方名)+ 创意组 20 员键化', () {
     final p = _param(PtpDevicePropCode.activePicCtrlItem);
     expect(p.pickValues, isNull,
         reason: '取值域走相机 FORM(真机 46 项;静态 11 项直供曾把 desc '
             '读短路砍掉值域,2026-10-07 用户反馈根因)');
     expect(p.display(1), 'param.standard');
+    expect(p.display(2), 'param.neutral',
+        reason: '自然(机身菜单名;协议 §9.9.1 叫 Neutral)');
     expect(p.display(4), 'param.monochrome');
-    expect(p.display(103), 'Pop');
+    expect(p.display(9), 'param.pcFlatMono');
+    expect(p.display(10), 'param.pcDeepToneMono');
+    expect(p.display(11), 'param.pcRichTonePortrait');
+    // 创意组全员键化(EN = 官方 §9.9.1,zh = 官方中文译名;2026-10-26
+    // 用户反馈「创意显示的是创意 x 而非梦幻」根因 = 旧码裸英文字符串 +
+    // displayParamValue 段位分支抢在目录键之前)。
+    expect(p.display(101), 'param.pcDream');
+    expect(p.display(103), 'param.pcPop');
+    expect(p.display(111), 'param.pcDenim');
+    expect(p.display(120), 'param.pcCarbon');
     // 自定义/云组段位带参:display() 无 args 通道,2xx/3xx 数值直通;
     // 键化分支(param.picCtrlCustom/Cloud {n})在控制器
     // displayParamValue 内联,渲染端 tm() 落地。
     expect(p.display(202), '202');
     expect(p.display(305), '305');
+  });
+
+  test('优化校准面板取值域按机身菜单序重排(内置组自动居首,FORM 协议值序不入面板)', () {
+    expect(
+        sortPicCtrlEnumValues([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]),
+        [8, 1, 2, 3, 4, 9, 10, 5, 11, 6, 7],
+        reason: '2026-10-27 用户机身菜单逐项对照:自动/标准/自然/鲜艳/单色/'
+            '平面单色/深调单色/人像/丰富色调人像/风景/平面');
+    expect(sortPicCtrlEnumValues([301, 8, 120, 201, 101, 999]),
+        [8, 101, 120, 201, 301, 999],
+        reason: '创意/自定义/云按值升序(机身菜单编号序),表外殿后');
   });
 
   test('display:数值格式化(光圈/快门打包分数/ISO/EV)', () {

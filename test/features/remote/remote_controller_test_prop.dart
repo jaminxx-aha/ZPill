@@ -460,6 +460,11 @@ void _propGroups() {
               .key,
           'param.standard',
           reason: '静态表标签照常');
+      final creative = controller
+          .displayParamValue(PtpDevicePropCode.activePicCtrlItem, 101);
+      expect(creative.key, 'param.pcDream',
+          reason: '创意组走目录键(官方 §9.9.1),段位「创意 {n}」只兜表外值');
+      expect(creative.args, isNull);
     });
 
     test('优化校准:0x90CC 首槽位被拒 → 整组停(不逐个撞),显示回落静态',

@@ -834,14 +834,16 @@ mixin _RemoteOps on _SessionCore {
     return result;
   }
 
-  /// Nikon GetPictCtrlData(0x90CC):读优化校准(0xD200)槽位详情里的
-  /// 注册名。params = [槽位号(即 0xD200 的值), 0];数据集布局按
-  /// digiCamControl NikonBase.GetPictureControl 实证 —— [3..22] 是
-  /// 20 字节 ASCII 名(NUL 截断,[0..2] 为未知/单色/自定义标志)。
+  /// Nikon GetPicCtrlData(0x90CC):读优化校准(0xD200)槽位详情里的
+  /// 注册名。params = [槽位号(即 0xD200 的值), 0=当前值];数据集布局
+  /// 按官方指令书 §9.9(ZfUsbMtpE_02)—— BasePictureControl 2 字节 +
+  /// RegistrationName 20 字节(ASCII 19 + NUL),名字在 [2..22)。
+  /// (2026-10-26 用户真机反馈「自定义/云组名字少开头一个字母」根因:
+  /// 旧码按 digiCamControl 口径读 [3..23),恰好吞掉首字母 —— 其 3 字节
+  /// 头是旧机型布局,Zf 是 2 字节 BasePictureControl。)
   /// 用于自定义(201-206,Zf FORM 实测 6 槽)/云下载(301-309)槽位的
-  /// 真名显示(静态表只有
-  /// 「自定义 N」「云 N」占位);数据不足 23 字节或名字空白返回 null,
-  /// 上层回落静态标签。Zf 待真机核对。
+  /// 真名显示(静态表只有「自定义 N」「云 N」占位);数据不足 22 字节
+  /// 或名字空白返回 null,上层回落静态标签。
   Future<String?> getPictureControlName(int slot) async {
     final result = await _serialized(() => transport.execute(PtpRequest(
           opcode: NikonOperationCode.getPictCtrlData,
@@ -849,9 +851,9 @@ mixin _RemoteOps on _SessionCore {
         )));
     _ensureOk(result, NikonOperationCode.getPictCtrlData);
     final data = result.data;
-    if (data == null || data.length < 23) return null;
+    if (data == null || data.length < 22) return null;
     final nameCodes = <int>[];
-    for (var i = 3; i < 23; i++) {
+    for (var i = 2; i < 22; i++) {
       final b = data[i];
       if (b == 0) break;
       if (b >= 0x20 && b < 0x7F) nameCodes.add(b);

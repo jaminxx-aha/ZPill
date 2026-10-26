@@ -24,10 +24,10 @@
 /// 枚举值标签:尼康方言值表(源 = OpenZCine PTPCameraPropertyDecoders,
 /// 其又源出 libgphoto2 config.c;**全部标 verify-on-HW,Zf 待真机核对**)。
 /// 表外值回退格式化/「值 N」,回读真机后如有出入只改标签表。
-/// 优化校准的创意组(101-120)/自定义(201-209)/云(301-309)按段
-/// 格式化(Zf FORM 实测 46 项 = 内置 11 + 创意 101-120 20 员 + 自定义
-/// 201-206 6 槽 + 云 301-309 9 槽,2026-10-26 USB dump;207-209 未在
-/// 册,段格式化超集保留)。
+/// 优化校准内置 1-11 与创意组 101-120 全员键化(官方 §9.9.1 值表),
+/// 自定义(201-209)/云(301-309)按段兜底(Zf FORM 实测 46 项 = 内置
+/// 11 + 创意 101-120 20 员 + 自定义 201-206 6 槽 + 云 301-309 9 槽,
+/// 2026-10-26 USB dump;207-209 未在册,段格式化超集保留)。
 library;
 
 import '../../core/ptp/device_prop.dart';
@@ -41,6 +41,42 @@ import '../../l10n/message.dart';
 /// RemoteController 据此门控对焦域。多机型口径:值 3 在 Zf 取值域外、
 /// 其余 Z 机身可能回,门控按全方言集判定(fail-open 只对未知值)。
 const kStillFocusModeMfValues = {3, 4};
+
+/// 优化校准 0xD200 内置组的机身菜单展示序(协议值序 ≠ 菜单序:菜单把
+/// 自动居首、单色三连、人像组居中 —— 2026-10-27 用户机身菜单逐项对照
+/// 定案):自动(8)标准(1)自然(2)鲜艳(3)单色(4)平面单色(9)
+/// 深调单色(10)人像(5)丰富色调人像(11)风景(6)平面(7)。
+/// 面板取值域列表经 [sortPicCtrlEnumValues] 重排,不赌相机 FORM 的
+/// 返回序(FORM 是协议值序)。
+const kPicCtrlMenuRank = <int, int>{
+  8: 0, // 自动 Auto
+  1: 1, // 标准 Standard
+  2: 2, // 自然 Natural(协议名 Neutral)
+  3: 3, // 鲜艳 Vivid
+  4: 4, // 单色 Monochrome
+  9: 5, // 平面单色 Flat Monochrome
+  10: 6, // 深调单色 Deep Tone Monochrome
+  5: 7, // 人像 Portrait
+  11: 8, // 丰富色调人像 Rich Tone Portrait
+  6: 9, // 风景 Landscape
+  7: 10, // 平面 Flat
+};
+
+/// 优化校准取值域按机身菜单序重排:内置组走 [kPicCtrlMenuRank];创意
+/// (101-120)/自定义(201-209)/云(301-309)按值升序(机身菜单即
+/// 编号序);表外值殿后按值升序。稳定排序,重复值保原序。
+List<int> sortPicCtrlEnumValues(List<int> values) {
+  int rank(int v) {
+    final menu = kPicCtrlMenuRank[v];
+    if (menu != null) return menu;
+    if (v >= 101 && v <= 120) return 100 + (v - 101);
+    if (v >= 201 && v <= 209) return 200 + (v - 201);
+    if (v >= 301 && v <= 309) return 300 + (v - 301);
+    return 1000 + v;
+  }
+
+  return [...values]..sort((a, b) => rank(a).compareTo(rank(b)));
+}
 
 /// 单个拍摄参数:属性码 + 中文名 + 值展示规则 + 读写路径路由。
 final class ShootingParam {
@@ -498,45 +534,51 @@ final kShootingParams = <ShootingParam>[
   // 优化校准 0xD200(u16):相机 FORM 枚举驱动(真机 46 项全在 FORM,
   // 静态表只有内置 11 项 —— pickValues 曾把 desc 读短路,值域被砍到
   // 11 项,2026-10-07 用户反馈「相机 46 个应用只有 11 个」根因)。
-  // 自定义(201-206,Zf FORM 实测 6 槽;格式化段留 201-209 超集)/
+  // 标签全员键化(EN = 官方 §9.9.1 BasePictureControl 值表逐字;zh = 官方
+  // 中文菜单译名,2026-10-27 用户机身菜单逐名过目定案):内置 1-11 + 创意
+  // 101-120;
+  // 自定义(201-206,Zf FORM 实测 6 槽;段格式化留 201-209 超集)/
   // 云(301-309)组的真名由 0x90CC 拉取
-  // (RemoteController.picCtrlNames),静态标签只是占位。
+  // (RemoteController.picCtrlNames),静态侧只有「自定义 N」「云 N」
+  // 段位兜底。
   ShootingParam(
     code: PtpDevicePropCode.activePicCtrlItem,
     label: 'param.pictureControl',
     enumLabels: {
+      // 内置组按机身菜单序排字面量(展示序重排在面板侧,见
+      // [kPicCtrlMenuRank];自然 = 协议 Neutral,Zf 菜单名「自然/Natural」)
+      8: 'param.auto',
       1: 'param.standard',
       2: 'param.neutral',
       3: 'param.vivid',
       4: 'param.monochrome',
+      9: 'param.pcFlatMono',
+      10: 'param.pcDeepToneMono',
       5: 'param.portrait',
+      11: 'param.pcRichTonePortrait',
       6: 'param.landscape',
       7: 'param.flat',
-      8: 'param.auto',
-      9: 'Flat Mono',
-      10: 'Deep Tone Mono',
-      11: 'Rich Tone Portrait',
-      // 创意组 20 员(官方中文译名未定,先用 OpenZCine 原名)
-      101: 'Dream',
-      102: 'Morning',
-      103: 'Pop',
-      104: 'Sunday',
-      105: 'Somber',
-      106: 'Drama',
-      107: 'Silence',
-      108: 'Bleach',
-      109: 'Melancholic',
-      110: 'Pure',
-      111: 'Denim',
-      112: 'Toy',
-      113: 'Sepia',
-      114: 'Blue',
-      115: 'Red',
-      116: 'Pink',
-      117: 'Charcoal',
-      118: 'Graphite',
-      119: 'Binary',
-      120: 'Carbon',
+      // 创意组 20 员(官方 §9.9.1:值 = BasePictureControl 同号)
+      101: 'param.pcDream',
+      102: 'param.pcMorning',
+      103: 'param.pcPop',
+      104: 'param.pcSunday',
+      105: 'param.pcSomber',
+      106: 'param.pcDrama',
+      107: 'param.pcSilence',
+      108: 'param.pcBleach',
+      109: 'param.pcMelancholic',
+      110: 'param.pcPure',
+      111: 'param.pcDenim',
+      112: 'param.pcToy',
+      113: 'param.pcSepia',
+      114: 'param.pcBlue',
+      115: 'param.pcRed',
+      116: 'param.pcPink',
+      117: 'param.pcCharcoal',
+      118: 'param.pcGraphite',
+      119: 'param.pcBinary',
+      120: 'param.pcCarbon',
     },
   ),
 ];

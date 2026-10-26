@@ -213,13 +213,13 @@ void _scriptParamsVideo(_ScriptTransport t) {
   t.ok(data: Uint8List.fromList([0])); // 0xD054 自动 ISO:关
 }
 
-/// 0x90CC GetPictCtrlData 应答数据集(digiCamControl 布局:[0]未知
-/// [1]单色 [2]自定义 [3..23) ASCII 名 NUL 填充;尾部补到 32B)。
+/// 0x90CC GetPictCtrlData 应答数据集(官方 §9.9 布局:[0..1]
+/// BasePictureControl [2..22) ASCII 名 NUL 填充;尾部补到 32B)。
 Uint8List _picCtrlData(String name) {
   final b = Uint8List(32);
-  b[2] = 1; // 自定义标志
+  b[0] = 2; // BasePictureControl = Custom(digiCamControl 口径的自定义标志)
   for (var i = 0; i < name.length && i < 20; i++) {
-    b[3 + i] = name.codeUnitAt(i);
+    b[2 + i] = name.codeUnitAt(i);
   }
   return b;
 }
