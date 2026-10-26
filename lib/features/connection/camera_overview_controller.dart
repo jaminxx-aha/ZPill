@@ -8,7 +8,10 @@
 /// - 镜头规格:0xD0E3-E6 焦距上下限/两端最大光圈 + 0xD0E0 镜头 ID
 ///   (只读实时属性,连接沿直读;Zf 实证不在声明表但应答,2026-10-12
 ///   USB 探针)—— 不拍照即知挂机镜头,ID 命中 [kLensIdNames] 直接出
-///   营销名全称,未收录退规格描述(如「40mm ƒ/2」)。
+///   营销名全称,未收录退规格描述(如「40mm ƒ/2」)。连接沿 ID 紧随
+///   GetDeviceInfo 早读先亮(1 事务),规格四连读垫链尾 —— 门放行后
+///   侧链整组同抢会话串行锁,ID 压最尾=镜头名最后才现(2026-10-26
+///   「连接后镜头信息出来很慢」修)。
 /// - 实时追平(0x4006 事件,不拍照):焦距/光圈随拨轮、变焦、换镜
 ///   即时刷新(声明表门禁);规格/ID 码不推事件(2026-10-12 探针),
 ///   0x5008 沿补读 ID 对比 = 换镜精确判(同区间换镜焦距不挪也抓到)
@@ -287,6 +290,12 @@ final class CameraOverviewController extends ChangeNotifier {
   /// 修):各数据点赋值沿即 notify,不等整链 —— 全链串行 8 事务
   /// (Wi-Fi 每事务一次往返),链尾一次 notify 曾把电池、镜头整卡压到
   /// 全链跑完才一起亮。
+  ///
+  /// 镜头名先行(2026-10-26 真机反馈「连接后镜头信息出来很慢」修):
+  /// 0xD0E0 单事务紧随 GetDeviceInfo,命中 [kLensIdNames] 即 notify 出
+  /// 全称;规格四连读(0xD0E3-E6,只是未收录 ID 的退路描述 + 换镜哨
+  /// 基线)垫到链尾 —— 门放行后相册预热/双卡槽/对时整组同抢会话串行
+  /// 锁,镜头名原压在电池/焦距/光圈 + 规格四连读后面,全卡最尾才亮。
   Future<void> refresh() async {
     if (_refreshing || !_linkUp) return;
     _refreshing = true;
@@ -295,6 +304,11 @@ final class CameraOverviewController extends ChangeNotifier {
       if (!_linkUp) return;
       deviceInfo = info;
       notifyListeners(); // 机身组(型号/固件/序列号)先亮
+      // 镜头 ID(1 事务,声明表外直读):映射命中即出营销名全称;未挂镜
+      // (应答 0)镜头行定格 '--',规格四连读也不必读。
+      final specWanted = await _readLensId();
+      if (!_linkUp) return;
+      notifyListeners(); // 镜头名先亮(早于规格四连读 4 事务)
       for (final code in const [
         PtpDevicePropCode.batteryLevel,
         PtpDevicePropCode.focalLength,
@@ -321,8 +335,11 @@ final class CameraOverviewController extends ChangeNotifier {
           // 单属性拒答/失败:该行保持缺省,不拖垮整卡
         }
       }
-      await _readLensSpec();
-      notifyListeners(); // 镜头行(ID/规格)收尾亮
+      if (specWanted) {
+        await _readLensSpecValues();
+        if (!_linkUp) return;
+        notifyListeners(); // 镜头行(未收录 ID 的规格描述)收尾亮
+      }
     } on Exception {
       // GetDeviceInfo 失败 = 链路问题,状态机会收口;信息卡保持已有点
     } finally {
@@ -411,7 +428,12 @@ final class CameraOverviewController extends ChangeNotifier {
           final outOfRange =
               spec == null || focal == null || !spec.containsFocal(focal);
           if (idChanged || outOfRange) {
-            await _readLensSpec();
+            // ID 重读先行:换镜新名(映射命中)即亮,规格四连读殿后 ——
+            // 与连接沿同款「名先于规格」。
+            await _readLensId();
+            if (!_linkUp) return;
+            notifyListeners();
+            await _readLensSpecValues();
             if (!_linkUp) return;
             if (deviceInfo?.devicePropsSupported
                     .contains(PtpDevicePropCode.fNumber) ??
@@ -437,17 +459,19 @@ final class CameraOverviewController extends ChangeNotifier {
     }
   }
 
-  /// 挂机镜头规格(0xD0E3-E6)+ 镜头 ID(0xD0E0 打头):Zf 实证**不在
-  /// devicePropsSupported 声明表但 0x1015 应答**(2026-10-12 USB 探针;
-  /// 40 SE 回 25/4000/4000/200/200 = ID 25,40-40mm ƒ/2-ƒ/2)—— 声明表
-  /// 门禁在此不适用,直读。ID = 0 即未挂镜,规格值官方明说 "not fixed"
-  /// 不采(ID 拒答则规格照走,兼容只有规格码的机身);四码任一拒答即
-  /// 放弃(旧机型/异构机身静默无规格)。
-  Future<void> _readLensSpec() async {
+  /// 镜头 ID(0xD0E0,官方指令书 6.5.10.4):Zf 实证**不在
+  /// devicePropsSupported 声明表但 0x1015 应答**(2026-10-12 USB 探针)
+  /// —— 声明表门禁在此不适用,直读。
+  ///
+  /// 返回 true = 规格四连读值得跟(ID 命中非 0,或 ID 拒答 —— 兼容只有
+  /// 规格码的机身);false = 未挂镜(应答 0,规格值官方明说 "not fixed"
+  /// 不采),[lensSpec] 一并清态。ID 确认即武装 [_knownLensId](换镜精确
+  /// 判基线,规格四码成败不再牵制)。
+  Future<bool> _readLensId() async {
     var idAnswered = false;
     try {
       final v = await session.getDevicePropValue(PtpDevicePropCode.lensId);
-      if (!_linkUp) return;
+      if (!_linkUp) return false;
       final raw = _asInt(v.value);
       if (raw != null) {
         idAnswered = true;
@@ -459,8 +483,15 @@ final class CameraOverviewController extends ChangeNotifier {
     if (idAnswered && lensId == null) {
       lensSpec = null;
       _knownLensId = 0;
-      return; // 未挂镜:规格值不固定,不读
+      return false; // 未挂镜:规格值不固定,不读
     }
+    if (lensId != null) _knownLensId = lensId!;
+    return true;
+  }
+
+  /// 挂机镜头规格四连读(0xD0E3-E6 焦距上下限/两端最大光圈):四码
+  /// 任一拒答即放弃(旧机型/异构机身静默无规格,宁缺勿错)。
+  Future<void> _readLensSpecValues() async {
     final values = <int, int>{};
     for (final code in const [
       PtpDevicePropCode.lensFocalLengthMin,
@@ -484,7 +515,6 @@ final class CameraOverviewController extends ChangeNotifier {
       maxApertureWide: values[PtpDevicePropCode.lensMaxApertureWide]!,
       maxApertureTele: values[PtpDevicePropCode.lensMaxApertureTele]!,
     );
-    if (lensId != null) _knownLensId = lensId!;
   }
 
   /// 断连/失败:清态(迟到的属性值被门闩挡住)。
