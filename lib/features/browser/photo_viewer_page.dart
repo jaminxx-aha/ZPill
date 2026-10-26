@@ -30,6 +30,7 @@ import '../../core/browser/object_entry.dart';
 import '../../core/ptp/ptp_session.dart';
 import '../../core/browser/photo_group.dart';
 import '../../core/browser/thumbnail_cache.dart';
+import '../../core/log/app_log.dart';
 import '../../core/ptpip/object_format.dart' show ObjectKind;
 import '../transfers/transfers_page.dart';
 import '../../core/transfer/object_downloader.dart';
@@ -194,7 +195,7 @@ class _PhotoViewerPageState extends State<PhotoViewerPage>
         // 读回失败:保持现状(下页翻回再试)
       } on Object catch (e) {
         // 意外(Error 类:无会话测试桩等)尽力而为,不挡查看
-        debugPrint('[查看器] 保护态读回失败 0x${handle.toRadixString(16)}: $e');
+        AppLog.w(AppLog.browser, '[查看器] 保护态读回失败 0x${handle.toRadixString(16)}: $e');
       }
     }());
   }
