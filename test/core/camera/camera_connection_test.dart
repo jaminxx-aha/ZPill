@@ -386,6 +386,29 @@ void main() {
     ]);
   });
 
+  test('USB 首笔超时自愈两段式:复位归位后 300ms 急拨未中,1.5s 慢拨接住'
+      '(2026-10-26 真机:复位归位 ≠ 立即可用,手动第二点必中 = 缺的是稳定'
+      '时间)', () async {
+    final usb = FakeUsbHostChannel(const [_zf])..recoveryResetResult = true;
+    final fake = FakePtpTransport();
+    final (conn, _, _) = wireUsb(usb, fake);
+
+    // 第一拨:GetDeviceInfo 处吃 TimeoutException(相机整体沉默)
+    fake.fail(TimeoutException('bulkRead', const Duration(seconds: 15)));
+    // 第二拨(300ms 急拨):复位归位但 USB 栈未醒,仍超时
+    fake.fail(TimeoutException('bulkRead', const Duration(seconds: 15)));
+    // 第三拨(1.5s 稳定窗):相机已醒,全链通
+    fake.reply(_ok(data: buildDeviceInfoDataset())); // GetDeviceInfo
+    fake.reply(_ok()); // OpenSession
+
+    await conn.connect();
+
+    expect(conn.state, CameraLinkState.connected);
+    expect(conn.error, isNull, reason: '两段式接住,用户无感');
+    expect(usb.openedIdentifiers.length, 3,
+        reason: '三拨:首拨 + 急拨 + 慢拨,每拨各走一次 listCameras/open');
+  });
+
   test('无相机:failed + 插线/解锁引导,不动 USB 会话', () async {
     final usb = FakeUsbHostChannel(const []);
     final fake = FakePtpTransport();

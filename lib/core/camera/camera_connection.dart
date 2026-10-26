@@ -289,6 +289,9 @@ final class CameraConnectionImpl implements CameraConnection {
   /// 会话死亡/深待机后必现,重试无用)→ 程序化拔插一次再试:ohos
   /// native resetUsbDevice 端口复位强制重枚举(2026-10-26 真机两案,
   /// 物理拔插均愈);其余平台能力缺席返回 false,直接落原失败路径。
+  /// 复位重试**两段式**(2026-10-26 真机:复位归位 ≠ 立即可用,300ms
+  /// 急拨吃过再超时,红字后手动第二点必中 = 缺的只是稳定时间):300ms
+  /// 急拨未中,再给 1.5s 稳定窗慢试;两段都超时才落红字。
   Future<void> _connectUsb({bool silent = false}) async {
     try {
       await _connectUsbOnce(silent: silent);
@@ -297,8 +300,16 @@ final class CameraConnectionImpl implements CameraConnection {
         try {
           if (await _usb.recoveryReset()) {
             await Future<void>.delayed(const Duration(milliseconds: 300));
-            await _connectUsbOnce(silent: silent);
-            return;
+            try {
+              await _connectUsbOnce(silent: silent);
+              return;
+            } on Exception {
+              // 急拨未中:再等 1.5s 稳定窗慢试(复位后的相机 USB 栈
+              // 醒来需要秒级;不复发位 —— 再复位反而把刚醒的设备又摁倒)
+              await Future<void>.delayed(const Duration(milliseconds: 1500));
+              await _connectUsbOnce(silent: silent);
+              return;
+            }
           }
         } on Exception {
           // 复位重开仍失败:落原失败路径上报
