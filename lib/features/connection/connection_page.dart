@@ -1377,14 +1377,31 @@ class _ConnectionPageState extends State<ConnectionPage>
     // 置 live 后触发现读,关闭沿(pop/滑删)撤销 live。
     _overview.shutterLive = true;
     unawaited(_overview.refreshShutterCount());
+    // 标签列宽:整组标签实测共用一宽(kv_row 同机制)—— EN 长标签
+    // (Device Name/Shutter count)在原 56 钉宽(v26 zh 口径定稿)下
+    // 折行、行高跳,实测放行;zh 短标签 56 下限观感不变。
+    final sheetLabelWidth = kvLabelWidth(
+      context,
+      labels: [
+        context.t('conn.sheetDevice'),
+        context.t('conn.sheetModel'),
+        context.t('conn.sheetLink'),
+        context.t('conn.camInfoShutter'),
+      ],
+      style: Theme.of(context).textTheme.bodySmall!,
+      minWidth: 56,
+    );
     Widget row(String labelKey, String value) => Padding(
           padding: const EdgeInsets.symmetric(vertical: 7),
           child: Row(
             children: [
-              // 标签列定宽,数值列统一左对齐成一条(v25/v26 定稿)。
+              // 标签列定宽,数值列统一左对齐成一条(v25/v26 定稿;宽随
+              // 语言实测,见 sheetLabelWidth)。
               SizedBox(
-                width: 56,
+                width: sheetLabelWidth,
                 child: Text(context.t(labelKey),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
                         color:
                             Theme.of(context).colorScheme.onSurfaceVariant)),
