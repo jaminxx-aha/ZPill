@@ -35,6 +35,19 @@ Future<void> main() async {
   // 汇入 AppLog native 域;尽早 install,免 native 早期上报落空)。
   NativeLogBridge.install();
 
+  // 方向契约(2026-10-26 用户明示「禁止旋转」):默认钉竖屏,全 app
+  // 无传感器自转 —— shell 无横屏布局,拍摄页竖排相机式排版同不受转。
+  // 横屏只剩两处**显式动作**(拍摄页方向钮「横」锁、全屏视频,见
+  // remote_page 方向锁与 viewer/library 全屏切换),退出各自钉回竖屏。
+  // Info.plist/AndroidManifest 三向保留不掐:显式切横的引擎通路仍在。
+  // 启动即钉(持有横放手机冷启,首帧不闪横屏外壳);竖拍值单发
+  // portraitUp(iOS 未声明 UpsideDown,双值只留系统自选余地)。
+  unawaited(
+    SystemChrome.setPreferredOrientations(const [
+      DeviceOrientation.portraitUp,
+    ]).catchError((Object _) {}),
+  );
+
   // 内存警告取证(全生命周期,常驻):只记日志不动缓存 —— 清空是框
   // 架在 super.handleMemoryPressure 里已做的,不重不漏。
   WidgetsBinding.instance.addObserver(_MemoryPressureObserver());
@@ -42,20 +55,16 @@ Future<void> main() async {
   // 应用级单例:USB 主线对象图(通道 → 传输 → 会话 → 仓库 → 控制器)。
   AppServices.bootstrap();
 
-  // 首帧后预热方向偏好:引擎未收过任何方向表时(iOS 侧
-  // _orientationPreferences 默认 = All 掩码),进程的首个用户方向请求
-  // 会走一条特有路径 —— 真机上表现为首次点方向钮「先按设备姿态转过去
-  // 再 180° 拉回」的双旋,第二次起才正常(2026-10-08 实测)。此处先发
-  // 一张全方向表(竖 + 双横,与 Info.plist 生效集一致,零旋转零可见
-  // 变化),让引擎方向状态在用户点按前就收敛到与后续点按相同的路径。
-  // Android 该表映射 SCREEN_ORIENTATION_USER(跟随传感器,不钉向);
+  // 首帧后再发一次同表(竖)预热方向偏好:引擎未收过任何方向表时,
+  // 进程的首个用户方向请求会走一条特有路径 —— 真机上表现为首次点
+  // 方向钮「先按设备姿态转过去再 180° 拉回」的双旋,第二次起才正常
+  // (2026-10-08 实测)。预热让引擎方向状态在用户点按前收敛到与后续
+  // 点按相同的路径。Android 该表映射 SCREEN_ORIENTATION_PORTRAIT;
   // OHOS fork 未实现此 method,异常被静默兜住。
   WidgetsBinding.instance.addPostFrameCallback((_) {
     unawaited(
       SystemChrome.setPreferredOrientations(const [
         DeviceOrientation.portraitUp,
-        DeviceOrientation.landscapeLeft,
-        DeviceOrientation.landscapeRight,
       ]).catchError((Object _) {}),
     );
   });

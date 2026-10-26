@@ -67,15 +67,16 @@ final class AfBox {
   final bool? focused;
 }
 
-/// 应用内方向锁(拍摄页方向按钮):auto 跟随系统(仅初始态);landscape/
-/// portrait 经 SystemChrome.setPreferredOrientations 强制(系统转屏锁
-/// 开着也能切)。挂在常驻控制器上:页面重建不丢;但**离页即还竖**
-/// (RemotePage._exitOrientationReset:横锁是监看页专属,SystemChrome
-/// 却全局生效;锁态复位 portrait,再进从竖起步 —— 2026-10-08 真机
-/// 反馈改制)。**点按只在横/竖锁间直切,不设回 auto 路径**(长按已按
-/// 用户要求取消,2026-10-08)—— 空表在 iOS 是 All mask,会让系统按
-/// 手机物理姿态重选方向(旋转锁开着时闪一圈,2026-10-08 真机日志
-/// 定案),不能放进点按循环。
+/// 应用内方向锁(拍摄页方向按钮):auto 仅初始值,契约下同竖屏钉死
+/// (2026-10-26 禁止旋转:空表 = 传感自转已废,下发即 portraitUp);
+/// landscape/portrait 经 SystemChrome.setPreferredOrientations 强制
+/// (系统转屏锁开着也能切)。挂在常驻控制器上:页面重建不丢;但**离页
+/// 即还竖**(RemotePage._exitOrientationReset:横锁是监看页专属,
+/// SystemChrome 却全局生效;锁态复位 portrait,再进从竖起步 ——
+/// 2026-10-08 真机反馈改制)。**点按只在横/竖锁间直切,不设回 auto
+/// 路径**(长按已按用户要求取消,2026-10-08)—— 空表在 iOS 是 All
+/// mask,会让系统按手机物理姿态重选方向(旋转锁开着时闪一圈,
+/// 2026-10-08 真机日志定案),不能放进点按循环。
 enum OrientationLock { auto, landscape, portrait }
 
 /// 拍摄模式 = 相机真状态(0xD1A6 镜像:0=照片 / 1=视频)。跟随与切换
