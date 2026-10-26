@@ -24,7 +24,10 @@
 /// 枚举值标签:尼康方言值表(源 = OpenZCine PTPCameraPropertyDecoders,
 /// 其又源出 libgphoto2 config.c;**全部标 verify-on-HW,Zf 待真机核对**)。
 /// 表外值回退格式化/「值 N」,回读真机后如有出入只改标签表。
-/// 优化校准的创意组(101-120)/自定义(201-209)/云(301-309)按段格式化。
+/// 优化校准的创意组(101-120)/自定义(201-209)/云(301-309)按段
+/// 格式化(Zf FORM 实测 46 项 = 内置 11 + 创意 101-120 20 员 + 自定义
+/// 201-206 6 槽 + 云 301-309 9 槽,2026-10-26 USB dump;207-209 未在
+/// 册,段格式化超集保留)。
 library;
 
 import '../../core/ptp/device_prop.dart';
@@ -202,7 +205,8 @@ final _kEvPickValues = <int>[
 String _formatColorTemp(int v) => '${v}K';
 
 /// 优化校准 0xD200 段位(101-120 创意组 / 201-209 自定义 / 301-309 云
-/// 下载):键化走 displayParamValue(键+{n} 参,目录 display 无参通道;
+/// 下载;Zf FORM 实测自定义段 201-206,构成见库头注):键化走
+/// displayParamValue(键+{n} 参,目录 display 无参通道;
 /// 内置 1-11 与创意组成员走枚举表)。
 
 /// 白平衡值空间标签(静照 0x5005 与视频 0xD23A 共用 —— 官方 §6.5.3.9:
@@ -282,9 +286,11 @@ final kShootingParams = <ShootingParam>[
       dialOwned: true),
   // ISO:值读走 0xD0B5(有效 ISO,Auto ISO 时 = 机身当前应用值;标准码
   // 0x500F 不跟厂商写,真机「改了不同步」根因)/ 写 0xD0B4(u32,值 =
-  // ISO 数);取值域仍用 0x500F PropDesc 相机自报枚举。dialOwned:机身
-  // 上 ISO 由按键+指令拨盘调整(拨盘级)—— 接管后可写(2026-10-06
-  // 真机:0xD0B4 写 0x200F,同快门/模式的拨盘语义)。
+  // ISO 数);取值域仍用 0x500F PropDesc 相机自报枚举(Desc 自报
+  // getSet=True + FORM 31 值,2026-10-26 USB dump —— 写不生效的谎报,
+  // 写路维持 0xD0B4)。dialOwned:机身上 ISO 由按键+指令拨盘调整(拨盘
+  // 级)—— 接管后可写(2026-10-06 真机:0xD0B4 写 0x200F,同快门/模式
+  // 的拨盘语义)。
   ShootingParam(
       code: PtpDevicePropCode.exposureIndex,
       label: 'ISO',
@@ -492,7 +498,8 @@ final kShootingParams = <ShootingParam>[
   // 优化校准 0xD200(u16):相机 FORM 枚举驱动(真机 46 项全在 FORM,
   // 静态表只有内置 11 项 —— pickValues 曾把 desc 读短路,值域被砍到
   // 11 项,2026-10-07 用户反馈「相机 46 个应用只有 11 个」根因)。
-  // 自定义(201-209)/云(301-309)组的真名由 0x90CC 拉取
+  // 自定义(201-206,Zf FORM 实测 6 槽;格式化段留 201-209 超集)/
+  // 云(301-309)组的真名由 0x90CC 拉取
   // (RemoteController.picCtrlNames),静态标签只是占位。
   ShootingParam(
     code: PtpDevicePropCode.activePicCtrlItem,

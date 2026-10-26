@@ -103,7 +103,10 @@ abstract final class NikonOperationCode {
   static const int getPtpIpPairingCode = 0x952B; // 取配对验证码,data-in
   // ── 官方指令书候选区(2026-10-12 §6.2 定名入册)。主体追踪启停
   // (参数同 0x9205,P1=X/P2=Y whole-size 坐标系;官方 §6.2.6.7:
-  // 静照域 0xD05D 须自动区/追踪档,拒 0x200F,无取景 0xA00B):
+  // 静照域 0xD05D 须自动区/追踪档,拒 0x200F,无取景 0xA00B。
+  // 2026-10-26 USB 探针:0xD05D 属性写(0x1016)同值+改值在照片档
+  // 无闩无取景均 0x2001 回读实证 —— 门不落属性写,专属 0x9424/0x9205
+  // op 侧;0xA00B/0x200F 属性写遇码收集留档):
   static const int startTracking = 0x9424;
   static const int endTracking = 0x9425;
   // AE/AWB 锁(2026-10-13 规格书坐标重排定案):P1 LockValue 0 释放/
