@@ -236,7 +236,8 @@ class LocalLibraryPage extends StatefulWidget {
   State<LocalLibraryPage> createState() => _LocalLibraryPageState();
 }
 
-class _LocalLibraryPageState extends State<LocalLibraryPage> {
+class _LocalLibraryPageState extends State<LocalLibraryPage>
+    with WidgetsBindingObserver {
   TransfersController get _controller =>
       widget.controller ?? AppServices.instance.transfersController;
 
@@ -362,6 +363,25 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
           (d) => _thumbsDirPath = d, // 小档盘路径(首帧直显通道)
           onError: (Object _) {}, // 通道缺席(壳层测试/平台缺口):留空 = 原图源
         ));
+    WidgetsBinding.instance.addObserver(this); // 后台返回沿重预热
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  /// 退后台期间系统内存告警会整体清 imageCache(2026-10-20 既有账:
+  /// 「看大图返回缩略重刷新」同源),回前台猛滑 = 解码全部重来;而
+  /// 会话去重(_prefetchSent)仍挡着预取重发 → 黑格复现(2026-10-26
+  /// 真机复报)。resume 沿清去重 + 当前锚点窗(可视±窗)整段重拉:
+  /// 没被清的预热命中 imageCache 秒回(空转),被清的重解 —— 首开同待遇。
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _rewarmAfterResume();
+    }
   }
 
   /// 恢复弹层选项(排序/格式/评级/显示/连拍聚合;文件夹不入账)。
@@ -745,33 +765,82 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
 
     if (newMax) window(index + 1, index + _prefetchWindow);
     if (newMin) window(index - _prefetchWindow, index - 1);
+    _issuePrefetch(targets);
+  }
+
+  /// 预取窗批量发起(post-frame;空目标静默):缩略文件预热 + 解码缓存
+  /// 预热(与格内同一提供器 → 同一缓存键,命中即不重复解码)。已知小档
+  /// 直预热小档;未知的先预热原图源(原就是格首显源,提前 = 首过不再
+  /// 黑),小档落地后补预热。缺了这层,首次猛滑的格滚走了解码才落地,
+  /// 只能回滚才秒出(「第一遍黑、后续不黑」的真身);预热后首过即有图,
+  /// Apple 图库同级。[evictStale] = resume 重预热档(见
+  /// [_rewarmAfterResume]):先清键再预热。
+  void _issuePrefetch(List<File> targets, {bool evictStale = false}) {
     if (targets.isEmpty) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       for (final f in targets) {
         final future = _thumbFor(f);
-        // 解码缓存预热(与格内同一提供器 → 同一缓存键,命中即不重复
-        // 解码):已知小档直预热小档;未知的先预热原图源(原就是格首
-        // 显源,提前 = 首过不再黑),小档落地后补预热。缺了这层,首次
-        // 猛滑的格滚走了解码才落地,只能回滚才秒出(「第一遍黑、后续
-        // 不黑」的真身);预热后首过即有图,Apple 图库同级。
         final known = _knownThumbSync(f);
         if (known != null) {
-          _precacheGridThumb(known);
+          _precacheGridThumb(known, evictStale: evictStale);
         } else {
-          _precacheGridThumb(f.path);
+          _precacheGridThumb(f.path, evictStale: evictStale);
           unawaited(future.then((path) {
-            if (path != null && mounted) _precacheGridThumb(path);
+            if (path != null && mounted) {
+              _precacheGridThumb(path, evictStale: evictStale);
+            }
           }));
         }
       }
     });
   }
 
+  /// 后台返回沿重预热(见 didChangeAppLifecycleState):清会话去重,
+  /// 按当前锚点把可视±窗整段重收(_rewarm 窗含可视格自身,与
+  /// [_noteBuilt] 只收窗外不同 —— 可视格的缓存同样可能被清),并带
+  /// [evictStale] 清键重预热。
+  void _rewarmAfterResume() {
+    _prefetchSent.clear();
+    final runs = _prefetchRuns;
+    if (runs == null || runs.isEmpty) return;
+    final lo = (_builtMinRun - _prefetchWindow).clamp(0, runs.length - 1);
+    final hi = (_builtMaxRun + _prefetchWindow).clamp(0, runs.length - 1);
+    if (lo > hi) return;
+    final targets = <File>[];
+    for (var i = lo; i <= hi; i++) {
+      final cover = _coverOf(runs[i]);
+      if (_prefetchSent.add(cover.path)) {
+        targets.add(cover);
+      }
+    }
+    _issuePrefetch(targets, evictStale: true);
+  }
+
   /// 解码缓存预热(静默口:precache 失败走 onError 官方静默道,不进
   /// future 错误道 —— 与查看器 _warmNeighbors 同款,测试假 JPEG 不外冒)。
-  void _precacheGridThumb(String path) {
-    unawaited(precacheImage(gridThumbImageProvider(path), context,
+  ///
+  /// [evictStale](resume 重预热档):先 `imageCache.evict`(含 live 跟踪)
+  /// 再预热。后台清缓存后,首过预热留下的 live 跟踪条目可能仍在(其
+  /// 清理回调依赖监听器清零,precache 的监听器由框架 post-frame 摘除,
+  /// 实测不清零)—— putIfAbsent 走 live 分支返回陈旧 completer,而该
+  /// 分支的 _touch 因 sizeBytes 缺失不回插,预热永远落不了缓存(真机
+  /// 「后台返回再滑仍黑格」的最后一环)。evict 强制 fresh loader 重解。
+  void _precacheGridThumb(String path, {bool evictStale = false}) {
+    final provider = gridThumbImageProvider(path);
+    if (evictStale) {
+      unawaited(provider
+          .obtainKey(ImageConfiguration.empty)
+          .then((key) {
+        PaintingBinding.instance.imageCache.evict(key);
+      }).then((_) {
+        if (!mounted) return;
+        unawaited(precacheImage(provider, context,
+            onError: (Object _, StackTrace? __) {}));
+      }));
+      return;
+    }
+    unawaited(precacheImage(provider, context,
         onError: (Object _, StackTrace? __) {}));
   }
 
