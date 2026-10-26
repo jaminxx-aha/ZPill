@@ -620,6 +620,14 @@ void main() {
         reason: '选中文字直充');
     expect(tester.widget<Text>(_navTab('图库')).style?.color, unselected,
         reason: '未选文字钉 onSurfaceVariant');
+    // 按压涟漪与胶囊同形,随胶囊一并撤(底栏走主题 overlayColor 钩子)。
+    expect(
+        Theme.of(tester.element(find.byType(NavigationBar)))
+            .navigationBarTheme
+            .overlayColor
+            ?.resolve(const {WidgetState.pressed}),
+        Colors.transparent,
+        reason: '点击不闪胶囊涟漪');
   });
 
   testWidgets('横屏 rail 样式闸:胶囊撤除、选中直充,三 tab 重排无溢出',
@@ -657,6 +665,12 @@ void main() {
     expect(DefaultTextStyle.of(tester.element(_railTab('图库'))).style.color,
         unselected,
         reason: '未选文字钉 onSurfaceVariant');
+    // rail 无 overlayColor 钩子(涟漪硬编码 primary),外壳局部 Theme
+    // 把子树 primary 覆透明 → 涟漪/悬停全灭。
+    final railLocalTheme = tester.firstWidget<Theme>(
+        find.ancestor(of: find.byType(NavigationRail), matching: find.byType(Theme)));
+    expect(railLocalTheme.data.colorScheme.primary, Colors.transparent,
+        reason: '点击不闪胶囊涟漪(rail 涟漪=primary)');
 
     // 三 tab 逐台重排:横屏宽幅下各页回流不溢出(RenderFlex 溢出在
     // 测试框架即判败,takeException 再兜一层显式断言)。

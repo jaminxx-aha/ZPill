@@ -51,6 +51,11 @@ abstract final class AppTheme {
       navigationBarTheme: NavigationBarThemeData(
         backgroundColor: scheme.surface,
         indicatorColor: Colors.transparent,
+        // 按压涟漪与胶囊同形(stadium 围图标):胶囊撤除后点击瞬间仍会
+        // 闪一枚(overlayColor 默认 onSecondaryContainer 系),一并透明
+        // (2026-10-26 用户明示)。rail 侧无此钩子,见 home_shell 局部
+        // Theme 覆盖。
+        overlayColor: const WidgetStatePropertyAll(Colors.transparent),
         height: 53,
         labelPadding: EdgeInsets.zero,
       ),
