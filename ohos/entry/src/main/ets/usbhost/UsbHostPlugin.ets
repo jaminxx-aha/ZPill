@@ -39,6 +39,8 @@
  * interrupt wMaxPacketSize=8(事件 16B 会跨包,native 重组处理)。
  */
 import usb from '@ohos.usbManager';
+import hilog from '@ohos.hilog';
+import { BusinessError } from '@kit.BasicServicesKit';
 import {
   FlutterPlugin,
   FlutterPluginBinding,
@@ -52,6 +54,12 @@ import {
 import { NativeLog } from '../log/NativeLog';
 
 const TAG = 'UsbHostPlugin';
+
+/// 探针/诊断 hilog 直写(flutter_ohos Log 封装缺省 WARN 闸,info 全吞,
+/// Release 真机自驱调试靠这里看;NativeLog 则只进 AppLog 不落 hilog)。
+function hlog(msg: string): void {
+  hilog.info(0xFF00, TAG, msg);
+}
 
 /// 尼康 USB Vendor ID(USB-IF 分配)。
 const NIKON_VENDOR_ID = 0x04B0;
@@ -94,6 +102,18 @@ const BULK_IN_READ_BYTES_START = 64 * 1024;
 /// ≈ 13-14MB/s。要再上去得换路(usbSubmitTransfer 异步流水/原生肖块),
 /// 等有 SDK 通路再说。
 const BULK_IN_READ_BYTES_MAX = 128 * 1024;
+
+/// usbSubmitTransfer 回调 status 数值(UsbTransferStatus,libusb 同源
+/// ABI:0 COMPLETED / 1 ERROR / 2 TIMED_OUT / 3 CANCELLED / 4 STALL /
+/// 5 NO_DEVICE / 6 OVERFLOW)。用数值常量:不依赖老设备 d.ts 是否导出。
+const TRANSFER_STATUS_COMPLETED = 0;
+const TRANSFER_STATUS_TIMED_OUT = 2;
+const TRANSFER_STATUS_CANCELLED = 3;
+
+/// submit 流水线缓冲下限(防 OVERFLOW 同理:一笔 URB 须容下一个突发)。
+const PIPE_BUF_MIN_BYTES = 16 * 1024;
+/// submit 流水线深度上限(探针阶梯最高 8,留余量;防误配吃爆内存)。
+const PIPE_DEPTH_MAX = 16;
 
 /// interrupt 事件缓冲:PTP 事件容器 ≤64B(Zf 实测 12/16B)。
 const INTERRUPT_BUF_BYTES = 64;
@@ -157,6 +177,28 @@ class InterruptAssembler {
   }
 }
 
+/** submit 流水线单笔在途 URB(一槽一笔:缓冲/参数/完成通知)。 */
+class PipeSlot {
+  buffer: Uint8Array = new Uint8Array(0);
+  params: usb.UsbDataTransferParams | null = null;
+  promise: Promise<void> = Promise.resolve();
+  resolve: () => void = (): void => {};
+  /// 回调回填:UsbTransferStatus 数值(见 TRANSFER_STATUS_* 常量;-1 = 未回)。
+  status: number = -1;
+  actual: number = 0;
+}
+
+/** submit 流水线记账(口径:setSubmitPipe 清账到 submitPipeStats 取走之间)。 */
+class PipeStats {
+  urbs: number = 0;
+  bytes: number = 0;
+  zlb: number = 0;
+  shortReads: number = 0;
+  timeouts: number = 0;
+  errors: number = 0;
+  maxActual: number = 0;
+}
+
 /** `nikonpill/usb` + `nikonpill/usb/events` 通道实现。 */
 export class UsbHostPlugin implements FlutterPlugin {
   private channel: MethodChannel | null = null;
@@ -177,6 +219,18 @@ export class UsbHostPlugin implements FlutterPlugin {
   private bulkInReadBytes: number = BULK_IN_READ_BYTES_START;
   /// 最小已知坏档尺寸(此值及以上不再尝试;MAX_SAFE_INTEGER = 尚无)。
   private bulkInBadFrom: number = Number.MAX_SAFE_INTEGER;
+
+  /// ===== submit 流水线(探针临时口,生产缺省关)=====
+  /// 开闸时 bulkRead 走 usbSubmitTransfer URB 流水(见 bulkReadPipe):
+  /// 恒保 depth 笔读在途,「提交→等完成」串行等待被预提交摊掉 ——
+  /// sync 路 128KB 墙(~9ms/次固定开销)的唯一换路候选。随 open() 重置。
+  private pipeEnabled: boolean = false;
+  private pipeDepth: number = 1;
+  private pipeBufBytes: number = 64 * 1024;
+  private pipeSlots: PipeSlot[] = [];
+  private pipeStats: PipeStats = new PipeStats();
+  /// 本档开闸时刻(stats 汇总耗时/吞吐用)。
+  private pipeStartedAt: number = 0;
 
   getUniqueClassName(): string {
     return 'UsbHostPlugin';
@@ -225,6 +279,21 @@ export class UsbHostPlugin implements FlutterPlugin {
         break;
       case 'bulkRead':
         this.bulkRead(call.argument('maxLen') as number, call.argument('timeoutMs') as number, result);
+        break;
+      case 'setSubmitPipe':
+        this.setSubmitPipe(call.argument('enabled') as boolean,
+          (call.argument('depth') as number) ?? 1,
+          (call.argument('bufBytes') as number) ?? (64 * 1024), result);
+        break;
+      case 'submitPipeStats':
+        this.submitPipeStats(result);
+        break;
+      case 'drainIn':
+        this.drainIn(result);
+        break;
+      case 'probeLog':
+        hlog(`[dart] ${call.argument('line') as string}`);
+        result.success(null);
         break;
       case 'close':
         this.teardownSession();
@@ -352,14 +421,20 @@ export class UsbHostPlugin implements FlutterPlugin {
       return;
     }
 
-    Log.i(TAG, `open: iface=${iface.id} bulkIn=0x${bulkIn.address.toString(16)} ` +
+    const line = `open: iface=${iface.id} bulkIn=0x${bulkIn.address.toString(16)} ` +
       `bulkOut=0x${bulkOut.address.toString(16)}` +
-      (interruptIn !== null ? ` interruptIn=0x${interruptIn.address.toString(16)}` : ' interruptIn=无'));
+      (interruptIn !== null ? ` interruptIn=0x${interruptIn.address.toString(16)}` : ' interruptIn=无');
+    Log.i(TAG, line);
+    hlog(line);
     this.session = new UsbSession(device, pipe, iface, bulkIn, bulkOut, interruptIn);
     // 自适应子块读状态随链路重置:新管道重探(升级在前几个满块调用内
     // 完成,代价可忽略),旧会话的坏档记号不作数。
     this.bulkInReadBytes = BULK_IN_READ_BYTES_START;
     this.bulkInBadFrom = Number.MAX_SAFE_INTEGER;
+    // submit 流水线随链路重置:新管道默认 sync 路(探针每档显式开闸)。
+    this.pipeEnabled = false;
+    this.pipeSlots = [];
+    this.pipeStats = new PipeStats();
     // 上轮失败会在设备侧留下脏状态(OUT toggle 停在 DATA1 → 后续写全被
     // 丢,真机实测 ret=-7 超时;IN 端点可能还压着未读残数据)。USB 2.0:
     // ClearFeature(ENDPOINT_HALT) 无条件把两端 data toggle 重置回 DATA0。
@@ -438,6 +513,11 @@ export class UsbHostPlugin implements FlutterPlugin {
         const out = this.bulkInLeftover.slice(0, take);
         this.bulkInLeftover = this.bulkInLeftover.slice(take);
         result.success(out);
+        return;
+      }
+      if (this.pipeEnabled) {
+        // 探针路:URB 预提交流水(消费语义与 sync 对齐,见 bulkReadPipe)。
+        await this.bulkReadPipe(maxLen, timeoutMs, result);
         return;
       }
       const buffer = new Uint8Array(maxLen);
@@ -544,6 +624,284 @@ export class UsbHostPlugin implements FlutterPlugin {
     }
   }
 
+  /// ===== submit 流水线探针(usbSubmitTransfer,bulk IN)=====
+
+  /// 开/关闸 + 配置(depth × bufBytes)。开闸沿取消旧在途、清账;
+  /// 运行时缺 usbSubmitTransfer(老设备/老系统)报 submit_unsupported。
+  private setSubmitPipe(enabled: boolean, depth: number, bufBytes: number,
+    result: MethodResult): void {
+    if (enabled && typeof usb.usbSubmitTransfer !== 'function') {
+      Log.w(TAG, 'usbSubmitTransfer 运行时不可用');
+      result.error('submit_unsupported', 'usbSubmitTransfer 不在本设备运行时', null);
+      return;
+    }
+    this.cancelPipeUrbs();
+    this.pipeEnabled = enabled;
+    this.pipeDepth = Math.max(1, Math.min(depth, PIPE_DEPTH_MAX));
+    this.pipeBufBytes = Math.max(PIPE_BUF_MIN_BYTES, bufBytes);
+    this.pipeStats = new PipeStats();
+    this.pipeStartedAt = enabled ? Date.now() : 0;
+    const line = `submitPipe: enabled=${enabled} depth=${this.pipeDepth}` +
+      ` buf=${this.pipeBufBytes / 1024}KB`;
+    Log.i(TAG, line);
+    hlog(line);
+    result.success(null);
+  }
+
+  /// 取账并清零(探针每档一次;含本档耗时,hilog 同步留档可脱离 App 对账)。
+  private submitPipeStats(result: MethodResult): void {
+    const s = this.pipeStats;
+    const ms = this.pipeStartedAt > 0 ? Date.now() - this.pipeStartedAt : 0;
+    const line = `submitPipe stats: urbs=${s.urbs} bytes=${s.bytes} ms=${ms}` +
+      ` zlb=${s.zlb} short=${s.shortReads} timeout=${s.timeouts}` +
+      ` err=${s.errors} maxActual=${s.maxActual}`;
+    Log.i(TAG, line);
+    hlog(line);
+    const out: Record<string, Object> = {
+      'urbs': s.urbs,
+      'bytes': s.bytes,
+      'ms': ms,
+      'zlb': s.zlb,
+      'shortReads': s.shortReads,
+      'timeouts': s.timeouts,
+      'errors': s.errors,
+      'maxActual': s.maxActual,
+    };
+    this.pipeStats = new PipeStats();
+    result.success(out);
+  }
+
+  /// 提交一笔 bulk IN URB(异步,完成走回调回填槽);失败回 null 并记账。
+  /// flags=0(无旗标;SHORT_NOT_OK=0 的枚举值存疑,零位恒安全)。
+  private submitIn(s: UsbSession, timeoutMs: number): PipeSlot | null {
+    const slot = new PipeSlot();
+    slot.buffer = new Uint8Array(this.pipeBufBytes);
+    slot.promise = new Promise<void>((resolve): void => {
+      slot.resolve = resolve;
+    });
+    slot.params = {
+      devPipe: s.pipe,
+      flags: 0,
+      endpoint: s.bulkIn.address,
+      type: usb.UsbEndpointTransferType.TRANSFER_TYPE_BULK,
+      timeout: timeoutMs,
+      length: slot.buffer.length,
+      callback: (err: BusinessError, data: usb.SubmitTransferCallback): void => {
+        if (err) {
+          slot.status = 1; // TRANSFER_ERROR
+        } else {
+          slot.status = data.status;
+          slot.actual = data.actualLength;
+        }
+        slot.resolve();
+      },
+      userData: new Uint8Array(0),
+      buffer: slot.buffer,
+      isoPacketCount: 0,
+    } as usb.UsbDataTransferParams;
+    try {
+      usb.usbSubmitTransfer(slot.params);
+      return slot;
+    } catch (e) {
+      this.pipeStats.errors++;
+      hlog(`usbSubmitTransfer 异常: ${e}`);
+      Log.w(TAG, `usbSubmitTransfer 异常: ${e}`);
+      return null;
+    }
+  }
+
+  /// 等槽完成;窗口尽回 false(槽保持在途,URB 自带超时兜底,下次
+  /// 调用先消化它)。头笔 promise 与计时器 race,race 出口必清计时器。
+  private waitSlot(slot: PipeSlot, winMs: number, finite: boolean): Promise<boolean> {
+    if (!finite) {
+      return slot.promise.then((): boolean => true);
+    }
+    let timer: number = 0;
+    const tick = new Promise<boolean>((resolve): void => {
+      timer = setTimeout((): void => resolve(false), winMs);
+    });
+    return Promise.race([slot.promise.then((): boolean => true), tick])
+      .then((v: boolean): boolean => {
+        clearTimeout(timer);
+        return v;
+      });
+  }
+
+  /// bulkRead 的 submit 流水实现:恒保 depth 笔 URB 在途,头笔完成即
+  /// 消费 + 循环顶补发 —— 相机出数与主机收数重叠,sync 路每次调用
+  /// ~9ms 的固定开销被预提交摊掉。消费语义对齐 sync bulkRead:短读/
+  /// ZLB 交付、超读进 leftover、窗口尽报 usb_timeout、会话轮换报 stale。
+  private async bulkReadPipe(maxLen: number, timeoutMs: number,
+    result: MethodResult): Promise<void> {
+    const s = this.session;
+    if (s === null) {
+      result.error('usb_closed', '会话未打开', null);
+      return;
+    }
+    const finite = timeoutMs > 0;
+    const start = Date.now();
+    const deadline = start + timeoutMs;
+    const buffer = new Uint8Array(maxLen);
+    let filled = 0;
+    let callUrbs = 0;
+    let zlbRun = 0; // 连续零字节完成计(诊断空转病)
+    let recovered = false; // 本调用已做过一次空转恢复
+    try {
+      while (filled < maxLen) {
+        if (finite && deadline - Date.now() <= 0) {
+          break; // 窗口耗尽:有数据交付短读,无数据走超时
+        }
+        // 空转恢复实验:URB 恒「完成」却 0 字节(v2 真机 d≥2 实证,
+        // 无错无超时)→ cancel + clearHalt(IN) + 重投,看能否救活;
+        // 复发即弃窗(别把窗口烧在死循环上)。
+        if (zlbRun >= 32 && filled === 0) {
+          if (recovered) {
+            hlog(`pipe spin 复发(zlb=${zlbRun}),弃窗`);
+            break;
+          }
+          recovered = true;
+          hlog(`pipe spin 恢复尝试: cancel + clearHalt + 重投`);
+          this.cancelPipeUrbs();
+          await this.clearHalt(s.bulkIn.address);
+          if (this.session !== s) {
+            result.error('usb_stale', '会话已轮换,旧链路读结果丢弃', null);
+            return;
+          }
+          zlbRun = 0;
+          continue;
+        }
+        // 补满在途(头笔消费沿补发,这里兜底凑齐)
+        while (this.pipeSlots.length < this.pipeDepth) {
+          const win = finite ? Math.max(1, deadline - Date.now()) : 0;
+          const slot = this.submitIn(s, win);
+          if (slot === null) {
+            break;
+          }
+          this.pipeSlots.push(slot);
+        }
+        if (this.pipeSlots.length === 0) {
+          break; // 一笔都发不出:提交不可用,交失败收尾
+        }
+        const head = this.pipeSlots[0];
+        const win = finite ? Math.max(1, deadline - Date.now()) : 0;
+        const done = await this.waitSlot(head, win, finite);
+        if (this.session !== s) {
+          result.error('usb_stale', '会话已轮换,旧链路读结果丢弃', null);
+          return;
+        }
+        if (!done) {
+          break; // 窗口尽:头笔仍在途(自带超时),按已有数据收
+        }
+        this.pipeSlots.shift();
+        this.pipeStats.urbs++;
+        callUrbs++;
+        const n = head.actual;
+        if (head.status === TRANSFER_STATUS_COMPLETED && n > 0) {
+          zlbRun = 0;
+          const take = Math.min(n, maxLen - filled);
+          buffer.set(head.buffer.subarray(0, take), filled);
+          filled += take;
+          if (take < n) {
+            // 超读余量(小 maxLen 撞大缓冲,仅头笔撞满格时出现)
+            this.bulkInLeftover = head.buffer.slice(take, n);
+          }
+          this.pipeStats.bytes += take;
+          if (this.pipeStats.maxActual < n) {
+            this.pipeStats.maxActual = n;
+          }
+          if (n < head.buffer.length) {
+            this.pipeStats.shortReads++;
+            break; // 短读 = 突发暂停,先交付(其余在途留给下次调用)
+          }
+          continue; // 满块:循环顶补发
+        }
+        if (head.status === TRANSFER_STATUS_COMPLETED && n === 0) {
+          this.pipeStats.zlb++;
+          zlbRun++;
+          if (zlbRun === 4 || zlbRun % 100 === 0) {
+            hlog(`pipe ZLB 连转 run=${zlbRun} filled=${filled}`);
+          }
+          if (filled > 0) {
+            break; // 交付
+          }
+          continue; // 未见数据的 ZLB:续等
+        }
+        if (head.status === TRANSFER_STATUS_TIMED_OUT) {
+          this.pipeStats.timeouts++;
+          hlog(`pipe URB TIMED_OUT (filled=${filled})`);
+        } else if (head.status !== TRANSFER_STATUS_CANCELLED) {
+          this.pipeStats.errors++;
+          hlog(`pipe URB status=${head.status} (filled=${filled})`);
+          Log.w(TAG, `pipe URB status=${head.status}`);
+        }
+        break; // TIMED_OUT/CANCELLED/ERROR:有数据交付,无数据走收尾
+      }
+      hlog(`pipe read: max=${maxLen} filled=${filled} urbs=${callUrbs}` +
+        ` ms=${Date.now() - start} zlbRun=${zlbRun} recovered=${recovered}`);
+      if (filled > 0) {
+        result.success(buffer.slice(0, filled));
+        return;
+      }
+      if (this.pipeSlots.length === 0 && this.pipeStats.errors > 0) {
+        result.error('usb_error', 'submitPipe 提交失败(异常/能力缺)', null);
+        return;
+      }
+      if (finite) {
+        result.error('usb_timeout', `submitPipe bulkRead ${timeoutMs}ms 内无数据`, null);
+      } else {
+        result.error('usb_error', 'submitPipe bulkRead 失败(无数据)', null);
+      }
+    } catch (e) {
+      NativeLog.e('usb', `bulkReadPipe 异常:${e}`);
+      result.error('usb_error', `bulkReadPipe: ${e}`, null);
+    }
+  }
+
+  /// 取消全部在途 URB(teardown/换配置沿)。回调随后以 CANCELLED 到来,
+  /// 槽表即刻清空;取消失败(传输已完/管道已坏)尽力而为不上抛。
+  private cancelPipeUrbs(): void {
+    for (const slot of this.pipeSlots) {
+      if (slot.params === null) {
+        continue;
+      }
+      try {
+        usb.usbCancelTransfer(slot.params);
+      } catch (e) {
+        // 尽力而为
+      }
+    }
+    this.pipeSlots = [];
+  }
+
+  /// 有界吸干 IN 端点(对齐 Android drainIn 契约):16KB 短窗循环读,
+  /// 300ms 静默即净,32 轮上限;吸掉的字节数回执。探针换档沿排空用 ——
+  /// 失败档(URB 超时/流错位)残留的旧数据相字节不清掉会毒下一档。
+  /// 先取消 submit 在途(它们手里可能还压着字节),再走 sync 短读。
+  private async drainIn(result: MethodResult): Promise<void> {
+    const s = this.session;
+    if (s === null) {
+      result.error('usb_closed', '会话未打开', null);
+      return;
+    }
+    try {
+      this.cancelPipeUrbs();
+      let total = 0;
+      for (let i = 0; i < 32; i++) {
+        const buf = new Uint8Array(16 * 1024);
+        const n = await usb.bulkTransfer(s.pipe, s.bulkIn, buf, 300);
+        if (n > 0) {
+          total += n;
+          continue;
+        }
+        break; // 0 = ZLB(边界),负 = 静默窗超时:皆当吸净
+      }
+      hlog(`drainIn: ${total}B`);
+      result.success(total);
+    } catch (e) {
+      result.error('usb_error', `drainIn: ${e}`, null);
+    }
+  }
+
   /// STALL 恢复/端点复位:手工 CLEAR_FEATURE 控制请求(ohos 无 clearHalt API)。
   /// 运行时(apiVersion 24)要求 controlParam 必带 data 属性,即使 wLength=0。
   private async clearHalt(endpointAddr: number): Promise<void> {
@@ -617,6 +975,8 @@ export class UsbHostPlugin implements FlutterPlugin {
     this.session = null;
     this.assembler.reset();
     this.bulkInLeftover = new Uint8Array(0);
+    // submit 流水线在途 URB 先取消(params 持旧 pipe 引用,不依赖会话)。
+    this.cancelPipeUrbs();
     if (s === null) {
       return;
     }
@@ -624,8 +984,7 @@ export class UsbHostPlugin implements FlutterPlugin {
       usb.releaseInterface(s.pipe, s.iface);
     } catch (e) {
       Log.w(TAG, `releaseInterface: ${e}`);
-    }
-    try {
+    }    try {
       usb.closePipe(s.pipe);
     } catch (e) {
       Log.w(TAG, `close: ${e}`);

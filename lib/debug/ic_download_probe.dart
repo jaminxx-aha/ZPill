@@ -45,7 +45,7 @@ final class IcDownloadProbe {
     required Future<String> Function() tempDir,
   }) async {
     try {
-      final entry = await _pickLargest(session, ObjectKind.image);
+      final entry = await pickLargest(session, ObjectKind.image);
       if (entry == null) {
         AppLog.i(AppLog.transfer, 'IC 探针: 卡上无静照对象');
         return;
@@ -83,7 +83,7 @@ final class IcDownloadProbe {
   }
 
   /// 选靶:枚举全卡取指定类目下最大档([kind]=image 静照 / video 视频)。
-  static Future<ObjectEntry?> _pickLargest(
+  static Future<ObjectEntry?> pickLargest(
       PtpSession session, ObjectKind kind) async {
     final handles = await session.getObjectHandles();
     ObjectEntry? pick;
@@ -119,7 +119,7 @@ final class IcDownloadProbe {
   static const int _hsChunkBytes = 16 * 1024 * 1024;
 
   static Future<void> _highSpeedRun(PtpSession session) async {
-    final entry = await _pickLargest(session, ObjectKind.video);
+    final entry = await pickLargest(session, ObjectKind.video);
     if (entry == null) {
       AppLog.i(AppLog.transfer, '0x9400 探针: 卡上无视频对象');
       return;
