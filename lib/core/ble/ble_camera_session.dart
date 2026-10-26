@@ -171,6 +171,19 @@ final class BleCameraSession {
   bool _resuming = false;
   String? _serial;
 
+  /// stage2 原始帧(17B):stage4 到达时与 stage1 合成 LSS 密钥材料。
+  Uint8List? _stage2Frame;
+
+  /// stage2 命中的 salt 序号(LSS 材料 idx 位)。
+  int? _stage2SaltIndex;
+
+  /// LSS 握手密钥材料(0x2004 凭据解密 K 派生输入;握手完成合成,
+  /// 下次连接尝试清空重建)。
+  LssHandshakeMaterial? _lssMaterial;
+
+  /// 握手合成的 LSS 密钥材料(诊断/测试观察;握手未完成为 null)。
+  LssHandshakeMaterial? get lssMaterial => _lssMaterial;
+
   /// 取消纪元(十三轮):[disconnect] 沿推进 —— 在途连接尝试
   /// (retryReconnect/reconnectDirect/reconnectScan)的迟到收口不再把
   /// 状态翻回 reconnecting。用户取消沿状态已回 idle,若无此闸,握手的
@@ -258,6 +271,9 @@ final class BleCameraSession {
     lastMatchName = device.name;
     _resuming = false;
     _serial = null;
+    _stage2Frame = null;
+    _stage2SaltIndex = null;
+    _lssMaterial = null;
     final epoch = _cancelEpoch;
     _pairWaitActive = true;
     var attempt = 0;
@@ -378,6 +394,9 @@ final class BleCameraSession {
     _standbySkips = 0;
     _resuming = true;
     _serial = null;
+    _stage2Frame = null;
+    _stage2SaltIndex = null;
+    _lssMaterial = null;
     _setState(BleSessionState.pairing);
     final done = _handshake = Completer<void>();
     try {
@@ -431,6 +450,9 @@ final class BleCameraSession {
     final epoch = _cancelEpoch; // 十三轮:取消沿迟到收口不推态。
     _resuming = true;
     _serial = null;
+    _stage2Frame = null;
+    _stage2SaltIndex = null;
+    _lssMaterial = null;
     _setState(BleSessionState.pairing);
     final done = _handshake = Completer<void>();
     var linked = false;
@@ -498,6 +520,9 @@ final class BleCameraSession {
     }
     _resuming = true;
     _serial = null;
+    _stage2Frame = null;
+    _stage2SaltIndex = null;
+    _lssMaterial = null;
     _setState(BleSessionState.pairing);
     final done = _handshake = Completer<void>();
     var linked = false;
@@ -585,12 +610,24 @@ final class BleCameraSession {
         );
         return null;
       }
-      final creds = decodeWifiCredentials(blob);
+      final creds = decodeWifiCredentials(blob, lss: _lssMaterial);
       if (creds == null) {
         // 十七轮:解密未中**不上 lastError**(错误位)—— 唤醒流程下
         // 相机 Wi-Fi 已开,错误位让位「去系统连 Wi-Fi」红字提醒;细节
-        // 落 AppLog(blob 已 trace,候选密钥增补用)。
-        AppLog.w(AppLog.ble, 'AP 凭据解密未中(候选密钥全试未命中,blob 已落诊断日志)');
+        // 落 AppLog(blob 已 trace,候选密钥增补用)。LSS 材料齐全度
+        // 随行,缺材料 = 握手未走到 stage4 合成沿。
+        final m = _lssMaterial;
+        if (m != null) {
+          // 全 hex 只走 onTrace(离线分析用),AppLog 分支留摘要。
+          _trace('LSS 材料 key1=${hex(m.key1)} key2=${hex(m.key2)} '
+              'saltIdx=${m.saltIndex} N_A=${hex(m.cameraNonce)} '
+              'X=${hex(m.phoneNonce)}',
+              masked: 'LSS 材料在(saltIdx=${m.saltIndex},字段 hex 走 trace)');
+        }
+        AppLog.w(AppLog.ble,
+            'AP 凭据解密未中(LSS 派生+定键候选全未命中,blob 已落诊断日志;材料 ${m == null ? '缺' : '在'})');
+      } else {
+        _trace('0x2004 解密命中 keySource=${creds.keySource}');
       }
       return creds;
     } on Exception catch (e) {
@@ -943,6 +980,24 @@ final class BleCameraSession {
       if (data.length == PairingMessage.length) {
         _serial = _engine.extractSerial(PairingMessage.decode(data));
         _trace('stage4 → 序列号=$_serial');
+        // LSS 密钥材料合成(0x2004 凭据解密 K 派生输入,字段一律线上
+        // 原样):key1 = stage4 deviceId 原始 8B(与序列号是两回事,
+        // 序列号是它的 ASCII 读法),key2 = 客户端身份(stage1 帧
+        // 9..17),N_A/X = 相机/手机 nonce(帧 1..9),idx = stage2
+        // 命中 salt 序号。
+        final s2 = _stage2Frame;
+        if (s2 != null && s2.length == PairingMessage.length) {
+          final s1 = stage1.encode();
+          _lssMaterial = LssHandshakeMaterial(
+            key1: Uint8List.fromList(data.sublist(9, 17)),
+            key2: Uint8List.fromList(s1.sublist(9, 17)),
+            saltIndex: _stage2SaltIndex ?? 0,
+            cameraNonce: Uint8List.fromList(s2.sublist(1, 9)),
+            phoneNonce: Uint8List.fromList(s1.sublist(1, 9)),
+          );
+          _trace('LSS 材料 ∈ saltIdx=$_stage2SaltIndex '
+              'key1=${hex(_lssMaterial!.key1)}');
+        }
         // 真机方言(2026-10-13 Zf):名字先行 —— 相机收下 0x2002 控制
         // 器名后才发 NOT1 确认;等 NOT1 再写名会双方互等到超时。
         await _writeName();
@@ -957,13 +1012,16 @@ final class BleCameraSession {
     final msg = PairingMessage.decode(data);
     _trace('stage2 ← device=${msg.device.toRadixString(16)} '
         'nonce=${msg.nonce.toRadixString(16)}');
-    final stage3 = _engine.verifyStage2AndBuildStage3(stage1, msg);
-    if (stage3 == null) {
+    final stage3Pair = _engine.verifyStage2AndBuildStage3(stage1, msg);
+    if (stage3Pair == null) {
       lastError = (key: 'ble.stage2NoSalt', args: null);
       _trace('stage2 无 salt 命中(8 组 salt 全试未中)');
       _failHandshake();
       return;
     }
+    final (stage3, saltIndex) = stage3Pair;
+    _stage2Frame = Uint8List.fromList(data);
+    _stage2SaltIndex = saltIndex;
     _stage3Sent = true;
     try {
       await _host.write(kNikonCharPairing, stage3.encode());

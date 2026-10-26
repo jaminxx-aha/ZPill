@@ -984,13 +984,51 @@ class _ConnectionPageState extends State<ConnectionPage>
           context, controller, context.t('conn.joinedHotspot', {'ssid': creds.ssid}),
           duration: const Duration(seconds: 5));
     } else if (outcome == ApJoinOutcome.failed) {
-      _showHintStatic(
-        context,
-        controller,
-        context.t('conn.autoJoinFailed',
-            {'e': controller.apJoinError ?? context.t('common.unknown')}),
-        duration: const Duration(seconds: 5),
-      );
+      if (controller.cameraApCredentials != null) {
+        // join 失败但凭据已解出(iOS 免费签名无 Hotspot entitlement,
+        // 2026-10-27 真机):弹层直呈 SSID/密码(行尾复制)—— 别让用户
+        // 回相机屏幕抄;无凭据才走提示条。
+        await showDialog<void>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: Text(dialogContext.t('conn.autoJoinFailedCredTitle')),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  dialogContext.t('conn.autoJoinFailedCredBody'),
+                  style: Theme.of(dialogContext).textTheme.bodySmall,
+                ),
+                const SizedBox(height: AppSpacing.sm),
+                Text(
+                  dialogContext.t('conn.autoJoinFailReason', {
+                    'e': controller.apJoinError ??
+                        dialogContext.t('common.unknown'),
+                  }),
+                  style: Theme.of(dialogContext).textTheme.bodySmall,
+                ),
+                const SizedBox(height: AppSpacing.md),
+                ..._apCredentialBlock(dialogContext, controller),
+              ],
+            ),
+            actions: [
+              FilledButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: Text(dialogContext.t('conn.manualJoinDone')),
+              ),
+            ],
+          ),
+        );
+      } else {
+        _showHintStatic(
+          context,
+          controller,
+          context.t('conn.autoJoinFailed',
+              {'e': controller.apJoinError ?? context.t('common.unknown')}),
+          duration: const Duration(seconds: 5),
+        );
+      }
     } else {
       // skipped:防御路(joiner 在 wake 后被置空等)—— 红卡兜底。
       controller.markWifiAwakePending();
@@ -1150,7 +1188,9 @@ class _ConnectionPageState extends State<ConnectionPage>
   /// AP 方式凭据块(蓝牙通道解出才显示):SSID/密码/安全 + 复制钮 ——
   /// 系统设置加入热点用;密码空(开放网络)不渲染行。显示在未连接
   /// 主视图下方(原 AP 卡凭据区,2026-10-17 随卡撤销迁此)。
-  List<Widget> _apCredentialBlock(
+  /// AP 凭据块(SSID/密码/安全,行尾复制)。static:AP 卡与 join 失败
+  /// 弹层共用(后者在静态唤醒链里,无实例态可依)。
+  static List<Widget> _apCredentialBlock(
     BuildContext context,
     ConnectionController controller,
   ) {
@@ -1182,11 +1222,10 @@ class _ConnectionPageState extends State<ConnectionPage>
           style: Theme.of(context).textTheme.bodySmall),
     ];
   }
-
   /// 凭据行(KvRow 收编):[labelWidth] 缺省按本行标签实测(红卡单行
   /// 用);同卡多行由调用方传共用宽保持列对齐。44 下限 = zh 短标签的
   /// 现行观感(原钉宽)。标签随行结构单行省略,正常文案实测宽放行。
-  Widget _credentialRow(
+  static Widget _credentialRow(
     BuildContext context,
     String label,
     String value, {

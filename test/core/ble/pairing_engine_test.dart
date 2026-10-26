@@ -22,9 +22,11 @@ void main() {
   group('NikonPairingEngine', () {
     test('Z50_2 握手:stage2 校验通过,stage3 逐字节', () {
       final engine = NikonPairingEngine();
-      final stage3 = engine.verifyStage2AndBuildStage3(stage1, stage2);
-      expect(stage3, isNotNull);
-      expect(stage3!.stage, 0x03);
+      final stage3Pair = engine.verifyStage2AndBuildStage3(stage1, stage2);
+      expect(stage3Pair, isNotNull);
+      final (stage3, saltIndex) = stage3Pair!;
+      expect(saltIndex, inInclusiveRange(0, 7));
+      expect(stage3.stage, 0x03);
       expect(stage3.timestamp, stage1.timestamp);
       expect(stage3.device, 0x79f1ad53);
       expect(stage3.nonce, 0x23838a35);

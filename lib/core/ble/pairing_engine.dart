@@ -49,7 +49,9 @@ final class NikonPairingEngine {
   }
 
   /// 校验 stage2 并构建 stage3;无 salt 命中返回 null(握手失败)。
-  PairingMessage? verifyStage2AndBuildStage3(
+  /// 返回 (stage3 帧, 命中 salt 序号):序号随 LSS 会话密钥派生出料
+  /// (ctx 的 idx 位,0x2004 凭据解密用,2026-10-27)。
+  (PairingMessage, int)? verifyStage2AndBuildStage3(
     PairingMessage stage1,
     PairingMessage stage2,
   ) {
@@ -65,11 +67,14 @@ final class NikonPairingEngine {
     // stage3 与 stage2 块序相反:我方时间戳在前。
     final (r0, r1) = _hasher
         .hash(<int>[salt[0], salt[1], ourLo, ourHi, camLo, camHi]);
-    return PairingMessage(
-      stage: 0x03,
-      timestamp: stage1.timestamp,
-      device: _reverseU32(r0),
-      nonce: _reverseU32(r1),
+    return (
+      PairingMessage(
+        stage: 0x03,
+        timestamp: stage1.timestamp,
+        device: _reverseU32(r0),
+        nonce: _reverseU32(r1),
+      ),
+      saltIndex,
     );
   }
 

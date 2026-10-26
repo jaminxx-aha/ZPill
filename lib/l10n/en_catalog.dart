@@ -233,6 +233,11 @@ const Map<String, String> enCatalog = {
   'conn.wifiPasswordSave': 'Connect',
   'conn.autoJoinFailed':
       'Auto-join failed: {e} — join via system Wi-Fi manually (password on the camera screen), then choose "AP Hotspot" on the connection page and tap "Connect to camera"',
+  'conn.autoJoinFailedCredTitle': 'Auto-join failed — join manually',
+  'conn.autoJoinFailedCredBody':
+      'Join the hotspot in system Wi-Fi (tap the copy button at row end); then choose "AP Hotspot" on the connection page and tap "Connect to camera"',
+  'conn.autoJoinFailReason': 'Reason: {e}',
+  'conn.manualJoinDone': 'Got it',
   'conn.wifiManualConnectHint':
       'Camera Wi-Fi is on — join the camera hotspot in system Wi-Fi (password on the camera screen); tap "Reconnect" to resume Bluetooth after transfers',
   'conn.methodUsb': 'Wired (USB)',
