@@ -64,6 +64,13 @@ abstract interface class UsbHostChannel implements UsbBytePipe {
 
   Future<void> close();
 
+  /// 程序化拔插(ohos 专属能力,其余平台返回 false):相机对「同枚举
+  /// 下的新会话」可能整体沉默(进程带会话死亡/深待机后首笔事务 15s
+  /// 无响应,重试无用,唯 USB 重枚举可治 —— 2026-10-26 真机两案)。
+  /// native resetUsbDevice(@since 20)端口复位强制重枚举,复位后设备
+  /// 地址可能变化,调用方随后走常规 listCameras/open 重开。
+  Future<bool> recoveryReset();
+
   /// 链路断开事件(原因文本,如「相机已断开(USB 连接消失)」)。
   /// 由看门狗装饰器(WatchdogUsbHostChannel)发出;无检测能力的实现
   /// 返回空流。连接层订阅它把 connected 转 failed(P1:相机拔出后
@@ -139,6 +146,17 @@ final class MethodChannelUsbHost implements UsbHostChannel {
 
   @override
   Future<void> close() => channel.invokeMethod('close');
+
+  @override
+  Future<bool> recoveryReset() async {
+    try {
+      return await channel.invokeMethod<bool>('recoveryReset') ?? false;
+    } on Exception {
+      // notImplemented(Android/iOS native 无此方法)/ 权限/异常:false
+      // = 能力不可用,调用方落回常规失败路径
+      return false;
+    }
+  }
 
   /// 中止后排空 bulk IN:native 有界吸干(残余字节 + 超读暂存,见
   /// UsbBytePipe.drainIn 契约)。Android/ohos 已落地(ohos 另在 open

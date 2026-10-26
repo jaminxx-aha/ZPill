@@ -284,19 +284,26 @@ final class CameraConnectionImpl implements CameraConnection {
   /// 不上报状态(teardown 后把异常抛回),由恢复循环节拍决定去留;
   /// 相机未归位(listCameras 空)抛 [CameraNotPresentException]
   /// (cameraAbsent 慢拍,不耗预算)。
+  ///
+  /// 首笔事务 TimeoutException(相机对同枚举新会话整体沉默,进程带
+  /// 会话死亡/深待机后必现,重试无用)→ 程序化拔插一次再试:ohos
+  /// native resetUsbDevice 端口复位强制重枚举(2026-10-26 真机两案,
+  /// 物理拔插均愈);其余平台能力缺席返回 false,直接落原失败路径。
   Future<void> _connectUsb({bool silent = false}) async {
     try {
-      final cameras = await _usb.listCameras();
-      if (cameras.isEmpty) {
-        if (silent) throw const CameraNotPresentException();
-        await _failConnect((key: 'conn.errNoUsbCamera', args: null));
-        return;
-      }
-      await _usb.open(cameras.first);
-      _link.attach(_usbTransport);
-      _wireless = false;
-      await _openSessionOrReject(silent: silent);
+      await _connectUsbOnce(silent: silent);
     } on Exception catch (e) {
+      if (e is TimeoutException) {
+        try {
+          if (await _usb.recoveryReset()) {
+            await Future<void>.delayed(const Duration(milliseconds: 300));
+            await _connectUsbOnce(silent: silent);
+            return;
+          }
+        } on Exception {
+          // 复位重开仍失败:落原失败路径上报
+        }
+      }
       if (silent) {
         await _teardown();
         rethrow;
@@ -312,6 +319,19 @@ final class CameraConnectionImpl implements CameraConnection {
       }
       await _failConnect((key: 'conn.errUsb', args: {'e': e}));
     }
+  }
+
+  Future<void> _connectUsbOnce({bool silent = false}) async {
+    final cameras = await _usb.listCameras();
+    if (cameras.isEmpty) {
+      if (silent) throw const CameraNotPresentException();
+      await _failConnect((key: 'conn.errNoUsbCamera', args: null));
+      return;
+    }
+    await _usb.open(cameras.first);
+    _link.attach(_usbTransport);
+    _wireless = false;
+    await _openSessionOrReject(silent: silent);
   }
 
   /// [silent] = true 供配对后的重试拍:失败不上报状态(teardown 后把

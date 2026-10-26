@@ -29,6 +29,8 @@ final class FakeUsbHostChannel implements UsbHostChannel {
 
   final List<UsbDeviceHandle> devices;
   final List<String> openedIdentifiers = [];
+  /// recoveryReset 假件的返回值(缺省 false = 能力缺席);测试按需改。
+  bool recoveryResetResult = false;
   int closeCalls = 0;
   final StreamController<Uint8List> _eventCtrl =
       StreamController<Uint8List>.broadcast();
@@ -49,6 +51,9 @@ final class FakeUsbHostChannel implements UsbHostChannel {
 
   @override
   Future<void> close() async => closeCalls++;
+
+  @override
+  Future<bool> recoveryReset() async => recoveryResetResult;
 
   @override
   Future<void> bulkOut(Uint8List bytes) async {}

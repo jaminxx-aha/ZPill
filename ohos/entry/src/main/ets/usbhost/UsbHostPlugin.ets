@@ -254,6 +254,8 @@ export class UsbHostPlugin implements FlutterPlugin {
   private pipeStartedAt: number = 0;
   /// 最近一次读活动时刻(任一路径收发都刷新)—— 空闲回落判据。
   private pipeLastActivityMs: number = 0;
+  /// 空闲回落 hilog 节流戳(30s 一条,闲置期轮询小事务逐条打点太吵)。
+  private pipeLastFallbackLogMs: number = 0;
 
   getUniqueClassName(): string {
     return 'UsbHostPlugin';
@@ -317,6 +319,9 @@ export class UsbHostPlugin implements FlutterPlugin {
       case 'probeLog':
         hlog(`[dart] ${call.argument('line') as string}`);
         result.success(null);
+        break;
+      case 'recoveryReset':
+        this.recoveryReset(result);
         break;
       case 'close':
         this.teardownSession();
@@ -568,7 +573,12 @@ export class UsbHostPlugin implements FlutterPlugin {
           await this.bulkReadPipe(maxLen, timeoutMs, result);
           return;
         }
-        hlog(`pipe 空闲回落 sync 一笔(max=${maxLen})`);
+        // 节流留档:连接闲置期探针/摘出轮询每 ~2s 一笔小事务都会走
+        // 回落(设计使然,它们正是死窗的靶子),逐条打点太吵。
+        if (Date.now() - this.pipeLastFallbackLogMs > 30000) {
+          this.pipeLastFallbackLogMs = Date.now();
+          hlog(`pipe 空闲回落 sync 一笔(max=${maxLen})`);
+        }
       }
       const buffer = new Uint8Array(maxLen);
       let scratch = new Uint8Array(
@@ -888,8 +898,10 @@ export class UsbHostPlugin implements FlutterPlugin {
         }
         break; // TIMED_OUT/CANCELLED/ERROR:有数据交付,无数据走收尾
       }
-      hlog(`pipe read 异常收口: max=${maxLen} filled=${filled} urbs=${callUrbs}` +
-        ` ms=${Date.now() - start} zlbRun=${zlbRun} recovered=${recovered}`);
+      if (filled === 0) {
+        hlog(`pipe read 异常收口: max=${maxLen} filled=${filled} urbs=${callUrbs}` +
+          ` ms=${Date.now() - start} zlbRun=${zlbRun} recovered=${recovered}`);
+      }
       if (filled > 0) {
         result.success(buffer.slice(0, filled));
         return;
@@ -985,6 +997,74 @@ export class UsbHostPlugin implements FlutterPlugin {
       NativeLog.e('usb', `drainIn 异常:${e}`);
       result.error('usb_error', `drainIn: ${e}`, null);
     }
+  }
+
+  /// 程序化拔插(resetUsbDevice,@since 20):相机对「同枚举下的新会话」
+  /// 可能整体沉默 —— 进程带会话死亡(装机/杀进程)或深待机后,首笔
+  /// 事务 15s 无响应,重试无用,唯 USB 重枚举可治(2026-10-26 真机
+  /// 两案,物理拔插均愈)。端口复位强制重枚举 = 等价拔插;复位后设备
+  /// 地址可能变化,轮询等归位(至多 5s),返回后 Dart 走常规 open。
+  /// 复位借**新连的 pipe**:旧 pipe 经 15s 超时重试后常被 daemon 判死
+  /// (14400013 pipe validity 实证),不能直接用;请求权限沿用授权记录。
+  private recoveryReset(result: MethodResult): void {
+    const s = this.session;
+    this.teardownSession();
+    if (s === null || typeof usb.resetUsbDevice !== 'function') {
+      result.error('usb_unsupported', 'resetUsbDevice 不可用', null);
+      return;
+    }
+    try {
+      let ok = false;
+      try {
+        const pipe = usb.connectDevice(s.device);
+        try {
+          ok = usb.resetUsbDevice(pipe);
+        } finally {
+          try {
+            usb.closePipe(pipe);
+          } catch (e) {
+            // 复位后 pipe 已废,关失败忽略
+          }
+        }
+      } catch (e) {
+        hlog(`recoveryReset 新 pipe 复位失败: ${e}`);
+      }
+      hlog(`resetUsbDevice: ${ok}`);
+      if (!ok) {
+        result.error('usb_error', 'resetUsbDevice false', null);
+        return;
+      }
+    } catch (e) {
+      hlog(`resetUsbDevice 异常: ${e}`);
+      result.error('usb_error', `resetUsbDevice: ${e}`, null);
+      return;
+    }
+    this.waitReenumerate(result, Date.now() + 5000);
+  }
+
+  /// 轮询等复位后的重枚举归位(设备瞬断/重址,枚举可能暂时报错)。
+  private async waitReenumerate(result: MethodResult, deadline: number): Promise<void> {
+    while (Date.now() < deadline) {
+      let found = false;
+      try {
+        for (const d of usb.getDevices()) {
+          if (d.vendorId === NIKON_VENDOR_ID) {
+            found = true;
+            break;
+          }
+        }
+      } catch (e) {
+        // 枚举瞬断忽略,下轮再试
+      }
+      if (found) {
+        hlog('recoveryReset: 设备已重枚举归位');
+        result.success(null);
+        return;
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, 250));
+    }
+    hlog('recoveryReset: 复位后设备未归位');
+    result.error('usb_error', 'reset 后设备未归位', null);
   }
 
   /// STALL 恢复/端点复位:手工 CLEAR_FEATURE 控制请求(ohos 无 clearHalt API)。
