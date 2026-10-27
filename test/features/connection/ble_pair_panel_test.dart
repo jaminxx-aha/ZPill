@@ -271,6 +271,56 @@ void main() {
     await disposePage(tester);
   });
 
+  testWidgets('解除配对沿即刻起扫(2026-10-27 根修):重配对相机当轮可见',
+      (tester) async {
+    // 复现链:iOS 设置断链 → app 解除配对 → 相机删配置重开配对窗。
+    // 解除沿的 disconnect 是 idle→idle 短路(BleCameraSession._setState
+    // 同态即返)无状态事件,扫描权仲裁若只挂状态沿,面板清了身份也
+    // 不起扫,其它设备恒「未发现设备」,唯回前台才补 —— 真机实证
+    // 「必须回桌面再开 app 才出现」。clear() 沿 dataDir 走
+    // nikonpill/gallery 通道(真 IO 排水同上例)。
+    const gallery = MethodChannel('nikonpill/gallery');
+    final messenger = tester.binding.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(gallery, (call) async {
+      return '/tmp/nikonpill_ble_unpair_rescan_test';
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(gallery, null));
+
+    await boot(tester,
+        scanResult: [deviceMap(mfgOf(0x56781234))],
+        saved: identityOf(0x11223301, cameraName: 'Z f_8014411'));
+    AppServices.instance.bleSession.identity = BleIdentity(
+        peripheralUuid: 'P1',
+        deviceId: 0x11223301,
+        nonce: 0x70,
+        serial: 'S',
+        name: 'NikonPill');
+    // 有身份:扫描权在驱动(2026-10-21 裁定),相机只在档案行可见。
+    expect(find.text('Z f_8014411'), findsOneWidget,
+        reason: '档案行展示相机名;面板不扫描,其它设备无行');
+
+    await tester.tap(find.byIcon(Icons.link_off));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('解除配对'));
+    await tester.pump(); // 弹窗收口 + _unpair 起步(悬在 clear() 真 IO)
+    // clear() 内 file.exists() 是 dart:io 真 IO:runAsync 逐窗排水
+    // (memory flutter-test runAsync IO 排水)。不用 pumpAndSettle ——
+    // 解除沿起扫后扫描循环计时器在场,pumpAndSettle 永不收口。
+    for (var i = 0; i < 8; i++) {
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 10)));
+      await tester.pump(const Duration(milliseconds: 10));
+    }
+    await tester.pump(const Duration(milliseconds: 50)); // 扫描回包落表
+
+    expect(find.text('暂无已配对设备'), findsOneWidget,
+        reason: '解除沿档案行收空');
+    expect(find.text('Z f_8014411'), findsOneWidget,
+        reason: '身份清空沿即刻重算扫描权并起扫:配对窗相机当轮进'
+            '「其它设备」,不再等回前台/重启 app');
+    await disposePage(tester);
+  });
+
   testWidgets('重连反馈只在按钮位;握手中行尾只出状态词(十/十一/十三/十四轮)',
       (tester) async {
     await boot(tester, scanResult: [], saved: identityOf(0x11223301));
