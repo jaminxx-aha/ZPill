@@ -60,6 +60,13 @@ std::atomic<bool> g_lutBusy{false};
 std::atomic<bool> g_lutCancel{false};
 std::atomic<int> g_lutProgress{0};
 
+constexpr int32_t kMaxVideoDimension = 8192;
+constexpr int64_t kMaxVideoPixels = 64LL * 1024 * 1024;
+constexpr int32_t kMaxTrackCount = 256;
+constexpr int32_t kMaxAudioChannels = 8;
+constexpr int32_t kMinAudioSampleRate = 8000;
+constexpr int32_t kMaxAudioSampleRate = 384000;
+
 // ---------------------------------------------------------------------------
 // 小工具
 // ---------------------------------------------------------------------------
@@ -368,7 +375,7 @@ RunResult RunLutExport(const std::string &path, const std::string &outPath,
         result.error = "open_src";
         return result;
     }
-    const int outFd = open(outPath.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    const int outFd = open(outPath.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
     if (outFd < 0) {
         close(fd);
         result.error = "open_out";
@@ -435,6 +442,12 @@ RunResult RunLutExport(const std::string &path, const std::string &outPath,
         OH_AVFormat_GetIntValue(srcFmt2, OH_MD_KEY_TRACK_COUNT, &trackCount);
         OH_AVFormat_Destroy(srcFmt2);
     }
+    if (trackCount <= 0 || trackCount > kMaxTrackCount) {
+        return fail("track_count");
+    }
+    if (durationUs < 0) {
+        durationUs = 0;
+    }
 
     Breadcrumb("demuxer_ok");
     // 选轨:按 mime 前缀分(勿按 track 序号猜)。
@@ -487,16 +500,42 @@ RunResult RunLutExport(const std::string &path, const std::string &outPath,
         }
         OH_AVFormat_Destroy(tf);
     }
-    if (vTrack < 0 || vWidth <= 0 || vHeight <= 0) {
+    if (vTrack < 0 || vWidth <= 0 || vHeight <= 0 ||
+        vWidth > kMaxVideoDimension || vHeight > kMaxVideoDimension ||
+        static_cast<int64_t>(vWidth) * vHeight > kMaxVideoPixels) {
         return fail("no_video_track");
+    }
+    if (!std::isfinite(vFps) || vFps < 1.0f || vFps > 240.0f) {
+        vFps = 30.0f;
+    }
+    if (!std::isfinite(vRotation) || vRotation < -3600.0f ||
+        vRotation > 3600.0f) {
+        vRotation = 0.0f;
+    }
+    vBitrate = std::min<int64_t>(200'000'000,
+                                 std::max<int64_t>(1'000'000, vBitrate));
+    aBitrate = std::min<int64_t>(512'000,
+                                 std::max<int64_t>(32'000, aBitrate));
+    if (aChannels < 1 || aChannels > kMaxAudioChannels) {
+        aChannels = 2;
+    }
+    if (aSampleRate < kMinAudioSampleRate ||
+        aSampleRate > kMaxAudioSampleRate) {
+        aSampleRate = 48000;
     }
     // 选轨后才能 ReadSample(demuxer 不选轨读样必败)
     OH_AVDemuxer_SelectTrackByID(demuxer, static_cast<uint32_t>(vTrack));
     if (aTrack >= 0) {
         OH_AVDemuxer_SelectTrackByID(demuxer, static_cast<uint32_t>(aTrack));
     }
+    const double estimatedFrames = durationUs * vFps / 1000000.0;
     const int64_t estFrames =
-        vFps > 0 ? static_cast<int64_t>(durationUs * vFps / 1000000.0) : 0;
+        estimatedFrames >= static_cast<double>(INT64_MAX)
+            ? INT64_MAX
+            : static_cast<int64_t>(std::max(0.0, estimatedFrames));
+    const int64_t sourcePixels =
+        static_cast<int64_t>(vWidth) * static_cast<int64_t>(vHeight);
+    const int64_t sourceFrameBytes = sourcePixels * 3 / 2;
 
     // 解码器(buffer 模式,NV12 出)。
     Breadcrumb(("tracks v=" + std::to_string(vWidth) + "x" + std::to_string(vHeight) + " mime=" + vMime + " fps=" + std::to_string(vFps) +
@@ -517,8 +556,7 @@ RunResult RunLutExport(const std::string &path, const std::string &outPath,
     // 4K 关键帧可超默认容量:读样直写解码输入 buffer,容量不足即越界
     OH_AVFormat_SetIntValue(
         decFmt, OH_MD_KEY_MAX_INPUT_SIZE,
-        vWidth * vHeight * 3 / 2 > (4 << 20) ? vWidth * vHeight * 3 / 2
-                                             : (4 << 20));
+        static_cast<int32_t>(std::max<int64_t>(4 << 20, sourceFrameBytes)));
     if (OH_VideoDecoder_Configure(decoder, decFmt) != AV_ERR_OK) {
         OH_AVFormat_Destroy(decFmt);
         return fail("config_decoder");
@@ -569,8 +607,15 @@ RunResult RunLutExport(const std::string &path, const std::string &outPath,
     if (aTrack >= 0) {
         aBuf = OH_AVBuffer_Create(1 << 20);
         muxBuf = OH_AVBuffer_Create(1 << 16);
+        if (aBuf == nullptr || muxBuf == nullptr) {
+            return fail("audio_buffer");
+        }
         const bool aacSource = aMime.rfind("audio/mp4a-latm", 0) == 0;
         if (!aacSource) {
+            if (aSrcFmt != SAMPLE_S16LE && aSrcFmt != SAMPLE_S24LE &&
+                aSrcFmt != SAMPLE_S32LE) {
+                return fail("audio_format");
+            }
             if (aacEncOpen(&audEnc, 0, aChannels) != AACENC_OK) {
                 return fail("fdk_open");
             }
@@ -655,8 +700,7 @@ RunResult RunLutExport(const std::string &path, const std::string &outPath,
     // 主循环 = 全非阻塞泵:四路队列(解入/解出/编入/编出)统一泵送,
     // 帧在等编码器空位时可暂存(stash)—— 任何一路阻塞泵都会死锁
     // (编码器输出不排空 → 编入不回收 → 永等,2026-10-24 真机实锤)。
-    const size_t frameBytes =
-        static_cast<size_t>(vWidth) * static_cast<size_t>(vHeight) * 3 / 2;
+    const size_t frameBytes = static_cast<size_t>(sourceFrameBytes);
     struct StashedFrame {
         uint32_t decIdx;
         OH_AVBuffer *buf;
@@ -734,7 +778,11 @@ RunResult RunLutExport(const std::string &path, const std::string &outPath,
                 audDemuxEos = true;
                 audEmptyReads = 0;
                 break;
-            } else if (attr.size <= 0) {
+            } else if (attr.size < 0 ||
+                       attr.size > OH_AVBuffer_GetCapacity(aBuf)) {
+                inner.error = "aud_buf_size";
+                break;
+            } else if (attr.size == 0) {
                 // 空样本:略过
             } else if (audEnc == nullptr) {
                 // AAC 直通:整样混流
@@ -828,6 +876,13 @@ RunResult RunLutExport(const std::string &path, const std::string &outPath,
                         break;
                     }
                     if (outArgs.numOutBytes > 0) {
+                        if (outArgs.numOutBytes >
+                                static_cast<int>(sizeof(outBuf)) ||
+                            outArgs.numOutBytes >
+                                OH_AVBuffer_GetCapacity(muxBuf)) {
+                            inner.error = "fdk_output_size";
+                            break;
+                        }
                         memcpy(OH_AVBuffer_GetAddr(muxBuf), outBuf,
                                outArgs.numOutBytes);
                         OH_AVCodecBufferAttr wa{};
@@ -846,14 +901,28 @@ RunResult RunLutExport(const std::string &path, const std::string &outPath,
                         }
                         aacOutFrames++;
                     }
-                    const int consumedBytes =
-                        outArgs.numInSamples * 2; // S16 交错:样本×2B
+                    if (outArgs.numInSamples < 0) {
+                        inner.error = "fdk_consumed";
+                        break;
+                    }
+                    const int64_t consumedBytes =
+                        static_cast<int64_t>(outArgs.numInSamples) *
+                        2; // S16 交错:样本×2B
+                    if (consumedBytes >
+                        static_cast<int64_t>(audPcm.size() - off)) {
+                        inner.error = "fdk_consumed";
+                        break;
+                    }
                     off += consumedBytes;
                     if (consumedBytes == 0 && outArgs.numOutBytes == 0) {
                         break; // fdk 内部攒帧中,余量下轮续喂
                     }
                 }
                 if (!audPcm.empty()) {
+                    if (off > audPcm.size()) {
+                        inner.error = "fdk_consumed";
+                        break;
+                    }
                     audPcm.erase(audPcm.begin(),
                                  audPcm.begin() +
                                      static_cast<long>(off));
@@ -881,12 +950,12 @@ RunResult RunLutExport(const std::string &path, const std::string &outPath,
                     OH_VideoDecoder_GetOutputDescription(decoder);
                 if (of != nullptr) {
                     int32_t stride = 0;
+                    int32_t planeH = 0;
                     if (OH_AVFormat_GetIntValue(of, OH_MD_KEY_VIDEO_STRIDE,
                                                 &stride) &&
                         stride > 0) {
                         decoderStride = stride;
                     }
-                    int32_t planeH = 0;
                     if (OH_AVFormat_GetIntValue(of, OH_MD_KEY_HEIGHT,
                                                 &planeH) &&
                         planeH > vHeight) {
@@ -898,6 +967,13 @@ RunResult RunLutExport(const std::string &path, const std::string &outPath,
                     // 8-bit 时 stride=width 自然可分。
                     tenBit = decoderStride >= 2 * vWidth;
                     OH_AVFormat_Destroy(of);
+                    if (stride > kMaxVideoDimension * 2 ||
+                        planeH > kMaxVideoDimension * 2 ||
+                        decoderStride < vWidth || decPlaneHeight < vHeight) {
+                        inner.error = "decoder_format";
+                        OH_VideoDecoder_FreeOutputBuffer(decoder, decIdx);
+                        break;
+                    }
                 }
                 Breadcrumb(("frame0 s=" + std::to_string(decoderStride) +
                             " h=" + std::to_string(decPlaneHeight) +
@@ -960,8 +1036,15 @@ RunResult RunLutExport(const std::string &path, const std::string &outPath,
                 break;
             }
             auto &sf = stash.front();
+            const int64_t needRead =
+                static_cast<int64_t>(decoderStride) * decPlaneHeight * 3 / 2;
             const int64_t needWrite =
-                static_cast<int64_t>(vWidth) * vHeight * 3 / 2;
+                sourceFrameBytes;
+            if (OH_AVBuffer_GetCapacity(sf.buf) < needRead) {
+                inner.error = "dec_buf_small";
+                OH_VideoDecoder_FreeOutputBuffer(decoder, sf.decIdx);
+                break;
+            }
             if (OH_AVBuffer_GetCapacity(encBuf) < needWrite) {
                 inner.error = "enc_buf_small";
                 OH_VideoDecoder_FreeOutputBuffer(decoder, sf.decIdx);
@@ -970,7 +1053,7 @@ RunResult RunLutExport(const std::string &path, const std::string &outPath,
             const uint8_t *base = OH_AVBuffer_GetAddr(sf.buf);
             uint8_t *dst = OH_AVBuffer_GetAddr(encBuf);
             const uint8_t *uvSrc =
-                base + static_cast<size_t>(decoderStride) * vHeight;
+                base + static_cast<size_t>(decoderStride) * decPlaneHeight;
             ApplyLutFrame(base, decoderStride, uvSrc, decoderStride, tenBit,
                           dst, vWidth,
                           dst + static_cast<size_t>(vWidth) * vHeight, vWidth,
