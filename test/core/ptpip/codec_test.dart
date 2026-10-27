@@ -29,8 +29,8 @@ void main() {
   group('包头:长度(u32)在前、类型(u32)在后', () {
     test('ProbeRequest 空负载,包头即全部', () {
       // 长度 8 在前、类型 13 在后 —— 顺序曾是类型在前,2026-10-04 订正
-      expect(codec.encode(const ProbeRequestPacket()),
-          _hex('08000000 0D000000'));
+      expect(
+          codec.encode(const ProbeRequestPacket()), _hex('08000000 0D000000'));
     });
 
     test('尼康方言 InitCommandRequest 的线上真值(Camera_Bridge 实证)', () {
@@ -99,7 +99,8 @@ void main() {
     test('Data / EndData:tid + 负载(EndData 携带尾段)', () {
       expect(
         codec.encode(DataPacket(
-            transactionId: 7, payload: Uint8List.fromList([0xDE, 0xAD, 0xBE, 0xEF]))),
+            transactionId: 7,
+            payload: Uint8List.fromList([0xDE, 0xAD, 0xBE, 0xEF]))),
         _hex('10000000 0A000000 07000000 DEADBEEF'),
       );
       expect(
@@ -135,7 +136,24 @@ void main() {
     test('InitCommandResponse(尼康方言四段)', () {
       final body = (ByteWriter()
             ..u32(0x0000ABCD)
-            ..raw(const [0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF])
+            ..raw(const [
+              0x00,
+              0x11,
+              0x22,
+              0x33,
+              0x44,
+              0x55,
+              0x66,
+              0x77,
+              0x88,
+              0x99,
+              0xAA,
+              0xBB,
+              0xCC,
+              0xDD,
+              0xEE,
+              0xFF
+            ])
             ..utf16le('NIKON Z f')
             ..u16(0)
             ..u32(kPtpIpProtocolVersion))
@@ -177,7 +195,10 @@ void main() {
 
       final noParams = codec.decode(PtpIpFrame(
           type: PtpIpPacketType.operationResponse,
-          body: (ByteWriter()..u16(0x2019)..u32(9)).takeBytes()));
+          body: (ByteWriter()
+                ..u16(0x2019)
+                ..u32(9))
+              .takeBytes()));
       expect((noParams as OperationResponsePacket).params, isEmpty);
     });
 
@@ -198,18 +219,27 @@ void main() {
     test('StartData / Data / EndData / Cancel', () {
       final start = codec.decode(PtpIpFrame(
           type: PtpIpPacketType.startData,
-          body: (ByteWriter()..u32(1)..u64(0x123456789A)).takeBytes()));
+          body: (ByteWriter()
+                ..u32(1)
+                ..u64(0x123456789A))
+              .takeBytes()));
       expect((start as StartDataPacket).totalLength, 0x123456789A);
       expect(start.transactionId, 1);
 
       final data = codec.decode(PtpIpFrame(
           type: PtpIpPacketType.data,
-          body: (ByteWriter()..u32(7)..raw([0xDE, 0xAD])).takeBytes()));
+          body: (ByteWriter()
+                ..u32(7)
+                ..raw([0xDE, 0xAD]))
+              .takeBytes()));
       expect((data as DataPacket).payload, [0xDE, 0xAD]);
 
       final end = codec.decode(PtpIpFrame(
           type: PtpIpPacketType.endData,
-          body: (ByteWriter()..u32(2)..raw([0x41, 0x42])).takeBytes()));
+          body: (ByteWriter()
+                ..u32(2)
+                ..raw([0x41, 0x42]))
+              .takeBytes()));
       expect((end as EndDataPacket).payload, [0x41, 0x42]);
       // EndData 携带尾段负载(小数据集可能 StartData+EndData 零 Data 包)
       expect(end.payload, isNotEmpty);
@@ -246,14 +276,49 @@ void main() {
       expect(initReq.guid, kNikonAndroidGuid);
 
       final evtReq = codec.decode(PtpIpFrame(
-          type: PtpIpPacketType.initEventRequest,
-          body: (ByteWriter()..u32(0xC0DE)).takeBytes())) as InitEventRequestPacket;
+              type: PtpIpPacketType.initEventRequest,
+              body: (ByteWriter()..u32(0xC0DE)).takeBytes()))
+          as InitEventRequestPacket;
       expect(evtReq.connectionNumber, 0xC0DE);
     });
 
     test('未知类型抛 FormatException', () {
       expect(
         () => codec.decode(PtpIpFrame(type: 99, body: Uint8List(0))),
+        throwsFormatException,
+      );
+    });
+
+    test('畸形定长包转为 FormatException,不让 RangeError 逃出 dispatcher', () {
+      expect(
+        () => codec.decode(PtpIpFrame(
+            type: PtpIpPacketType.operationResponse,
+            body: Uint8List.fromList([0x01]))),
+        throwsFormatException,
+      );
+    });
+
+    test('参数区未按 u32 对齐 / 参数数超限均拒绝', () {
+      final misaligned = (ByteWriter()
+            ..u16(0x2001)
+            ..u32(1)
+            ..u8(0x7F))
+          .takeBytes();
+      expect(
+        () => codec.decode(PtpIpFrame(
+            type: PtpIpPacketType.operationResponse, body: misaligned)),
+        throwsFormatException,
+      );
+
+      final writer = ByteWriter()
+        ..u16(0x4002)
+        ..u32(0xFFFFFFFF);
+      for (var i = 0; i <= kMaxPtpIpParamCount; i++) {
+        writer.u32(i);
+      }
+      expect(
+        () => codec.decode(
+            PtpIpFrame(type: PtpIpPacketType.event, body: writer.takeBytes())),
         throwsFormatException,
       );
     });

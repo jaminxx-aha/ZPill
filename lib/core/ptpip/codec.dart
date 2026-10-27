@@ -47,6 +47,10 @@ const List<int> kNikonAndroidGuid = [
 /// PTP-IP 协议版本 1.0(u32,高 16 位为主版本),附在 Init 包末尾。
 const int kPtpIpProtocolVersion = 0x00010000;
 
+/// PTP 操作与事件参数上限。规范常见上限为 5;保留 16 给厂商扩展,
+/// 同时阻止畸形控制包展开成超大 List。
+const int kMaxPtpIpParamCount = 16;
+
 final class PtpIpCodecImpl implements PtpIpCodec {
   @override
   Uint8List encode(PtpIpPacket packet) {
@@ -132,6 +136,16 @@ final class PtpIpCodecImpl implements PtpIpCodec {
 
   @override
   PtpIpPacket decode(PtpIpFrame frame) {
+    try {
+      return _decode(frame);
+    } on FormatException {
+      rethrow;
+    } on RangeError catch (e) {
+      throw FormatException('PTP-IP body 长度不足或字段未对齐: $e');
+    }
+  }
+
+  PtpIpPacket _decode(PtpIpFrame frame) {
     final r = ByteReader(frame.body);
     switch (frame.type) {
       // ↓ 主机 → 相机方向:相机不回这些,decode 供测试解析已发帧
@@ -147,10 +161,7 @@ final class PtpIpCodecImpl implements PtpIpCodec {
         final dp = r.u32();
         final opcode = r.u16();
         final tid = r.u32();
-        final params = <int>[];
-        while (!r.eof) {
-          params.add(r.u32());
-        }
+        final params = _readParams(r);
         return OperationRequestPacket(
             dataPhaseInfo: dp,
             opcode: opcode,
@@ -174,21 +185,14 @@ final class PtpIpCodecImpl implements PtpIpCodec {
       case PtpIpPacketType.operationResponse:
         final code = r.u16();
         final tid = r.u32();
-        final params = <int>[];
-        while (!r.eof) {
-          params.add(r.u32());
-        }
+        final params = _readParams(r);
         return OperationResponsePacket(
             responseCode: code, transactionId: tid, params: params);
       case PtpIpPacketType.event:
         final code = r.u16();
         final tid = r.u32();
-        final params = <int>[];
-        while (!r.eof) {
-          params.add(r.u32());
-        }
-        return EventPacket(
-            eventCode: code, transactionId: tid, params: params);
+        final params = _readParams(r);
+        return EventPacket(eventCode: code, transactionId: tid, params: params);
       case PtpIpPacketType.startData:
         final tid = r.u32();
         final total = r.u64();
@@ -211,5 +215,16 @@ final class PtpIpCodecImpl implements PtpIpCodec {
       default:
         throw FormatException('未知 PTP-IP 包类型 ${frame.type}');
     }
+  }
+
+  static List<int> _readParams(ByteReader r) {
+    if (r.remaining % 4 != 0) {
+      throw FormatException('PTP-IP 参数区未按 u32 对齐(${r.remaining}B)');
+    }
+    final count = r.remaining ~/ 4;
+    if (count > kMaxPtpIpParamCount) {
+      throw FormatException('PTP-IP 参数 $count 个,超过上限 $kMaxPtpIpParamCount');
+    }
+    return [for (var i = 0; i < count; i++) r.u32()];
   }
 }

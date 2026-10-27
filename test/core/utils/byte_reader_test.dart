@@ -25,7 +25,9 @@ void main() {
     });
 
     test('UTF-16LE 往返(InitCommandReq 主机名)', () {
-      final w = ByteWriter()..u32(12)..utf16le('Nikon');
+      final w = ByteWriter()
+        ..u32(12)
+        ..utf16le('Nikon');
       final bytes = w.takeBytes();
       expect(bytes.length, 4 + 10);
       expect(bytes.sublist(4), [0x4E, 0, 0x69, 0, 0x6B, 0, 0x6F, 0, 0x6E, 0]);
@@ -42,6 +44,32 @@ void main() {
       first[0] = 99;
       expect(bytes[0], 1, reason: 'raw() 必须返回副本,避免污染协议缓冲');
       expect(r.remaining, 2);
+    });
+
+    test('截断标量/切片统一抛 FormatException,不泄漏 RangeError', () {
+      final bytes = Uint8List.fromList([1, 2, 3]);
+      expect(() => ByteReader(bytes).u32(), throwsFormatException);
+      expect(() => ByteReader(bytes).u64(), throwsFormatException);
+      expect(() => ByteReader(bytes).raw(4), throwsFormatException);
+      expect(() => ByteReader(bytes).rawView(4), throwsFormatException);
+    });
+
+    test('奇数 UTF-16 长度和截断 PTP STRING 抛 FormatException', () {
+      expect(
+        () => ByteReader(Uint8List.fromList([1, 2])).utf16le(3),
+        throwsFormatException,
+      );
+      expect(
+        () => ByteReader(Uint8List.fromList([5, 0x41, 0])).ptpString(),
+        throwsFormatException,
+      );
+    });
+
+    test('起始 offset 非法属于调用方错误', () {
+      expect(
+        () => ByteReader(Uint8List.fromList([1]), 2),
+        throwsArgumentError,
+      );
     });
   });
 }

@@ -15,6 +15,10 @@ import 'packet.dart';
 /// 超限几乎必然是流错位 —— 拒绝预分配,直接报错毒化链路。
 const int kMaxPtpIpFrameLength = 32 * 1024 * 1024;
 
+/// 控制包不承载媒体数据;1MiB 足够容纳握手名、命令和事件,避免恶意
+/// 长度把参数区或字符串区扩成数十 MB。
+const int kMaxPtpIpControlFrameLength = 1024 * 1024;
+
 abstract interface class PtpIpChannel {
   bool get isOpen;
 
@@ -70,6 +74,7 @@ final class PtpIpFrameSplitter {
     while (buf.length - off >= kPtpIpHeaderLength) {
       final header = ByteData.sublistView(buf, off, off + kPtpIpHeaderLength);
       final length = header.getUint32(0, Endian.little);
+      final type = header.getUint32(4, Endian.little);
       if (length < kPtpIpHeaderLength) {
         throw FormatException('PTP-IP 帧长度 $length < 8(流错位?)');
       }
@@ -77,14 +82,18 @@ final class PtpIpFrameSplitter {
         // 巨值保护:先校验再分配,拒绝按乱序长度预分配大缓冲。
         throw FormatException('PTP-IP 帧长度 $length 超上限(流错位?)');
       }
+      if (type != PtpIpPacketType.data &&
+          type != PtpIpPacketType.endData &&
+          length > kMaxPtpIpControlFrameLength) {
+        throw FormatException('PTP-IP 控制帧长度 $length 超上限(流错位?)');
+      }
       if (buf.length - off < length) {
         break; // 半包,留待下一轮
       }
-      final type = header.getUint32(4, Endian.little);
       frames.add(PtpIpFrame(
         type: type,
-        body: Uint8List.sublistView(
-            buf, off + kPtpIpHeaderLength, off + length),
+        body:
+            Uint8List.sublistView(buf, off + kPtpIpHeaderLength, off + length),
       ));
       off += length;
     }

@@ -44,6 +44,10 @@ import 'packet.dart';
 /// 相机 PTP-IP 服务端口(command/event 通道同端口,两条独立 TCP 连接)。
 const int kPtpIpPort = 15740;
 
+/// 非流式事务必须整体驻留内存,单笔上限 64MiB。大文件必须走
+/// `onData` 流式回调,不能靠相机声明长度触发无界预分配。
+const int kMaxBufferedPtpIpDataLength = 64 * 1024 * 1024;
+
 /// 链路级故障(断链 / 超时 / 毒化后的 execute)。
 ///
 /// implements Exception 是硬约束:上层清理路径全部 `on Exception` catch。
@@ -162,6 +166,10 @@ final class _Pending {
   void feed(Uint8List chunk) {
     receivedLength += chunk.length;
     if (cancelRequested) return;
+    if (!isStreaming && receivedLength > kMaxBufferedPtpIpDataLength) {
+      throw FormatException(
+          '非流式数据超过 $kMaxBufferedPtpIpDataLength B 上限(实收 $receivedLength B)');
+    }
     final sink = onData;
     if (sink != null) {
       sink(chunk); // 回调抛异常(盘满等)由 dispatcher 兜住 → 毒化
@@ -182,9 +190,7 @@ final class _Pending {
       return;
     }
     final declared = declaredLength;
-    if (declared != null &&
-        _chunks.isEmpty &&
-        chunk.length <= declared) {
+    if (declared != null && _chunks.isEmpty && chunk.length <= declared) {
       // 首块即预分配(StartData 先于数据块,声明必已到)。
       final out = Uint8List(declared);
       out.setAll(0, chunk);
@@ -333,14 +339,16 @@ final class PtpIpTransport implements PtpTransport, PtpCancelCapable {
       final cmdHandshake = Completer<PtpIpPacket>();
       _cmdHandshake = cmdHandshake;
       _listenForever(command, isCommand: true);
-      await _send(command, InitCommandRequestPacket(
+      await _send(
+          command,
+          InitCommandRequestPacket(
             guid: clientGuid,
             hostname: hostname,
           ));
       final initResp = await cmdHandshake.future.timeout(transactionTimeout);
       if (initResp is InitFailPacket) {
-        AppLog.e(AppLog.protocol,
-            '← InitFail(连接)reason=${_hx(initResp.reason)}');
+        AppLog.e(
+            AppLog.protocol, '← InitFail(连接)reason=${_hx(initResp.reason)}');
         throw PtpInitRejectException(initResp.reason, '连接');
       }
       // 握手期只可能以目标类型或 InitFail 完成,转型安全
@@ -357,8 +365,8 @@ final class PtpIpTransport implements PtpTransport, PtpCancelCapable {
           InitEventRequestPacket(connectionNumber: init.connectionNumber));
       final evtResp = await evtHandshake.future.timeout(transactionTimeout);
       if (evtResp is InitFailPacket) {
-        AppLog.e(AppLog.protocol,
-            '← InitFail(事件通道)reason=${_hx(evtResp.reason)}');
+        AppLog.e(
+            AppLog.protocol, '← InitFail(事件通道)reason=${_hx(evtResp.reason)}');
         throw PtpInitRejectException(evtResp.reason, '事件通道');
       }
       _evtHandshake = null;
@@ -366,7 +374,9 @@ final class PtpIpTransport implements PtpTransport, PtpCancelCapable {
       _command = command;
       _event = event;
       _connected = true;
-      AppLog.i(AppLog.protocol, '双通道握手完成($host:$port)'
+      AppLog.i(
+          AppLog.protocol,
+          '双通道握手完成($host:$port)'
           '${enableKeepalive ? ',心跳 ${keepaliveInterval.inSeconds}s 档' : ''}');
       if (enableKeepalive) {
         final keepalive = ProbeKeepalive(
@@ -413,16 +423,14 @@ final class PtpIpTransport implements PtpTransport, PtpCancelCapable {
         if (handshake != null && !handshake.isCompleted) {
           handshake.completeError(e);
         } else {
-          _onBreakage(
-              '${isCommand ? "command" : "event"} 通道错误: $e');
+          _onBreakage('${isCommand ? "command" : "event"} 通道错误: $e');
         }
       },
       onDone: () {
         if (_poisoned) return;
         final handshake = isCommand ? _cmdHandshake : _evtHandshake;
         if (handshake != null && !handshake.isCompleted) {
-          handshake.completeError(
-              const PtpLinkException('通道在握手完成前被关闭'));
+          handshake.completeError(const PtpLinkException('通道在握手完成前被关闭'));
         } else if (isCommand) {
           _onBreakage('command 通道被相机关闭(空闲超时或链路中断)');
         } else {
@@ -483,8 +491,7 @@ final class PtpIpTransport implements PtpTransport, PtpCancelCapable {
         case CancelPacket(:final transactionId):
           _onBreakage('相机主动发出 Cancel(tid=$transactionId)');
         case InitFailPacket(:final reason):
-          _onBreakage(
-              '相机在会话中发 InitFail(reason=0x${reason.toRadixString(16)})');
+          _onBreakage('相机在会话中发 InitFail(reason=0x${reason.toRadixString(16)})');
         case InitCommandRequestPacket():
         case InitEventRequestPacket():
         case OperationRequestPacket():
@@ -536,6 +543,12 @@ final class PtpIpTransport implements PtpTransport, PtpCancelCapable {
     final pending = _pending[packet.transactionId];
     if (pending == null) {
       _onBreakage('StartData 事务号错位(tid=${packet.transactionId})');
+      return;
+    }
+    if (!pending.isStreaming &&
+        packet.totalLength > kMaxBufferedPtpIpDataLength) {
+      _onBreakage('StartData 声明 ${packet.totalLength} B,'
+          '超过非流式上限 $kMaxBufferedPtpIpDataLength B');
       return;
     }
     pending.declaredLength = packet.totalLength;
@@ -595,9 +608,9 @@ final class PtpIpTransport implements PtpTransport, PtpCancelCapable {
     final declared = pending.declaredLength;
     if (declared != null && pending.receivedLength != declared) {
       if (!pending.completer.isCompleted) {
-        pending.completer.completeError(PtpLinkException(
-            'tid=$tid 数据不完整:声明 $declared B,实收 '
-            '${pending.receivedLength} B'));
+        pending.completer
+            .completeError(PtpLinkException('tid=$tid 数据不完整:声明 $declared B,实收 '
+                '${pending.receivedLength} B'));
       }
       _onBreakage('数据相对账失败(tid=$tid)');
       return;
@@ -606,7 +619,9 @@ final class PtpIpTransport implements PtpTransport, PtpCancelCapable {
       _onBreakage('tid=$tid 收到重复响应');
       return;
     }
-    AppLog.i(AppLog.protocol, '← $op tid=$tid rc=${_hx(packet.responseCode)}'
+    AppLog.i(
+        AppLog.protocol,
+        '← $op tid=$tid rc=${_hx(packet.responseCode)}'
         ' ${pending.receivedLength}B ${ms}ms');
     pending.completer.complete(PtpResult(
       responseCode: packet.responseCode,
@@ -645,7 +660,9 @@ final class PtpIpTransport implements PtpTransport, PtpCancelCapable {
     _pending[tid] = pending;
     _armWatchdog(pending);
     try {
-      await _send(command, OperationRequestPacket(
+      await _send(
+          command,
+          OperationRequestPacket(
             dataPhaseInfo: _dataPhaseFor(request.opcode, request.dataOut),
             opcode: request.opcode,
             transactionId: tid,
@@ -655,7 +672,9 @@ final class PtpIpTransport implements PtpTransport, PtpCancelCapable {
       if (dataOut != null) {
         // 数据出相:StartData + EndData 携带全部负载。
         // 布局待真机核对(--setprop 未跑);需要分块发送时再加。
-        await _send(command, StartDataPacket(
+        await _send(
+            command,
+            StartDataPacket(
               transactionId: tid,
               totalLength: dataOut.length,
             ));
@@ -663,7 +682,9 @@ final class PtpIpTransport implements PtpTransport, PtpCancelCapable {
             command, EndDataPacket(transactionId: tid, payload: dataOut));
       }
       // 发送沿摘要(原始字节走 verbose,见 _send/_onData)。
-      AppLog.i(AppLog.protocol, '→ ${_hx(request.opcode)} tid=$tid'
+      AppLog.i(
+          AppLog.protocol,
+          '→ ${_hx(request.opcode)} tid=$tid'
           '${request.params.isEmpty ? '' : ' p=${request.params.join(',')}'}'
           '${dataOut != null ? ' out=${dataOut.length}B' : ''}');
     } on Object catch (e) {
@@ -710,8 +731,7 @@ final class PtpIpTransport implements PtpTransport, PtpCancelCapable {
     // 先记账再发包(同步段内完成,dispatcher 无交错窗口):此后到达的
     // 该事务响应一律按取消收场。已在排水的事务不重复发、不重置墙钟阀
     // (重复调用幂等)。
-    final targets =
-        _pending.values.where((p) => !p.cancelRequested).toList();
+    final targets = _pending.values.where((p) => !p.cancelRequested).toList();
     if (targets.isEmpty) return false;
     final deadline = drainTimeout ?? transactionTimeout;
     for (final pending in targets) {

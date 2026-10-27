@@ -56,6 +56,10 @@ abstract interface class UsbBytePipe {
 /// 天然支持任意 maxLen。三端一次通道调用均读满 maxLen,短读/ZLB 即返)。
 const int kUsbStreamChunkBytes = 1024 * 1024;
 
+/// 非流式数据容器必须整体驻留内存,单笔上限 64MiB。大对象必须由调用方
+/// 提供 onData 走流式路径。
+const int kMaxUsbBufferedDataBytes = 64 * 1024 * 1024;
+
 /// bulk 读缺省超时:相机忙(写卡/连拍清缓存)可能拖长,放宽到 15s。
 const int kUsbDefaultReadTimeoutMs = 15000;
 
@@ -85,7 +89,8 @@ final class _Incoming {
 /// 线程模型:一次只允许一个在途 execute()(相机侧事务严格串行;
 /// 并发由上层会话/队列保证,本层不设锁)。
 final class UsbPtpTransport implements PtpTransport {
-  UsbPtpTransport({required this.pipe, this.timeoutMs = kUsbDefaultReadTimeoutMs});
+  UsbPtpTransport(
+      {required this.pipe, this.timeoutMs = kUsbDefaultReadTimeoutMs});
 
   final UsbBytePipe pipe;
   final int timeoutMs;
@@ -198,9 +203,9 @@ final class UsbPtpTransport implements PtpTransport {
       // 头 12B 十六进制随报错浮出:txid 位是「旧容器头」还是「数据相位
       // 负载被当头解析」(如 XMP 文本的 '0\0\0\0' → txid=48)一眼可判,
       // 真机日志不再靠猜(2026-10-26 ohos 连接自锁死排查的教训)。
-      final hex = head.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ');
-      throw FormatException(
-          '容器 txid=$txid 与事务 $expectedTxid 不符(流错位?头:$hex)');
+      final hex =
+          head.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ');
+      throw FormatException('容器 txid=$txid 与事务 $expectedTxid 不符(流错位?头:$hex)');
     }
     if (length < kUsbContainerHeaderLength) {
       throw FormatException('容器长度字段 $length 小于 12 字节头');
@@ -228,11 +233,16 @@ final class UsbPtpTransport implements PtpTransport {
         if (onData != null) {
           var remaining = bodyLen;
           while (remaining > 0) {
-            final chunk = await _takeUpTo(math.min(remaining, kUsbStreamChunkBytes));
+            final chunk =
+                await _takeUpTo(math.min(remaining, kUsbStreamChunkBytes));
             remaining -= chunk.length;
             onData(chunk);
           }
           return _Incoming(type: type, code: code, transactionId: txid);
+        }
+        if (bodyLen > kMaxUsbBufferedDataBytes) {
+          throw FormatException(
+              'USB 非流式数据 $bodyLen B 超过 $kMaxUsbBufferedDataBytes B 上限');
         }
         final body = await _take(bodyLen);
         return _Incoming(

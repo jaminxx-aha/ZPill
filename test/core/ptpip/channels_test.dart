@@ -16,8 +16,7 @@ Uint8List _hex(String hex) {
 }
 
 /// 一个 EndData 帧:tid=2 + 载荷 AB(总长 14)。
-final Uint8List _endDataFrame =
-    _hex('0E000000 0C000000 02000000 41 42');
+final Uint8List _endDataFrame = _hex('0E000000 0C000000 02000000 41 42');
 
 void main() {
   group('PtpIpFrameSplitter(纯逻辑:半包/粘包/逐字节)', () {
@@ -94,13 +93,30 @@ void main() {
 
     test('长度 < 8 抛 FormatException(流错位毒化依据)', () {
       final s = PtpIpFrameSplitter();
-      expect(() => s.feed(_hex('07000000 01000000')),
-          throwsFormatException);
+      expect(() => s.feed(_hex('07000000 01000000')), throwsFormatException);
     });
 
     test('巨值长度先校验后分配,直接抛 FormatException', () {
       final s = PtpIpFrameSplitter();
       expect(() => s.feed(_hex('FFFFFF7F 01000000')), throwsFormatException);
+    });
+
+    test('控制帧超过 1MiB:在完整 body 到齐前拒绝', () {
+      final s = PtpIpFrameSplitter();
+      final header = Uint8List(kPtpIpHeaderLength);
+      ByteData.sublistView(header)
+        ..setUint32(0, kMaxPtpIpControlFrameLength + 1, Endian.little)
+        ..setUint32(4, PtpIpPacketType.operationResponse, Endian.little);
+      expect(() => s.feed(header), throwsFormatException);
+    });
+
+    test('Data/EndData 不受 1MiB 控制帧上限误伤', () {
+      final s = PtpIpFrameSplitter();
+      final header = Uint8List(kPtpIpHeaderLength);
+      ByteData.sublistView(header)
+        ..setUint32(0, 2 * 1024 * 1024, Endian.little)
+        ..setUint32(4, PtpIpPacketType.data, Endian.little);
+      expect(s.feed(header), isEmpty);
     });
   });
 

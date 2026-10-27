@@ -8,7 +8,11 @@ library;
 import 'dart:typed_data';
 
 final class ByteReader {
-  ByteReader(this.bytes, [this.offset = 0]);
+  ByteReader(this.bytes, [this.offset = 0]) {
+    if (offset < 0 || offset > bytes.length) {
+      throw ArgumentError.value(offset, 'offset', '超出字节缓冲范围');
+    }
+  }
 
   final Uint8List bytes;
   int offset;
@@ -16,29 +20,39 @@ final class ByteReader {
   bool get eof => offset >= bytes.length;
   int get remaining => bytes.length - offset;
 
-  int u8() => bytes[offset++];
+  int u8() {
+    _need(1);
+    return bytes[offset++];
+  }
 
   int u16() {
-    final v = ByteData.sublistView(bytes, offset, offset + 2).getUint16(0, Endian.little);
+    _need(2);
+    final v = ByteData.sublistView(bytes, offset, offset + 2)
+        .getUint16(0, Endian.little);
     offset += 2;
     return v;
   }
 
   int u32() {
-    final v = ByteData.sublistView(bytes, offset, offset + 4).getUint32(0, Endian.little);
+    _need(4);
+    final v = ByteData.sublistView(bytes, offset, offset + 4)
+        .getUint32(0, Endian.little);
     offset += 4;
     return v;
   }
 
   /// Dart int 为 64 位补码,足够承载 uint64 文件总长度。
   int u64() {
-    final v = ByteData.sublistView(bytes, offset, offset + 8).getUint64(0, Endian.little);
+    _need(8);
+    final v = ByteData.sublistView(bytes, offset, offset + 8)
+        .getUint64(0, Endian.little);
     offset += 8;
     return v;
   }
 
   /// 读 [length] 字节(返回副本,不与源共享缓冲)。
   Uint8List raw(int length) {
+    _need(length);
     final view = Uint8List.sublistView(bytes, offset, offset + length);
     offset += length;
     return Uint8List.fromList(view);
@@ -48,6 +62,7 @@ final class ByteReader {
   /// (整帧转发免一遍拷贝),调用方不得原地修改、须自行保证源存活;
   /// 小字段仍用 [raw](副本,源释放后仍可持有)。
   Uint8List rawView(int length) {
+    _need(length);
     final view = Uint8List.sublistView(bytes, offset, offset + length);
     offset += length;
     return view;
@@ -55,6 +70,10 @@ final class ByteReader {
 
   /// 读 UTF-16LE 字符串([byteLength] 必须为偶数)。
   String utf16le(int byteLength) {
+    if (byteLength.isOdd) {
+      throw FormatException('UTF-16LE 字节长度 $byteLength 不是偶数');
+    }
+    _need(byteLength);
     final units = <int>[];
     final end = offset + byteLength;
     for (; offset < end; offset += 2) {
@@ -71,6 +90,7 @@ final class ByteReader {
     final n = u8();
     if (n == 0xFF) return null;
     if (n == 0) return '';
+    _need(2 * n);
     var s = utf16le(2 * n);
     while (s.endsWith('\u0000')) {
       s = s.substring(0, s.length - 1);
@@ -93,5 +113,15 @@ final class ByteReader {
     }
     if (offset < bytes.length) offset++; // 末尾孤字节,对齐吞掉
     return String.fromCharCodes(units);
+  }
+
+  void _need(int length) {
+    if (length < 0) {
+      throw FormatException('字节读取长度 $length 为负');
+    }
+    if (length > remaining) {
+      throw FormatException(
+          '字节读取越界(需 $length B,剩 $remaining B,offset=$offset)');
+    }
   }
 }

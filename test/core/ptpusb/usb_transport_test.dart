@@ -15,7 +15,8 @@ void main() {
     test('命令容器字节手算核对(OpenSession,txid 从 0 起)', () async {
       final pipe = FakeUsbBytePipe();
       final t = UsbPtpTransport(pipe: pipe);
-      pipe.enqueue(encodeUsbResponse(responseCode: PtpResponseCode.ok, transactionId: 0));
+      pipe.enqueue(encodeUsbResponse(
+          responseCode: PtpResponseCode.ok, transactionId: 0));
       await t.execute(const PtpRequest(
         opcode: PtpOperationCode.openSession,
         params: [1],
@@ -33,7 +34,8 @@ void main() {
     test('dataOut 相位:命令 + 数据两个容器先后发出', () async {
       final pipe = FakeUsbBytePipe();
       final t = UsbPtpTransport(pipe: pipe);
-      pipe.enqueue(encodeUsbResponse(responseCode: PtpResponseCode.ok, transactionId: 0));
+      pipe.enqueue(encodeUsbResponse(
+          responseCode: PtpResponseCode.ok, transactionId: 0));
       await t.execute(PtpRequest(
         opcode: 0x1016, // SetDevicePropValue(数据出相位的典型操作)
         params: [0x5001],
@@ -53,8 +55,10 @@ void main() {
     test('txid 随事务递增', () async {
       final pipe = FakeUsbBytePipe();
       final t = UsbPtpTransport(pipe: pipe);
-      pipe.enqueue(encodeUsbResponse(responseCode: PtpResponseCode.ok, transactionId: 0));
-      pipe.enqueue(encodeUsbResponse(responseCode: PtpResponseCode.ok, transactionId: 1));
+      pipe.enqueue(encodeUsbResponse(
+          responseCode: PtpResponseCode.ok, transactionId: 0));
+      pipe.enqueue(encodeUsbResponse(
+          responseCode: PtpResponseCode.ok, transactionId: 1));
       await t.execute(const PtpRequest(opcode: PtpOperationCode.getDeviceInfo));
       await t.execute(const PtpRequest(opcode: PtpOperationCode.getDeviceInfo));
       // 命令容器 txid 字段在偏移 8(u32)
@@ -73,7 +77,8 @@ void main() {
         transactionId: 0,
         payload: payload,
       ));
-      pipe.enqueue(encodeUsbResponse(responseCode: PtpResponseCode.ok, transactionId: 0));
+      pipe.enqueue(encodeUsbResponse(
+          responseCode: PtpResponseCode.ok, transactionId: 0));
       final result = await t.execute(
         const PtpRequest(opcode: PtpOperationCode.getStorageIds),
       );
@@ -104,7 +109,8 @@ void main() {
         params: [0x12345678],
       ));
       final result = await t.execute(
-        const PtpRequest(opcode: PtpOperationCode.getNumObjects, params: [0xFFFFFFFF, 0]),
+        const PtpRequest(
+            opcode: PtpOperationCode.getNumObjects, params: [0xFFFFFFFF, 0]),
       );
       expect(result.params, [0x12345678]);
     });
@@ -119,11 +125,32 @@ void main() {
         payload: payload,
       );
       pipe.enqueueSplit(data, [5, 7]);
-      pipe.enqueue(encodeUsbResponse(responseCode: PtpResponseCode.ok, transactionId: 0));
+      pipe.enqueue(encodeUsbResponse(
+          responseCode: PtpResponseCode.ok, transactionId: 0));
       final result = await t.execute(
         const PtpRequest(opcode: PtpOperationCode.getObjectInfo, params: [1]),
       );
       expect(result.data, payload);
+    });
+
+    test('非流式数据超过 64MiB:读头后立即拒绝,不整体分配', () async {
+      final pipe = FakeUsbBytePipe();
+      final t = UsbPtpTransport(pipe: pipe);
+      final header = Uint8List(kUsbContainerHeaderLength);
+      ByteData.sublistView(header)
+        ..setUint32(0, kUsbContainerHeaderLength + kMaxUsbBufferedDataBytes + 1,
+            Endian.little)
+        ..setUint16(4, UsbContainerType.data, Endian.little)
+        ..setUint16(6, PtpOperationCode.getObject, Endian.little)
+        ..setUint32(8, 0, Endian.little);
+      pipe.enqueue(header);
+
+      await expectLater(
+        t.execute(
+            const PtpRequest(opcode: PtpOperationCode.getObject, params: [42])),
+        throwsFormatException,
+      );
+      expect(pipe.drainCalls, 1);
     });
   });
 
@@ -132,14 +159,16 @@ void main() {
       final pipe = FakeUsbBytePipe();
       final t = UsbPtpTransport(pipe: pipe);
       // payload 100000B:分片 5+7(头)+ 30000+30000+40000(体)
-      final payload = Uint8List.fromList(List.generate(100000, (i) => i & 0xFF));
+      final payload =
+          Uint8List.fromList(List.generate(100000, (i) => i & 0xFF));
       final data = encodeUsbData(
         opcode: PtpOperationCode.getObject,
         transactionId: 0,
         payload: payload,
       );
       pipe.enqueueSplit(data, [5, 7, 30000, 30000, 40000]);
-      pipe.enqueue(encodeUsbResponse(responseCode: PtpResponseCode.ok, transactionId: 0));
+      pipe.enqueue(encodeUsbResponse(
+          responseCode: PtpResponseCode.ok, transactionId: 0));
 
       final chunks = <Uint8List>[];
       final result = await t.execute(
@@ -162,7 +191,8 @@ void main() {
         transactionId: 0,
         payload: payload,
       ));
-      pipe.enqueue(encodeUsbResponse(responseCode: PtpResponseCode.ok, transactionId: 0));
+      pipe.enqueue(encodeUsbResponse(
+          responseCode: PtpResponseCode.ok, transactionId: 0));
 
       final chunks = <Uint8List>[];
       await t.execute(
@@ -225,7 +255,8 @@ void main() {
     test('响应 txid 与事务不符抛 FormatException', () async {
       final pipe = FakeUsbBytePipe();
       final t = UsbPtpTransport(pipe: pipe);
-      pipe.enqueue(encodeUsbResponse(responseCode: PtpResponseCode.ok, transactionId: 7));
+      pipe.enqueue(encodeUsbResponse(
+          responseCode: PtpResponseCode.ok, transactionId: 7));
       await expectLater(
         t.execute(const PtpRequest(opcode: PtpOperationCode.getDeviceInfo)),
         throwsFormatException,
@@ -235,7 +266,8 @@ void main() {
     test('txid 不符报错带头 12B 十六进制(真机日志可判错位成因)', () async {
       final pipe = FakeUsbBytePipe();
       final t = UsbPtpTransport(pipe: pipe);
-      pipe.enqueue(encodeUsbResponse(responseCode: PtpResponseCode.ok, transactionId: 7));
+      pipe.enqueue(encodeUsbResponse(
+          responseCode: PtpResponseCode.ok, transactionId: 7));
       // 头 12B:len=0x0C 00 00 00 | type=03 00 | code=01 20(0x2001 OK) | txid=07 00 00 00
       await expectLater(
         t.execute(const PtpRequest(opcode: PtpOperationCode.getDeviceInfo)),
@@ -307,10 +339,9 @@ void main() {
         transactionId: 0,
         payload: Uint8List(4),
       ));
-      pipe.enqueue(
-          encodeUsbResponse(responseCode: PtpResponseCode.ok, transactionId: 0));
-      await t.execute(
-          const PtpRequest(opcode: PtpOperationCode.getStorageIds));
+      pipe.enqueue(encodeUsbResponse(
+          responseCode: PtpResponseCode.ok, transactionId: 0));
+      await t.execute(const PtpRequest(opcode: PtpOperationCode.getStorageIds));
       expect(pipe.drainCalls, 0);
     });
 
@@ -367,8 +398,8 @@ void main() {
       // tx1(txid=1)的响应容器不被污染
       pipe.enqueue(encodeUsbResponse(
           responseCode: PtpResponseCode.ok, transactionId: 1));
-      final result = await t.execute(
-          const PtpRequest(opcode: PtpOperationCode.getDeviceInfo));
+      final result = await t
+          .execute(const PtpRequest(opcode: PtpOperationCode.getDeviceInfo));
       expect(result.responseCode, PtpResponseCode.ok);
     });
 
