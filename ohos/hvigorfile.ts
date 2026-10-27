@@ -6,6 +6,39 @@ import { flutterHvigorPlugin } from 'flutter-hvigor-plugin';
 
 const KEYCHAIN_SERVICE = 'com.jaminxx.nikon_pill.ohos-signing';
 const LOCAL_SIGNING_CONFIG = path.join(__dirname, 'signing', 'local-signing.json');
+const LOCAL_BUILD_STATE_DIRS = [
+    path.join(__dirname, '.hvigor'),
+    path.resolve(__dirname, '..', '.hvigor'),
+];
+
+function restrictPrivatePath(target: string) {
+    if (process.platform === 'win32' || !fs.existsSync(target)) {
+        return;
+    }
+
+    const stat = fs.lstatSync(target);
+    if (stat.isSymbolicLink()) {
+        return;
+    }
+    if (stat.isDirectory()) {
+        fs.chmodSync(target, 0o700);
+        for (const entry of fs.readdirSync(target)) {
+            restrictPrivatePath(path.join(target, entry));
+        }
+        return;
+    }
+    if (stat.isFile()) {
+        fs.chmodSync(target, 0o600);
+    }
+}
+
+if (process.platform !== 'win32') {
+    process.umask(0o077);
+    for (const dir of LOCAL_BUILD_STATE_DIRS) {
+        restrictPrivatePath(dir);
+    }
+    restrictPrivatePath(LOCAL_SIGNING_CONFIG);
+}
 
 type LocalSigningConfig = {
     name?: string;

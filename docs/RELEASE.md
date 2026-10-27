@@ -82,6 +82,11 @@ combines them with the ignored signing material. On machines without the local
 config it leaves signing unchanged. Do not put passwords in
 `local-signing.json`, environment files, or any tracked file.
 
+Hvigor may copy encrypted signing values into its local build cache. The build
+script therefore applies `umask 077` and repairs existing `.hvigor` metadata to
+owner-only permissions (`0700` for directories, `0600` for files). Keep that
+directory ignored, and remove it before handing the checkout to another user.
+
 When replacing certificates, update `local-signing.json` and replace both
 Keychain items:
 
