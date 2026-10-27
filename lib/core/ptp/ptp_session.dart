@@ -51,6 +51,32 @@ final class PtpResponseException implements Exception {
   }
 }
 
+/// PTP 数据集数组元素上限。正常相机全卡对象数远低于 100 万;超过即按
+/// 畸形响应拒绝,防止 count 字段驱动超大 List 分配。
+const int _kMaxPtpArrayElements = 1 << 20;
+
+Uint8List _requireData(PtpResult result, String opName) {
+  final data = result.data;
+  if (data == null) {
+    throw FormatException('$opName 应答 OK 但缺少数据相');
+  }
+  return data;
+}
+
+List<int> _readU32Array(Uint8List data, String opName) {
+  if (data.length < 4 || data.length % 4 != 0) {
+    throw FormatException('$opName 数据集 ${data.length}B 非 u32 数组');
+  }
+  final r = ByteReader(data);
+  final count = r.u32();
+  if (count > _kMaxPtpArrayElements || count > r.remaining ~/ 4) {
+    throw FormatException(
+        '$opName 计数 $count 超出剩余 ${r.remaining ~/ 4} 项或上限 '
+        '$_kMaxPtpArrayElements');
+  }
+  return [for (var i = 0; i < count; i++) r.u32()];
+}
+
 /// GetDeviceInfo(0x1001)数据集 —— 最小解析(仅浏览/连接所需字段,
 /// 数组完整收录:后续能力检查如 GetPartialObjectEx 在册与否要用)。
 ///
@@ -132,6 +158,11 @@ final class PtpDeviceInfo {
   /// PTP 数组数据集类型:u32 计数 + N 个 u16。
   static List<int> _u16Array(ByteReader r) {
     final n = r.u32();
+    if (n > _kMaxPtpArrayElements || n > r.remaining ~/ 2) {
+      throw FormatException(
+          'DeviceInfo 数组计数 $n 超出剩余 ${r.remaining ~/ 2} 项或上限 '
+          '$_kMaxPtpArrayElements');
+    }
     return [for (var i = 0; i < n; i++) r.u16()];
   }
 }
@@ -247,7 +278,7 @@ mixin _SessionCore {
           const PtpRequest(opcode: PtpOperationCode.getDeviceInfo),
         ));
     _ensureOk(result, PtpOperationCode.getDeviceInfo);
-    _deviceInfo = PtpDeviceInfo.parse(result.data!);
+    _deviceInfo = PtpDeviceInfo.parse(_requireData(result, 'GetDeviceInfo'));
     return _deviceInfo!;
   }
 
@@ -469,13 +500,8 @@ mixin _BrowseOps on _SessionCore {
           params: [storageId, objectFormat, parent],
         )));
     _ensureOk(result, PtpOperationCode.getObjectHandles);
-    final data = result.data!;
-    if (data.length % 4 != 0) {
-      throw FormatException('GetObjectHandles 数据集 ${data.length}B 非 4 对齐');
-    }
-    final r = ByteReader(data);
-    final count = r.u32();
-    return [for (var i = 0; i < count; i++) r.u32()];
+    return _readU32Array(
+        _requireData(result, 'GetObjectHandles'), 'GetObjectHandles');
   }
 
   /// GetStorageIDs(0x1004):u32 计数 + N 个 u32(双卡槽 = 两个 ID)。
@@ -484,13 +510,7 @@ mixin _BrowseOps on _SessionCore {
           const PtpRequest(opcode: PtpOperationCode.getStorageIds),
         ));
     _ensureOk(result, PtpOperationCode.getStorageIds);
-    final data = result.data!;
-    if (data.length % 4 != 0) {
-      throw FormatException('GetStorageIDs 数据集 ${data.length}B 非 4 对齐');
-    }
-    final r = ByteReader(data);
-    final count = r.u32();
-    return [for (var i = 0; i < count; i++) r.u32()];
+    return _readU32Array(_requireData(result, 'GetStorageIDs'), 'GetStorageIDs');
   }
 
   /// GetVendorStorageIDs(0x9209,§6.2.3.1):真卡 StorageID 列表。
@@ -503,14 +523,8 @@ mixin _BrowseOps on _SessionCore {
           const PtpRequest(opcode: NikonOperationCode.getVendorStorageIds),
         ));
     _ensureOk(result, NikonOperationCode.getVendorStorageIds);
-    final data = result.data!;
-    if (data.length % 4 != 0) {
-      throw FormatException(
-          'GetVendorStorageIDs 数据集 ${data.length}B 非 4 对齐');
-    }
-    final r = ByteReader(data);
-    final count = r.u32();
-    return [for (var i = 0; i < count; i++) r.u32()];
+    return _readU32Array(_requireData(result, 'GetVendorStorageIDs'),
+        'GetVendorStorageIDs');
   }
 
   /// GetStorageInfo(0x1005):单存储槽容量/余量(双卡余量展示)。
@@ -520,7 +534,8 @@ mixin _BrowseOps on _SessionCore {
               opcode: PtpOperationCode.getStorageInfo, params: [storageId]),
         ));
     _ensureOk(result, PtpOperationCode.getStorageInfo);
-    return CameraStorage.parse(id: storageId, dataset: result.data!);
+    return CameraStorage.parse(
+        id: storageId, dataset: _requireData(result, 'GetStorageInfo'));
   }
 
   /// GetObjectInfo:ObjectInfo 数据集与 PTP-IP 同构,复用 ptpip 解析。
@@ -530,7 +545,8 @@ mixin _BrowseOps on _SessionCore {
           params: [handle],
         )));
     _ensureOk(result, PtpOperationCode.getObjectInfo);
-    return PtpObjectInfo.parse(handle: handle, dataset: result.data!);
+    return PtpObjectInfo.parse(
+        handle: handle, dataset: _requireData(result, 'GetObjectInfo'));
   }
 
   /// DeleteObject(0x100B,标准码):删除相机上的单个对象。
@@ -1684,11 +1700,12 @@ mixin _RemoteOps on _SessionCore {
     if (data == null || data.length < 4) return const [];
     final reader = ByteReader(data);
     final count = reader.u32();
-    final out = <int>[];
-    for (var i = 0; i < count && !reader.eof; i++) {
-      out.add(reader.u16());
+    if (count > _kMaxPtpArrayElements || count > reader.remaining ~/ 2) {
+      throw FormatException(
+          'GetObjectPropsSupported 计数 $count 超出剩余 '
+          '${reader.remaining ~/ 2} 项或上限 $_kMaxPtpArrayElements');
     }
-    return out;
+    return [for (var i = 0; i < count; i++) reader.u16()];
   }
 }
 

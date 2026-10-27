@@ -36,6 +36,27 @@ void main() {
       ]);
     });
 
+    test('getObjectHandles:计数超上限立即拒绝,不按 count 分配大表', () async {
+      final fake = FakePtpTransport()
+        ..reply(PtpResult(
+          responseCode: PtpResponseCode.ok,
+          data: Uint8List.fromList([
+            0x01, 0x00, 0x10, 0x00, // count = 0x00100001
+          ]),
+        ));
+      final session = PtpSession(transport: fake);
+      await expectLater(
+          session.getObjectHandles(), throwsA(isA<FormatException>()));
+    });
+
+    test('OK 响应缺少数据相统一抛 FormatException', () async {
+      final fake = FakePtpTransport()
+        ..reply(const PtpResult(responseCode: PtpResponseCode.ok));
+      final session = PtpSession(transport: fake);
+      await expectLater(
+          session.getDeviceInfo(), throwsA(isA<FormatException>()));
+    });
+
     test('getObjectInfo:错误码抛 PtpResponseException 并带操作码', () async {
       final fake = FakePtpTransport()
         ..reply(const PtpResult(responseCode: 0x2009)); // ObjectNotOpen-ish 非法态
