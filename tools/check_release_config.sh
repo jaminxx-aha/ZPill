@@ -35,4 +35,18 @@ if grep -Fq 'signingConfigs.getByName("debug")' android/app/build.gradle.kts; th
   fail "Android release must not use the debug signing config"
 fi
 
+tracked_signing_material="$(
+  git ls-files |
+    grep -E '(^|/)(android/key\.properties|ohos/signing/local-signing\.json)$|\.(jks|keystore|p12|p7b|p8|mobileprovision|cer)$' ||
+    true
+)"
+if [[ -n "$tracked_signing_material" ]]; then
+  fail "tracked signing material must stay outside Git: $tracked_signing_material"
+fi
+
+if git grep -I -q -E -- \
+    '-----BEGIN (RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY-----'; then
+  fail "tracked files must not contain PEM private keys"
+fi
+
 printf 'release config: OK (%s, build %s)\n' "$version_name" "$build_number"

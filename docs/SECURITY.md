@@ -52,6 +52,7 @@ HarmonyOS 视频 LUT 导出还会校验容器报告的尺寸、像素数、轨�
 - 密码只从 macOS Keychain 读取,不写入环境文件或签名 JSON。
 - Hvigor 本地缓存使用 owner-only 权限,并可由下一次构建自动修复。
 - CI 不接收发布签名材料,也不生成可分发的正式包。
+- 发布检查会拒绝受版本控制的签名文件、`key.properties` 和 PEM 私钥。
 
 详细操作见 [RELEASE.md](RELEASE.md)。
 
