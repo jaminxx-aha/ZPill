@@ -3,11 +3,11 @@ import 'dart:collection';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:nikon_pill/core/browser/object_entry.dart';
-import 'package:nikon_pill/core/transfer/transfer_engine.dart';
-import 'package:nikon_pill/core/transfer/transfer_task.dart';
-import 'package:nikon_pill/features/transfers/transfers_page.dart';
-import 'package:nikon_pill/platform/gallery_saver.dart';
+import 'package:z_pill/core/browser/object_entry.dart';
+import 'package:z_pill/core/transfer/transfer_engine.dart';
+import 'package:z_pill/core/transfer/transfer_task.dart';
+import 'package:z_pill/features/transfers/transfers_page.dart';
+import 'package:z_pill/platform/gallery_saver.dart';
 
 /// downloadsDir 逐次取用预置的 Completer:两次并发刷新各挂一扇门,门后
 /// 给不同目录 —— 旧刷新若未被纪元闸拦下,晚到结果必覆盖新结果,断言即
@@ -63,7 +63,7 @@ void main() {
   late Directory root;
 
   setUp(() {
-    root = Directory.systemTemp.createTempSync('nikonpill_transfers');
+    root = Directory.systemTemp.createTempSync('zpill_transfers');
   });
   tearDown(() {
     if (root.existsSync()) root.deleteSync(recursive: true);

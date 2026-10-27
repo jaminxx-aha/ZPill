@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:nikon_pill/core/ble/blowfish_hasher.dart';
+import 'package:z_pill/core/ble/blowfish_hasher.dart';
 
 void main() {
   group('BlowfishHasher', () {

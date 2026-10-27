@@ -310,7 +310,7 @@ final class _WatermarkJob {
   final double lineSize;
 }
 
-/// 角标规划:文本回落链(自定义 → EXIF 型号 → 'NikonPill')+ 等比字号,
+/// 角标规划:文本回落链(自定义 → EXIF 型号 → 'ZPill')+ 等比字号,
 /// 主 isolate 预光栅。
 Future<_WatermarkJob> _planCorner(int displayWidth, Uint8List jpeg,
     ExifCardData? card, WatermarkOptions options, TextRaster raster) async {
@@ -319,7 +319,7 @@ Future<_WatermarkJob> _planCorner(int displayWidth, Uint8List jpeg,
       ? custom
       : card?.titleLine.isNotEmpty == true
           ? card!.titleLine
-          : 'NikonPill';
+          : 'ZPill';
   final fontSize = (displayWidth * 0.03).clamp(16.0, 96.0);
   final badge = await raster(text, fontSize, 0xFFFFFFFF);
   return _WatermarkJob(

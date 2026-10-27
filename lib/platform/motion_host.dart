@@ -1,6 +1,6 @@
-/// 水平仪姿态接口(监看辅助):`nikonpill/motion` 通道契约。
+/// 水平仪姿态接口(监看辅助):`zpill/motion` 通道契约。
 ///
-/// EventChannel `nikonpill/motion/attitude` 广播设备姿态(重力方向):
+/// EventChannel `zpill/motion/attitude` 广播设备姿态(重力方向):
 /// 每条事件 = `[pitch, roll]`(double,弧度;pitch 抬头为正,roll 右倾
 /// 为正)。native 侧 iOS = CoreMotion CMDeviceMotion.gravity,
 /// ohos = @ohos.sensor 重力传感器,Android = SensorManager 重力向量,
@@ -45,7 +45,7 @@ abstract interface class MotionHost {
 
 final class MethodChannelMotionHost implements MotionHost {
   static const EventChannel _channel =
-      EventChannel('nikonpill/motion/attitude');
+      EventChannel('zpill/motion/attitude');
 
   @override
   Stream<MotionOrientation> get attitudes => _channel

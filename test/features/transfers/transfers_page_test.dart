@@ -3,11 +3,11 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/core/browser/object_entry.dart';
-import 'package:nikon_pill/core/transfer/transfer_engine.dart';
-import 'package:nikon_pill/core/transfer/transfer_task.dart';
-import 'package:nikon_pill/features/transfers/transfers_page.dart';
-import 'package:nikon_pill/platform/gallery_saver.dart';
+import 'package:z_pill/core/browser/object_entry.dart';
+import 'package:z_pill/core/transfer/transfer_engine.dart';
+import 'package:z_pill/core/transfer/transfer_task.dart';
+import 'package:z_pill/features/transfers/transfers_page.dart';
+import 'package:z_pill/platform/gallery_saver.dart';
 
 /// 快照流由测试驱动的伪引擎(sync 广播:add 时刻同步送达;removeRecord
 /// 出快照,模拟引擎真实单删回放)。

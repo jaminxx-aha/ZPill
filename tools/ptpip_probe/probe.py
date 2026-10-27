@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""NikonPill PTP-IP 协议验证 CLI。
+"""ZPill PTP-IP 协议验证 CLI。
 
 在 App 实现之前对真机跑通握手、核对字节布局,再移植进
 lib/core/ptpip/codec.dart。参考:libgphoto2 ptpip 后端。
@@ -7,7 +7,7 @@ lib/core/ptpip/codec.dart。参考:libgphoto2 ptpip 后端。
 用法:
     python3 probe.py 192.168.1.1
     python3 probe.py --idle 180 192.168.1.1
-    python3 probe.py --setprop 0xd406=NikonPill/1.0 192.168.1.1
+    python3 probe.py --setprop 0xd406=ZPill/1.0 192.168.1.1
     python3 probe.py --setprop 0xd406= --setprop-layout data 192.168.1.1
     遥控域回归(无线对照 usb_probe 同款):
     python3 probe.py --propdesc 5007,500d,500f 192.168.0.104
@@ -1072,7 +1072,7 @@ def main() -> int:
                       f"declared={stats['declared']} Data×{stats['data_packets']}")
                 if got == 1:
                     ext = ".jpg" if soi >= 0 else ".bin"
-                    out = f"/tmp/nikonpill_ptpip_liveview_first{ext}"
+                    out = f"/tmp/zpill_ptpip_liveview_first{ext}"
                     with open(out, "wb") as f:
                         f.write(payload)
                     print(f"      头 32B: {payload[:32].hex(' ')}  原始帧已存:{out}")
@@ -1311,7 +1311,7 @@ def main() -> int:
         print(f"[12] SetDevicePropValue 数据出({args.setprop_layout} 布局):")
         for spec in args.setprop:
             if "=" not in spec:
-                print(f"    [格式错 {spec!r}:应为 十六进制属性码=文本(如 0xd406=NikonPill/1.0)]")
+                print(f"    [格式错 {spec!r}:应为 十六进制属性码=文本(如 0xd406=ZPill/1.0)]")
                 continue
             code_s, text = spec.split("=", 1)
             try:

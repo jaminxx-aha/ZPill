@@ -6,35 +6,35 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/app_services.dart';
-import 'package:nikon_pill/core/camera/camera_connection.dart';
-import 'package:nikon_pill/core/camera/camera_discovery.dart';
-import 'package:nikon_pill/core/camera/camera_info.dart';
-import 'package:nikon_pill/core/ptp/operation_codes.dart';
-import 'package:nikon_pill/core/ptp/ptp_session.dart';
-import 'package:nikon_pill/core/ptp/ptp_transport.dart';
-import 'package:nikon_pill/core/ptpip/probe.dart';
-import 'package:nikon_pill/core/ptpip/subnet_scan.dart';
-import 'package:nikon_pill/core/ble/ble_camera_session.dart';
-import 'package:nikon_pill/core/ble/gatt_uuids.dart';
-import 'package:nikon_pill/core/ble/pairing_message.dart';
-import 'package:nikon_pill/core/ble/wifi_credentials.dart';
-import 'package:nikon_pill/core/remote/live_view_engine.dart';
-import 'package:nikon_pill/core/utils/byte_writer.dart';
-import 'package:nikon_pill/data/ble_identity_store.dart';
-import 'package:nikon_pill/data/paired_cameras_store.dart';
-import 'package:nikon_pill/data/settings_store.dart';
-import 'package:nikon_pill/design/app_colors.dart';
-import 'package:nikon_pill/features/connection/camera_overview_controller.dart';
-import 'package:nikon_pill/features/connection/connection_controller.dart';
-import 'package:nikon_pill/features/connection/connection_page.dart';
-import 'package:nikon_pill/features/remote/remote_controller.dart';
-import 'package:nikon_pill/features/remote/remote_page.dart';
-import 'package:nikon_pill/features/settings/settings_page.dart';
-import 'package:nikon_pill/l10n/l10n.dart';
-import 'package:nikon_pill/platform/ble_scanner.dart';
-import 'package:nikon_pill/platform/network_monitor.dart';
-import 'package:nikon_pill/platform/nsd_scanner.dart';
+import 'package:z_pill/app_services.dart';
+import 'package:z_pill/core/camera/camera_connection.dart';
+import 'package:z_pill/core/camera/camera_discovery.dart';
+import 'package:z_pill/core/camera/camera_info.dart';
+import 'package:z_pill/core/ptp/operation_codes.dart';
+import 'package:z_pill/core/ptp/ptp_session.dart';
+import 'package:z_pill/core/ptp/ptp_transport.dart';
+import 'package:z_pill/core/ptpip/probe.dart';
+import 'package:z_pill/core/ptpip/subnet_scan.dart';
+import 'package:z_pill/core/ble/ble_camera_session.dart';
+import 'package:z_pill/core/ble/gatt_uuids.dart';
+import 'package:z_pill/core/ble/pairing_message.dart';
+import 'package:z_pill/core/ble/wifi_credentials.dart';
+import 'package:z_pill/core/remote/live_view_engine.dart';
+import 'package:z_pill/core/utils/byte_writer.dart';
+import 'package:z_pill/data/ble_identity_store.dart';
+import 'package:z_pill/data/paired_cameras_store.dart';
+import 'package:z_pill/data/settings_store.dart';
+import 'package:z_pill/design/app_colors.dart';
+import 'package:z_pill/features/connection/camera_overview_controller.dart';
+import 'package:z_pill/features/connection/connection_controller.dart';
+import 'package:z_pill/features/connection/connection_page.dart';
+import 'package:z_pill/features/remote/remote_controller.dart';
+import 'package:z_pill/features/remote/remote_page.dart';
+import 'package:z_pill/features/settings/settings_page.dart';
+import 'package:z_pill/l10n/l10n.dart';
+import 'package:z_pill/platform/ble_scanner.dart';
+import 'package:z_pill/platform/network_monitor.dart';
+import 'package:z_pill/platform/nsd_scanner.dart';
 
 import '../../core/ble/ble_camera_session_test.dart'
     show FakeBleHost, buildStage2, buildStage4;
@@ -1316,7 +1316,7 @@ void main() {
 
   group('ConnectionPage 蓝牙工具通道:', () {
     Future<BleIdentityStore> tempIdentityStore() async {
-      final dir = await Directory.systemTemp.createTemp('nikonpill_ble_test');
+      final dir = await Directory.systemTemp.createTemp('zpill_ble_test');
       return BleIdentityStore(dataDir: () async => dir.path);
     }
 
@@ -1357,7 +1357,7 @@ void main() {
         deviceId: 0x11223344,
         nonce: 0x55667788,
         serial: '1641397',
-        controllerName: 'NikonPill',
+        controllerName: 'ZPill',
         pairedAt: DateTime(2026, 10, 14),
       ));
       await controller.loadBleIdentity();
@@ -1437,7 +1437,7 @@ void main() {
           deviceId: 0x11223344,
           nonce: 0x55667788,
           serial: '1641397',
-          controllerName: 'NikonPill',
+          controllerName: 'ZPill',
           pairedAt: DateTime(2026, 10, 14),
         ));
         await controller.loadBleIdentity();
@@ -1490,7 +1490,7 @@ void main() {
           deviceId: 0x11223344,
           nonce: 0x55667788,
           serial: '1641397',
-          controllerName: 'NikonPill',
+          controllerName: 'ZPill',
           pairedAt: DateTime(2026, 10, 14),
         ));
         await controller.loadBleIdentity();
@@ -1545,7 +1545,7 @@ void main() {
           deviceId: 0x11223344,
           nonce: 0x55667788,
           serial: '1641397',
-          controllerName: 'NikonPill',
+          controllerName: 'ZPill',
           pairedAt: DateTime(2026, 10, 14),
         ));
         await controller.loadBleIdentity();
@@ -1565,7 +1565,7 @@ void main() {
         deviceId: 0x11223344,
         nonce: 0x55667788,
         serial: '1641397',
-        name: 'NikonPill',
+        name: 'ZPill',
       );
 
       // 涟漪环 = 圆形容器且有描边无填充(hero 外圈有填充、状态行圆点
@@ -1625,7 +1625,7 @@ void main() {
           deviceId: 0x11223344,
           nonce: 0x55667788,
           serial: '1641397',
-          controllerName: 'NikonPill',
+          controllerName: 'ZPill',
           pairedAt: DateTime(2026, 10, 14),
         ));
         await controller.loadBleIdentity();
@@ -1753,7 +1753,7 @@ void main() {
           deviceId: 0x11223344,
           nonce: 0x55667788,
           serial: '1641397',
-          controllerName: 'NikonPill',
+          controllerName: 'ZPill',
           pairedAt: DateTime(2026, 10, 14),
         ));
         await controller.loadBleIdentity();
@@ -1770,7 +1770,7 @@ void main() {
         deviceId: 0x11223344,
         nonce: 0x55667788,
         serial: '1641397',
-        name: 'NikonPill',
+        name: 'ZPill',
       );
       unawaited(f.session.reconnectDirect());
       await tester.pump();
@@ -1851,7 +1851,7 @@ void main() {
       // 真文件 IO 须 runAsync 放行。直调回填(AppServices 常驻监听
       // ready 沿同参)。
       final f = (await tester.runAsync(readyFixture))!;
-      expect(f.controller.bleIdentity!.displayName, 'NikonPill');
+      expect(f.controller.bleIdentity!.displayName, 'ZPill');
       // 跨相机残留名不回填:档案 deviceId ≠ 会话现役身份 → 短路。
       f.session.lastMatchName = 'Z f_8014411';
       await tester.runAsync(() => f.controller.healCameraName());
@@ -1864,7 +1864,7 @@ void main() {
             deviceId: id.deviceId,
             nonce: id.nonce,
             serial: id.serial,
-            controllerName: 'NikonPill',
+            controllerName: 'ZPill',
             pairedAt: DateTime(2026, 10, 14),
           )));
       await tester.runAsync(() => f.controller.loadBleIdentity());

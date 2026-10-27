@@ -6,7 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:image/image.dart' as img;
 
-import 'package:nikon_pill/features/common/widgets/hero_zoom.dart';
+import 'package:z_pill/features/common/widgets/hero_zoom.dart';
 
 /// 1×1 PNG(解码必成):梭子层无底,盘档须真图防错误道上翻红屏。
 final _tinyPng = base64Decode(
@@ -34,7 +34,7 @@ void main() {
   late String thumbPath;
 
   setUp(() {
-    tmp = Directory.systemTemp.createTempSync('nikonpill_hero_zoom');
+    tmp = Directory.systemTemp.createTempSync('zpill_hero_zoom');
     thumbPath = '${tmp.path}/thumb.png';
     File(thumbPath).writeAsBytesSync(_tinyPng);
   });

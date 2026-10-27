@@ -3,7 +3,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/core/media/nef_thumb.dart';
+import 'package:z_pill/core/media/nef_thumb.dart';
 
 /// 最小 NEF 合成:II/MM TIFF 头 + IFD0(宽/高/方向/JPEG 偏移/长度)+
 /// 填充 + 内嵌缩略载荷。结构对齐 Zf NEF(II、IFD0@8、条目升序)。

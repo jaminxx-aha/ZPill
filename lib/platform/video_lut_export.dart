@@ -42,9 +42,9 @@ abstract interface class VideoLutExportHost {
   Future<void> cancel();
 }
 
-/// 经 `nikonpill/video_lut` channel。
+/// 经 `zpill/video_lut` channel。
 final class MethodChannelVideoLutExport implements VideoLutExportHost {
-  static const MethodChannel _channel = MethodChannel('nikonpill/video_lut');
+  static const MethodChannel _channel = MethodChannel('zpill/video_lut');
 
   bool _inFlight = false;
   void Function(int)? _progress;

@@ -1,4 +1,4 @@
-// NikonPill 相册/文件通道(iOS 平台,native 侧)。
+// ZPill 相册/文件通道(iOS 平台,native 侧)。
 //
 // 对应 Dart 契约 lib/platform/gallery_saver.dart:
 // - tempDir()/thumbsDir()/previewsDir():NSTemporaryDirectory 下专用子目录
@@ -17,16 +17,16 @@ import Flutter
 import Photos
 import UIKit
 
-private let tempSubdir = "nikonpill"
-private let thumbsSubdir = "nikonpill-thumbs"
-private let previewsSubdir = "nikonpill-previews"
-private let downloadsSubdir = "nikonpill-downloads"
-private let dataSubdir = "nikonpill-data"
+private let tempSubdir = "zpill"
+private let thumbsSubdir = "zpill-thumbs"
+private let previewsSubdir = "zpill-previews"
+private let downloadsSubdir = "zpill-downloads"
+private let dataSubdir = "zpill-data"
 
 public final class GalleryPlugin: NSObject, FlutterPlugin {
   public static func register(with registrar: FlutterPluginRegistrar) {
     let channel = FlutterMethodChannel(
-      name: "nikonpill/gallery", binaryMessenger: registrar.messenger())
+      name: "zpill/gallery", binaryMessenger: registrar.messenger())
     registrar.addMethodCallDelegate(GalleryPlugin(), channel: channel)
   }
 

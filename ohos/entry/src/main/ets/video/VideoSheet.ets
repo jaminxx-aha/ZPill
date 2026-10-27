@@ -209,7 +209,7 @@ export struct VideoSheet {
         .height('100%')
         .backgroundColor('#000000')
       XComponent({
-        id: 'nikonpill-video',
+        id: 'zpill-video',
         type: 'surface',
         controller: this.controller,
       })

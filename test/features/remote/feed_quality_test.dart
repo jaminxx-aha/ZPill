@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 
-import 'package:nikon_pill/features/remote/feed_quality.dart';
+import 'package:z_pill/features/remote/feed_quality.dart';
 
 Uint8List _jpeg() {
   final image = img.Image(width: 32, height: 24);

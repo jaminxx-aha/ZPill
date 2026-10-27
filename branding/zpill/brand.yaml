@@ -1,0 +1,11 @@
+id: zpill
+displayName: ZPill
+description: Camera remote control and media transfer
+
+bundleId:
+  android: com.jaminxx.zpill
+  ios: com.jaminxx.zpill
+  ohos: com.jaminxx.z_pill
+
+icon: icon.png
+allowBundleIdOverride: false

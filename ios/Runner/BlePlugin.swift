@@ -1,7 +1,7 @@
-// NikonPill BLE 裸桥(iOS CoreBluetooth,native 侧)。
+// ZPill BLE 裸桥(iOS CoreBluetooth,native 侧)。
 //
 // 对应 Dart 契约 lib/platform/ble_scanner.dart(BleHost):
-// MethodChannel `nikonpill/ble` + EventChannel `nikonpill/ble/events`。
+// MethodChannel `zpill/ble` + EventChannel `zpill/ble/events`。
 // 协议逻辑(配对握手/GEO/TIME 载荷)全在 Dart(lib/core/ble/),
 // 本桥只做扫描/连接/GATT 读写订阅的搬运,零 Nikon 方言知识。
 //
@@ -21,10 +21,10 @@ public final class BlePlugin: NSObject, FlutterPlugin, CBCentralManagerDelegate,
   public static func register(with registrar: FlutterPluginRegistrar) {
     let instance = BlePlugin()
     let channel = FlutterMethodChannel(
-      name: "nikonpill/ble", binaryMessenger: registrar.messenger())
+      name: "zpill/ble", binaryMessenger: registrar.messenger())
     registrar.addMethodCallDelegate(instance, channel: channel)
     let events = FlutterEventChannel(
-      name: "nikonpill/ble/events", binaryMessenger: registrar.messenger())
+      name: "zpill/ble/events", binaryMessenger: registrar.messenger())
     events.setStreamHandler(instance)
   }
 
@@ -70,7 +70,7 @@ public final class BlePlugin: NSObject, FlutterPlugin, CBCentralManagerDelegate,
 
   // MARK: - 本机型号
 
-  /// 本机型号名(相机侧注册名「<型号>-NikonPill」的型号段,组装在
+  /// 本机型号名(相机侧注册名「<型号>-ZPill」的型号段,组装在
   /// Dart 侧):hw.machine 标识 → 市场名对照(iPhone 12 代起;2025 的
   /// 17 代取公开标识表,真机核对机会罕见)。未收录回落标识原串(如
   /// iPhone18,5)—— 苹果无公开的市场名 API,UIDevice.model 恒为泛型

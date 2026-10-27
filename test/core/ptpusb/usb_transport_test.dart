@@ -3,10 +3,10 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/core/ptp/operation_codes.dart';
-import 'package:nikon_pill/core/ptp/ptp_transport.dart';
-import 'package:nikon_pill/core/ptpusb/containers.dart';
-import 'package:nikon_pill/core/ptpusb/usb_transport.dart';
+import 'package:z_pill/core/ptp/operation_codes.dart';
+import 'package:z_pill/core/ptp/ptp_transport.dart';
+import 'package:z_pill/core/ptpusb/containers.dart';
+import 'package:z_pill/core/ptpusb/usb_transport.dart';
 
 import 'fake_usb_byte_pipe.dart';
 

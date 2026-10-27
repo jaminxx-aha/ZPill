@@ -4,15 +4,15 @@ import 'dart:typed_data';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/core/media/cube_lut.dart';
-import 'package:nikon_pill/platform/video_lut_export.dart';
+import 'package:z_pill/core/media/cube_lut.dart';
+import 'package:z_pill/platform/video_lut_export.dart';
 
-/// `nikonpill/video_lut` 通道件单测:mock 拦截 Dart→原生(export/cancel
+/// `zpill/video_lut` 通道件单测:mock 拦截 Dart→原生(export/cancel
 /// 载荷),handlePlatformMessage 反向推 'onProgress' 模拟原生进度回传。
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  const channel = MethodChannel('nikonpill/video_lut');
+  const channel = MethodChannel('zpill/video_lut');
   final messenger = TestWidgetsFlutterBinding.instance.defaultBinaryMessenger;
 
   late List<MethodCall> outbound;

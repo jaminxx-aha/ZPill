@@ -4,7 +4,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/core/media/jpeg_orientation.dart';
+import 'package:z_pill/core/media/jpeg_orientation.dart';
 
 // ── 真机探针产物夹具(2026-10-09 Zf 实拍,tools/usb_probe 抓档)──
 

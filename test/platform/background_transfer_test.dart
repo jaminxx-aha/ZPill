@@ -7,7 +7,7 @@ library;
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/platform/background_transfer.dart';
+import 'package:z_pill/platform/background_transfer.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -115,7 +115,7 @@ void main() {
     });
   });
 
-  group('MethodChannelBackgroundScheduler(nikonpill/bg):', () {
+  group('MethodChannelBackgroundScheduler(zpill/bg):', () {
     late List<MethodCall> calls;
     late MethodChannelBackgroundScheduler scheduler;
 

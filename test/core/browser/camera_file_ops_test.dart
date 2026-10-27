@@ -2,15 +2,15 @@ import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/core/browser/album.dart';
-import 'package:nikon_pill/core/browser/camera_file_ops.dart';
-import 'package:nikon_pill/core/browser/object_entry.dart';
-import 'package:nikon_pill/core/browser/object_repository.dart';
-import 'package:nikon_pill/core/browser/photo_group.dart';
-import 'package:nikon_pill/core/ptp/operation_codes.dart';
-import 'package:nikon_pill/core/ptp/ptp_session.dart';
-import 'package:nikon_pill/core/ptp/ptp_transport.dart';
-import 'package:nikon_pill/core/ptpip/object_format.dart';
+import 'package:z_pill/core/browser/album.dart';
+import 'package:z_pill/core/browser/camera_file_ops.dart';
+import 'package:z_pill/core/browser/object_entry.dart';
+import 'package:z_pill/core/browser/object_repository.dart';
+import 'package:z_pill/core/browser/photo_group.dart';
+import 'package:z_pill/core/ptp/operation_codes.dart';
+import 'package:z_pill/core/ptp/ptp_session.dart';
+import 'package:z_pill/core/ptp/ptp_transport.dart';
+import 'package:z_pill/core/ptpip/object_format.dart';
 
 import '../ptp/ptp_session_harness.dart' show FakePtpTransport;
 

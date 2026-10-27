@@ -33,7 +33,7 @@ const bool kUsbDlProbe = bool.fromEnvironment('USB_DL_PROBE');
 final class IcDownloadProbe {
   IcDownloadProbe._();
 
-  static const MethodChannel _usb = MethodChannel('nikonpill/usb');
+  static const MethodChannel _usb = MethodChannel('zpill/usb');
 
   /// IC 取消试验的到点时长(大档取 1.5s 内的采样足以判真停)。
   static const int _cancelAfterMs = 1500;

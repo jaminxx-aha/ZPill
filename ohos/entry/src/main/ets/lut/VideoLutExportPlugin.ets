@@ -1,8 +1,8 @@
 /**
- * NikonPill 视频 LUT 导出通道(ohos 平台,native 侧)。
+ * ZPill 视频 LUT 导出通道(ohos 平台,native 侧)。
  *
  * 对应 Dart 契约 lib/platform/video_lut_export.dart(MethodChannel
- * `nikonpill/video_lut`):重活在 rawdecoder.so 的 C++ 管线
+ * `zpill/video_lut`):重活在 rawdecoder.so 的 C++ 管线
  * (cpp/video_lut.cpp:解封装 → 硬解 NV12 → CPU 行并行 3D-LUT →
  * 硬编 H.264 → 混流,音频直通)。
  *
@@ -25,7 +25,7 @@ import {
 import rawdecoder from 'librawdecoder.so';
 
 const TAG = 'VideoLutExportPlugin';
-const CHANNEL = 'nikonpill/video_lut';
+const CHANNEL = 'zpill/video_lut';
 
 /** rawdecoder.so 人设(LUT 三方法,见 cpp/video_lut.cpp)。 */
 interface LutNapi {

@@ -15,7 +15,7 @@ import '../core/log/app_log.dart';
 final class NativeLogBridge {
   NativeLogBridge._();
 
-  static const MethodChannel _ch = MethodChannel('nikonpill/log');
+  static const MethodChannel _ch = MethodChannel('zpill/log');
   static bool _installed = false;
 
   /// main() 在 PlatformServices.bootstrap() 后立即 install;测试不经

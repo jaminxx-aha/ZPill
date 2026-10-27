@@ -1,5 +1,5 @@
 /**
- * 全屏视频播放会话(ohos;`nikonpill/video` play 的宿主)。
+ * 全屏视频播放会话(ohos;`zpill/video` play 的宿主)。
  *
  * 对应 iOS VideoPlugin.swift 的 AVKit 全屏路径与 Android VideoActivity:
  * VideoPlugin.play 只登记请求并亮覆盖层(Index.ets 内 VideoSheet,

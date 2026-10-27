@@ -3,12 +3,12 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/core/camera/camera_connection.dart';
-import 'package:nikon_pill/core/ptp/operation_codes.dart';
-import 'package:nikon_pill/core/ptp/ptp_session.dart';
-import 'package:nikon_pill/core/ptp/ptp_transport.dart';
-import 'package:nikon_pill/core/utils/byte_writer.dart';
-import 'package:nikon_pill/features/browser/storage_overview_controller.dart';
+import 'package:z_pill/core/camera/camera_connection.dart';
+import 'package:z_pill/core/ptp/operation_codes.dart';
+import 'package:z_pill/core/ptp/ptp_session.dart';
+import 'package:z_pill/core/ptp/ptp_transport.dart';
+import 'package:z_pill/core/utils/byte_writer.dart';
+import 'package:z_pill/features/browser/storage_overview_controller.dart';
 
 import '../../core/ptp/ptp_session_harness.dart' show FakePtpTransport;
 import '../../helpers/fake_connection.dart';

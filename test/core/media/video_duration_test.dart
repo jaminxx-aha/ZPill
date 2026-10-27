@@ -3,7 +3,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/core/media/video_duration.dart';
+import 'package:z_pill/core/media/video_duration.dart';
 
 Uint8List _box(String type, List<int> payload) {
   final size = 8 + payload.length;

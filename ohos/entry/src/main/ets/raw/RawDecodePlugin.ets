@@ -1,8 +1,8 @@
 /**
- * NikonPill RAW/HEIF 解码通道(ohos 平台,native 侧)。
+ * ZPill RAW/HEIF 解码通道(ohos 平台,native 侧)。
  *
  * 对应 Dart 契约 lib/platform/raw_decoder.dart(MethodChannel
- * `nikonpill/raw`,`decode({path, maxPixelSize})` → JPEG 字节):
+ * `zpill/raw`,`decode({path, maxPixelSize})` → JPEG 字节):
  * - **HIF/HEIF**:@ohos.multimedia.image 的 ImageSource 解码 → 长边
  *   压档(desiredSize 按比缩放,不变形)→ ImagePacker 打包 JPEG(0.85)
  *   回传;
@@ -50,7 +50,7 @@ import {
 import { NativeLog } from '../log/NativeLog';
 
 const TAG = 'RawDecodePlugin';
-const CHANNEL = 'nikonpill/raw';
+const CHANNEL = 'zpill/raw';
 
 /** 头读窗口:HEIF meta 链在 mdat 之前(Zf HIF 实测 ~1.8KB),64KB 罩住。 */
 const HEAD_BYTES = 65536;
@@ -76,7 +76,7 @@ interface RawJpeg {
   ms: string;
 }
 
-/** `nikonpill/raw` 通道实现(ohos:HIF/HEIF/JPG 长边压档出 JPEG)。 */
+/** `zpill/raw` 通道实现(ohos:HIF/HEIF/JPG 长边压档出 JPEG)。 */
 export class RawDecodePlugin implements FlutterPlugin {
   private channel: MethodChannel | null = null;
 

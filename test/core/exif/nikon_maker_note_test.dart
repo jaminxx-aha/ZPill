@@ -8,7 +8,7 @@ library;
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:nikon_pill/core/exif/nikon_maker_note.dart';
+import 'package:z_pill/core/exif/nikon_maker_note.dart';
 
 void _w16(BytesBuilder b, int v, bool big) =>
     b.add(big ? [v >> 8 & 0xFF, v & 0xFF] : [v & 0xFF, v >> 8 & 0xFF]);

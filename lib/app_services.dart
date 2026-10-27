@@ -297,7 +297,7 @@ final class AppServices {
     // 断连拆)。
     bleSession = BleCameraSession(host: PlatformServices.ble);
     // 相机侧注册名(0x2002,相机「已配对设备」菜单显示):「<手机型号
-    // >-NikonPill」。异步取型号 —— 配对须用户过 UI,毫秒级落定无竞态;
+    // >-ZPill」。异步取型号 —— 配对须用户过 UI,毫秒级落定无竞态;
     // 取不到(native 缺失/异常,helper 已兜空串)保持默认裸名。
     unawaited(bleDeviceModelName().then((model) {
       bleSession.controllerName = BleCameraSession.composeControllerName(model);

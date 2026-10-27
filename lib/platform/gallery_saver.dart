@@ -15,7 +15,7 @@
 /// 三端落地状态:ohos ✅ 真机闭环(photoAccessHelper + SaveButton
 /// 安全控件);iOS ✅ 真机闭环(PHPhotoLibrary + SaveButton 控件,
 /// 提交 f949349);Android ✅ 已落地(编译过,真机待验证)——
-/// MediaStore 直写(RELATIVE_PATH=Pictures/Movies/NikonPill +
+/// MediaStore 直写(RELATIVE_PATH=Pictures/Movies/ZPill +
 /// IS_PENDING 自有贡献,免权限零弹窗;无系统对话框故无取消路径,
 /// 要么全量成功要么整体异常)。
 ///
@@ -84,12 +84,12 @@ abstract interface class GallerySaver {
   Future<List<Uri>> importFiles(List<GalleryImportRequest> requests);
 }
 
-/// 经 `nikonpill/gallery` channel。
+/// 经 `zpill/gallery` channel。
 ///
 /// native 实现状态:ohos(GalleryPlugin.ets)全量实现;
 /// Android/iOS 留待平台落地(native 侧 notImplemented,Dart 不改)。
 final class MethodChannelGallerySaver implements GallerySaver {
-  static const MethodChannel channel = MethodChannel('nikonpill/gallery');
+  static const MethodChannel channel = MethodChannel('zpill/gallery');
 
   @override
   Future<String> tempDir() => _dir('tempDir');

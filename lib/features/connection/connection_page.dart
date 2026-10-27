@@ -884,7 +884,7 @@ class _ConnectionPageState extends State<ConnectionPage>
   }
 
   /// 系统设置深链通道(红卡手动按钮共用;蓝牙原有,Wi-Fi 为本次新增)。
-  static const MethodChannel _settingsChannel = MethodChannel('nikonpill/ble');
+  static const MethodChannel _settingsChannel = MethodChannel('zpill/ble');
 
   /// 打开系统 Wi-Fi 设置(红卡手动钮;不点不跳,深链失败静默 —— 用户
   /// 按引导手动进设置)。

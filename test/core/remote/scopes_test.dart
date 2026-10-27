@@ -3,7 +3,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/core/remote/scopes.dart';
+import 'package:z_pill/core/remote/scopes.dart';
 
 /// 平面极角(弧度;只做同角比较,与盘面方向语义一致)。
 double _angle(double nx, double ny) => math.atan2(ny, nx);

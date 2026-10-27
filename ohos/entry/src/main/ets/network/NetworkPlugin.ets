@@ -1,8 +1,8 @@
 /**
- * NikonPill 程序化加入 Wi-Fi(ohos 平台,native 侧)。
+ * ZPill 程序化加入 Wi-Fi(ohos 平台,native 侧)。
  *
  * 对应 Dart 契约 lib/platform/network_monitor.dart 的 WifiJoiner
- * (通道 `nikonpill/network`,方法 join/release)—— BLE→WiFi 交接
+ * (通道 `zpill/network`,方法 join/release)—— BLE→WiFi 交接
  * (SnapBridge 同款):0x2004 凭据 → 0x2005 断 BLE → join 相机热点 →
  * PTP/IP。Android 同名插件(WifiNetworkSpecifier)已先行,iOS 待
  * Network Extensions entitlement。
@@ -40,7 +40,7 @@ import {
 } from '@ohos/flutter_ohos';
 
 const TAG = 'NetworkPlugin';
-const CHANNEL = 'nikonpill/network';
+const CHANNEL = 'zpill/network';
 
 /** 轮询节奏与总限(相机热点上线 + 关联 + DHCP 需数秒,30s 与 Android 看门狗同限)。 */
 const POLL_MS = 1000;
@@ -48,7 +48,7 @@ const JOIN_TIMEOUT_MS = 30000;
 /** 静默连未上链多久后升级系统确认弹窗。 */
 const ESCALATE_AFTER_MS = 6000;
 
-/** `nikonpill/network` 通道实现。 */
+/** `zpill/network` 通道实现。 */
 export class NetworkPlugin implements FlutterPlugin {
   private channel: MethodChannel | null = null;
   private pendingJoin: MethodResult | null = null;

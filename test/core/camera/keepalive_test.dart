@@ -2,7 +2,7 @@ import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/core/camera/keepalive.dart';
+import 'package:z_pill/core/camera/keepalive.dart';
 
 /// 手动泵:每次 call 记一个 Completer,pump 按序解决,驱动串行循环。
 final class FakeDelay {

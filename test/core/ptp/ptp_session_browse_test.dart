@@ -3,11 +3,11 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/core/ptp/device_prop.dart';
-import 'package:nikon_pill/core/ptp/operation_codes.dart';
-import 'package:nikon_pill/core/ptp/ptp_session.dart';
-import 'package:nikon_pill/core/ptp/ptp_transport.dart';
-import 'package:nikon_pill/core/utils/byte_writer.dart';
+import 'package:z_pill/core/ptp/device_prop.dart';
+import 'package:z_pill/core/ptp/operation_codes.dart';
+import 'package:z_pill/core/ptp/ptp_session.dart';
+import 'package:z_pill/core/ptp/ptp_transport.dart';
+import 'package:z_pill/core/utils/byte_writer.dart';
 
 
 import 'ptp_session_harness.dart';

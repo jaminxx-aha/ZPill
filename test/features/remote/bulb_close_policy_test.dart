@@ -1,7 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/core/ptp/operation_codes.dart';
-import 'package:nikon_pill/features/remote/bulb_close_policy.dart';
+import 'package:z_pill/core/ptp/operation_codes.dart';
+import 'package:z_pill/features/remote/bulb_close_policy.dart';
 
 /// B 门收门策略(纯值类 + 合成时钟口径:只产出延迟,零真实挂钟 ——
 /// 仓内 ReconnectPolicy 同款先例形态)。退避序列/预算/忙等码集全覆盖。

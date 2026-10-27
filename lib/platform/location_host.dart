@@ -1,6 +1,6 @@
-/// 位置采样接口(GPS 元数据):`nikonpill/location` 通道契约。
+/// 位置采样接口(GPS 元数据):`zpill/location` 通道契约。
 ///
-/// MethodChannel `nikonpill/location` 的 `current` 方法做一次定位,返回
+/// MethodChannel `zpill/location` 的 `current` 方法做一次定位,返回
 /// `[latitude, longitude]`(double,十进制度,WGS84;正 = 北纬/东经),
 /// 未授权/不可用/超时返回 null。native 侧 iOS = CoreLocation、
 /// ohos = @ohos.geoLocationManager、Android = LocationManager,
@@ -50,7 +50,7 @@ final class LocationSample {
   final double altitude;
 }
 
-/// 定位流宿主(`nikonpill/location/stream` EventChannel + 授权方法)。
+/// 定位流宿主(`zpill/location/stream` EventChannel + 授权方法)。
 /// 未授权时流上无事件(native 静默),状态经 [authorizationStatus] 查询;
 /// native 旧版或平台通道缺失时抛 MissingPluginException,按「无定位」
 /// 降级。三端后台权限差异由各平台 native 侧如实收口。
@@ -75,9 +75,9 @@ abstract interface class LocationStreamHost {
 final class MethodChannelLocationStream implements LocationStreamHost {
   const MethodChannelLocationStream();
 
-  static const MethodChannel _channel = MethodChannel('nikonpill/location');
+  static const MethodChannel _channel = MethodChannel('zpill/location');
   static const EventChannel _events =
-      EventChannel('nikonpill/location/stream');
+      EventChannel('zpill/location/stream');
 
   @override
   Future<void> startStream() => _channel.invokeMethod<void>('startStream');
@@ -107,7 +107,7 @@ final class MethodChannelLocationStream implements LocationStreamHost {
 }
 
 final class MethodChannelLocationHost implements LocationHost {
-  static const MethodChannel _channel = MethodChannel('nikonpill/location');
+  static const MethodChannel _channel = MethodChannel('zpill/location');
 
   @override
   Future<LocationFix?> current() async {

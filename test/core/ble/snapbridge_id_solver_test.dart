@@ -1,7 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:nikon_pill/core/ble/snapbridge_id_solver.dart';
+import 'package:z_pill/core/ble/snapbridge_id_solver.dart';
 
 /// SnapBridge LCG 反解器:对拍 photools 的 JVM 实证向量(其测试注明
 /// 「Verified on a JVM」),另加自洽性断言。Dart VM int 64 位二补环,

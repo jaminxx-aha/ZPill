@@ -5,12 +5,12 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 
-import 'package:nikon_pill/core/remote/frame_analysis.dart';
-import 'package:nikon_pill/core/remote/frame_analyzer.dart';
-import 'package:nikon_pill/core/remote/peaking_engines.dart';
-import 'package:nikon_pill/core/ptp/ptp_session.dart';
-import 'package:nikon_pill/core/remote/scopes.dart';
-import 'package:nikon_pill/features/remote/remote_controller.dart';
+import 'package:z_pill/core/remote/frame_analysis.dart';
+import 'package:z_pill/core/remote/frame_analyzer.dart';
+import 'package:z_pill/core/remote/peaking_engines.dart';
+import 'package:z_pill/core/ptp/ptp_session.dart';
+import 'package:z_pill/core/remote/scopes.dart';
+import 'package:z_pill/features/remote/remote_controller.dart';
 
 import '../ptp/ptp_session_harness.dart';
 

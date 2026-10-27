@@ -7,7 +7,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Nikon Pill</string>
+	<string>$(BRAND_DISPLAY_NAME)</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -15,7 +15,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>nikon_pill</string>
+	<string>$(BRAND_BUNDLE_NAME)</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -29,13 +29,13 @@
 	<key>NSCameraUsageDescription</key>
 	<string>连接相机后浏览与导入相机中的照片(外部相机媒体权限)</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>连接尼康相机的 Wi-Fi 热点,以浏览和传输照片</string>
+	<string>连接相机的 Wi-Fi 热点,以浏览和传输照片</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>下载照片时读取当前位置,将 GPS 坐标写入照片元数据</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
 	<string>后台持续读取位置,经蓝牙注入相机 —— 拍进卡的照片原生带 EXIF 坐标</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>与尼康相机建立蓝牙连接,完成配对并同步时间与位置信息(相机照片 EXIF 定位)</string>
+	<string>与相机建立蓝牙连接,完成配对并同步时间与位置信息(相机照片 EXIF 定位)</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_ptp._tcp</string>

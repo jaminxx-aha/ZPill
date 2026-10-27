@@ -1,10 +1,10 @@
 /**
- * NikonPill 位置采样(ohos 平台,native 侧)。
+ * ZPill 位置采样(ohos 平台,native 侧)。
  *
  * 对应 Dart 契约 lib/platform/location_host.dart:
- * - MethodChannel `nikonpill/location` 的 `current` 单次定位 →
+ * - MethodChannel `zpill/location` 的 `current` 单次定位 →
  *   [latitude, longitude](WGS84 十进制度);未授权/不可用/超时 → null。
- * - `startStream`/`stopStream` + EventChannel `nikonpill/location/stream`
+ * - `startStream`/`stopStream` + EventChannel `zpill/location/stream`
  *   连续定位流(BLE GPS 注入驱动源):on('locationChange') 持续回调,
  *   事件载荷 Map{latitude, longitude, altitude}。
  * - `authStatus` 回授权态(词表对齐 Dart 契约的 iOS 方言:两权限齐 =
@@ -46,7 +46,7 @@ const TAG = 'LocationPlugin';
 /// 单次定位兜底超时(与 Dart 侧 8s 单飞对齐;真机核对实际时延)。
 const LOCATE_TIMEOUT_MS = 8000;
 
-/** `nikonpill/location` + `nikonpill/location/stream` 通道实现。 */
+/** `zpill/location` + `zpill/location/stream` 通道实现。 */
 export class LocationPlugin implements FlutterPlugin, AbilityAware {
   private channel: MethodChannel | null = null;
   private events: EventChannel | null = null;
@@ -60,14 +60,14 @@ export class LocationPlugin implements FlutterPlugin, AbilityAware {
 
   onAttachedToEngine(binding: FlutterPluginBinding): void {
     this.channel =
-      new MethodChannel(binding.getBinaryMessenger(), 'nikonpill/location');
+      new MethodChannel(binding.getBinaryMessenger(), 'zpill/location');
     this.channel.setMethodCallHandler({
       onMethodCall: (call: MethodCall, result: MethodResult): void => {
         this.onMethodCall(call, result);
       },
     });
     this.events = new EventChannel(
-      binding.getBinaryMessenger(), 'nikonpill/location/stream');
+      binding.getBinaryMessenger(), 'zpill/location/stream');
     this.events.setStreamHandler({
       onListen: (args: ESObject, events: EventSink): void => {
         this.sink = events;

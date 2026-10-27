@@ -875,7 +875,7 @@ const Map<String, String> enCatalog = {
   'film.cinema': 'Cinema',
   'film.classicPicks': 'Classic Picks',
   'conn.errNoUsbCamera':
-      'No Nikon camera found: plug in the USB cable, unlock the camera, then try again',
+      'No camera found: plug in the USB cable, unlock the camera, then try again',
   'conn.errRestricted':
       'The camera is in a restricted connection state (data operations disabled): turn the camera off and back on, then reconnect',
   'conn.errReconnectPaused':
@@ -943,7 +943,7 @@ const Map<String, String> enCatalog = {
   'log.saved': 'Saved to {path}',
   'log.saveFailed': 'Save failed: {e}',
   'log.empty': 'No logs yet',
-  'log.header': 'NikonPill diagnostic log\nExported at {time}\n{n} entries\n',
+  'log.header': 'ZPill diagnostic log\nExported at {time}\n{n} entries\n',
   // EN 抽查补漏(2026-10-16)。
   'param.shutter': 'Shutter',
   // 相机信息 sheet(已连接状态行弹层):快门数现读最新照片 MakerNote。

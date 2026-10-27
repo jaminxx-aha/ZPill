@@ -1,11 +1,14 @@
-# NikonPill
+# ZPill
 
-<img src="nikonpill.png" width="96" alt="NikonPill 图标" align="right" />
+<img src="branding/zpill/icon.png" width="96" alt="ZPill 图标" align="right" />
 
-尼康相机无线遥控与传输工具:iOS / Android / HarmonyOS 三端共用一份 Flutter 代码库。
+面向 Nikon 相机的非官方无线遥控与传输工具:iOS / Android / HarmonyOS 三端共用一份 Flutter 代码库。
 
 蓝牙配对唤醒相机 WiFi(或 USB 线直连),经 PTP 协议完成实时取景监看、遥控拍摄、
-浏览下载与本地图库编辑。以尼康 **Zf** 为主要开发与真机验证机型。
+浏览下载与本地图库编辑。以 Nikon **Zf** 为主要开发与真机验证机型。
+
+> 本项目为独立个人开发,与 Nikon Corporation 无隶属、合作或背书关系;
+> Nikon、Zf 等商标归其权利人所有,文中提及仅作兼容性说明。
 
 ## 功能
 
@@ -71,7 +74,7 @@ docs/                架构文档
 
 ## 平台通道
 
-通道命名统一 `nikonpill/<service>`:`network / gallery / bg / ble / usb / nsd / motion / location / raw / video / log`。契约表与三端实现进度见 [lib/platform/services.dart](lib/platform/services.dart);能力缺失时上层按降级路径处理(iOS 拿不到 SSID → 网关直连等),详见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
+通道命名统一 `zpill/<service>`:`network / gallery / bg / ble / usb / nsd / motion / location / raw / video / log`。契约表与三端实现进度见 [lib/platform/services.dart](lib/platform/services.dart);能力缺失时上层按降级路径处理(iOS 拿不到 SSID → 网关直连等),详见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 
 ## 环境准备
 
@@ -122,6 +125,7 @@ flutter build hap
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — 总体分层、关键数据流、三端能力差异
 - [docs/SECURITY.md](docs/SECURITY.md) — 协议、凭据、原生解析与发布安全边界
+- [docs/BRANDING.md](docs/BRANDING.md) — 默认 ZPill 身份与本地自定义品牌
 - [lib/core/README.md](lib/core/README.md) — core 分层与测试策略
 - [lib/core/ptpip/README.md](lib/core/ptpip/README.md) — 尼康 Wi-Fi 方言定案
 - [lib/core/ptpusb/README.md](lib/core/ptpusb/README.md) — PTP/USB 容器差异备忘

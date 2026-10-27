@@ -1,8 +1,8 @@
 /**
- * NikonPill 视频(ohos 平台,native 侧)。
+ * ZPill 视频(ohos 平台,native 侧)。
  *
  * 对应 Dart 契约 lib/platform/video_player.dart(MethodChannel
- * `nikonpill/video`),当前覆盖抽帧、全屏播放与内嵌平台视图:
+ * `zpill/video`),当前覆盖抽帧、全屏播放与内嵌平台视图:
  *
  * - `thumbnail({path, maxPixelSize})`:@ohos.multimedia.media 的
  *   AVImageGenerator(API 12+,本 SDK @since 23 形态)取 0.1s 处一帧
@@ -17,7 +17,7 @@
  * - `play({path, rate})`:全屏播放(VideoSheet 覆盖层 + AVPlayer/
  *   XComponent,2026-10-13)。
  * - `viewLoad/viewControl/viewStatus/viewSeek`:内嵌播放平台视图
- *   (`nikonpill/video-view`,2026-10-24 对齐 iOS 页内播放)—— 实例
+ *   (`zpill/video-view`,2026-10-24 对齐 iOS 页内播放)—— 实例
  *   在 video/VideoView.ets,本类只按 viewId 分发;工厂在
  *   onAttachedToEngine 注册。
  *
@@ -39,10 +39,10 @@ import { VideoSession } from './VideoSession';
 import { VideoViewFactory, VideoViewRegistry } from './VideoView';
 
 const TAG = 'VideoPlugin';
-const CHANNEL = 'nikonpill/video';
+const CHANNEL = 'zpill/video';
 const THUMB_TIME_US = 100000; // 0.1s,避纯黑首帧
 
-/** `nikonpill/video` 通道实现(抽帧/全屏播放/内嵌视图分发)。 */
+/** `zpill/video` 通道实现(抽帧/全屏播放/内嵌视图分发)。 */
 export class VideoPlugin implements FlutterPlugin {
   private channel: MethodChannel | null = null;
 
@@ -58,7 +58,7 @@ export class VideoPlugin implements FlutterPlugin {
       },
     });
     binding.getPlatformViewRegistry().registerViewFactory(
-      'nikonpill/video-view', new VideoViewFactory());
+      'zpill/video-view', new VideoViewFactory());
   }
 
   onDetachedFromEngine(binding: FlutterPluginBinding): void {

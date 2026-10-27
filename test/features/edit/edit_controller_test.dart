@@ -4,10 +4,10 @@ import 'dart:ui' show Rect, Size;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 
-import 'package:nikon_pill/core/media/cube_lut.dart';
-import 'package:nikon_pill/core/media/film_presets.dart';
-import 'package:nikon_pill/core/media/image_edit.dart';
-import 'package:nikon_pill/features/edit/edit_controller.dart';
+import 'package:z_pill/core/media/cube_lut.dart';
+import 'package:z_pill/core/media/film_presets.dart';
+import 'package:z_pill/core/media/image_edit.dart';
+import 'package:z_pill/features/edit/edit_controller.dart';
 
 Uint8List _jpeg(int w, int h) {
   final image = img.Image(width: w, height: h);

@@ -5,7 +5,7 @@
 /// 注),唯一可直接取用的位图是 IFD0 0x0201(JPEGInterchangeFormat)
 /// 指向的 160×120 缩略 JPEG —— 与相机相册 GetThumb 同源同质(撑满
 /// 全屏糊,三列网格够用)。平台无原生 RAW 解码器(ohos/Android,
-/// `nikonpill/raw` 缺席或拒绝)时,网格缩略与大图查看以此为兜底
+/// `zpill/raw` 缺席或拒绝)时,网格缩略与大图查看以此为兜底
 /// ([nefEmbeddedJpeg] 装配成品);NEF 全尺寸解码仍走原生(iOS ImageIO)。
 ///
 /// 结构:文件即 TIFF(II*/MM*,IFD0@8),条目表在头部 ~300B 内;

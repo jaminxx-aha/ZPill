@@ -19,9 +19,9 @@ library;
 
 import 'dart:typed_data';
 
-import 'package:nikon_pill/core/ptp/operation_codes.dart';
-import 'package:nikon_pill/core/ptpip/object_format.dart';
-import 'package:nikon_pill/core/utils/byte_writer.dart';
+import 'package:z_pill/core/ptp/operation_codes.dart';
+import 'package:z_pill/core/ptpip/object_format.dart';
+import 'package:z_pill/core/utils/byte_writer.dart';
 
 import 'mock_objects.dart';
 

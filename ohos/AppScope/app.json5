@@ -1,7 +1,7 @@
 {
   "app": {
-    "bundleName": "com.jaminxx.nikon_pill",
-    "vendor": "example",
+    "bundleName": "com.jaminxx.z_pill",
+    "vendor": "jaminxx",
     "versionCode": 1000000,
     "versionName": "1.0.0",
     "icon": "$media:app_icon",

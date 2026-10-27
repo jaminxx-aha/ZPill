@@ -1,4 +1,4 @@
-// NikonPill RAW 解码通道(iOS 平台,native 侧)。
+// ZPill RAW 解码通道(iOS 平台,native 侧)。
 //
 // 对应 Dart 契约 lib/platform/raw_decoder.dart:
 // - decode({path, maxPixelSize}):CGImageSource 读 RAW(尼康 NEF,
@@ -25,7 +25,7 @@ import UIKit
 public final class RawDecodePlugin: NSObject, FlutterPlugin {
   public static func register(with registrar: FlutterPluginRegistrar) {
     let channel = FlutterMethodChannel(
-      name: "nikonpill/raw", binaryMessenger: registrar.messenger())
+      name: "zpill/raw", binaryMessenger: registrar.messenger())
     registrar.addMethodCallDelegate(RawDecodePlugin(), channel: channel)
   }
 

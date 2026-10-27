@@ -2,9 +2,9 @@ import 'dart:io';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:nikon_pill/app.dart';
-import 'package:nikon_pill/app_services.dart';
-import 'package:nikon_pill/platform/gallery_saver.dart';
+import 'package:z_pill/app.dart';
+import 'package:z_pill/app_services.dart';
+import 'package:z_pill/platform/gallery_saver.dart';
 
 /// 整棵 UI 树冒烟:真机上"屏幕只打一堆文字"疑似渲染异常,
 /// 此处先在本地复现/排除 Widget 层异常。
@@ -15,7 +15,7 @@ void main() {
   // 同款)。
   late Directory dir;
   setUp(() {
-    dir = Directory.systemTemp.createTempSync('nikonpill_smoke');
+    dir = Directory.systemTemp.createTempSync('zpill_smoke');
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(MethodChannelGallerySaver.channel,
             (call) async => switch (call.method) {
@@ -26,7 +26,7 @@ void main() {
     // 事件流,listen 无 mock 即 MissingPluginException,异步错在哪个用例
     // 的排水窗上浮看运气 —— mock 成空应答(冒烟只验渲染,不发事件)
     // 钉死顺序无关(local_library_page_test 同款)。
-    for (final name in const ['nikonpill/ble/events', 'nikonpill/nsd/events']) {
+    for (final name in const ['zpill/ble/events', 'zpill/nsd/events']) {
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(MethodChannel(name),
               (call) async => call.method == 'listen' ? '' : null);
@@ -35,7 +35,7 @@ void main() {
   tearDown(() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(MethodChannelGallerySaver.channel, null);
-    for (final name in const ['nikonpill/ble/events', 'nikonpill/nsd/events']) {
+    for (final name in const ['zpill/ble/events', 'zpill/nsd/events']) {
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(MethodChannel(name), null);
     }
@@ -51,7 +51,7 @@ void main() {
       ..physicalSize = const Size(800, 2400)
       ..devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
-    await tester.pumpWidget(const NikonPillApp());
+    await tester.pumpWidget(const ZPillApp());
     // 首扫排水:扫描未收口前图库 tab 在转圈,pumpAndSettle 会挂在动画
     // 帧上 —— 逐窗排水到收口(单例跨用例保值,首用例排水后续直通)。
     final transfers = AppServices.instance.transfersController;

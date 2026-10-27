@@ -2,8 +2,8 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/core/ptpip/object_info.dart';
-import 'package:nikon_pill/core/utils/byte_writer.dart';
+import 'package:z_pill/core/ptpip/object_info.dart';
+import 'package:z_pill/core/utils/byte_writer.dart';
 
 /// 数据集手搓(布局独立于被测代码,字段排布按 ISO 15740 §13.3 与
 /// probe dump_object_info 的 Zf 真机结构):52 字节定长头 + 三个 STRING

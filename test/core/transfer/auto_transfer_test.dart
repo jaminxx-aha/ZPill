@@ -3,16 +3,16 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/core/browser/object_entry.dart';
-import 'package:nikon_pill/core/browser/photo_group.dart';
-import 'package:nikon_pill/core/ptp/operation_codes.dart';
-import 'package:nikon_pill/core/ptp/ptp_session.dart';
-import 'package:nikon_pill/core/ptp/ptp_transport.dart';
-import 'package:nikon_pill/core/transfer/auto_transfer.dart';
-import 'package:nikon_pill/core/transfer/transfer_engine.dart';
-import 'package:nikon_pill/core/transfer/transfer_task.dart';
-import 'package:nikon_pill/core/utils/byte_writer.dart';
-import 'package:nikon_pill/data/settings_store.dart';
+import 'package:z_pill/core/browser/object_entry.dart';
+import 'package:z_pill/core/browser/photo_group.dart';
+import 'package:z_pill/core/ptp/operation_codes.dart';
+import 'package:z_pill/core/ptp/ptp_session.dart';
+import 'package:z_pill/core/ptp/ptp_transport.dart';
+import 'package:z_pill/core/transfer/auto_transfer.dart';
+import 'package:z_pill/core/transfer/transfer_engine.dart';
+import 'package:z_pill/core/transfer/transfer_task.dart';
+import 'package:z_pill/core/utils/byte_writer.dart';
+import 'package:z_pill/data/settings_store.dart';
 
 /// 事件可控的最小假传输(script 队列 + events 控制器)。
 final class FakeTransport implements PtpTransport {

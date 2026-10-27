@@ -5,8 +5,8 @@ library;
 
 import 'dart:async';
 
-import 'package:nikon_pill/core/camera/camera_connection.dart';
-import 'package:nikon_pill/l10n/message.dart';
+import 'package:z_pill/core/camera/camera_connection.dart';
+import 'package:z_pill/l10n/message.dart';
 
 final class FakeConnection implements CameraConnection {
   final statesCtrl = StreamController<CameraLinkState>.broadcast();

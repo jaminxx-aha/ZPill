@@ -3,10 +3,10 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/core/ptpip/channels.dart';
-import 'package:nikon_pill/core/ptpip/codec.dart';
-import 'package:nikon_pill/core/ptpip/packet.dart';
-import 'package:nikon_pill/core/ptpip/probe.dart';
+import 'package:z_pill/core/ptpip/channels.dart';
+import 'package:z_pill/core/ptpip/codec.dart';
+import 'package:z_pill/core/ptpip/packet.dart';
+import 'package:z_pill/core/ptpip/probe.dart';
 
 /// 探测用假通道(仿 transport_test 的 FakePtpIpChannel):记录已发帧
 /// 与关闭态,emit* 模拟相机。
@@ -159,12 +159,12 @@ void main() {
     final channel = FakeProbeChannel();
     final customGuid = Uint8List.fromList(List.filled(16, 0xAB));
     final probing =
-        probe(channel, clientGuid: customGuid, hostname: 'NikonPill');
+        probe(channel, clientGuid: customGuid, hostname: 'ZPill');
     await pumpEventQueue();
     final sentPacket =
         codec.decode(channel.sent.single) as InitCommandRequestPacket;
     expect(sentPacket.guid, customGuid);
-    expect(sentPacket.hostname, 'NikonPill');
+    expect(sentPacket.hostname, 'ZPill');
     channel.emit(frameOf(InitCommandResponsePacket(
       connectionNumber: 1,
       cameraGuid: Uint8List(16),

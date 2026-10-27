@@ -39,10 +39,34 @@ check(
 val releaseSigningConfigured =
     configuredReleaseSigningValues == releaseSigningValues.size
 
+val brandProperties = Properties()
+val brandPropertiesFile = rootProject.file("brand.local.properties")
+if (brandPropertiesFile.exists()) {
+    brandPropertiesFile.reader(Charsets.UTF_8).use(brandProperties::load)
+}
+
+fun brandValue(
+    environmentName: String,
+    propertyName: String,
+    defaultValue: String,
+): String =
+    System.getenv(environmentName)?.takeIf { it.isNotEmpty() }
+        ?: brandProperties.getProperty(propertyName)?.takeIf { it.isNotEmpty() }
+        ?: defaultValue
+
+val brandApplicationId =
+    brandValue("BRAND_APPLICATION_ID", "applicationId", "com.jaminxx.zpill")
+val brandApplicationName =
+    brandValue("BRAND_APP_NAME", "appName", "ZPill")
+
 android {
-    namespace = "com.jaminxx.nikonpill"
+    namespace = "com.jaminxx.zpill"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
+
+    buildFeatures {
+        resValues = true
+    }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -50,7 +74,8 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.jaminxx.nikonpill"
+        applicationId = brandApplicationId
+        resValue("string", "app_name", brandApplicationName)
         // minSdk 29(Android 10):相册导入走现代 MediaStore 免权限路径
         // (RELATIVE_PATH + IS_PENDING 自有贡献零弹窗);不兼容更旧机型
         // (2026-10-04 用户定)。

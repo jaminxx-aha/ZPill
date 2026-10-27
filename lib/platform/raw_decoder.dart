@@ -1,6 +1,6 @@
-/// RAW 解码接口:`nikonpill/raw` 通道契约。
+/// RAW 解码接口:`zpill/raw` 通道契约。
 ///
-/// MethodChannel `nikonpill/raw` 的 `decode` 方法把 RAW 文件(尼康 NEF)
+/// MethodChannel `zpill/raw` 的 `decode` 方法把 RAW 文件(尼康 NEF)
 /// 原生解码为 JPEG 字节返回,参数 `{path, maxPixelSize}`,返回
 /// `FlutterStandardTypedData`(JPEG;字节陷阱见 flutter-ios-channel-byte-trap)。
 ///
@@ -23,7 +23,7 @@ abstract interface class RawDecoder {
 }
 
 final class MethodChannelRawDecoder implements RawDecoder {
-  static const MethodChannel _channel = MethodChannel('nikonpill/raw');
+  static const MethodChannel _channel = MethodChannel('zpill/raw');
 
   @override
   Future<Uint8List> decodeJpeg(String path, {required int maxPixelSize}) async {

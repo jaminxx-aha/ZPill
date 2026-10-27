@@ -2,8 +2,8 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/core/ptp/operation_codes.dart';
-import 'package:nikon_pill/core/ptpusb/containers.dart';
+import 'package:z_pill/core/ptp/operation_codes.dart';
+import 'package:z_pill/core/ptpusb/containers.dart';
 
 /// 期望字节全部手算(小端),与实现独立 —— 同 test/core/utils 的纪律。
 void main() {

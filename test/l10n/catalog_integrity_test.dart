@@ -2,8 +2,8 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/l10n/en_catalog.dart';
-import 'package:nikon_pill/l10n/zh_catalog.dart';
+import 'package:z_pill/l10n/en_catalog.dart';
+import 'package:z_pill/l10n/zh_catalog.dart';
 
 /// 词表完整性闸门(键漂移防线):
 /// 1. lib/ 全部 t('字面量') 键必须同时在 zh/en 两词表;

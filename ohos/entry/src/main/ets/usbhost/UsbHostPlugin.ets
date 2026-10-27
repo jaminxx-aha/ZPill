@@ -1,5 +1,5 @@
 /**
- * NikonPill USB 主机通道(ohos 平台,native 侧)。
+ * ZPill USB 主机通道(ohos 平台,native 侧)。
  *
  * 对应 Dart 契约 lib/platform/usb/usb_host.dart(v2 字节管道):
  * - bulkRead(maxLen, timeoutMs):单次读、短读合法,native 不做容器重组
@@ -219,7 +219,7 @@ class PipeStats {
   maxActual: number = 0;
 }
 
-/** `nikonpill/usb` + `nikonpill/usb/events` 通道实现。 */
+/** `zpill/usb` + `zpill/usb/events` 通道实现。 */
 export class UsbHostPlugin implements FlutterPlugin {
   private channel: MethodChannel | null = null;
   private events: EventChannel | null = null;
@@ -262,13 +262,13 @@ export class UsbHostPlugin implements FlutterPlugin {
   }
 
   onAttachedToEngine(binding: FlutterPluginBinding): void {
-    this.channel = new MethodChannel(binding.getBinaryMessenger(), 'nikonpill/usb');
+    this.channel = new MethodChannel(binding.getBinaryMessenger(), 'zpill/usb');
     this.channel.setMethodCallHandler({
       onMethodCall: (call: MethodCall, result: MethodResult): void => {
         this.onMethodCall(call, result);
       },
     });
-    this.events = new EventChannel(binding.getBinaryMessenger(), 'nikonpill/usb/events');
+    this.events = new EventChannel(binding.getBinaryMessenger(), 'zpill/usb/events');
     this.events.setStreamHandler({
       onListen: (args: ESObject, events: EventSink): void => {
         this.sink = events;

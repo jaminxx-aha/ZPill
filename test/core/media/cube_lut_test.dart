@@ -2,7 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/core/media/cube_lut.dart';
+import 'package:z_pill/core/media/cube_lut.dart';
 
 /// N×N×N 位置编码表:格点值 = 自身坐标(红最快)。恒等 / 插值 /
 /// 通道顺序断言全靠它 —— apply(0.5,0.5,0.5) 必须精确回到 (0.5,0.5,0.5)。

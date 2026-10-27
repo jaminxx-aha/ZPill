@@ -259,7 +259,7 @@ bool isVideoFilename(String name) => _hasExt(name, const {'mov', 'mp4', 'm4v'});
 
 /// HEIF 静照判定:.hif/.heif(尼康 HIF 容器)。Flutter 引擎无 HEIF
 /// 解码器(iOS 同样不走 ImageIO),查看/缩略只能走原生解码通道
-///(nikonpill/raw,CGImageSource 对格式无门槛)—— 与 NEF 同族,
+///(zpill/raw,CGImageSource 对格式无门槛)—— 与 NEF 同族,
 /// 勿并进「Flutter 可解码」扩展名集合。
 bool isHeifFilename(String name) => _hasExt(name, const {'hif', 'heif'});
 

@@ -2,7 +2,7 @@ import 'dart:math';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/core/camera/reconnect_policy.dart';
+import 'package:z_pill/core/camera/reconnect_policy.dart';
 
 void main() {
   group('ReconnectPolicy normal 退避', () {

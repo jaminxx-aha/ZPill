@@ -4,7 +4,7 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 
-import 'package:nikon_pill/core/media/motion_photo.dart';
+import 'package:z_pill/core/media/motion_photo.dart';
 
 /// XMP APP1 段头(标准 xap 命名空间 + 结尾 NUL),与实现同源。
 final List<int> _kHeader = [...'http://ns.adobe.com/xap/1.0/'.codeUnits, 0];

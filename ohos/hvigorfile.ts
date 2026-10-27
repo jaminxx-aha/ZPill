@@ -4,7 +4,8 @@ import path from 'path'
 import { appTasks } from '@ohos/hvigor-ohos-plugin';
 import { flutterHvigorPlugin } from 'flutter-hvigor-plugin';
 
-const KEYCHAIN_SERVICE = 'com.jaminxx.nikon_pill.ohos-signing';
+const KEYCHAIN_SERVICE = 'com.jaminxx.z_pill.ohos-signing';
+const LEGACY_KEYCHAIN_SERVICE = 'com.jaminxx.nikon_pill.ohos-signing';
 const LOCAL_SIGNING_CONFIG = path.join(__dirname, 'signing', 'local-signing.json');
 const LOCAL_BUILD_STATE_DIRS = [
     path.join(__dirname, '.hvigor'),
@@ -52,24 +53,37 @@ type LocalSigningConfig = {
     };
 };
 
-function readKeychainSecret(account: string): string {
-    try {
-        const secret = execFileSync(
-            '/usr/bin/security',
-            ['find-generic-password', '-w', '-s', KEYCHAIN_SERVICE, '-a', account],
-            { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
-        ).trim();
+let legacyKeychainWarningShown = false;
 
-        if (!secret) {
-            throw new Error('empty Keychain value');
-        }
-        return secret;
-    } catch {
-        throw new Error(
-            `Missing macOS Keychain item "${account}" for service "${KEYCHAIN_SERVICE}". ` +
-            'See docs/RELEASE.md.',
+function readKeychainSecret(account: string): string {
+  for (const service of [KEYCHAIN_SERVICE, LEGACY_KEYCHAIN_SERVICE]) {
+    try {
+      const secret = execFileSync(
+        '/usr/bin/security',
+        ['find-generic-password', '-w', '-s', service, '-a', account],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
+      ).trim();
+
+      if (!secret) {
+        continue;
+      }
+      if (service === LEGACY_KEYCHAIN_SERVICE && !legacyKeychainWarningShown) {
+        legacyKeychainWarningShown = true;
+        console.warn(
+          `Using legacy Keychain service "${LEGACY_KEYCHAIN_SERVICE}". ` +
+          `Move signing secrets to "${KEYCHAIN_SERVICE}" when convenient.`,
         );
+      }
+      return secret;
+    } catch {
+      // Try the legacy service before failing the build.
+        }
     }
+  throw new Error(
+    `Missing macOS Keychain item "${account}" for services ` +
+    `"${KEYCHAIN_SERVICE}" or "${LEGACY_KEYCHAIN_SERVICE}". ` +
+    'See docs/RELEASE.md.',
+  );
 }
 
 function loadSigningOverride() {

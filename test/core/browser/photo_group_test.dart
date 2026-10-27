@@ -1,8 +1,8 @@
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/core/browser/object_entry.dart';
-import 'package:nikon_pill/core/browser/photo_group.dart';
-import 'package:nikon_pill/core/ptpip/object_format.dart';
+import 'package:z_pill/core/browser/object_entry.dart';
+import 'package:z_pill/core/browser/photo_group.dart';
+import 'package:z_pill/core/ptpip/object_format.dart';
 
 /// 单文件条目(参数只留配对关心的字段)。
 ObjectEntry _file(

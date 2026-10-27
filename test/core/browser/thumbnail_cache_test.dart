@@ -4,23 +4,23 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/core/browser/object_entry.dart';
-import 'package:nikon_pill/core/browser/thumbnail_cache.dart';
-import 'package:nikon_pill/core/media/jpeg_orientation.dart';
-import 'package:nikon_pill/core/ptp/operation_codes.dart';
-import 'package:nikon_pill/core/ptp/ptp_session.dart';
-import 'package:nikon_pill/core/ptp/ptp_transport.dart';
-import 'package:nikon_pill/core/ptpip/object_format.dart';
-import 'package:nikon_pill/core/transfer/object_downloader.dart';
-import 'package:nikon_pill/platform/gallery_saver.dart';
-import 'package:nikon_pill/platform/raw_decoder.dart';
+import 'package:z_pill/core/browser/object_entry.dart';
+import 'package:z_pill/core/browser/thumbnail_cache.dart';
+import 'package:z_pill/core/media/jpeg_orientation.dart';
+import 'package:z_pill/core/ptp/operation_codes.dart';
+import 'package:z_pill/core/ptp/ptp_session.dart';
+import 'package:z_pill/core/ptp/ptp_transport.dart';
+import 'package:z_pill/core/ptpip/object_format.dart';
+import 'package:z_pill/core/transfer/object_downloader.dart';
+import 'package:z_pill/platform/gallery_saver.dart';
+import 'package:z_pill/platform/raw_decoder.dart';
 
 import '../ptp/ptp_session_harness.dart' show FakePtpTransport;
 
 /// 假相册服务:目录落在临时目录(每个用例独立,互不污染)。
 final class FakeGallerySaver implements GallerySaver {
   FakeGallerySaver()
-      : root = Directory.systemTemp.createTempSync('nikonpill_test_gallery');
+      : root = Directory.systemTemp.createTempSync('zpill_test_gallery');
 
   final Directory root;
 

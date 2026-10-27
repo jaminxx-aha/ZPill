@@ -3,11 +3,11 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/core/remote/frame_analysis.dart';
-import 'package:nikon_pill/core/remote/live_view_header.dart';
-import 'package:nikon_pill/features/remote/live_design.dart';
-import 'package:nikon_pill/features/remote/live_view_overlays.dart';
-import 'package:nikon_pill/features/remote/monitor_toggles.dart';
+import 'package:z_pill/core/remote/frame_analysis.dart';
+import 'package:z_pill/core/remote/live_view_header.dart';
+import 'package:z_pill/features/remote/live_design.dart';
+import 'package:z_pill/features/remote/live_view_overlays.dart';
+import 'package:z_pill/features/remote/monitor_toggles.dart';
 
 LiveViewHeader _header({
   bool recording = false,

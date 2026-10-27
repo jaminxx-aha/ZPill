@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/features/common/widgets/pull_away.dart';
+import 'package:z_pill/features/common/widgets/pull_away.dart';
 
 /// 下拉跟手共享件单测:跟手变换(布局缩小 + 绘制平移,实测盒随之)、
 /// chrome 淡出口径、弹回复位。

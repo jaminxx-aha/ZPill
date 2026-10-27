@@ -2,12 +2,11 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/core/ptp/device_prop.dart';
-import 'package:nikon_pill/core/ptp/operation_codes.dart';
-import 'package:nikon_pill/core/ptp/ptp_session.dart';
-import 'package:nikon_pill/core/ptp/ptp_transport.dart';
-import 'package:nikon_pill/core/utils/byte_writer.dart';
-
+import 'package:z_pill/core/ptp/device_prop.dart';
+import 'package:z_pill/core/ptp/operation_codes.dart';
+import 'package:z_pill/core/ptp/ptp_session.dart';
+import 'package:z_pill/core/ptp/ptp_transport.dart';
+import 'package:z_pill/core/utils/byte_writer.dart';
 
 import 'ptp_session_harness.dart';
 
@@ -115,10 +114,10 @@ void main() {
       final req = fake.requests.single;
       expect(req.opcode, PtpOperationCode.setDevicePropValue);
       expect(req.params, [PtpDevicePropCode.sessionInitiatorInfo]);
-      // 'NikonPill' PTP 字符串:u8 计数(字符数,不含 NUL)+ UTF-16LE,
+      // 'ZPill' PTP 字符串:u8 计数(字符数,不含 NUL)+ UTF-16LE,
       // 无终止符 —— 与探针 ptp_str 同款(Zf USB 实证载荷,2026-10-07)。
-      final expected = <int>[9];
-      for (final cu in 'NikonPill'.codeUnits) {
+      final expected = <int>['ZPill'.length];
+      for (final cu in 'ZPill'.codeUnits) {
         expected.addAll([cu & 0xFF, cu >> 8]);
       }
       expect(req.dataOut, Uint8List.fromList(expected));
@@ -861,8 +860,7 @@ void main() {
       await session.getObjectPropList(0x10,
           propCode: 0x0004, depth: 0xFFFFFFFF);
       // P4/P5 按位序不可跳:给了 depth 而未给组码,P4 补 0x00000000。
-      expect(
-          t.requests.last.params, [0x10, 0, 0x0004, 0x00000000, 0xFFFFFFFF]);
+      expect(t.requests.last.params, [0x10, 0, 0x0004, 0x00000000, 0xFFFFFFFF]);
 
       t.reply(PtpResult(
           responseCode: PtpResponseCode.ok,
@@ -884,8 +882,7 @@ void main() {
         ..str(0x13, PtpObjectPropCode.dateCreated, '20260926T090000')
         ..u16(0x10, PtpObjectPropCode.objectFormat, 0x3001)
         ..str(0x10, PtpObjectPropCode.objectFilename, 'DCIM');
-      t.reply(
-          PtpResult(responseCode: PtpResponseCode.ok, data: ds.build()));
+      t.reply(PtpResult(responseCode: PtpResponseCode.ok, data: ds.build()));
       final props = await session.getObjectPropList(0xFFFFFFFF,
           formatCode: 0x00000000, propCode: 0xFFFFFFFF, depth: 0xFFFFFFFF);
       expect(t.requests.single.opcode, NikonOperationCode.getObjectPropList);
@@ -908,13 +905,14 @@ void main() {
       final ds = PropListDataset()
         ..u16(0x13, PtpObjectPropCode.objectFormat, 0x3801) // 首条正常
         ..raw(0x13, 0xDC41, 0x5555, [1, 2, 3, 4]); // 表外类型 → 整体弃
-      t.reply(
-          PtpResult(responseCode: PtpResponseCode.ok, data: ds.build()));
-      await expectLater(session.getObjectPropList(0xFFFFFFFF, depth: 0xFFFFFFFF),
+      t.reply(PtpResult(responseCode: PtpResponseCode.ok, data: ds.build()));
+      await expectLater(
+          session.getObjectPropList(0xFFFFFFFF, depth: 0xFFFFFFFF),
           throwsA(isA<FormatException>()));
       expect(session.objectPropListDegraded, isTrue);
       // 秒拒:本会话后续调用直接 UnsupportedError,不再消耗往返。
-      await expectLater(session.getObjectPropList(0xFFFFFFFF, depth: 0xFFFFFFFF),
+      await expectLater(
+          session.getObjectPropList(0xFFFFFFFF, depth: 0xFFFFFFFF),
           throwsA(isA<UnsupportedError>()));
       expect(t.requests, hasLength(1));
     });
@@ -924,10 +922,12 @@ void main() {
         '回退 GetObjectInfo 仍可用', () async {
       t.reply(
           const PtpResult(responseCode: PtpResponseCode.operationNotSupported));
-      await expectLater(session.getObjectPropList(0xFFFFFFFF, depth: 0xFFFFFFFF),
+      await expectLater(
+          session.getObjectPropList(0xFFFFFFFF, depth: 0xFFFFFFFF),
           throwsA(isA<PtpResponseException>()));
       expect(session.objectPropListDegraded, isTrue);
-      await expectLater(session.getObjectPropList(0xFFFFFFFF, depth: 0xFFFFFFFF),
+      await expectLater(
+          session.getObjectPropList(0xFFFFFFFF, depth: 0xFFFFFFFF),
           throwsA(isA<UnsupportedError>()));
       expect(t.requests, hasLength(1)); // 拒答只发生一次
 
@@ -942,7 +942,8 @@ void main() {
     test('getObjectPropList:open() 复位降级旗标,新会话重新探测', () async {
       t.reply(
           const PtpResult(responseCode: PtpResponseCode.operationNotSupported));
-      await expectLater(session.getObjectPropList(0xFFFFFFFF, depth: 0xFFFFFFFF),
+      await expectLater(
+          session.getObjectPropList(0xFFFFFFFF, depth: 0xFFFFFFFF),
           throwsA(isA<PtpResponseException>()));
       expect(session.objectPropListDegraded, isTrue);
 
@@ -952,8 +953,7 @@ void main() {
 
       final ds = PropListDataset()
         ..str(0x13, PtpObjectPropCode.objectFilename, 'DSC_0002.JPG');
-      t.reply(
-          PtpResult(responseCode: PtpResponseCode.ok, data: ds.build()));
+      t.reply(PtpResult(responseCode: PtpResponseCode.ok, data: ds.build()));
       final props =
           await session.getObjectPropList(0xFFFFFFFF, depth: 0xFFFFFFFF);
       expect(props.single.value, 'DSC_0002.JPG');
@@ -966,8 +966,7 @@ void main() {
         ..raw(0x12, 0xDC41, 0x000A, List.filled(16, 0xAB)) // UINT128
         ..raw(0x12, 0xDC86, 0x4002, [3, 0, 0, 0, 9, 9, 9]) // AUINT8×3
         ..u64(0x12, PtpObjectPropCode.objectSize, 26843545);
-      t.reply(
-          PtpResult(responseCode: PtpResponseCode.ok, data: ds.build()));
+      t.reply(PtpResult(responseCode: PtpResponseCode.ok, data: ds.build()));
       final props =
           await session.getObjectPropList(0xFFFFFFFF, depth: 0xFFFFFFFF);
       expect(props, hasLength(3));
@@ -980,8 +979,7 @@ void main() {
       expect(session.objectPropListDegraded, isFalse);
     });
 
-    test('getObjectPropList:计数与字节流不符(尾巴/提前耗尽)判不可信降级',
-        () async {
+    test('getObjectPropList:计数与字节流不符(尾巴/提前耗尽)判不可信降级', () async {
       // 尾巴:count=1 但流内还有第二条的字节。
       final w = ByteWriter()
         ..u32(1)
@@ -994,7 +992,8 @@ void main() {
         ..u16(0x0004)
         ..u16(0x3001);
       t.reply(PtpResult(responseCode: PtpResponseCode.ok, data: w.takeBytes()));
-      await expectLater(session.getObjectPropList(0xFFFFFFFF, depth: 0xFFFFFFFF),
+      await expectLater(
+          session.getObjectPropList(0xFFFFFFFF, depth: 0xFFFFFFFF),
           throwsA(isA<FormatException>()));
       expect(session.objectPropListDegraded, isTrue);
 
@@ -1009,8 +1008,7 @@ void main() {
         ..u16(0x3801);
       t2.reply(
           PtpResult(responseCode: PtpResponseCode.ok, data: w2.takeBytes()));
-      await expectLater(
-          s2.getObjectPropList(0xFFFFFFFF, depth: 0xFFFFFFFF),
+      await expectLater(s2.getObjectPropList(0xFFFFFFFF, depth: 0xFFFFFFFF),
           throwsA(isA<FormatException>()));
       expect(s2.objectPropListDegraded, isTrue);
     });

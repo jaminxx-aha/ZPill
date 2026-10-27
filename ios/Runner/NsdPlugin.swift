@@ -1,7 +1,7 @@
-// NikonPill mDNS 相机发现(iOS 平台,native 侧)。
+// ZPill mDNS 相机发现(iOS 平台,native 侧)。
 //
-// 对应 Dart 契约 lib/platform/nsd_scanner.dart(`nikonpill/nsd` +
-// `nikonpill/nsd/events`):浏览 `_ptp._tcp.` 并解析出 IP/端口/TXT,
+// 对应 Dart 契约 lib/platform/nsd_scanner.dart(`zpill/nsd` +
+// `zpill/nsd/events`):浏览 `_ptp._tcp.` 并解析出 IP/端口/TXT,
 // found/lost 事件经 EventChannel 上报。
 //
 // 路线抉择:**NetServiceBrowser + NetService**(纯 DNS-SD),不用
@@ -36,10 +36,10 @@ final class NsdPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
   static func register(with registrar: FlutterPluginRegistrar) {
     let instance = NsdPlugin()
     let methods = FlutterMethodChannel(
-      name: "nikonpill/nsd", binaryMessenger: registrar.messenger())
+      name: "zpill/nsd", binaryMessenger: registrar.messenger())
     registrar.addMethodCallDelegate(instance, channel: methods)
     let events = FlutterEventChannel(
-      name: "nikonpill/nsd/events", binaryMessenger: registrar.messenger())
+      name: "zpill/nsd/events", binaryMessenger: registrar.messenger())
     events.setStreamHandler(instance)
   }
 

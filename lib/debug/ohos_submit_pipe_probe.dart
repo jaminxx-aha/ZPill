@@ -41,7 +41,7 @@ const bool kOhosSubmitProbe = bool.fromEnvironment('OHOS_SUBMIT_PROBE');
 final class OhosSubmitPipeProbe {
   OhosSubmitPipeProbe._();
 
-  static const MethodChannel _usb = MethodChannel('nikonpill/usb');
+  static const MethodChannel _usb = MethodChannel('zpill/usb');
 
   /// (深度 × 缓冲 × 重复)阶梯 v5:sync 基线锚定;512K 单发(衔接 v4
   /// 口径,带常规间隙);512K ×6 零间隙连下(生产节拍模拟 —— v4 定案

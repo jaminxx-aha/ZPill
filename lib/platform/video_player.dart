@@ -1,4 +1,4 @@
-/// 视频播放接口:`nikonpill/video` 通道契约。
+/// 视频播放接口:`zpill/video` 通道契约。
 ///
 /// 三个方法:
 /// - `play({path, rate})`:全屏播放本地视频文件,返回于播放器关闭时
@@ -20,7 +20,7 @@
 ///
 /// 另有**内嵌播放**一路(图库查看器视频页,2026-10-09):
 /// - `supportsEmbeddedView`:平台是否具备内嵌播放视图(= iOS/ohos
-///   平台视图 `nikonpill/video-view` 已注册;Android 回 false → 调用方
+///   平台视图 `zpill/video-view` 已注册;Android 回 false → 调用方
 ///   回落海报帧 + 播放钮,点了走全屏 play)。
 /// - `loadEmbeddedView(viewId, path)`:内嵌视图装载档案。**路径不走
 ///   平台视图 creationParams**(引擎对工厂可选编解码钩子的挂接不可靠,
@@ -91,7 +91,7 @@ abstract interface class VideoPlayer {
   Future<void> seekEmbeddedView(int viewId, {required double position});
 }
 
-/// 生产内嵌视图:`nikonpill/video-view` 平台视图 —— iOS = UiKitView 包
+/// 生产内嵌视图:`zpill/video-view` 平台视图 —— iOS = UiKitView 包
 /// AVPlayerViewController(VideoPlugin 注册),ohos = **OhosView**(fork
 /// 亲儿子件,渲染对象 offset 带仿射 transform,引擎旋转支持只认它 ——
 /// AndroidView 载具实测转横即死:无 transform 被引擎按「不处理旋转」
@@ -105,13 +105,13 @@ Widget embeddedVideoViewBuilder(
     String path, void Function(int viewId) onCreated) {
   if (Platform.isIOS) {
     return UiKitView(
-      viewType: 'nikonpill/video-view',
+      viewType: 'zpill/video-view',
       onPlatformViewCreated: onCreated,
     );
   }
   if (Platform.operatingSystem == 'ohos') {
     return OhosView(
-      viewType: 'nikonpill/video-view',
+      viewType: 'zpill/video-view',
       onPlatformViewCreated: onCreated,
     );
   }
@@ -120,7 +120,7 @@ Widget embeddedVideoViewBuilder(
 }
 
 final class MethodChannelVideoPlayer implements VideoPlayer {
-  static const MethodChannel _channel = MethodChannel('nikonpill/video');
+  static const MethodChannel _channel = MethodChannel('zpill/video');
 
   @override
   bool get supportsEmbeddedView =>

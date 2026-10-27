@@ -317,7 +317,7 @@ def main() -> int:
         print("    ✗ 全档被拒 —— 相机侧(USB 直连)就不给 0x101B 数据")
         return 0
 
-    out = f"/tmp/nikonpill_lens_head_{newest_jpg['handle']:08X}.bin"
+    out = f"/tmp/zpill_lens_head_{newest_jpg['handle']:08X}.bin"
     Path(out).write_bytes(head)
     print(f"    首档成功:{used}B 已存 {out}")
 

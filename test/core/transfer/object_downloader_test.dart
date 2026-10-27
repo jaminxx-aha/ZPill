@@ -4,13 +4,13 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/core/browser/object_entry.dart';
-import 'package:nikon_pill/core/ptp/operation_codes.dart';
-import 'package:nikon_pill/core/ptp/ptp_session.dart';
-import 'package:nikon_pill/core/ptp/ptp_transport.dart';
-import 'package:nikon_pill/core/ptpip/object_format.dart';
-import 'package:nikon_pill/core/transfer/aimd_chunk.dart';
-import 'package:nikon_pill/core/transfer/object_downloader.dart';
+import 'package:z_pill/core/browser/object_entry.dart';
+import 'package:z_pill/core/ptp/operation_codes.dart';
+import 'package:z_pill/core/ptp/ptp_session.dart';
+import 'package:z_pill/core/ptp/ptp_transport.dart';
+import 'package:z_pill/core/ptpip/object_format.dart';
+import 'package:z_pill/core/transfer/aimd_chunk.dart';
+import 'package:z_pill/core/transfer/object_downloader.dart';
 
 import '../ptp/ptp_session_harness.dart'
     show FakePtpTransport, buildDeviceInfoDataset;
@@ -28,7 +28,7 @@ PtpResult _okData(Uint8List data) =>
 void main() {
   late Directory dir;
   setUp(() async {
-    dir = await Directory.systemTemp.createTemp('nikonpill_dl_test');
+    dir = await Directory.systemTemp.createTemp('zpill_dl_test');
   });
   tearDown(() async {
     if (await dir.exists()) {

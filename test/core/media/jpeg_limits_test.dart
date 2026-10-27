@@ -3,7 +3,7 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 
-import 'package:nikon_pill/core/media/jpeg_limits.dart';
+import 'package:z_pill/core/media/jpeg_limits.dart';
 
 Uint8List _jpeg(int width, int height) => Uint8List.fromList(
       img.encodeJpg(img.Image(width: width, height: height)),

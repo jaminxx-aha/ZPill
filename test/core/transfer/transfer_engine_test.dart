@@ -6,19 +6,19 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 
-import 'package:nikon_pill/core/browser/object_entry.dart';
-import 'package:nikon_pill/core/media/motion_photo.dart' show injectXmpApp1;
-import 'package:nikon_pill/core/media/watermark.dart';
-import 'package:nikon_pill/core/media/xmp_metadata.dart';
-import 'package:nikon_pill/core/ptp/operation_codes.dart';
-import 'package:nikon_pill/core/ptp/ptp_session.dart';
-import 'package:nikon_pill/core/ptp/ptp_transport.dart';
-import 'package:nikon_pill/core/ptpip/object_format.dart';
-import 'package:nikon_pill/core/transfer/object_downloader.dart';
-import 'package:nikon_pill/core/transfer/transfer_engine.dart';
-import 'package:nikon_pill/core/transfer/transfer_history.dart';
-import 'package:nikon_pill/core/transfer/transfer_task.dart';
-import 'package:nikon_pill/platform/gallery_saver.dart';
+import 'package:z_pill/core/browser/object_entry.dart';
+import 'package:z_pill/core/media/motion_photo.dart' show injectXmpApp1;
+import 'package:z_pill/core/media/watermark.dart';
+import 'package:z_pill/core/media/xmp_metadata.dart';
+import 'package:z_pill/core/ptp/operation_codes.dart';
+import 'package:z_pill/core/ptp/ptp_session.dart';
+import 'package:z_pill/core/ptp/ptp_transport.dart';
+import 'package:z_pill/core/ptpip/object_format.dart';
+import 'package:z_pill/core/transfer/object_downloader.dart';
+import 'package:z_pill/core/transfer/transfer_engine.dart';
+import 'package:z_pill/core/transfer/transfer_history.dart';
+import 'package:z_pill/core/transfer/transfer_task.dart';
+import 'package:z_pill/platform/gallery_saver.dart';
 
 import '../ptp/ptp_session_harness.dart'
     show FakePtpTransport, buildDeviceInfoDataset;
@@ -26,7 +26,7 @@ import '../ptp/ptp_session_harness.dart'
 /// 假相册:目录落在真实临时目录(验证落盘/清理),导入行为可配置。
 final class FakeGallerySaver implements GallerySaver {
   FakeGallerySaver()
-      : root = Directory.systemTemp.createTempSync('nikonpill_engine_test');
+      : root = Directory.systemTemp.createTempSync('zpill_engine_test');
 
   final Directory root;
 

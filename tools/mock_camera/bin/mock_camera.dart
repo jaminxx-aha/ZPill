@@ -13,7 +13,7 @@ library;
 import 'dart:async';
 import 'dart:io';
 
-import 'package:nikon_pill/core/ptpip/transport.dart' show kPtpIpPort;
+import 'package:z_pill/core/ptpip/transport.dart' show kPtpIpPort;
 
 import '../mock_camera.dart';
 

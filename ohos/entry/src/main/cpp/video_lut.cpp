@@ -1,7 +1,7 @@
 /**
  * ohos 视频 LUT 导出(rawdecoder.so 内,native 侧)。
  *
- * 对应 Dart 契约 lib/platform/video_lut_export.dart(`nikonpill/video_lut`):
+ * 对应 Dart 契约 lib/platform/video_lut_export.dart(`zpill/video_lut`):
  * 本地视频 + 3D LUT(Float32 N³×4 RGBA 红最快)→ 烘焙 MP4 临时档。
  * iOS = AVVideoComposition 内嵌 CIColorCube;Android = Media3
  * Transformer SingleColorLut;ohos 无带颜色钩子的转码 API(AVTranscoder

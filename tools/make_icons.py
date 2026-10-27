@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""从仓库根 nikonpill.png 生成 iOS 与 ohos 应用图标及三端启动占位图。
+"""从品牌图标生成 iOS、Android 与 OHOS 应用图标及启动占位图。
 
 原图本身已是完整的方形图标设计(黄底上 56° 斜向飞行的药丸,
 红头右上、金尾左下),因此按原图方向与构图原样导出:
@@ -15,7 +15,7 @@
 - android/.../mipmap-{m,h,x,xh,xxh,xxxh}dpi/launch_image.png(96dp 网格,圆角)
 - android/.../mipmap-{m,h,x,xh,xxh,xxxh}dpi/ic_launcher.png(48dp 网格,圆角,替换默认 Flutter 图)
 
-用法:python3 tools/make_icons.py [源图](默认 <repo>/nikonpill.png)
+用法:python3 tools/make_icons.py [源图](默认 <repo>/branding/zpill/icon.png)
 依赖:Pillow。
 """
 
@@ -104,7 +104,7 @@ def export_launcher(master):
 
 
 def main():
-    src = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "nikonpill.png"
+    src = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "branding/zpill/icon.png"
     # 原图直出:保持源图方向与构图,仅做平台所需的尺寸与遮罩处理
     master = Image.open(src).convert("RGB")
     print(f"master: {master.size[0]}x{master.size[1]}")

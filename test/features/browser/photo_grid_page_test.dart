@@ -5,24 +5,24 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/features/common/trash_rating_icon.dart';
-import 'package:nikon_pill/data/ui_prefs_store.dart';
-import 'package:nikon_pill/core/browser/album.dart';
-import 'package:nikon_pill/core/browser/object_entry.dart';
-import 'package:nikon_pill/core/media/watermark.dart' show ExifCardData;
-import 'package:nikon_pill/core/browser/object_repository.dart';
-import 'package:nikon_pill/core/browser/photo_group.dart';
-import 'package:nikon_pill/core/browser/thumbnail_cache.dart';
-import 'package:nikon_pill/core/camera/camera_connection.dart';
-import 'package:nikon_pill/core/ptpip/object_format.dart';
-import 'package:nikon_pill/core/transfer/transfer_engine.dart';
-import 'package:nikon_pill/core/transfer/transfer_task.dart';
-import 'package:nikon_pill/features/browser/album_ratings_controller.dart';
-import 'package:nikon_pill/features/browser/browser_controller.dart';
-import 'package:nikon_pill/features/browser/photo_grid_page.dart';
-import 'package:nikon_pill/features/browser/photo_viewer_page.dart';
-import 'package:nikon_pill/features/common/widgets/hero_zoom.dart';
-import 'package:nikon_pill/features/transfers/transfers_page.dart';
+import 'package:z_pill/features/common/trash_rating_icon.dart';
+import 'package:z_pill/data/ui_prefs_store.dart';
+import 'package:z_pill/core/browser/album.dart';
+import 'package:z_pill/core/browser/object_entry.dart';
+import 'package:z_pill/core/media/watermark.dart' show ExifCardData;
+import 'package:z_pill/core/browser/object_repository.dart';
+import 'package:z_pill/core/browser/photo_group.dart';
+import 'package:z_pill/core/browser/thumbnail_cache.dart';
+import 'package:z_pill/core/camera/camera_connection.dart';
+import 'package:z_pill/core/ptpip/object_format.dart';
+import 'package:z_pill/core/transfer/transfer_engine.dart';
+import 'package:z_pill/core/transfer/transfer_task.dart';
+import 'package:z_pill/features/browser/album_ratings_controller.dart';
+import 'package:z_pill/features/browser/browser_controller.dart';
+import 'package:z_pill/features/browser/photo_grid_page.dart';
+import 'package:z_pill/features/browser/photo_viewer_page.dart';
+import 'package:z_pill/features/common/widgets/hero_zoom.dart';
+import 'package:z_pill/features/transfers/transfers_page.dart';
 import '../../helpers/fake_connection.dart';
 
 /// 手动驱动的伪仓库(同 browser_controller_test:块事件逐个发,
@@ -132,7 +132,7 @@ final class _FakeThumbs implements ThumbnailCache {
     if (failHandles.contains(entry.handle)) {
       throw Exception('假失败:${entry.name}');
     }
-    final path = '/tmp/nikonpill_test_thumb_${entry.handle}.jpg';
+    final path = '/tmp/zpill_test_thumb_${entry.handle}.jpg';
     File(path).writeAsBytesSync(_tinyPng);
     return path;
   }
@@ -1295,7 +1295,7 @@ void main() {
         find.byWidgetPredicate((w) =>
             w is Image &&
             w.image ==
-                FileImage(File('/tmp/nikonpill_test_thumb_1.jpg'))),
+                FileImage(File('/tmp/zpill_test_thumb_1.jpg'))),
         findsOneWidget);
 
     // 收查看器:配对件仍在两侧,回程航班落回格位。

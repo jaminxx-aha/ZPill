@@ -2,7 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/features/edit/lut_presets.dart';
+import 'package:z_pill/features/edit/lut_presets.dart';
 
 /// 「N-Log 还原」内置 LUT 对账。
 ///

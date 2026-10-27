@@ -1,8 +1,8 @@
 /**
- * NikonPill BLE 裸桥(ohos 平台,native 侧)。
+ * ZPill BLE 裸桥(ohos 平台,native 侧)。
  *
  * 对应 Dart 契约 lib/platform/ble_scanner.dart(BleHost):
- * MethodChannel `nikonpill/ble` + EventChannel `nikonpill/ble/events`。
+ * MethodChannel `zpill/ble` + EventChannel `zpill/ble/events`。
  * 协议逻辑(配对握手/GEO/TIME 载荷)全在 Dart(lib/core/ble/),本桥
  * 只做扫描/连接/GATT 搬运,零 Nikon 方言知识 —— 唯一例外:bondDevice
  * (程序化经典蓝牙绑定;鸿蒙公开 API 可为,iOS 无此路 —— 首配注册用)。
@@ -63,7 +63,7 @@ class PendingOp {
   result: MethodResult | null = null;
 }
 
-/** `nikonpill/ble` + `nikonpill/ble/events` 通道实现。 */
+/** `zpill/ble` + `zpill/ble/events` 通道实现。 */
 export class BlePlugin implements FlutterPlugin, AbilityAware {
   private channel: MethodChannel | null = null;
   private events: EventChannel | null = null;
@@ -99,14 +99,14 @@ export class BlePlugin implements FlutterPlugin, AbilityAware {
 
   onAttachedToEngine(binding: FlutterPluginBinding): void {
     this.channel =
-      new MethodChannel(binding.getBinaryMessenger(), 'nikonpill/ble');
+      new MethodChannel(binding.getBinaryMessenger(), 'zpill/ble');
     this.channel.setMethodCallHandler({
       onMethodCall: (call: MethodCall, result: MethodResult): void => {
         this.onMethodCall(call, result);
       },
     });
     this.events =
-      new EventChannel(binding.getBinaryMessenger(), 'nikonpill/ble/events');
+      new EventChannel(binding.getBinaryMessenger(), 'zpill/ble/events');
     this.events.setStreamHandler({
       onListen: (args: ESObject, events: EventSink): void => {
         this.sink = events;
@@ -152,7 +152,7 @@ export class BlePlugin implements FlutterPlugin, AbilityAware {
         });
         break;
       case 'deviceName':
-        // 本机型号名(相机侧注册名「<型号>-NikonPill」的型号段,组装
+        // 本机型号名(相机侧注册名「<型号>-ZPill」的型号段,组装
         // 在 Dart 侧):市场名(如 HUAWEI Mate 80 Pro)→ 机型代号
         // (productModel,如 ALN-AL00)兜底。deviceInfo 免权限,同步取。
         result.success(deviceInfo.marketName !== ''

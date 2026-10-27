@@ -3,8 +3,8 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 
-import 'package:nikon_pill/core/media/film_presets.dart';
-import 'package:nikon_pill/core/media/image_edit.dart';
+import 'package:z_pill/core/media/film_presets.dart';
+import 'package:z_pill/core/media/image_edit.dart';
 
 FilmPreset _byId(String id) => filmPresets.firstWhere((p) => p.id == id);
 

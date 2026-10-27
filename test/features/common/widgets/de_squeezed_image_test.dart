@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 
-import 'package:nikon_pill/features/common/widgets/de_squeezed_image.dart';
+import 'package:z_pill/features/common/widgets/de_squeezed_image.dart';
 
 Uint8List _png(int width, int height) {
   final image = img.Image(width: width, height: height);

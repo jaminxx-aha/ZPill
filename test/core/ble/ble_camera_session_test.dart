@@ -3,17 +3,17 @@ import 'dart:typed_data';
 
 import 'package:flutter/services.dart' show PlatformException;
 import 'package:flutter_test/flutter_test.dart';
-import 'package:nikon_pill/core/ble/ble_camera_session.dart';
-import 'package:nikon_pill/core/ble/blowfish_hasher.dart';
-import 'package:nikon_pill/core/ble/gatt_uuids.dart';
-import 'package:nikon_pill/core/ble/geo_payload.dart';
-import 'package:nikon_pill/core/ble/pairing_engine.dart';
-import 'package:nikon_pill/core/ble/pairing_message.dart';
-import 'package:nikon_pill/core/ble/wifi_credentials.dart'
+import 'package:z_pill/core/ble/ble_camera_session.dart';
+import 'package:z_pill/core/ble/blowfish_hasher.dart';
+import 'package:z_pill/core/ble/gatt_uuids.dart';
+import 'package:z_pill/core/ble/geo_payload.dart';
+import 'package:z_pill/core/ble/pairing_engine.dart';
+import 'package:z_pill/core/ble/pairing_message.dart';
+import 'package:z_pill/core/ble/wifi_credentials.dart'
     show lssSessionKeyCandidates;
-import 'package:nikon_pill/l10n/message.dart';
-import 'package:nikon_pill/core/log/app_log.dart';
-import 'package:nikon_pill/platform/ble_scanner.dart';
+import 'package:z_pill/l10n/message.dart';
+import 'package:z_pill/core/log/app_log.dart';
+import 'package:z_pill/platform/ble_scanner.dart';
 
 import 'wifi_credentials_test.dart' show craftBlob;
 
@@ -247,11 +247,17 @@ void main() {
     expect(session.identity!.peripheralUuid, 'P1');
     expect(session.identity!.deviceId & 0xFF, 0x01);
     expect(session.identity!.serial, 'B123456');
-    expect(session.identity!.name, 'NikonPill');
+    expect(session.identity!.name, 'ZPill');
     final name = host.lastWrite(kNikonCharName);
     expect(name.length, 32);
-    expect(String.fromCharCodes(name.take(9)), 'NikonPill');
-    expect(name.skip(9).every((b) => b == 0), isTrue);
+    expect(
+      String.fromCharCodes(name.take('ZPill'.length)),
+      'ZPill',
+    );
+    expect(
+      name.skip('ZPill'.length).every((b) => b == 0),
+      isTrue,
+    );
   });
 
   test('握手诊断不落配对帧 device/nonce/序列号', () async {
@@ -280,7 +286,7 @@ void main() {
     }
   });
 
-  test('组装名沿写入 0x2002(「<型号>-NikonPill」,32B 零填充)', () async {
+  test('组装名沿写入 0x2002(「<型号>-ZPill」,32B 零填充)', () async {
     session.controllerName =
         BleCameraSession.composeControllerName('iPhone 17 Pro');
     final done = expectLater(session.pair(device), completes);
@@ -295,35 +301,39 @@ void main() {
         BleNotified(uuid: kNikonCharPairing, data: buildStage4().encode()));
     await pump();
     expect(session.state, BleSessionState.ready);
-    expect(session.identity!.name, 'iPhone 17 Pro-NikonPill');
+    expect(session.identity!.name, 'iPhone 17 Pro-ZPill');
     final name = host.lastWrite(kNikonCharName);
     expect(name.length, 32);
-    expect(String.fromCharCodes(name.take(23)), 'iPhone 17 Pro-NikonPill');
-    expect(name.skip(23).every((b) => b == 0), isTrue);
+    const expectedName = 'iPhone 17 Pro-ZPill';
+    expect(String.fromCharCodes(name.take(expectedName.length)), expectedName);
+    expect(
+      name.skip(expectedName.length).every((b) => b == 0),
+      isTrue,
+    );
     await done;
   });
 
-  group('composeControllerName(相机侧注册名「<型号>-NikonPill」)', () {
+  group('composeControllerName(相机侧注册名「<型号>-ZPill」)', () {
     test('常规型号原样接后缀', () {
       expect(BleCameraSession.composeControllerName('iPhone 17 Pro'),
-          'iPhone 17 Pro-NikonPill');
+          'iPhone 17 Pro-ZPill');
       expect(BleCameraSession.composeControllerName('HUAWEI Mate 80 Pro'),
-          'HUAWEI Mate 80 Pro-NikonPill');
+          'HUAWEI Mate 80 Pro-ZPill');
     });
 
     test('型号空/纯非 ASCII 回落裸名(0x2002 须 ASCII)', () {
-      expect(BleCameraSession.composeControllerName(''), 'NikonPill');
-      expect(BleCameraSession.composeControllerName('哈哈手机'), 'NikonPill');
+      expect(BleCameraSession.composeControllerName(''), 'ZPill');
+      expect(BleCameraSession.composeControllerName('哈哈手机'), 'ZPill');
     });
 
     test('非 ASCII 剔除 + 连续空白并一', () {
       expect(BleCameraSession.composeControllerName('Aha 的 Mate60'),
-          'Aha Mate60-NikonPill');
+          'Aha Mate60-ZPill');
     });
 
-    test('总长钳 32(型号段最多 22)', () {
+    test('总长钳 32(型号段最多 26)', () {
       final name = BleCameraSession.composeControllerName('A' * 30);
-      expect(name, '${'A' * 22}-NikonPill');
+      expect(name, '${'A' * 26}-ZPill');
       expect(name.length, 32);
     });
   });

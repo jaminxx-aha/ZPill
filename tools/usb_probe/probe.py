@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""NikonPill USB PTP 探针。
+"""ZPill USB PTP 探针。
 
 在写 iOS DriverKit dext / Android UsbManager 实现之前,先在 Mac 上对
 真机跑通 PTP/USB 握手、核对容器字节布局 —— 与 tools/ptpip_probe 同纪律。
@@ -22,7 +22,7 @@
         ... probe.py --thumb 0x0A1A571E    # 指定 handle(逗号分隔多个)
     身份判别实验(唯一写操作,见 [4s]):
         ... probe.py --props d406 --setprop 0xd406=factory --setprop 0xd406= \
-              --setprop "0xd406=NikonPill/1.0 (PTP host)" --getobj 0x291A16A1
+              --setprop "0xd406=ZPill/1.0 (PTP host)" --getobj 0x291A16A1
     遥控域回归(曝光属性解码对照 / Live View 帧格式 / 快门事件时间线):
         ... probe.py --propdesc 5007,500d,500f
         ... probe.py --liveview 10
@@ -750,7 +750,7 @@ def dump_thumb(dev, ep_out, ep_in, txid, opcode: int, op_name: str, handle: int)
     print(f"    {op_name} 0x{handle:08X} <- 0x{rcode:04X}  {len(data)}B  "
           f"SOI 偏移 {soi if soi >= 0 else '无(非 JPEG?)'}  尺寸 {dim_s}")
     print(f"      前 32B: {data[:32].hex(' ')}")
-    out = f"/tmp/nikonpill_probe_{op_name}_{handle:08X}.bin"
+    out = f"/tmp/zpill_probe_{op_name}_{handle:08X}.bin"
     with open(out, "wb") as f:
         f.write(data)
     print(f"      原始字节已存:{out}(可直接改后缀 .jpg 查看)")
@@ -997,7 +997,7 @@ def main() -> int:
         return 1
 
     # 步骤 4x(可选,--xact):任意事务梯 —— 连接脚本/模式门直发仪器。
-    # 背景:OpenZCine 连接脚本(0x9435 → 0x90C2(1) USB 兜底)与 NikonPill
+    # 背景:OpenZCine 连接脚本(0x9435 → 0x90C2(1) USB 兜底)与 ZPill
     # enableAppControl 同款,但 Zf 机身停上传优先横幅的病根未定 —— 逐级
     # 直发记录响应码,机身屏显由操作者目视对照(usbfs 直连人设与 iOS IC
     # 人设可能不同;usbfs 实证的 0xD406 身份钥匙在 IC 链不生效)。
@@ -1100,7 +1100,7 @@ def main() -> int:
             except (usb.core.USBError, IOError) as e:
                 print(f"    {tag} <- USB 异常:{e}")
                 # STALL(Pipe error)后必须 CLEAR_FEATURE(ENDPOINT_HALT)
-                # 才能继续,两个 bulk 端点都清(参照 NikonPill UsbHostPlugin)。
+                # 才能继续,两个 bulk 端点都清(参照 ZPill UsbHostPlugin)。
                 try:
                     dev.clear_halt(ep_out)
                     dev.clear_halt(ep_in)
@@ -1113,7 +1113,7 @@ def main() -> int:
                 print(f"    {tag} <- 0x{rc:04X}  data={len(data)}B  "
                       f"head={data[:16].hex(' ')}")
                 if len(data) > 64:
-                    out = f"/tmp/nikonpill_probe_op_{op:04X}_{len(data)}B.bin"
+                    out = f"/tmp/zpill_probe_op_{op:04X}_{len(data)}B.bin"
                     with open(out, "wb") as f:
                         f.write(data)
                     print(f"      数据已存:{out}")
@@ -1211,7 +1211,7 @@ def main() -> int:
                     continue
                 print(f"      <- 0x{rc:04X}  数据 {len(data)}B  头 64B: {data[:64].hex(' ')}")
                 if len(data) > 64:
-                    out = f"/tmp/nikonpill_probe_objmeta_{tag}.bin"
+                    out = f"/tmp/zpill_probe_objmeta_{tag}.bin"
                     with open(out, "wb") as f:
                         f.write(data)
                     print(f"      原始字节已存:{out}")
@@ -1646,7 +1646,7 @@ def main() -> int:
                 print(f"    帧 #{got}: {len(data)}B  SOI@{soi}")
                 if got == 1:
                     ext = ".jpg" if soi >= 0 else ".bin"
-                    out = f"/tmp/nikonpill_probe_liveview_first{ext}"
+                    out = f"/tmp/zpill_probe_liveview_first{ext}"
                     with open(out, "wb") as f:
                         f.write(data)
                     print(f"      头 32B: {data[:32].hex(' ')}  原始帧已存:{out}")

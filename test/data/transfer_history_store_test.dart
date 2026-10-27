@@ -2,8 +2,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:nikon_pill/core/transfer/transfer_task.dart';
-import 'package:nikon_pill/data/transfer_history_store.dart';
+import 'package:z_pill/core/transfer/transfer_task.dart';
+import 'package:z_pill/data/transfer_history_store.dart';
 
 TransferTask _task(
   String id, {
@@ -33,7 +33,7 @@ void main() {
   late Directory root;
 
   setUp(() {
-    root = Directory.systemTemp.createTempSync('nikonpill_history');
+    root = Directory.systemTemp.createTempSync('zpill_history');
   });
   tearDown(() {
     if (root.existsSync()) root.deleteSync(recursive: true);

@@ -1,6 +1,6 @@
-# NikonPill 架构
+# ZPill 架构
 
-> 三端(iOS / Android / HarmonyOS)尼康相机无线遥控与传输工具。
+> 三端(iOS / Android / HarmonyOS)面向 Nikon 相机的非官方无线遥控与传输工具。
 > 技术栈:Flutter(HarmonyOS 走 OpenHarmony-SIG flutter_flutter fork),
 > 单一 `lib/` 代码库。功能总览与环境准备见 [README.md](../README.md)。
 > 无线 / USB 双链路、取景拍摄、传输、图库主线均已真机验收。
@@ -31,7 +31,7 @@ flowchart TD
         media[media 图像处理]
     end
     subgraph PLAT["platform/ — 平台差异收口(MethodChannel)"]
-        plat["nikonpill/* 契约 + Dart 侧实现"]
+        plat["zpill/* 契约 + Dart 侧实现"]
     end
     subgraph DATA["data/ — 持久化"]
         store[配对相机 / 身份 / 设置 / 评分 / 参数快照]
@@ -79,7 +79,7 @@ flowchart TD
 | `lib/core/log` | 统一日志门面 AppLog:分级分域 + 环形缓冲 + 脱敏,原生日志合流 |
 | `lib/core/utils` | 小端字节读写器(全协议读写的唯一通道) |
 | `lib/features` | UI(MVVM):shell / connection / remote / browser / library / edit / transfers / settings |
-| `lib/platform` | 三端 MethodChannel 契约与 Dart 侧实现(`nikonpill/<service>`) |
+| `lib/platform` | 三端 MethodChannel 契约与 Dart 侧实现(`zpill/<service>`) |
 | `lib/data` | 持久化:配对相机、BLE/客户端身份、设置、评分、拍摄参数快照 |
 | `lib/design` / `lib/l10n` / `lib/debug` | 设计 token、键化文案(zh/en + 完整性闸)、PTP 诊断 |
 | `tools/` | mock_camera(假相机)/ ptpip_probe / usb_probe / ble_pair 探针 |
@@ -103,7 +103,7 @@ BLE 配对:四步握手(身份持久化,重连免重配)→ GATT 读出 WiFi 凭
 断链转 `reconnecting` 按退避重拨(取景页保留冻结帧不弹回),预算耗尽转
 `failed`;状态 Stream 驱动 UI 着色。
 
-**连接(USB)**:插线 → `nikonpill/usb` claim 接口 → `UsbPtpTransport`
+**连接(USB)**:插线 → `zpill/usb` claim 接口 → `UsbPtpTransport`
 attach 进路由器,同一状态机同一下游。
 
 **取景**:连接即取景(RemoteController 于 connected 沿串链自驱)→
@@ -129,7 +129,7 @@ Android 后台下载走前台服务。
 
 ## 4. 三端平台契约
 
-channel 命名统一 `nikonpill/<service>`,完整契约表与三端落地进度见
+channel 命名统一 `zpill/<service>`,完整契约表与三端落地进度见
 [lib/platform/services.dart](../lib/platform/services.dart)。
 技术选型与能力差异:
 

@@ -3,11 +3,11 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/data/ratings_store.dart';
-import 'package:nikon_pill/features/library/library_ratings.dart';
+import 'package:z_pill/data/ratings_store.dart';
+import 'package:z_pill/features/library/library_ratings.dart';
 
 Future<String> _tempDataDir() async =>
-    (await Directory.systemTemp.createTemp('nikonpill_ratings_test_')).path;
+    (await Directory.systemTemp.createTemp('zpill_ratings_test_')).path;
 
 void main() {
   // ── 身份键 ────────────────────────────────────────────────────

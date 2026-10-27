@@ -10,7 +10,7 @@
     },
     {
       "name": "EntryAbility_label",
-      "value": "Nikon Pill"
+      "value": "ZPill"
     },
     {
       "name": "location_reason",
@@ -18,7 +18,7 @@
     },
     {
       "name": "bluetooth_reason",
-      "value": "与尼康相机建立蓝牙连接,完成配对并注入 GPS 定位"
+      "value": "与相机建立蓝牙连接,完成配对并注入 GPS 定位"
     },
     {
       "name": "media_save_reason",

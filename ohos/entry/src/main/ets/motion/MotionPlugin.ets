@@ -1,8 +1,8 @@
 /**
- * NikonPill 水平仪姿态(ohos 平台,native 侧)。
+ * ZPill 水平仪姿态(ohos 平台,native 侧)。
  *
  * 对应 Dart 契约 lib/platform/motion_host.dart(EventChannel
- * `nikonpill/motion/attitude`):每条事件 = [pitch, roll](弧度,pitch
+ * `zpill/motion/attitude`):每条事件 = [pitch, roll](弧度,pitch
  * 抬头为正,roll 右倾为正)。
  *
  * ohos API 要点(@ohos.sensor,API 9+):
@@ -33,7 +33,7 @@ import {
 
 const TAG = 'MotionPlugin';
 
-/** `nikonpill/motion/attitude` 通道实现。 */
+/** `zpill/motion/attitude` 通道实现。 */
 export class MotionPlugin implements FlutterPlugin {
   private events: EventChannel | null = null;
   private sink: EventSink | null = null;
@@ -45,7 +45,7 @@ export class MotionPlugin implements FlutterPlugin {
 
   onAttachedToEngine(binding: FlutterPluginBinding): void {
     this.events =
-      new EventChannel(binding.getBinaryMessenger(), 'nikonpill/motion/attitude');
+      new EventChannel(binding.getBinaryMessenger(), 'zpill/motion/attitude');
     this.events.setStreamHandler({
       onListen: (args: ESObject, events: EventSink): void => {
         this.sink = events;

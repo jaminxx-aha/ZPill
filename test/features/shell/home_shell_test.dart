@@ -7,23 +7,23 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 
-import 'package:nikon_pill/app_services.dart';
-import 'package:nikon_pill/core/camera/camera_connection.dart';
-import 'package:nikon_pill/core/ptp/device_prop.dart';
-import 'package:nikon_pill/core/ptp/operation_codes.dart';
-import 'package:nikon_pill/core/ptp/ptp_session.dart';
-import 'package:nikon_pill/core/ptp/ptp_transport.dart';
-import 'package:nikon_pill/core/remote/live_view_engine.dart';
-import 'package:nikon_pill/core/utils/byte_writer.dart';
-import 'package:nikon_pill/design/app_theme.dart';
-import 'package:nikon_pill/features/connection/connection_controller.dart';
-import 'package:nikon_pill/features/remote/live_view_overlays.dart';
-import 'package:nikon_pill/features/remote/remote_controller.dart';
-import 'package:nikon_pill/features/remote/remote_page.dart';
-import 'package:nikon_pill/features/remote/shooting_param_catalog.dart';
-import 'package:nikon_pill/features/settings/settings_page.dart';
-import 'package:nikon_pill/features/shell/home_shell.dart';
-import 'package:nikon_pill/platform/gallery_saver.dart';
+import 'package:z_pill/app_services.dart';
+import 'package:z_pill/core/camera/camera_connection.dart';
+import 'package:z_pill/core/ptp/device_prop.dart';
+import 'package:z_pill/core/ptp/operation_codes.dart';
+import 'package:z_pill/core/ptp/ptp_session.dart';
+import 'package:z_pill/core/ptp/ptp_transport.dart';
+import 'package:z_pill/core/remote/live_view_engine.dart';
+import 'package:z_pill/core/utils/byte_writer.dart';
+import 'package:z_pill/design/app_theme.dart';
+import 'package:z_pill/features/connection/connection_controller.dart';
+import 'package:z_pill/features/remote/live_view_overlays.dart';
+import 'package:z_pill/features/remote/remote_controller.dart';
+import 'package:z_pill/features/remote/remote_page.dart';
+import 'package:z_pill/features/remote/shooting_param_catalog.dart';
+import 'package:z_pill/features/settings/settings_page.dart';
+import 'package:z_pill/features/shell/home_shell.dart';
+import 'package:z_pill/platform/gallery_saver.dart';
 import '../../helpers/fake_connection.dart';
 
 /// 假传输:双道应答回放。连接沿有两条独立链并发入队 —— 控制器链
@@ -228,7 +228,7 @@ void main() {
   // 排水窗(与 local_library_page_test 同款),扫描链可在窗内收口。
   late Directory dir;
   setUp(() {
-    dir = Directory.systemTemp.createTempSync('nikonpill_shell');
+    dir = Directory.systemTemp.createTempSync('zpill_shell');
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(MethodChannelGallerySaver.channel,
             (call) async => switch (call.method) {
@@ -239,7 +239,7 @@ void main() {
     // 事件流,listen 无 mock 即 MissingPluginException,异步错在哪个用例
     // 的排水窗上浮看运气 —— mock 成空应答(壳用例注入假控制器,事件流
     // 本就不该发事件)钉死顺序无关(local_library_page_test 同款)。
-    for (final name in const ['nikonpill/ble/events', 'nikonpill/nsd/events']) {
+    for (final name in const ['zpill/ble/events', 'zpill/nsd/events']) {
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(MethodChannel(name),
               (call) async => call.method == 'listen' ? '' : null);
@@ -248,7 +248,7 @@ void main() {
   tearDown(() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(MethodChannelGallerySaver.channel, null);
-    for (final name in const ['nikonpill/ble/events', 'nikonpill/nsd/events']) {
+    for (final name in const ['zpill/ble/events', 'zpill/nsd/events']) {
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(MethodChannel(name), null);
     }

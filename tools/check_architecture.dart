@@ -210,7 +210,7 @@ bool _isForbiddenLayer(String path) {
 }
 
 String? _resolveImport(Directory root, String source, String importUri) {
-  const packagePrefix = 'package:nikon_pill/';
+  const packagePrefix = 'package:z_pill/';
   if (importUri.startsWith(packagePrefix)) {
     return 'lib/${importUri.substring(packagePrefix.length)}';
   }

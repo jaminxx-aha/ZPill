@@ -1,11 +1,11 @@
 /**
- * 内嵌视频播放平台视图(ohos 侧;`nikonpill/video-view`)。
+ * 内嵌视频播放平台视图(ohos 侧;`zpill/video-view`)。
  *
  * 对应 Dart 契约 lib/platform/video_player.dart 的内嵌播放一路(iOS
  * UiKitView 同款语义,2026-10-24 对齐 iOS 页内播放):OhosView 工厂创建
  * XComponent 面,AVPlayer 挂 surfaceId 出画;档案路径不走平台视图
  * creationParams(引擎编解码钩子不可靠,iOS 同款教训),Dart 在
- * onCreated 回传 viewId 后经 `nikonpill/video` 通道 viewLoad 显式装载。
+ * onCreated 回传 viewId 后经 `zpill/video` 通道 viewLoad 显式装载。
  *
  * 通道方法(VideoPlugin 按本文件注册表分发):
  * - `viewLoad({id, path})`:装载档案(idle → fdSrc)。

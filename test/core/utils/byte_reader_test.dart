@@ -1,8 +1,8 @@
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:nikon_pill/core/utils/byte_reader.dart';
-import 'package:nikon_pill/core/utils/byte_writer.dart';
+import 'package:z_pill/core/utils/byte_reader.dart';
+import 'package:z_pill/core/utils/byte_writer.dart';
 
 void main() {
   group('ByteWriter/ByteReader 小端序(字节序错误的包会被相机静默丢弃)', () {

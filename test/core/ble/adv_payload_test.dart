@@ -1,7 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:nikon_pill/core/ble/adv_payload.dart';
+import 'package:z_pill/core/ble/adv_payload.dart';
 
 /// 0x0399 广播解析:全分支 + 与 native 重连过滤器的字节口径互证
 /// (布局 [99 03][u32 LE deviceId],≥6B,尾随字节忽略)。

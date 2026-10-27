@@ -1,0 +1,13 @@
+id: example-custom
+displayName: My Camera Remote
+description: My personal camera remote
+
+# A custom brand must use its own application identity and signing material.
+bundleId:
+  android: com.example.cameraremote
+  ios: com.example.cameraremote
+  ohos: com.example.cameraremote
+
+# Relative to this file. Replace the sample image with your own square PNG.
+icon: ../zpill/icon.png
+allowBundleIdOverride: true

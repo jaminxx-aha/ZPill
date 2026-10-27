@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/platform/motion_host.dart';
+import 'package:z_pill/platform/motion_host.dart';
 
 void main() {
   group('MotionOrientation.fromList', () {

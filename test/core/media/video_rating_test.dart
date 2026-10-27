@@ -6,7 +6,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/core/media/video_rating.dart';
+import 'package:z_pill/core/media/video_rating.dart';
 
 import '../../helpers/video_container.dart';
 

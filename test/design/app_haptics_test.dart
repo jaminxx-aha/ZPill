@@ -1,7 +1,7 @@
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/design/app_haptics.dart';
+import 'package:z_pill/design/app_haptics.dart';
 
 /// AppHaptics 单测:各语义方法在 TestWidgetsFlutterBinding 下调用不炸,
 /// 且平台方法通道收到对应的 HapticFeedback 强度参数(官方 mock channel

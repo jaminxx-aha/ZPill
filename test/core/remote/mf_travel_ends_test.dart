@@ -1,7 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/core/ptp/ptp_session.dart';
-import 'package:nikon_pill/core/remote/mf_travel_ends.dart';
+import 'package:z_pill/core/ptp/ptp_session.dart';
+import 'package:z_pill/core/remote/mf_travel_ends.dart';
 
 void main() {
   group('MfTravelEnds 端点状态机(nico MfDriveResult 语义)', () {

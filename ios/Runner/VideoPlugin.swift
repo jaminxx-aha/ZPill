@@ -1,4 +1,4 @@
-// NikonPill 视频播放通道(iOS 平台,native 侧)。
+// ZPill 视频播放通道(iOS 平台,native 侧)。
 //
 // 对应 Dart 契约 lib/platform/video_player.dart:
 // - play({path, rate}):AVPlayer 播放本地文件,全屏 present。AVPlayerViewController
@@ -18,10 +18,10 @@
 //   预览的门禁数据)。无视频轨/探测失败回 nil,Dart 侧按「实时播放」
 //   处理。
 // - viewLoad({id, path}):内嵌播放视图装载档案(平台视图
-//   `nikonpill/video-view` 创建后、起播前由 Dart 侧调用 —— 平台视图
+//   `zpill/video-view` 创建后、起播前由 Dart 侧调用 —— 平台视图
 //   不走 creationParams 传路径,引擎侧编解码钩子不可靠,见工厂注释)。
 // - viewControl({id, playing, rate}):驱动内嵌播放视图(平台视图
-//   `nikonpill/video-view`,图库查看器视频页):起播/暂停 + 顺帧速率。
+//   `zpill/video-view`,图库查看器视频页):起播/暂停 + 顺帧速率。
 //   AVPlayerViewController 以子视图进 Flutter 树,原生传输条关闭
 //   (播放控制 Flutter 自绘);横滑翻页手势归 Flutter(UiKitView 空
 //   gestureRecognizers,拖动由 Flutter 滚动手势认领,点按未被认领才
@@ -43,10 +43,10 @@ public final class VideoPlugin: NSObject, FlutterPlugin {
 
   public static func register(with registrar: FlutterPluginRegistrar) {
     let channel = FlutterMethodChannel(
-      name: "nikonpill/video", binaryMessenger: registrar.messenger())
+      name: "zpill/video", binaryMessenger: registrar.messenger())
     registrar.addMethodCallDelegate(VideoPlugin(), channel: channel)
     registrar.register(
-      EmbeddedVideoViewFactory(), withId: "nikonpill/video-view")
+      EmbeddedVideoViewFactory(), withId: "zpill/video-view")
   }
 
   public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {

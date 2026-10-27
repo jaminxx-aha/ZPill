@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/core/log/app_log.dart';
+import 'package:z_pill/core/log/app_log.dart';
 
 void main() {
   setUp(() => AppLog.resetForTest());

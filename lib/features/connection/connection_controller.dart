@@ -136,7 +136,7 @@ class ConnectionController extends ChangeNotifier {
   final BleCameraSession? bleSession;
   final BleIdentityStore? bleIdentityStore;
 
-  /// 程序化加入相机热点(`nikonpill/network` join;Android/ohos 已实
+  /// 程序化加入相机热点(`zpill/network` join;Android/ohos 已实
   /// 现,iOS 未装配 → joinCameraAp 走 skipped 手动指引)。
   final WifiJoiner? wifiJoiner;
   final SettingsController? settingsController;

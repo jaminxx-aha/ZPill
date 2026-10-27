@@ -1,9 +1,9 @@
-// NikonPill 位置采样通道(iOS 平台,native 侧)。
+// ZPill 位置采样通道(iOS 平台,native 侧)。
 //
 // 对应 Dart 契约 lib/platform/location_host.dart:
-// - MethodChannel `nikonpill/location` 的 `current` 做一次定位,返回
+// - MethodChannel `zpill/location` 的 `current` 做一次定位,返回
 //   [latitude, longitude](WGS84 十进制度),不可用返回 nil。
-// - EventChannel `nikonpill/location/stream` + `startStream`/`stopStream`
+// - EventChannel `zpill/location/stream` + `startStream`/`stopStream`
 //   连续定位流(BLE GPS 注入用):distanceFilter 3m、后台可续
 //   (allowsBackgroundLocationUpdates,配 UIBackgroundModes=location)、
 //   不自动暂停;事件载荷 Map{latitude, longitude, altitude}。
@@ -27,10 +27,10 @@ public final class LocationPlugin: NSObject, FlutterPlugin, CLLocationManagerDel
   public static func register(with registrar: FlutterPluginRegistrar) {
     let instance = LocationPlugin()
     let channel = FlutterMethodChannel(
-      name: "nikonpill/location", binaryMessenger: registrar.messenger())
+      name: "zpill/location", binaryMessenger: registrar.messenger())
     registrar.addMethodCallDelegate(instance, channel: channel)
     let stream = FlutterEventChannel(
-      name: "nikonpill/location/stream", binaryMessenger: registrar.messenger())
+      name: "zpill/location/stream", binaryMessenger: registrar.messenger())
     stream.setStreamHandler(instance)
   }
 

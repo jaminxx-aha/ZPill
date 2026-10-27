@@ -2,9 +2,9 @@ import 'dart:async';
 import 'dart:collection';
 import 'dart:typed_data';
 
-import 'package:nikon_pill/core/ptp/operation_codes.dart';
-import 'package:nikon_pill/core/ptp/ptp_transport.dart';
-import 'package:nikon_pill/core/utils/byte_writer.dart';
+import 'package:z_pill/core/ptp/operation_codes.dart';
+import 'package:z_pill/core/ptp/ptp_transport.dart';
+import 'package:z_pill/core/utils/byte_writer.dart';
 
 /// PtpSession 三份测试(core / browse / remote)共用的桩传输与数据集
 /// 工厂;原 ptp_session_test.dart 单文件同缝拆出,原私有类转公开。

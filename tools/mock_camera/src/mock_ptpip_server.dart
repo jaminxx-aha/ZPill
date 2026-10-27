@@ -25,10 +25,10 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:nikon_pill/core/ptpip/channels.dart';
-import 'package:nikon_pill/core/ptpip/codec.dart';
-import 'package:nikon_pill/core/ptpip/packet.dart';
-import 'package:nikon_pill/core/utils/byte_reader.dart';
+import 'package:z_pill/core/ptpip/channels.dart';
+import 'package:z_pill/core/ptpip/codec.dart';
+import 'package:z_pill/core/ptpip/packet.dart';
+import 'package:z_pill/core/utils/byte_reader.dart';
 
 import 'mock_nikon_device.dart';
 
@@ -96,9 +96,9 @@ final class MockPtpIpCamera {
   /// 相机名(InitCommandResponse / DeviceInfo 展示用)。
   final String cameraName;
 
-  /// 相机 GUID:ASCII 'NikonPill-MOCK01' 恰 16 字节,一眼可辨。
+  /// 相机 GUID:ASCII 'ZPill-MOCK01' 恰 16 字节,一眼可辨。
   final Uint8List cameraGuid =
-      Uint8List.fromList('NikonPill-MOCK01'.codeUnits);
+      Uint8List.fromList('ZPill-MOCK01'.codeUnits);
 
   final void Function(String line) _log;
 

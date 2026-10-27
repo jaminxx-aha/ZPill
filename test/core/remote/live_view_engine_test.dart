@@ -5,13 +5,13 @@ import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/core/log/app_log.dart';
-import 'package:nikon_pill/core/ptp/operation_codes.dart';
-import 'package:nikon_pill/core/ptp/ptp_session.dart';
-import 'package:nikon_pill/core/ptp/ptp_transport.dart';
-import 'package:nikon_pill/core/remote/live_view_engine.dart';
-import 'package:nikon_pill/core/remote/live_view_header.dart';
-import 'package:nikon_pill/core/remote/live_view_watchdog.dart';
+import 'package:z_pill/core/log/app_log.dart';
+import 'package:z_pill/core/ptp/operation_codes.dart';
+import 'package:z_pill/core/ptp/ptp_session.dart';
+import 'package:z_pill/core/ptp/ptp_transport.dart';
+import 'package:z_pill/core/remote/live_view_engine.dart';
+import 'package:z_pill/core/remote/live_view_header.dart';
+import 'package:z_pill/core/remote/live_view_watchdog.dart';
 
 /// 按序回放的假传输层(与 ptp_session_test 同构,精简版)。
 final class _ScriptTransport implements PtpTransport {

@@ -2,8 +2,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:nikon_pill/data/ble_identity_store.dart';
-import 'package:nikon_pill/features/connection/connection_controller.dart';
+import 'package:z_pill/data/ble_identity_store.dart';
+import 'package:z_pill/features/connection/connection_controller.dart';
 
 void main() {
   late Directory dir;
@@ -28,7 +28,7 @@ void main() {
       'deviceId': 0x8014411,
       'nonce': 0x1234ABCD,
       'serial': '1641397',
-      'controllerName': 'NikonPill',
+      'controllerName': 'ZPill',
       'cameraName': 'Z f_8014411',
       'wifiPassword': legacyPassword,
       'pairedAt': '2026-10-13T08:00:00.000Z',

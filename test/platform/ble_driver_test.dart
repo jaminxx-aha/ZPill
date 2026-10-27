@@ -1,11 +1,11 @@
 import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:nikon_pill/core/ble/ble_camera_session.dart';
-import 'package:nikon_pill/platform/ble_scanner.dart';
-import 'package:nikon_pill/platform/background_transfer.dart';
-import 'package:nikon_pill/platform/ble_driver.dart';
-import 'package:nikon_pill/platform/location_host.dart';
+import 'package:z_pill/core/ble/ble_camera_session.dart';
+import 'package:z_pill/platform/ble_scanner.dart';
+import 'package:z_pill/platform/background_transfer.dart';
+import 'package:z_pill/platform/ble_driver.dart';
+import 'package:z_pill/platform/location_host.dart';
 
 /// 最小桩:驱动本身不触 host(只有会话触),驱动门面用例保持会话
 /// idle 即可,未触面一律 UnimplementedError。

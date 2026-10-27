@@ -16,7 +16,7 @@ import 'dart:typed_data';
 
 import 'package:image/image.dart' as img;
 
-import 'package:nikon_pill/core/ptpip/object_format.dart';
+import 'package:z_pill/core/ptpip/object_format.dart';
 
 /// 一个合成对象(句柄 → 元数据 + 三档载荷)。
 ///

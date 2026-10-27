@@ -2,9 +2,9 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/core/ptpip/codec.dart';
-import 'package:nikon_pill/core/ptpip/packet.dart';
-import 'package:nikon_pill/core/utils/byte_writer.dart';
+import 'package:z_pill/core/ptpip/codec.dart';
+import 'package:z_pill/core/ptpip/packet.dart';
+import 'package:z_pill/core/utils/byte_writer.dart';
 
 /// golden 十六进制 → 字节(测试专用,断言线上真值而非回环)。
 Uint8List _hex(String hex) {

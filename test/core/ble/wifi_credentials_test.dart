@@ -1,8 +1,8 @@
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:nikon_pill/core/ble/blowfish_hasher.dart';
-import 'package:nikon_pill/core/ble/wifi_credentials.dart';
+import 'package:z_pill/core/ble/blowfish_hasher.dart';
+import 'package:z_pill/core/ble/wifi_credentials.dart';
 
 /// 用与解密同核的 Blowfish 构造 97B 凭据 blob(测试向量制造器):
 /// 32B SSID + 64B 密码(NUL 补齐)+ 1B 安全;[cbc] = CBC(IV=0) 模式;

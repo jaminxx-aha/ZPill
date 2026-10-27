@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:nikon_pill/core/ble/geo_payload.dart';
+import 'package:z_pill/core/ble/geo_payload.dart';
 
 GeoFix fix({
   double lat = 35.5,

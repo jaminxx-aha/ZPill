@@ -11,17 +11,17 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/core/camera/camera_connection.dart';
-import 'package:nikon_pill/core/browser/album.dart';
-import 'package:nikon_pill/core/ptpip/object_format.dart';
-import 'package:nikon_pill/core/browser/object_entry.dart';
-import 'package:nikon_pill/core/browser/object_repository.dart';
-import 'package:nikon_pill/core/browser/photo_group.dart';
-import 'package:nikon_pill/core/ptp/operation_codes.dart';
-import 'package:nikon_pill/core/ptp/ptp_session.dart';
-import 'package:nikon_pill/core/ptp/ptp_transport.dart';
-import 'package:nikon_pill/l10n/message.dart';
-import 'package:nikon_pill/features/connection/camera_overview_controller.dart';
+import 'package:z_pill/core/camera/camera_connection.dart';
+import 'package:z_pill/core/browser/album.dart';
+import 'package:z_pill/core/ptpip/object_format.dart';
+import 'package:z_pill/core/browser/object_entry.dart';
+import 'package:z_pill/core/browser/object_repository.dart';
+import 'package:z_pill/core/browser/photo_group.dart';
+import 'package:z_pill/core/ptp/operation_codes.dart';
+import 'package:z_pill/core/ptp/ptp_session.dart';
+import 'package:z_pill/core/ptp/ptp_transport.dart';
+import 'package:z_pill/l10n/message.dart';
+import 'package:z_pill/features/connection/camera_overview_controller.dart';
 
 final class _FakeTransport implements PtpTransport {
   final script = Queue<Object>();

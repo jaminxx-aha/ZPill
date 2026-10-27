@@ -1,11 +1,11 @@
 {
   "modelVersion": "5.1.0",
-  "name": "nikon_pill",
+  "name": "z_pill",
   "version": "1.0.0",
-  "description": "Please describe the basic information.",
+  "description": "ZPill camera remote control and media transfer",
   "main": "",
-  "author": "",
-  "license": "",
+  "author": "jaminxx",
+  "license": "MIT",
   "dependencies": {},
   "devDependencies": {
     "@ohos/hypium": "1.0.6"

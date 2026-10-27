@@ -1630,7 +1630,7 @@ class _LibraryViewerState extends State<_LibraryViewer>
   }
 
   /// 原生解码,NEF 失败回内嵌缩略兜底:无原生 RAW 解码器平台(ohos/
-  /// Android,`nikonpill/raw` 缺席或扩展名闸拒绝)查看 NEF 不再死在
+  /// Android,`zpill/raw` 缺席或扩展名闸拒绝)查看 NEF 不再死在
   /// 「解码失败」—— 回 IFD0 内嵌 160×120 缩略([nefEmbeddedJpeg]:
   /// 方向注入 + 黑边裁剪,与网格缩略同源同质;撑满全屏糊,可看而不够
   /// 清晰,真清晰仍须原生 RAW 解码器,见 raw_decoder.dart 库注)。非

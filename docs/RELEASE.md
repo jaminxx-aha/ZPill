@@ -72,15 +72,20 @@ putting the value in shell history:
 
 ```bash
 security add-generic-password -U -a storePassword \
-  -s com.jaminxx.nikon_pill.ohos-signing -w
+  -s com.jaminxx.z_pill.ohos-signing -w
 security add-generic-password -U -a keyPassword \
-  -s com.jaminxx.nikon_pill.ohos-signing -w
+  -s com.jaminxx.z_pill.ohos-signing -w
 ```
 
 `hvigorfile.ts` reads those two Keychain items only during a local build and
 combines them with the ignored signing material. On machines without the local
 config it leaves signing unchanged. Do not put passwords in
 `local-signing.json`, environment files, or any tracked file.
+
+For existing development machines, `hvigorfile.ts` temporarily falls back to
+the pre-ZPill service `com.jaminxx.nikon_pill.ohos-signing`. Move both items to
+`com.jaminxx.z_pill.ohos-signing` when convenient; the fallback only prevents
+the rename from breaking local builds.
 
 Hvigor may copy encrypted signing values into its local build cache. The build
 script therefore applies `umask 077` and repairs existing `.hvigor` metadata to
@@ -92,9 +97,9 @@ Keychain items:
 
 ```bash
 security delete-generic-password -a storePassword \
-  -s com.jaminxx.nikon_pill.ohos-signing
+  -s com.jaminxx.z_pill.ohos-signing
 security delete-generic-password -a keyPassword \
-  -s com.jaminxx.nikon_pill.ohos-signing
+  -s com.jaminxx.z_pill.ohos-signing
 ```
 
 Signing material that has appeared in repository history must be treated as

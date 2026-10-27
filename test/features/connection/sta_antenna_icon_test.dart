@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:nikon_pill/features/connection/sta_antenna_icon.dart';
+import 'package:z_pill/features/connection/sta_antenna_icon.dart';
 
 /// STA 自绘图标形状闸:golden 锁「漏斗天线+两侧双弧波」构图(2026-10-20
 /// 对相机 Wi-Fi 菜单原图定稿)。纯 canvas 无文字渲染,跨平台 golden 稳定;

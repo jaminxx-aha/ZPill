@@ -966,11 +966,11 @@ mixin _RemoteOps on _SessionCore {
     }
   }
 
-  /// 写会话发起者身份 0xD406='NikonPill'(尽力而为,失败/被拒返 false)。
+  /// 写会话发起者身份 0xD406='ZPill'(尽力而为,失败/被拒返 false)。
   ///
   /// Zf USB 实证(2026-10-07 探针):initiator 为出厂/残留 MTP 主机串
   /// ('Windows/… MTPClassDriver')时 0x9201 StartLiveView 被拒 0xA004,
-  /// 写任一非 MTP 身份串('NikonPill'/'Android Device' 均验)即解锁;
+  /// 写任一非 MTP 身份串('ZPill'/'Android Device' 均验)即解锁;
   /// 该值**每次连接弹回出厂**。身份写同时让机身把主机按新身份归类
   /// (op 表 119→124 变化;真机复报:remote 模式下带身份写 = 停
   /// 「已连接到计算机」屏),**且 iOS IC 链上不生效** —— 故连接流
@@ -981,7 +981,7 @@ mixin _RemoteOps on _SessionCore {
   /// ptp_str 同款。
   Future<bool> writeInitiatorIdentity() async {
     try {
-      final w = ByteWriter()..ptpString('NikonPill');
+      final w = ByteWriter()..ptpString('ZPill');
       final result = await _serialized(() => transport.execute(PtpRequest(
             opcode: PtpOperationCode.setDevicePropValue,
             params: [PtpDevicePropCode.sessionInitiatorInfo],
