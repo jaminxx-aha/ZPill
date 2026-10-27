@@ -1,10 +1,11 @@
 allprojects {
     repositories {
-        // 国内网络兜底:阿里云镜像在前,官方仓在后(镜像缺失时回落)
-        maven("https://maven.aliyun.com/repository/google")
-        maven("https://maven.aliyun.com/repository/public")
+        // Official repositories are authoritative. Regional mirrors remain
+        // fallbacks for networks where the official endpoints are unreachable.
         google()
         mavenCentral()
+        maven("https://maven.aliyun.com/repository/google")
+        maven("https://maven.aliyun.com/repository/public")
     }
 }
 
