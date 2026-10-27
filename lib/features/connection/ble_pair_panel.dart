@@ -260,7 +260,8 @@ class BlePairPanelState extends State<BlePairPanel>
   /// 扫描权仲裁(2026-10-21):面板存活期只有 **idle 态**由面板循环持
   /// 续扫描 —— 单发 30s 扫描窗过后无人再扫,行 5s 过期清空,「设备出
   /// 现一次就再也不出现」实证。ready/reconnecting = 驱动接管(连接/
-  /// 重连扫描 scanForDeviceId),pairing = 会话握手不扫。态变即重算,
+  /// 重连扫描 scanForDeviceId),pairing = 会话握手不扫。态变/身份沿
+  /// (落档/清档,见 didUpdateWidget/_loadSaved/_unpair)即重算,
   /// _panelScanActive 随持有态同步(驱动扫描让位/归还)。
   void _syncScanOwnership() {
     // manualOff 只压制回链,不压制发现扫描(看设备列表是面板本职能)。
@@ -325,6 +326,13 @@ class BlePairPanelState extends State<BlePairPanel>
     // 才动 —— 同实例回喂(普通重建)不抖。
     if (!identical(widget.savedIdentity, oldWidget.savedIdentity)) {
       _saved = widget.savedIdentity;
+      // 身份沿重算扫描权(2026-10-27 解除配对不刷新其它设备根修):
+      // 仲裁原本只挂会话状态沿,而解除沿的 disconnect 多半是 idle→idle
+      // 短路(_setState 同态即返),不发状态事件 —— 面板清了身份也永
+      // 不起扫,唯一补扫沿只剩回前台。正反两向都须重算:清身份 → 面板
+      // 接管持续扫描(真首配/重配);来身份(冷启盘载晚到,开页沿曾
+      // 抢到持有)→ 依 2026-10-21 裁定让位回链,不与驱动抢无线电。
+      _syncScanOwnership();
     }
   }
 
@@ -333,6 +341,9 @@ class BlePairPanelState extends State<BlePairPanel>
         await AppServices.instance.bleIdentityStore.load();
     if (mounted) {
       setState(() => _saved = saved);
+      // 装载沿重算扫描权(同 didUpdateWidget:身份沿无状态事件可蹭;
+      // 幂等,持有态不变时零操作)。
+      _syncScanOwnership();
     }
   }
 
@@ -813,8 +824,15 @@ class BlePairPanelState extends State<BlePairPanel>
     await _session.disconnect();
     app.refreshBleInjection();
     _log('已解除配对(注入停止;重连须重新走相机菜单)');
-    await _loadSaved();
+    // 面板本地档案即时清零(不等宿主回喂:_loadSaved 会被
+    // widget.savedIdentity 旧值顶回非空,白载)。清零沿即重算扫描权
+    // (2026-10-27 解除配对不刷新其它设备根修):此刻会话已是 idle,
+    // disconnect 是 idle→idle 短路无状态事件,仲裁若等状态沿,真首配
+    // 的持续扫描要拖到回前台才起跑 —— 相机已重开配对窗,列表却恒
+    // 「未发现设备」。
+    if (mounted) setState(() => _saved = null);
     widget.onIdentityChanged?.call();
+    _syncScanOwnership();
   }
 
   /// 我方注册身份的 deviceId(已存档优先,会话内存兜底;null = 首次
