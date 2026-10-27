@@ -38,9 +38,11 @@ android {
     }
 }
 
-// 顶层 kotlin{} 扩展在当前工具链(AGP 9.1.0 内置 Kotlin,未 apply
-// KGP)下不注册,2026-10-25 起报 unresolved;jvmTarget 由 flutter
-// gradle 插件按 compileOptions(17)对齐,无需显式声明。
+kotlin {
+    compilerOptions {
+        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
+    }
+}
 
 flutter {
     source = "../.."
