@@ -106,6 +106,18 @@ void main() {
     expect(await dir.list().toList(), isEmpty); // 半成品已删
   });
 
+  test('GetObject 超出 ObjectInfo 声明:立即中止且不留半成品', () async {
+    final fake = FakePtpTransport();
+    final downloader = downloaderFor(fake);
+    fake.reply(_okData(Uint8List(120)));
+
+    await expectLater(
+      downloader.download(_entry('DSC_OVER.JPG', 100), targetDir: dir.path),
+      throwsA(isA<FormatException>()),
+    );
+    expect(await dir.list().toList(), isEmpty);
+  });
+
   test('文件名只取最后一段(防御路径分隔符)', () async {
     final fake = FakePtpTransport();
     final downloader = downloaderFor(fake);
@@ -199,6 +211,20 @@ void main() {
 
     await expectLater(
       downloader.download(_entry('DSC_0006.NEF', 120), targetDir: dir.path),
+      throwsA(isA<FormatException>()),
+    );
+    expect(await dir.list().toList(), isEmpty);
+  });
+
+  test('分块超读:单块超过请求长度立即中止且不留半成品', () async {
+    final fake = FakePtpTransport();
+    final downloader = chunkedDownloaderFor(fake);
+
+    fake.reply(deviceInfoWithPartial());
+    fake.reply(_okData(Uint8List(60))); // 请求 50,实收 60
+
+    await expectLater(
+      downloader.download(_entry('DSC_OVERRUN.JPG', 120), targetDir: dir.path),
       throwsA(isA<FormatException>()),
     );
     expect(await dir.list().toList(), isEmpty);
@@ -300,7 +326,7 @@ void main() {
     fake.reply(deviceInfoWithPartial());
     final gate = Completer<void>();
     fake.replyAfter(gate.future,
-        _okData(Uint8List.fromList(List.filled(64, 7)))); // 在途块正常跑完
+        _okData(Uint8List.fromList(List.filled(50, 7)))); // 在途块正常跑完
 
     var flip = false;
     final future = downloader.download(

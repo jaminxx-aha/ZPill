@@ -227,6 +227,10 @@ class ObjectDownloader {
             AppLog.i(AppLog.transfer,
                 '0x9431 接受,Ex 账块 ${_exPolicy.currentBytes ~/ 1024}KB 起爬');
           }
+          if (chunk.length > want) {
+            throw FormatException(
+                '分块超读:请求 $want B,返回 ${chunk.length}B');
+          }
           // 成功:带耗时喂策略(快 → 加性升;慢 → 不动,见策略口径)。
           policy.reportSuccess(chunkWatch.elapsed);
           if (loud) {
@@ -255,6 +259,11 @@ class ObjectDownloader {
             return; // 不写盘,继续收块排空
           }
           if (cancelled) return;
+          if (received + chunk.length > entry.sizeInBytes) {
+            throw FormatException(
+                'GetObject 超出 ObjectInfo 声明:'
+                '${entry.sizeInBytes}B,已收 $received + ${chunk.length}B');
+          }
           sink.add(chunk);
           received += chunk.length;
           onProgress?.call(received);
