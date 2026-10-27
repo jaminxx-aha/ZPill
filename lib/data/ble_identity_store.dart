@@ -15,7 +15,6 @@ final class BlePairedIdentity {
     required this.serial,
     required this.controllerName,
     this.cameraName = '',
-    this.wifiPassword = '',
     required this.pairedAt,
   });
 
@@ -34,15 +33,10 @@ final class BlePairedIdentity {
   /// 为空,显示沿回落 [displayName]。
   final String cameraName;
 
-  /// 相机热点密码(用户从相机屏幕录入一次;凭据随机身配置不轮换,
-  /// 一次录入之后一键直达)。0x2004 解密未中时的 B 路凭据,见
-  /// ConnectionController.saveWifiPassword。空 = 未录入。
-  final String wifiPassword;
   final DateTime pairedAt;
 
   /// 展示名:相机名优先,旧档(未存相机名)回落控制器名。
-  String get displayName =>
-      cameraName.isNotEmpty ? cameraName : controllerName;
+  String get displayName => cameraName.isNotEmpty ? cameraName : controllerName;
 
   Map<String, Object?> toJson() => {
         'peripheralUuid': peripheralUuid,
@@ -51,7 +45,6 @@ final class BlePairedIdentity {
         'serial': serial,
         'controllerName': controllerName,
         'cameraName': cameraName,
-        'wifiPassword': wifiPassword,
         'pairedAt': pairedAt.toIso8601String(),
       };
 
@@ -68,7 +61,6 @@ final class BlePairedIdentity {
       serial: json['serial'] as String? ?? '',
       controllerName: json['controllerName'] as String? ?? 'NikonPill',
       cameraName: json['cameraName'] as String? ?? '',
-      wifiPassword: json['wifiPassword'] as String? ?? '',
       pairedAt:
           pairedAtRaw == null ? DateTime.now() : DateTime.parse(pairedAtRaw),
     );
@@ -80,6 +72,7 @@ final class BleIdentityStore {
       : _dataDir = dataDir;
 
   final Future<String> Function() _dataDir;
+  static const _legacyWifiPasswordKey = 'wifiPassword';
 
   /// 取(无档返回 null);损坏文件按未配对处理。
   Future<BlePairedIdentity?> load() async {
@@ -87,8 +80,18 @@ final class BleIdentityStore {
     if (!await file.exists()) return null;
     try {
       final j = jsonDecode(await file.readAsString()) as Map<String, Object?>;
-      return BlePairedIdentity.fromJson(j);
+      final identity = BlePairedIdentity.fromJson(j);
+      if (j.containsKey(_legacyWifiPasswordKey)) {
+        await _scrubLegacyWifiPassword(file, identity);
+      }
+      return identity;
     } on FormatException {
+      await _discardInvalid(file);
+      return null;
+    } on TypeError {
+      await _discardInvalid(file);
+      return null;
+    } on FileSystemException {
       return null;
     }
   }
@@ -96,9 +99,36 @@ final class BleIdentityStore {
   /// 配对成功落档(覆盖旧身份 —— 单相机场景一个槽位足够)。
   Future<void> save(BlePairedIdentity identity) async {
     final file = File('${await _dataDir()}/ble_identity.json');
+    await _write(file, identity);
+  }
+
+  Future<void> _write(File file, BlePairedIdentity identity) async {
     await file.create(recursive: true);
     await file.writeAsString(
         const JsonEncoder.withIndent('  ').convert(identity.toJson()));
+  }
+
+  /// 旧版本曾把热点密码明文写进身份档。启动加载时立即清掉；若档本身
+  /// 已损坏到无法解析身份，则删除整个无效档，避免敏感字段继续留在盘上。
+  Future<void> _scrubLegacyWifiPassword(
+      File file, BlePairedIdentity? identity) async {
+    try {
+      if (identity == null) {
+        await file.delete();
+      } else {
+        await _write(file, identity);
+      }
+    } on FileSystemException {
+      // 清理失败不阻断连接；后续正常 save 会再次覆盖为无密码格式。
+    }
+  }
+
+  Future<void> _discardInvalid(File file) async {
+    try {
+      if (await file.exists()) await file.delete();
+    } on FileSystemException {
+      // 清理失败不阻断连接；损坏档已按未配对处理。
+    }
   }
 
   /// 清档(设置页「解除配对」;下次配对走全新握手)。

@@ -72,8 +72,7 @@ final class FakeBleHost implements BleHost {
     deviceIdScans.add(deviceId);
     if (reconnectDeviceId == deviceId) {
       return [
-        BleDevice(
-            name: 'Z f_x', uuid: 'P1', rssi: -50, mfgData: reconnectMfg)
+        BleDevice(name: 'Z f_x', uuid: 'P1', rssi: -50, mfgData: reconnectMfg)
       ];
     }
     return const [];
@@ -168,6 +167,7 @@ void main() {
   const device = BleDevice(name: 'Z f_8014411', uuid: 'P1', rssi: -50);
 
   setUp(() {
+    AppLog.resetForTest();
     host = FakeBleHost();
     now = DateTime.utc(2026, 10, 13, 8, 0, 0);
     session = BleCameraSession(host: host, now: () => now);
@@ -190,11 +190,8 @@ void main() {
   /// 解第 [index] 笔 GEO 写入的 UTC 时间字段
   /// (年@16 u16LE/月@18/日@19/时@20/分@21/秒@22,见 GeoPayload 布局)。
   (int, int, int, int, int, int) geoTimeOf(int index) {
-    final data = host
-        .writes
-        .where((w) => w.$1 == kNikonCharGeo)
-        .toList()[index]
-        .$2;
+    final data =
+        host.writes.where((w) => w.$1 == kNikonCharGeo).toList()[index].$2;
     final bd = ByteData.sublistView(data);
     return (
       bd.getUint16(16, Endian.little),
@@ -219,13 +216,12 @@ void main() {
     host.emit(const BleConnected(
         uuid: 'P1', characteristics: {}, writeWithoutResponseMtu: 20));
     await pump();
-    final stage1 =
-        PairingMessage.decode(host.lastWrite(kNikonCharPairing));
+    final stage1 = PairingMessage.decode(host.lastWrite(kNikonCharPairing));
     host.emit(BleNotified(
         uuid: kNikonCharPairing, data: buildStage2(stage1).encode()));
     await pump();
-    host.emit(BleNotified(
-        uuid: kNikonCharPairing, data: buildStage4().encode()));
+    host.emit(
+        BleNotified(uuid: kNikonCharPairing, data: buildStage4().encode()));
     await pump();
     host.emit(BleNotified(
         uuid: kNikonCharNot1, data: Uint8List.fromList([0x01, 0x00])));
@@ -258,6 +254,32 @@ void main() {
     expect(name.skip(9).every((b) => b == 0), isTrue);
   });
 
+  test('握手诊断不落配对帧 device/nonce/序列号', () async {
+    await runHandshake();
+    final pairingWrites = host.writes
+        .where((w) => w.$1 == kNikonCharPairing)
+        .map((w) => w.$2)
+        .toList();
+    final stage1 = PairingMessage.decode(pairingWrites[0]);
+    final stage3 = PairingMessage.decode(pairingWrites[1]);
+    final stage2 = buildStage2(stage1);
+    final frames = [
+      stage1.encode(),
+      stage2.encode(),
+      stage3.encode(),
+      buildStage4().encode(),
+    ];
+    final logs = AppLog.entries
+        .where((e) => e.domain == AppLog.ble)
+        .map((e) => e.message)
+        .join('\n');
+
+    expect(logs, isNot(contains('B123456')));
+    for (final frame in frames) {
+      expect(logs, isNot(contains(BleCameraSession.hex(frame))));
+    }
+  });
+
   test('组装名沿写入 0x2002(「<型号>-NikonPill」,32B 零填充)', () async {
     session.controllerName =
         BleCameraSession.composeControllerName('iPhone 17 Pro');
@@ -269,8 +291,8 @@ void main() {
     host.emit(BleNotified(
         uuid: kNikonCharPairing, data: buildStage2(stage1).encode()));
     await pump();
-    host.emit(BleNotified(
-        uuid: kNikonCharPairing, data: buildStage4().encode()));
+    host.emit(
+        BleNotified(uuid: kNikonCharPairing, data: buildStage4().encode()));
     await pump();
     expect(session.state, BleSessionState.ready);
     expect(session.identity!.name, 'iPhone 17 Pro-NikonPill');
@@ -329,8 +351,8 @@ void main() {
     host.emit(BleNotified(
         uuid: kNikonCharPairing, data: buildStage2(stage1).encode()));
     await pump();
-    host.emit(BleNotified(
-        uuid: kNikonCharPairing, data: buildStage4().encode()));
+    host.emit(
+        BleNotified(uuid: kNikonCharPairing, data: buildStage4().encode()));
     await pump();
     expect(session.state, BleSessionState.ready);
     expect(session.lastError, isNull);
@@ -346,8 +368,8 @@ void main() {
     host.emit(BleNotified(
         uuid: kNikonCharPairing, data: buildStage2(stage1).encode()));
     await pump();
-    host.emit(BleNotified(
-        uuid: kNikonCharPairing, data: buildStage4().encode()));
+    host.emit(
+        BleNotified(uuid: kNikonCharPairing, data: buildStage4().encode()));
     await pump();
     expect(session.state, BleSessionState.ready); // 名字落定即收口
     expect(host.countWrite(kNikonCharName), 1);
@@ -366,7 +388,8 @@ void main() {
         handshakeTimeout: const Duration(milliseconds: 60));
     // expectLater 急切挂接(同 salt-miss 例)。
     final done = expectLater(
-        short.pair(device, waitTimeout: const Duration(milliseconds: 1)), throwsA(isA<BlePairingException>()));
+        short.pair(device, waitTimeout: const Duration(milliseconds: 1)),
+        throwsA(isA<BlePairingException>()));
     host.emit(const BleConnected(
         uuid: 'P1', characteristics: {}, writeWithoutResponseMtu: 20));
     await pump();
@@ -378,12 +401,12 @@ void main() {
   test('stage2 无 salt 命中 → pair 抛 BlePairingException,回 idle', () async {
     // expectLater 急切挂接,避免 pair 抛错先落成 unhandled async error。
     final done = expectLater(
-        session.pair(device, waitTimeout: const Duration(milliseconds: 1)), throwsA(isA<BlePairingException>()));
+        session.pair(device, waitTimeout: const Duration(milliseconds: 1)),
+        throwsA(isA<BlePairingException>()));
     host.emit(const BleConnected(
         uuid: 'P1', characteristics: {}, writeWithoutResponseMtu: 20));
     await pump();
-    final stage1 =
-        PairingMessage.decode(host.lastWrite(kNikonCharPairing));
+    final stage1 = PairingMessage.decode(host.lastWrite(kNikonCharPairing));
     final bad = buildStage2(stage1);
     host.emit(BleNotified(
         uuid: kNikonCharPairing,
@@ -400,7 +423,8 @@ void main() {
 
   test('握手期间断连 → pair 抛错回 idle', () async {
     final done = expectLater(
-        session.pair(device, waitTimeout: const Duration(milliseconds: 1)), throwsA(isA<BlePairingException>()));
+        session.pair(device, waitTimeout: const Duration(milliseconds: 1)),
+        throwsA(isA<BlePairingException>()));
     host.emit(const BleConnected(
         uuid: 'P1', characteristics: {}, writeWithoutResponseMtu: 20));
     await pump();
@@ -411,8 +435,7 @@ void main() {
     expect(session.state, BleSessionState.idle);
   });
 
-  test('取消落在重连扫描窗内:命中也不入 pairing(十五轮预连接纪元闸)',
-      () async {
+  test('取消落在重连扫描窗内:命中也不入 pairing(十五轮预连接纪元闸)', () async {
     final zombieHost = FakeBleHost()
       ..reconnectDeviceId = 0x11223344
       ..scanGate = Completer<void>();
@@ -425,8 +448,7 @@ void main() {
         name: 'N');
     final attempt = zombieSession.retryReconnect(gateStandby: false);
     await pump();
-    expect(zombieSession.state, BleSessionState.idle,
-        reason: '尝试在扫描窗内等待');
+    expect(zombieSession.state, BleSessionState.idle, reason: '尝试在扫描窗内等待');
     // 取消沿(纪元推进)→ 扫描才放行命中:不得再入 pairing —— 否则
     // 僵尸 pairing 把后续尝试全挡在 guard 外(「断开后怎么都连不上」)。
     await zombieSession.disconnect();
@@ -590,8 +612,8 @@ void main() {
   test('断链类写失败不上红字:静默缓存;非断链失败照常上报', () async {
     await runHandshake();
     now = now.add(const Duration(seconds: 3)); // 过首写门
-    host.writeError = PlatformException(
-        code: 'disconnected', message: '连接已断开');    session.onFix(fixAt(35.5)); // 直发 → 断链失败:静默
+    host.writeError = PlatformException(code: 'disconnected', message: '连接已断开');
+    session.onFix(fixAt(35.5)); // 直发 → 断链失败:静默
     expect(session.lastError, isNull);
     // 非断链失败(GPS 会话拒收类):红字照报
     host.writeError = Exception('GPS 会话未醒');
@@ -752,10 +774,9 @@ void main() {
     expect(host.countWrite(kNikonCharTime), 1); // 首笔 TIME(校时)
   });
 
-  test('首写自驱:writeGate=0 时 Ready 沿自发校时,不依赖驱动 tick(配对页挂起场景)',
-      () async {
-    final s = BleCameraSession(
-        host: host, now: () => now, writeGate: Duration.zero);
+  test('首写自驱:writeGate=0 时 Ready 沿自发校时,不依赖驱动 tick(配对页挂起场景)', () async {
+    final s =
+        BleCameraSession(host: host, now: () => now, writeGate: Duration.zero);
     await runHandshake(target: s);
     await pump(); // 一次性延迟(0)沉淀
     expect(host.countWrite(kNikonCharTime), 1); // 自驱收口校时
@@ -823,12 +844,12 @@ void main() {
   });
 
   group('readWifiCredentials(0x2004,BLE→WiFi 二期)', () {
-    test('ready 态读 0x2004 → 解密出凭据;blob 落 trace', () async {
+    test('ready 态读 0x2004 → 解密出凭据;blob 只落脱敏 trace', () async {
       await runHandshake();
       final traces = <String>[];
       session.onTrace = traces.add;
-      host.reads[kNikonCharConfig] =
-          craftBlob('Zf_80114411', 'wpa2pass99', 0x02, cbc: false);
+      final blob = craftBlob('Zf_80114411', 'wpa2pass99', 0x02, cbc: false);
+      host.reads[kNikonCharConfig] = blob;
       final creds = await session.readWifiCredentials();
       expect(creds, isNotNull);
       expect(creds!.ssid, 'Zf_80114411');
@@ -836,6 +857,16 @@ void main() {
       expect(creds.security, 0x02);
       expect(session.lastError, isNull);
       expect(traces.where((l) => l.startsWith('0x2004 ←')), isNotEmpty);
+      final allTraceText = [
+        ...traces,
+        ...AppLog.entries.map((e) => e.message),
+      ];
+      final fullCipherHex = BleCameraSession.hex(blob);
+      expect(allTraceText.where((l) => l.contains(fullCipherHex)), isEmpty,
+          reason: '0x2004 密文只能保留头尾摘要');
+      expect(allTraceText.where((l) => l.contains('wpa2pass99')), isEmpty,
+          reason: '解密后的 WiFi 密码不得进入 trace/AppLog');
+      expect(traces.join('\n'), contains('脱敏'));
     });
 
     test('握手材料合成;0x2004 按派生主路端到端命中', () async {
@@ -881,6 +912,17 @@ void main() {
               .where((e) => e.domain == AppLog.ble)
               .map((e) => e.message),
           contains(contains('解密未中')));
+      final traces = AppLog.entries
+          .where((e) => e.domain == AppLog.ble)
+          .map((e) => e.message)
+          .join('\n');
+      final material = session.lssMaterial!;
+      expect(traces, isNot(contains(BleCameraSession.hex(material.key1))));
+      expect(traces, isNot(contains(BleCameraSession.hex(material.key2))));
+      expect(
+          traces, isNot(contains(BleCameraSession.hex(material.cameraNonce))));
+      expect(
+          traces, isNot(contains(BleCameraSession.hex(material.phoneNonce))));
     });
 
     test('读失败(特征不在/断链)→ null 带原因', () async {
@@ -891,12 +933,13 @@ void main() {
     });
   });
 
-  test('v7 全表扫描读:权限含 read 的特征全读,0x2000/0x2008/write-only 除外',
-      () async {
+  test('v7 全表扫描读:权限含 read 的特征全读,0x2000/0x2008/write-only 除外', () async {
     // waitTimeout 只是防挂死的看门狗(测试内握手是微任务级,正常路径
     // 完成即收):1ms 真闸与握手微任务链竞速,负载下偶发假超时(2026-10-24
     // 全量两连挂实证,main 无改动同样复现)—— 放宽到 1s。
-    final done = expectLater(session.pair(device, waitTimeout: const Duration(seconds: 1)), completes);
+    final done = expectLater(
+        session.pair(device, waitTimeout: const Duration(seconds: 1)),
+        completes);
     host.emit(const BleConnected(
         uuid: 'P1',
         characteristics: {
@@ -916,8 +959,8 @@ void main() {
     host.emit(BleNotified(
         uuid: kNikonCharPairing, data: buildStage2(stage1).encode()));
     await pump();
-    host.emit(BleNotified(
-        uuid: kNikonCharPairing, data: buildStage4().encode()));
+    host.emit(
+        BleNotified(uuid: kNikonCharPairing, data: buildStage4().encode()));
     await pump();
     await done;
     await pump();

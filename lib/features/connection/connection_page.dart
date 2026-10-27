@@ -70,7 +70,6 @@ import 'camera_overview_controller.dart';
 import 'connected_overview.dart';
 import 'connection_widgets.dart';
 
-
 /// 蓝牙工具卡状态文案(未配对/已配对未连/握手中/已连接/重连中/等待
 /// 系统配对)。返回 = t() 键,消费端统一包 t()。
 String bleStateLabel(ConnectionController c) => switch (c.bleState) {
@@ -283,10 +282,9 @@ class _ConnectionPageState extends State<ConnectionPage>
         centerTitle: true,
         title: ListenableBuilder(
           listenable: controller,
-          builder: (context, _) =>
-              controller.state == CameraLinkState.connected
-                  ? const SizedBox.shrink()
-                  : _modeChip(context, controller.method),
+          builder: (context, _) => controller.state == CameraLinkState.connected
+              ? const SizedBox.shrink()
+              : _modeChip(context, controller.method),
         ),
         actions: [
           ListenableBuilder(
@@ -383,23 +381,42 @@ class _ConnectionPageState extends State<ConnectionPage>
       ConnectionController c, BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return switch (c.state) {
-      CameraLinkState.disconnected => ('conn.notConnected', scheme.outline, false),
-      CameraLinkState.detecting =>
-        ('conn.detectingWifi', AppColors.accentYellow, true),
+      CameraLinkState.disconnected => (
+          'conn.notConnected',
+          scheme.outline,
+          false
+        ),
+      CameraLinkState.detecting => (
+          'conn.detectingWifi',
+          AppColors.accentYellow,
+          true
+        ),
       CameraLinkState.connecting when c.awaitingCameraConfirm => (
           'conn.waitingPairConfirm',
           AppColors.accentYellow,
           true
         ),
-      CameraLinkState.connecting =>
-        ('conn.connecting', AppColors.accentYellow, true),
-      CameraLinkState.pairing =>
-        ('conn.waitingPairing', AppColors.accentYellow, true),
-      CameraLinkState.reconnecting =>
-        ('conn.reconnecting', AppColors.accentYellow, true),
+      CameraLinkState.connecting => (
+          'conn.connecting',
+          AppColors.accentYellow,
+          true
+        ),
+      CameraLinkState.pairing => (
+          'conn.waitingPairing',
+          AppColors.accentYellow,
+          true
+        ),
+      CameraLinkState.reconnecting => (
+          'conn.reconnecting',
+          AppColors.accentYellow,
+          true
+        ),
       CameraLinkState.failed => ('conn.failed', scheme.error, false),
-      CameraLinkState.connected =>
-        ('conn.connected', AppColors.success(context), false),
+      CameraLinkState.connected => (
+          'conn.connected',
+          AppColors.success(context),
+          false
+        ),
     };
   }
 
@@ -409,12 +426,21 @@ class _ConnectionPageState extends State<ConnectionPage>
       ConnectionController c, BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return switch (c.bleState) {
-      BleSessionState.ready =>
-        ('conn.connected', AppColors.success(context), false),
-      BleSessionState.pairing =>
-        ('ble.handshaking', AppColors.accentYellow, true),
-      BleSessionState.reconnecting =>
-        ('ble.reconnecting', AppColors.accentYellow, true),
+      BleSessionState.ready => (
+          'conn.connected',
+          AppColors.success(context),
+          false
+        ),
+      BleSessionState.pairing => (
+          'ble.handshaking',
+          AppColors.accentYellow,
+          true
+        ),
+      BleSessionState.reconnecting => (
+          'ble.reconnecting',
+          AppColors.accentYellow,
+          true
+        ),
       BleSessionState.idle => (
           bleStateLabel(c),
           c.bleAwaitSystemBond ? AppColors.accentYellow : scheme.outline,
@@ -488,9 +514,8 @@ class _ConnectionPageState extends State<ConnectionPage>
                       context.t(lines[i]),
                       style: theme.textTheme.bodySmall?.copyWith(
                         height: 1.5,
-                        color: i == 0
-                            ? scheme.onSurface
-                            : scheme.onSurfaceVariant,
+                        color:
+                            i == 0 ? scheme.onSurface : scheme.onSurfaceVariant,
                         fontWeight: i == 0 ? FontWeight.w600 : null,
                       ),
                     ),
@@ -543,9 +568,7 @@ class _ConnectionPageState extends State<ConnectionPage>
   /// (pairing/detecting)不动作(同旧按钮禁用语义)。
   void _heroPressed(ConnectionController controller) {
     switch (controller.method) {
-      case ConnectionMethod.usb ||
-            ConnectionMethod.ap ||
-            ConnectionMethod.sta:
+      case ConnectionMethod.usb || ConnectionMethod.ap || ConnectionMethod.sta:
         _ptpHeroPressed(controller);
       case ConnectionMethod.ble:
         _bleHeroPressed(controller);
@@ -836,7 +859,8 @@ class _ConnectionPageState extends State<ConnectionPage>
                 key: _blePanelKey,
                 session: session,
                 savedIdentity: controller.bleIdentity,
-                onIdentityChanged: () => unawaited(controller.loadBleIdentity()),
+                onIdentityChanged: () =>
+                    unawaited(controller.loadBleIdentity()),
                 onSystemBondNeeded: controller.markAwaitSystemBond,
                 onRetryingChanged: (active) => _bleRetrying.value = active,
               ),
@@ -945,10 +969,13 @@ class _ConnectionPageState extends State<ConnectionPage>
       _showHintStatic(
           context,
           controller,
-          context.tm((key: 'conn.wakeFailed', args: {
-            'e': controller.bleLastError ??
-                (key: 'common.unknown', args: null),
-          })));
+          context.tm((
+            key: 'conn.wakeFailed',
+            args: {
+              'e': controller.bleLastError ??
+                  (key: 'common.unknown', args: null),
+            }
+          )));
       return;
     }
     final creds = controller.cameraApCredentials;
@@ -974,14 +1001,14 @@ class _ConnectionPageState extends State<ConnectionPage>
       return;
     }
     // 自动加入路上:join 看门狗 30s 兜底,过渡提示给足时长。
-    _showHintStatic(context,
-        controller, context.t('conn.joiningHotspot', {'ssid': creds.ssid}),
+    _showHintStatic(context, controller,
+        context.t('conn.joiningHotspot', {'ssid': creds.ssid}),
         duration: const Duration(seconds: 30));
     final outcome = await controller.joinCameraAp();
     if (!context.mounted) return;
     if (outcome == ApJoinOutcome.joined) {
-      _showHintStatic(
-          context, controller, context.t('conn.joinedHotspot', {'ssid': creds.ssid}),
+      _showHintStatic(context, controller,
+          context.t('conn.joinedHotspot', {'ssid': creds.ssid}),
           duration: const Duration(seconds: 5));
     } else if (outcome == ApJoinOutcome.failed) {
       if (controller.cameraApCredentials != null) {
@@ -1054,8 +1081,7 @@ class _ConnectionPageState extends State<ConnectionPage>
     _showHintStatic(context, controller, context.t('conn.scanningHotspot'),
         duration: const Duration(seconds: 30));
     final camName = controller.bleIdentity?.cameraName ?? '';
-    String norm(String s) =>
-        s.replaceAll(RegExp(r'[\s_]+'), '').toUpperCase();
+    String norm(String s) => s.replaceAll(RegExp(r'[\s_]+'), '').toUpperCase();
     final camNorm = norm(camName);
     WifiApScan? pick;
     for (var round = 1; round <= 5 && pick == null; round++) {
@@ -1084,14 +1110,13 @@ class _ConnectionPageState extends State<ConnectionPage>
     }
     // 密码策略(2026-10-23 真机定案):Zf 热点是**开放网络**(相机屏
     // 幕虽有提示密码,系统直连免输)—— 扫描安全类型即真相:开放
-    // (0x01)直接连,零弹框;加密 AP 才要密码(已存用存档,没有弹
-    // 一次录入框)。
+    // (0x01)直接连,零弹框;加密 AP 才要密码(本会话录过即复用,
+    // 冷启后重新录入)。
     String? password = '';
     if (pick.security != 0x01) {
-      password = controller.savedWifiPassword;
+      password = controller.sessionWifiPassword;
       if (password.isEmpty) {
-        password =
-            await _promptWifiPassword(context, controller, pick.ssid);
+        password = await _promptWifiPassword(context, controller, pick.ssid);
         if (!context.mounted) return ApJoinOutcome.skipped;
         if (password == null || password.isEmpty) {
           controller.markWifiAwakePending();
@@ -1110,13 +1135,11 @@ class _ConnectionPageState extends State<ConnectionPage>
     final outcome = await controller.joinCameraAp();
     if (!context.mounted) return outcome;
     if (outcome == ApJoinOutcome.joined) {
-      if (password.isNotEmpty && controller.savedWifiPassword.isEmpty) {
+      if (password.isNotEmpty && controller.sessionWifiPassword.isEmpty) {
         await controller.saveWifiPassword(password);
         if (!context.mounted) return outcome;
       }
-      _showHintStatic(
-          context,
-          controller,
+      _showHintStatic(context, controller,
           context.t('conn.joinedHotspot', {'ssid': pick.ssid}),
           duration: const Duration(seconds: 5));
     } else if (outcome == ApJoinOutcome.failed) {
@@ -1172,8 +1195,8 @@ class _ConnectionPageState extends State<ConnectionPage>
 
   /// 提示收口的静态面(整页组件共用):先撤在场提示再显 ——
   /// showSnackBar 是排队不替换,30s 的过渡提示会把终态消息压到 30s 后。
-  static void _showHintStatic(BuildContext context, ConnectionController controller,
-      String message,
+  static void _showHintStatic(
+      BuildContext context, ConnectionController controller, String message,
       {Duration duration = const Duration(seconds: 3)}) {
     ScaffoldMessenger.of(context)
       // 先撤在场提示再显:showSnackBar 是排队不替换,30s 的过渡提示
@@ -1213,8 +1236,7 @@ class _ConnectionPageState extends State<ConnectionPage>
     return [
       Text(context.t('conn.hotspotCred'),
           style: Theme.of(context).textTheme.labelMedium),
-      _credentialRow(context, 'conn.ssid', creds.ssid,
-          labelWidth: labelWidth),
+      _credentialRow(context, 'conn.ssid', creds.ssid, labelWidth: labelWidth),
       if (creds.password.isNotEmpty)
         _credentialRow(context, 'conn.password', creds.password,
             labelWidth: labelWidth),
@@ -1222,6 +1244,7 @@ class _ConnectionPageState extends State<ConnectionPage>
           style: Theme.of(context).textTheme.bodySmall),
     ];
   }
+
   /// 凭据行(KvRow 收编):[labelWidth] 缺省按本行标签实测(红卡单行
   /// 用);同卡多行由调用方传共用宽保持列对齐。44 下限 = zh 短标签的
   /// 现行观感(原钉宽)。标签随行结构单行省略,正常文案实测宽放行。
@@ -1298,7 +1321,8 @@ class _ConnectionPageState extends State<ConnectionPage>
           ConnectedHeader(
             batteryPercent: _overview.batteryPercent,
             linkIcon: wireless ? Icons.wifi : Icons.usb,
-            onDisconnect: () => unawaited(_confirmDisconnect(context, controller)),
+            onDisconnect: () =>
+                unawaited(_confirmDisconnect(context, controller)),
           ),
           const SizedBox(height: AppSpacing.md),
           // 整行:机身卡(竖线居中:型号 pill | 固件/序列号裸值);
@@ -1410,7 +1434,9 @@ class _ConnectionPageState extends State<ConnectionPage>
     final wireless = c?.isWireless ?? false;
     // 链路串:无线带 IP(动态串直通),USB 复用既有本地化文案。
     final link = wireless
-        ? (controller.activeIp == null ? 'Wi-Fi' : 'Wi-Fi(${controller.activeIp})')
+        ? (controller.activeIp == null
+            ? 'Wi-Fi'
+            : 'Wi-Fi(${controller.activeIp})')
         : context.t('conn.usbCable');
     // 弹层在场期间快门数实时跟随(controller 状态 + 拍照沿自动重读):
     // 置 live 后触发现读,关闭沿(pop/滑删)撤销 live。
@@ -1442,8 +1468,7 @@ class _ConnectionPageState extends State<ConnectionPage>
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color:
-                            Theme.of(context).colorScheme.onSurfaceVariant)),
+                        color: Theme.of(context).colorScheme.onSurfaceVariant)),
               ),
               const SizedBox(width: AppSpacing.md),
               Expanded(
@@ -1495,7 +1520,9 @@ class _ConnectionPageState extends State<ConnectionPage>
                     const SizedBox(width: AppSpacing.sm),
                     Text(
                       sheetContext.t('conn.connected'),
-                      style: Theme.of(sheetContext).textTheme.titleMedium
+                      style: Theme.of(sheetContext)
+                          .textTheme
+                          .titleMedium
                           ?.copyWith(fontWeight: FontWeight.w700),
                     ),
                   ],
@@ -1536,10 +1563,10 @@ class _ConnectionPageState extends State<ConnectionPage>
     _shootingOpen = true;
     Navigator.of(context)
         .push(
-          MaterialPageRoute<void>(
-            builder: (_) => RemotePage(controller: _remote),
-          ),
-        )
+      MaterialPageRoute<void>(
+        builder: (_) => RemotePage(controller: _remote),
+      ),
+    )
         .whenComplete(() {
       _shootingOpen = false;
       _syncViewerForMode();
@@ -1719,7 +1746,6 @@ class _MethodHeroState extends State<_MethodHero>
   }
 }
 
-
 /// STA 扫描视图体(2026-10-19 改版):进方式即自动扫描(静默 —— 无
 /// 扫描钮、无「扫描中」指示,2026-10-19 用户定稿),离方式停扫
 /// (dispose);内容 = 状态行 + 固定错误位 + Wi-Fi hero(**八轮可点 =
@@ -1833,7 +1859,8 @@ class _StaScanBodyState extends State<_StaScanBody> {
                       if (controller.savedCameras.isEmpty)
                         const _EmptyGroupRow(text: 'conn.noPairedDevices')
                       else
-                        for (final (i, saved) in controller.savedCameras.indexed)
+                        for (final (i, saved)
+                            in controller.savedCameras.indexed)
                           ListTile(
                             dense: true,
                             leading: const Icon(Icons.photo_camera_outlined),
@@ -1855,8 +1882,8 @@ class _StaScanBodyState extends State<_StaScanBody> {
                               tooltip: context.t('conn.forgetCamera'),
                               onPressed: busy
                                   ? null
-                                  : () => _ConnectionPageState
-                                      ._confirmRemoveSaved(
+                                  : () =>
+                                      _ConnectionPageState._confirmRemoveSaved(
                                           context, controller, saved),
                             ),
                             onTap: busy

@@ -27,6 +27,7 @@ import 'package:flutter/services.dart';
 import '../../app_services.dart';
 import '../../core/ble/adv_payload.dart';
 import '../../core/ble/ble_camera_session.dart';
+import '../../core/ble/gatt_uuids.dart';
 import '../../core/log/app_log.dart';
 import '../../data/ble_identity_store.dart';
 import '../../design/app_colors.dart';
@@ -40,6 +41,16 @@ import 'connection_widgets.dart';
 
 String hexOf(List<int> bytes) =>
     bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ');
+
+/// 配对、连接配置、设备标识与定位载荷；诊断日志只保留长度，不落原始帧。
+String bleNotificationLogPayload(String uuid, List<int> data) =>
+    uuid == kNikonCharPairing ||
+            uuid == kNikonCharConfig ||
+            uuid == kNikonCharServerName ||
+            uuid == kNikonCharGeo ||
+            uuid == kNikonCharSerialString
+        ? '<脱敏 ${data.length}B>'
+        : hexOf(data);
 
 /// 扫描行:设备 + 最后见到时刻(过期修剪依据,行自持 —— 合并可改行
 /// 的名,新鲜度跟着行走,无键漂移问题)。
@@ -389,7 +400,8 @@ class BlePairPanelState extends State<BlePairPanel>
         // iOS 对 SIG 采纳 16 位 UUID 回 4 字符短串,裸 substring(4,8) 会
         // RangeError 炸断事件链(2026-10-19 真机实证)。
         AppLog.d(AppLog.ble,
-            '← ${uuid.length <= 8 ? uuid : uuid.substring(4, 8)} ${hexOf(data)}');
+            '← ${uuid.length <= 8 ? uuid : uuid.substring(4, 8)} '
+            '${bleNotificationLogPayload(uuid, data)}');
       case BleError(:final code, :final message, :final uuid):
         AppLog.w(AppLog.ble,
             '错误 $code${uuid == null ? '' : ' @$uuid'}:$message');
@@ -438,9 +450,7 @@ class BlePairPanelState extends State<BlePairPanel>
     });
     try {
       final devices = await _session.scanForPairing();
-      // 台数行带状态字节(Zf 实证 0x1E/0x1F):重连时序取证要能对上
-      // 「命中时相机是否深睡」。
-      _log('扫描结束:${devices.length} 台(${devices.map(_deviceLabel).join(', ')})');
+      _log('扫描结束:${devices.length} 台');
       if (!mounted) return;
       // 收口表同样过行合并:原生按地址收集,相机一轮配对换一次 RPA,窗
       // 内多轮配对(用户实测:配对→返回→再配对)会让收口表自身带重复,
@@ -469,19 +479,12 @@ class BlePairPanelState extends State<BlePairPanel>
     }
   }
 
-  String _deviceLabel(BleDevice d) {
-    final name = d.name.isEmpty ? '(无名)' : d.name;
-    final st = advertisedStatusByte(d.mfgData);
-    if (st == null) return name;
-    return '$name(0x${st.toRadixString(16).toUpperCase().padLeft(2, '0')})';
-  }
-
   /// 首次配对:session 四步握手 → 身份落盘 → 通知注入驱动刷新。
   Future<void> _pair(BleDevice device) async {
     final app = AppServices.instance;
     _cancelRetry();
     app.bleManualOff = false; // 新配对 = 连接意图,解除手动断开压制
-    _log('配对 ${device.name}(${device.uuid})…');
+    _log('开始配对…');
     _pairedName = device.name; // 经典绑定匹配用(鸿蒙)
     try {
       await _session.pair(device);
@@ -508,8 +511,7 @@ class BlePairPanelState extends State<BlePairPanel>
     // (ready → 注入层即刻对齐;重连循环由驱动接管,面板让位)。
     app.resumeBleDriver();
     unawaited(AppHaptics.success()); // 配对成功确认沿(展示「配对成功」处震)
-    _log('配对成功 ✓ device=${id.deviceId.toRadixString(16)} '
-        'serial=${id.serial} 身份已落盘(驱动接管)');
+    _log('配对成功 ✓ 身份已落盘(驱动接管)');
     widget.onIdentityChanged?.call();
     await _loadSaved();
     // iOS 首配注册 = 系统配件选择器经典 bond(机制:SnapBridge 程序化
@@ -646,7 +648,7 @@ class BlePairPanelState extends State<BlePairPanel>
     final gen = _retryGen;
     widget.onRetryingChanged?.call(true);
     if (mounted) setState(() {});
-    _log('重连(复用身份 ${_saved!.deviceId.toRadixString(16)})…');
+    _log('重连(复用已存身份)…');
     var hintedForeign = false;
     for (var attempt = 1; attempt <= 6; attempt++) {
       if (gen != _retryGen || !mounted) break;
@@ -673,12 +675,10 @@ class BlePairPanelState extends State<BlePairPanel>
       // 本页配对扫描才看得见);每轮重连只提示一次,免刷屏。
       if (!hintedForeign) {
         final foreign = _foreignWaiting();
-        final foreignId = foreign == null
-            ? null
-            : expectedControllerDeviceId(foreign.mfgData);
-        if (foreign != null && foreignId != null) {
+        if (foreign != null &&
+            expectedControllerDeviceId(foreign.mfgData) != null) {
           hintedForeign = true;
-          _log(_conflictHint(context, foreignId));
+          _log('检测到相机在等待其它控制器');
         }
       }
       await _retryDelayWait(_session.nextRetryDelay);
@@ -828,12 +828,6 @@ class BlePairPanelState extends State<BlePairPanel>
   /// 我方注册身份的 deviceId(已存档优先,会话内存兜底;null = 首次
   /// 配对,无从比较冲突)。
   int? get _ownDeviceId => _saved?.deviceId ?? _session.identity?.deviceId;
-
-  /// 「在等别的手机」指引文案(扫描行提示与重连失败日志共用;动作
-  /// 措辞借 HarmoNiLink 真机口径:相机「已配对设备」菜单切换设备)。
-  String _conflictHint(BuildContext context, int foreignId) => context.t(
-      'ble.waitingOtherPhone',
-      {'id': foreignId.toRadixString(16).toUpperCase()});
 
   /// 当前列表里首个「在等别的手机」的设备(无则 null;重连未命中时的
   /// 指引来源 —— 重连扫描(scanForDeviceId)被 native 按我方 deviceId

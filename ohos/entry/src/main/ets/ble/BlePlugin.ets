@@ -138,7 +138,7 @@ export class BlePlugin implements FlutterPlugin, AbilityAware {
   // ------------------------------------------------------------------
 
   private onMethodCall(call: MethodCall, result: MethodResult): void {
-    Log.i(TAG, `method=${call.method} args=${JSON.stringify(call.args)}`);
+    Log.i(TAG, `method=${call.method}`);
     switch (call.method) {
       case 'isAvailable':
         this.ensureBluetoothPermission(() => {

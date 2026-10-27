@@ -6,6 +6,8 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:nikon_pill/app_services.dart';
 import 'package:nikon_pill/core/ble/ble_camera_session.dart';
+import 'package:nikon_pill/core/ble/gatt_uuids.dart';
+import 'package:nikon_pill/core/log/app_log.dart';
 import 'package:nikon_pill/data/ble_identity_store.dart';
 import 'package:nikon_pill/features/connection/ble_pair_panel.dart';
 import 'package:nikon_pill/platform/ble_scanner.dart';
@@ -28,6 +30,20 @@ import 'package:nikon_pill/platform/ble_scanner.dart';
 void main() {
   const ble = MethodChannel('nikonpill/ble');
   const bleEvents = MethodChannel('nikonpill/ble/events');
+
+  test('BLE 敏感通知特征日志只保留长度', () {
+    final data = Uint8List.fromList(List<int>.generate(17, (i) => i + 1));
+    for (final uuid in [
+      kNikonCharPairing,
+      kNikonCharConfig,
+      kNikonCharServerName,
+      kNikonCharGeo,
+      kNikonCharSerialString,
+    ]) {
+      expect(bleNotificationLogPayload(uuid, data), '<脱敏 17B>');
+    }
+    expect(bleNotificationLogPayload(kNikonCharNot1, data), hexOf(data));
+  });
 
   Uint8List mfgOf(int deviceId, {int? status}) => Uint8List.fromList(<int>[
         0x99,
@@ -108,6 +124,31 @@ void main() {
     expect(find.textContaining('待机'), findsNothing,
         reason: '无状态字节(mfg 不足 7B)不出电源态副文');
     expect(find.textContaining('此相机在等别的手机'), findsNothing);
+    await disposePage(tester);
+  });
+
+  testWidgets('配对通知帧进入 AppLog 前整体脱敏', (tester) async {
+    AppLog.resetForTest();
+    addTearDown(AppLog.resetForTest);
+    await boot(tester, scanResult: []);
+    final data = Uint8List.fromList(List<int>.generate(17, (i) => i + 1));
+    await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+      bleEvents.name,
+      const StandardMethodCodec().encodeSuccessEnvelope(<String, Object?>{
+        'type': 'notify',
+        'uuid': kNikonCharPairing,
+        'data': data,
+      }),
+      (_) {},
+    );
+    await tester.pump();
+
+    final logs = AppLog.entries
+        .where((e) => e.domain == AppLog.ble)
+        .map((e) => e.message)
+        .join('\n');
+    expect(logs, contains('<脱敏 17B>'));
+    expect(logs, isNot(contains(hexOf(data))));
     await disposePage(tester);
   });
 

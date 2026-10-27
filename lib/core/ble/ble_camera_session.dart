@@ -102,8 +102,7 @@ final class BleCameraSession {
         .replaceAll(RegExp(r'\s+'), ' ')
         .trim();
     if (cleaned.isEmpty) return 'NikonPill';
-    final head =
-        cleaned.length > 22 ? cleaned.substring(0, 22) : cleaned;
+    final head = cleaned.length > 22 ? cleaned.substring(0, 22) : cleaned;
     return '$head-NikonPill';
   }
 
@@ -115,8 +114,10 @@ final class BleCameraSession {
   /// GPS 会话未醒拒收 0x2007 的减灾前置;2900099 瞬态同类)。
   final Duration writeGate;
 
-  /// 诊断跟踪(配对页 hex 日志用;每帧 device/nonce 落一行,可随时
-  /// 换绑/清空)。
+  /// 诊断跟踪(握手/连接关键节点,可随时换绑/清空)。
+  ///
+  /// 回调只接收已脱敏文本;凭据 blob 与 LSS 密钥材料不得经此出口
+  /// 进入 UI、AppLog 或外部日志。
   void Function(String line)? onTrace;
 
   /// GEO 保鲜间隔(nsg 节奏):持续无成功注入时重发最后定位。
@@ -191,20 +192,23 @@ final class BleCameraSession {
   /// 谁也不会真的再连 —— 假在途卡死)。
   int _cancelEpoch = 0;
   int _backoffStep = 0;
+
   /// 深睡闸门连续跳过轮数(episode 限频日志用;非闸沿归零)。
   int _standbySkips = 0;
   DateTime? _gateWritesUntil;
 
   GeoFix? _pendingFix;
+
   /// 上次成功注入的定位与时刻(去重门/保鲜锚;失败沿不更新)。
   GeoFix? _lastOkFix;
   DateTime? _lastOkAt;
+
   /// 上次成功 TIME 写时刻(保活档位锚;Ready 沿清零 = 首笔校时待发)。
   DateTime? _lastTimeOkAt;
 
   /// 下次重连建议退避(驱动按此定时调 [retryReconnect])。
-  Duration get nextRetryDelay =>
-      Duration(seconds: _backoffSeconds[min(_backoffStep, _backoffSeconds.length - 1)]);
+  Duration get nextRetryDelay => Duration(
+      seconds: _backoffSeconds[min(_backoffStep, _backoffSeconds.length - 1)]);
 
   /// 配对扫描(相机须先进「连接至智能设备」配对菜单,广播窗 ~30s)。
   Future<List<BleDevice>> scanForPairing(
@@ -236,8 +240,7 @@ final class BleCameraSession {
     return _pairWithWait(device).timeout(waitTimeout, onTimeout: () async {
       _cancelEpoch++; // 纪元推闸:废在途握手/循环(迟到收口沿自灭)
       if (_state == BleSessionState.pairing) _failHandshake();
-      throw BlePairingException(
-          '配对等待超时 —— 相机须停在「连接至智能设备」配对页(广播窗约'
+      throw BlePairingException('配对等待超时 —— 相机须停在「连接至智能设备」配对页(广播窗约'
           ' 30s)再点扫描连接');
     });
   }
@@ -269,7 +272,8 @@ final class BleCameraSession {
         } on TimeoutException {
           // 15s 无果:原生没回包(connect 挂)或相机没进窗。逐次留痕,
           // 卓易通等容器里 channel 级悬死只有这里能看见。
-          AppLog.d(AppLog.ble, 'connect/握手 ${handshakeTimeout.inSeconds}s 无果,弃局重试');
+          AppLog.d(
+              AppLog.ble, 'connect/握手 ${handshakeTimeout.inSeconds}s 无果,弃局重试');
           _abandonHandshake(done); // 无应答:相机不在场/深睡,继续等窗
         } on Exception catch (e) {
           // 原生主动落错(容器看门狗「GATT 10s 无回调」/握手首帧被拒)或
@@ -281,8 +285,7 @@ final class BleCameraSession {
           _handshake = null;
           if (_cryptoWallDetected) {
             // 容器加密墙已实锤:不再空转重试,立即给出明确文案。
-            throw BlePairingException(
-                '此环境蓝牙不支持与相机配对(加密链路无法建立,卓易通等容器环境)');
+            throw BlePairingException('此环境蓝牙不支持与相机配对(加密链路无法建立,卓易通等容器环境)');
           }
           // 被踢 = 还没进窗(T4a),继续等
         }
@@ -339,8 +342,8 @@ final class BleCameraSession {
       if (direct) return true;
     }
     final epoch = _cancelEpoch; // 十三轮:取消沿迟到收口不推态。
-    final devices = await _host
-        .scanForDeviceId(identity!.deviceId, timeout: const Duration(seconds: 8));
+    final devices = await _host.scanForDeviceId(identity!.deviceId,
+        timeout: const Duration(seconds: 8));
     lastRetryGated = false;
     final match = devices.isEmpty ? null : devices.first;
     lastMatchName = match?.name ?? '';
@@ -434,8 +437,8 @@ final class BleCameraSession {
       return true;
     } on TimeoutException {
       // 失败落盘:直连超时(分段=链接建立/握手两段,排障定位用)。
-      AppLog.e(AppLog.ble,
-          'direct reconnect TIMEOUT linked=$linked'); // 真实失败,常驻
+      AppLog.e(
+          AppLog.ble, 'direct reconnect TIMEOUT linked=$linked'); // 真实失败,常驻
       lastError = linked
           ? (key: 'ble.stage2HandshakeTimeout', args: null)
           : (key: 'ble.stage2DirectTimeout', args: null);
@@ -492,7 +495,9 @@ final class BleCameraSession {
     final done = _handshake = Completer<void>();
     var linked = false;
     try {
-      await _host.connectPaired(target.uuid).timeout(const Duration(seconds: 20));
+      await _host
+          .connectPaired(target.uuid)
+          .timeout(const Duration(seconds: 20));
       linked = true;
       await done.future.timeout(const Duration(seconds: 45));
       return true;
@@ -555,10 +560,9 @@ final class BleCameraSession {
       if (blob == null) {
         _trace('0x2004 ← null');
       } else {
-        // AppLog 分支脱敏(加密凭据 blob);onTrace 保持全 hex 供方言核对。
-        _trace('0x2004 ← ${blob.length}B ${hex(blob)}',
-            masked: '0x2004 ← ${blob.length}B '
-                '${AppLog.hex(blob, sensitive: true)}');
+        // 凭据 blob 只保留头尾对拍片段,明文/完整密文都不落 trace。
+        _trace('0x2004 ← ${blob.length}B '
+            '${AppLog.hex(blob, sensitive: true)}');
       }
       if (blob == null || blob.isEmpty) {
         lastError = (key: 'ble.noCredBroadcast', args: null);
@@ -574,19 +578,14 @@ final class BleCameraSession {
       final creds = decodeWifiCredentials(blob, lss: _lssMaterial);
       if (creds == null) {
         // 十七轮:解密未中**不上 lastError**(错误位)—— 唤醒流程下
-        // 相机 Wi-Fi 已开,错误位让位「去系统连 Wi-Fi」红字提醒;细节
-        // 落 AppLog(blob 已 trace,候选密钥增补用)。LSS 材料齐全度
-        // 随行,缺材料 = 握手未走到 stage4 合成沿。
+        // 相机 Wi-Fi 已开,错误位让位「去系统连 Wi-Fi」红字提醒;日志
+        // 只记材料是否齐全,完整派生输入不落盘。
         final m = _lssMaterial;
         if (m != null) {
-          // 全 hex 只走 onTrace(离线分析用),AppLog 分支留摘要。
-          _trace('LSS 材料 key1=${hex(m.key1)} key2=${hex(m.key2)} '
-              'saltIdx=${m.saltIndex} N_A=${hex(m.cameraNonce)} '
-              'X=${hex(m.phoneNonce)}',
-              masked: 'LSS 材料在(saltIdx=${m.saltIndex},字段 hex 走 trace)');
+          _trace('LSS 材料在(saltIdx=${m.saltIndex},字段已脱敏)');
         }
         AppLog.w(AppLog.ble,
-            'AP 凭据解密未中(LSS 派生+定键候选全未命中,blob 已落诊断日志;材料 ${m == null ? '缺' : '在'})');
+            'AP 凭据解密未中(LSS 派生+定键候选全未命中,blob 仅存脱敏摘要;材料 ${m == null ? '缺' : '在'})');
       } else {
         _trace('0x2004 解密命中 keySource=${creds.keySource}');
       }
@@ -615,7 +614,8 @@ final class BleCameraSession {
       );
       return false;
     } on Exception catch (e) {
-      lastError = (key: 'ble.opFail', args: {'label': label, 'e': e.toString()});
+      lastError =
+          (key: 'ble.opFail', args: {'label': label, 'e': e.toString()});
       return false;
     }
   }
@@ -840,9 +840,9 @@ final class BleCameraSession {
           _stage3Sent = false;
           _nameWritten = false;
           await _host.write(kNikonCharPairing, stage1.encode());
-          _trace('stage1 → device=${stage1.device.toRadixString(16)} '
-              'nonce=${stage1.nonce.toRadixString(16)}'
-              '${_resuming ? '(复用)' : '(全新)'}');
+          // stage1 device/nonce 是 LSS key2/nonce 的原始输入，只记流程
+          // 形态，值本身不落 trace。
+          _trace('stage1 → 已发送${_resuming ? '(复用)' : '(全新)'}');
         } on Exception catch (e) {
           // 失败落盘(AppLog.e → errorTail/tail.log):握手起始失败的
           // 原生异常串上盘,真机排障唯一持久面(2026-10-21 夜教训)。
@@ -854,8 +854,8 @@ final class BleCameraSession {
             _cryptoWallDetected = true;
             final w = _handshake;
             if (w != null && !w.isCompleted) {
-              w.completeError(BlePairingException(
-                  '此环境蓝牙不支持与相机配对(加密链路无法建立,卓易通等容器环境)'));
+              w.completeError(
+                  BlePairingException('此环境蓝牙不支持与相机配对(加密链路无法建立,卓易通等容器环境)'));
             }
           }
           // 连续拒绝计数:kick = 相机接受链路后立刻掐 —— 瞬时态(唤醒
@@ -894,8 +894,8 @@ final class BleCameraSession {
       case BleDisconnected():
         if (_state == BleSessionState.pairing) {
           // 失败落盘:配对期断链时序(死在哪一拍)上盘排障。
-          AppLog.e(AppLog.ble,
-              'handshake DISCONNECTED (stage3Sent=$_stage3Sent)');
+          AppLog.e(
+              AppLog.ble, 'handshake DISCONNECTED (stage3Sent=$_stage3Sent)');
           lastError = (key: 'ble.handshakeDisconnected', args: null);
           _failHandshake();
         } else if (_state == BleSessionState.ready) {
@@ -922,7 +922,7 @@ final class BleCameraSession {
       // stage4:字节 9-16 = 相机 BLE 侧序列号(NUL 截止)。
       if (data.length == PairingMessage.length) {
         _serial = _engine.extractSerial(PairingMessage.decode(data));
-        _trace('stage4 → 序列号=$_serial');
+        _trace('stage4 → 序列号已收(${_serial?.length ?? 0} 字符)');
         // LSS 密钥材料合成(0x2004 凭据解密 K 派生输入,字段一律线上
         // 原样):key1 = stage4 deviceId 原始 8B(与序列号是两回事,
         // 序列号是它的 ASCII 读法),key2 = 客户端身份(stage1 帧
@@ -939,7 +939,7 @@ final class BleCameraSession {
             phoneNonce: Uint8List.fromList(s1.sublist(1, 9)),
           );
           _trace('LSS 材料 ∈ saltIdx=$_stage2SaltIndex '
-              'key1=${hex(_lssMaterial!.key1)}');
+              'key1=${AppLog.hex(_lssMaterial!.key1, sensitive: true)}');
         }
         // 真机方言(2026-10-13 Zf):名字先行 —— 相机收下 0x2002 控制
         // 器名后才发 NOT1 确认;等 NOT1 再写名会双方互等到超时。
@@ -953,8 +953,7 @@ final class BleCameraSession {
       return;
     }
     final msg = PairingMessage.decode(data);
-    _trace('stage2 ← device=${msg.device.toRadixString(16)} '
-        'nonce=${msg.nonce.toRadixString(16)}');
+    _trace('stage2 ← 挑战已收到');
     final stage3Pair = _engine.verifyStage2AndBuildStage3(stage1, msg);
     if (stage3Pair == null) {
       lastError = (key: 'ble.stage2NoSalt', args: null);
@@ -968,8 +967,7 @@ final class BleCameraSession {
     _stage3Sent = true;
     try {
       await _host.write(kNikonCharPairing, stage3.encode());
-      _trace('stage3 → device=${stage3.device.toRadixString(16)} '
-          'nonce=${stage3.nonce.toRadixString(16)}');
+      _trace('stage3 → 已发送');
     } on Exception catch (e) {
       // 失败落盘:stage3 认证写被掐的原生异常串上盘排障。
       AppLog.e(AppLog.ble, 'stage3 write FAIL $e');
@@ -1080,7 +1078,7 @@ final class BleCameraSession {
     _kickStreak = 0; // 连上即清连续拒绝计数
     _handshake?.complete();
     _handshake = null;
-    _trace('配对成功 ✓ device=${stage1.device.toRadixString(16)}');
+    _trace('配对成功 ✓');
     // 收口校时(SnapBridge 语义:配对事务末环)保留,但改过首写门才发:
     // 一次性延迟自发([_deferredFirstWrite]),配对页挂起期驱动 tick 停摆
     // 也能落地;闸内到达的定位缓存同沿回补。
@@ -1105,11 +1103,9 @@ final class BleCameraSession {
     }
   }
 
-  /// trace 双发:原样进 [onTrace](配对页 UI 保持全 hex 供方言核对),
-  /// 同时进 AppLog ble 域 —— [masked] 给敏感载荷行(AppLog 环形缓冲会
-  /// 随导出外流,凭据只留头尾对拍帧,中段打码)。
-  void _trace(String line, {String? masked}) {
+  /// trace 双发:[onTrace] 与 AppLog 都只接收调用方已脱敏的文本。
+  void _trace(String line) {
     onTrace?.call(line);
-    AppLog.d(AppLog.ble, masked ?? line);
+    AppLog.d(AppLog.ble, line);
   }
 }

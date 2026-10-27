@@ -13,7 +13,8 @@ import 'dart:io' show Directory, File, FileMode, Platform;
 import 'dart:typed_data' show Uint8List;
 
 import 'package:flutter/foundation.dart' show debugPrint, kDebugMode;
-import 'package:flutter/widgets.dart' show AppLifecycleListener, AppLifecycleState;
+import 'package:flutter/widgets.dart'
+    show AppLifecycleListener, AppLifecycleState;
 
 import 'core/ble/ble_camera_session.dart';
 import 'core/log/app_log.dart';
@@ -99,7 +100,6 @@ final class AppServices {
 
   /// 数据店装配(全部持久层,dataDir = applicationSupport)。
   void _wireStores() {
-
     // 无线身份与配对档案(dataDir = applicationSupport,持久):
     // 客户端 GUID 跨启动复用,相机按它记忆已配对设备;换 GUID = 新客户端。
     identityStore =
@@ -151,8 +151,7 @@ final class AppServices {
   void _wireBrowseAndTransfer() {
     repository = ObjectRepositoryImpl(session: session);
     fileOps = CameraFileOps(session: session, repository: repository);
-    ratingsStore = FileRatingsStore(
-        dataDir: PlatformServices.gallery.dataDir);
+    ratingsStore = FileRatingsStore(dataDir: PlatformServices.gallery.dataDir);
     // 弹层选项持久化(排序/筛选/显示/视图;文件夹不入账,句柄随相机漂移)。
     uiPrefs = FileUiPrefsStore(dataDir: PlatformServices.gallery.dataDir);
     // 图库文件级评级快照(下载落盘沿写、相册改评沿传播)。
@@ -195,8 +194,8 @@ final class AppServices {
       gallery: PlatformServices.gallery,
       // 传输历史持久化(终态落盘,重启后传输页仍有账;左滑删/清空历史
       // 同账)。
-      history: FileTransferHistoryStore(
-          dataDir: PlatformServices.gallery.dataDir),
+      history:
+          FileTransferHistoryStore(dataDir: PlatformServices.gallery.dataDir),
       // 水印合成:设置选模板;off / 异常 → 不处理。
       watermarkFor: (entry) async {
         try {
@@ -261,8 +260,8 @@ final class AppServices {
         if (stars < 1 && !trash) return;
         final name = path.split(Platform.pathSeparator).last;
         // 垃圾桶档记 -1(星级与删除候选互斥存储;改评传播沿覆写)。
-        await libraryRatings
-            .setFile(name, await File(path).length(), trash ? -1 : stars);
+        await libraryRatings.setFile(
+            name, await File(path).length(), trash ? -1 : stars);
       },
     );
     // 速传:ObjectAdded 事件驱动自动下载(开关/格式见设置页)。
@@ -279,8 +278,8 @@ final class AppServices {
       },
     );
     settingsController = SettingsController(store: settingsStore);
-    configSnapshots = ConfigSnapshotStore(
-        dataDir: PlatformServices.gallery.dataDir);
+    configSnapshots =
+        ConfigSnapshotStore(dataDir: PlatformServices.gallery.dataDir);
     snapshotController = SnapshotController(
       session: session,
       connection: connection,
@@ -301,13 +300,10 @@ final class AppServices {
     // >-NikonPill」。异步取型号 —— 配对须用户过 UI,毫秒级落定无竞态;
     // 取不到(native 缺失/异常,helper 已兜空串)保持默认裸名。
     unawaited(bleDeviceModelName().then((model) {
-      bleSession.controllerName =
-          BleCameraSession.composeControllerName(model);
+      bleSession.controllerName = BleCameraSession.composeControllerName(model);
     }));
-    // 帧级 trace 常年接线进统一日志(ble 域,debug 级):不随配对面板
-    // 开关断续,通用日志随时可查握手/注入帧时序(2026-10-17 面板日志
-    // 框退役,日志并轨统一日志)。
-    bleSession.onTrace = (line) => AppLog.d(AppLog.ble, line);
+    // BleCameraSession 的 _trace 已统一投递到 AppLog；不要另挂
+    // onTrace，否则会绕过敏感载荷的脱敏摘要。
     // 前台/后台档位(BLE TIME 保活 45s/90s):生命周期观察在服务层就地
     // 接线,UI 零感知;resumed=前台档,其余态(含 inactive 瞬态)按
     // 后台档 —— 只影响下一拍到点判定,无副作用。监听器随
@@ -449,11 +445,10 @@ final class AppServices {
       final active = ts.any((t) => !t.isTerminal);
       if (active == bgHeld) return;
       bgHeld = active;
-      unawaited(
-          active
-              ? PlatformServices.background.ensureRunning(
-                  'transfer', const <BgMode>{BgMode.dataTransfer})
-              : PlatformServices.background.stop('transfer'));
+      unawaited(active
+          ? PlatformServices.background
+              .ensureRunning('transfer', const <BgMode>{BgMode.dataTransfer})
+          : PlatformServices.background.stop('transfer'));
     });
     // BLE 持有独立订阅(广播流;注入驱动的 _bleStateSub 只在驱动在跑
     // 期存活,配对页挂起期链路仍在 —— 持有须全程跟随会话状态)。
@@ -497,8 +492,7 @@ final class AppServices {
       onConnectedSettled: kRatingDiagnostics || kUsbDlProbe || kOhosSubmitProbe
           ? () {
               if (kRatingDiagnostics) {
-                RatingDiagnostics.run(
-                    session: session, repository: repository);
+                RatingDiagnostics.run(session: session, repository: repository);
               }
               if (kUsbDlProbe) {
                 unawaited(IcDownloadProbe.run(
@@ -561,16 +555,15 @@ final class AppServices {
           jpeg[0] != 0xFF ||
           jpeg[1] != 0xD8 ||
           jpeg[2] != 0xFF) {
-        AppLog.w(AppLog.browser,
-            'HIF 伴生预览:${entry.name} 相机 JPEG 缺席/非 JPEG,跳过');
+        AppLog.w(AppLog.browser, 'HIF 伴生预览:${entry.name} 相机 JPEG 缺席/非 JPEG,跳过');
         return;
       }
       // 信箱黑边裁剪:相机缩略把画面信箱化进固定画布(HIF/NEF/视频均
       // 会),无黑边裁剪自回 null 原样。
       final trimmed = await trimLetterboxJpeg(jpeg);
       await companion.writeAsBytes(trimmed ?? jpeg, flush: true);
-      AppLog.i(AppLog.browser,
-          'HIF 伴生预览:${entry.name} → libv4_${safe}_$len.jpg');
+      AppLog.i(
+          AppLog.browser, 'HIF 伴生预览:${entry.name} → libv4_${safe}_$len.jpg');
     } on Exception {
       // 尽力而为:失败静默,传输照常完成
     }
@@ -671,6 +664,7 @@ final class AppServices {
       await libraryRatings.setFile(name, file.lengthSync(), stars);
     }
   }
+
   late final ThumbnailCache thumbnails;
   late final ObjectDownloader downloader;
   late final TransferEngineImpl transferEngine;
@@ -693,9 +687,8 @@ final class AppServices {
   /// kConnectStartGateTimeout)。概览/双卡槽/清事件/对时/轮询/相册预热
   /// 共此门。引用 late final 字段,连接沿才执行(装配早已收口),无
   /// 先序问题。
-  Future<void> _connectSideChainGate() =>
-      remoteController.connectedStartSettled
-          .timeout(kConnectStartGateTimeout, onTimeout: () {});
+  Future<void> _connectSideChainGate() => remoteController.connectedStartSettled
+      .timeout(kConnectStartGateTimeout, onTimeout: () {});
 
   late final BleDriver bleDriver;
 
@@ -710,6 +703,7 @@ final class AppServices {
 
   late final TransfersController transfersController;
   late final BleIdentityStore bleIdentityStore;
+
   /// BLE 相机会话(构造沿即建 —— 连接页「蓝牙」分段装配要引用;
   /// 驱动挂接在其后)。
   late final BleCameraSession bleSession;

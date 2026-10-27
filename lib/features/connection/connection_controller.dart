@@ -255,40 +255,27 @@ class ConnectionController extends ChangeNotifier {
   /// 「未配对」翻到「已配对」)。身份清空(解除配对)沿撤系统配对红卡。
   Future<void> loadBleIdentity() async {
     final saved = await bleIdentityStore?.load();
+    final sameCamera = saved != null && bleIdentity?.deviceId == saved.deviceId;
+    if (!sameCamera) {
+      sessionWifiPassword = '';
+    }
     if (saved == null) {
       bleAwaitSystemBond = false;
-      savedWifiPassword = '';
     }
     if (bleIdentity != saved) {
       bleIdentity = saved;
-      savedWifiPassword = saved?.wifiPassword ?? '';
       notifyListeners();
     }
   }
 
-  /// 相机热点密码(0x2004 解密未中的 B 路凭据;身份档持久化,一次录
-  /// 入之后一键直达)。装载见 [loadBleIdentity]。
-  String savedWifiPassword = '';
+  /// 相机热点密码(0x2004 解密未中时的 B 路凭据)。只保存在当前 App
+  /// 进程内，不落身份档；重启或切换已配对相机后须重新录入。
+  String sessionWifiPassword = '';
 
-  /// 密码落档(扫描+用户录入的 join 成功沿调用;凭据随机身配置不轮
-  /// 换,一次管到解除配对/重配为止)。
+  /// 记住本次会话内录入的热点密码，供同一次运行中的后续重连复用。
   Future<void> saveWifiPassword(String password) async {
-    final saved = bleIdentity;
-    final store = bleIdentityStore;
-    if (saved == null || store == null || password.isEmpty) return;
-    final updated = BlePairedIdentity(
-      peripheralUuid: saved.peripheralUuid,
-      deviceId: saved.deviceId,
-      nonce: saved.nonce,
-      serial: saved.serial,
-      controllerName: saved.controllerName,
-      cameraName: saved.cameraName,
-      wifiPassword: password,
-      pairedAt: saved.pairedAt,
-    );
-    await store.save(updated);
-    bleIdentity = updated;
-    savedWifiPassword = password;
+    if (bleIdentity == null || password.isEmpty) return;
+    sessionWifiPassword = password;
     notifyListeners();
   }
 
