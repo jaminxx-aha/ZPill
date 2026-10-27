@@ -432,14 +432,71 @@ void main() {
     await disposePage(tester);
   });
 
-  // skip 理由:扫描权状态机改造中,本用例待按新所有权模型重写
-  //(持续扫描循环的 Timer 生命周期/挂起让位沿断言,2026-10-21)。
   testWidgets('无身份首配:点选设备发起配对,先停在途扫描(无线电让给握手)',
       (tester) async {
-    // TODO(测试基建,2026-10-21):持续扫描循环 + 扫描权状态机落地后,
-    // 本用例按新所有权模型重写(Timer 生命周期/挂起让位沿断言)。
-  },
-      skip: true);
+    tester.view
+      ..physicalSize = const Size(800, 2400)
+      ..devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final messenger = tester.binding.defaultBinaryMessenger;
+    final secondScan = Completer<List<Map<String, Object?>>>();
+    var scanCalls = 0;
+    var stopScanCalls = 0;
+    var connectCalls = 0;
+    messenger.setMockMethodCallHandler(bleEvents, (call) async => null);
+    messenger.setMockMethodCallHandler(ble, (call) async {
+      switch (call.method) {
+        case 'scan':
+          scanCalls++;
+          // 首窗立即填设备行;第二窗挂住,模拟真机 30s 扫描窗仍在途。
+          if (scanCalls == 1) return [deviceMap(mfgOf(0x56781234))];
+          return secondScan.future;
+        case 'stopScan':
+          stopScanCalls++;
+          return null;
+        case 'connectPaired':
+          connectCalls++;
+          return null;
+      }
+      return null;
+    });
+    addTearDown(() {
+      if (!secondScan.isCompleted) secondScan.complete(const []);
+      messenger.setMockMethodCallHandler(ble, null);
+      messenger.setMockMethodCallHandler(bleEvents, null);
+    });
+
+    await tester.pumpWidget(
+        MaterialApp(home: Scaffold(body: BlePairPanel())));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(find.text('Z f_8014411'), findsOneWidget);
+    expect(scanCalls, 1, reason: '打开沿首窗已收口');
+
+    // 持续扫描 2s 后续窗:此时设备行仍在,但无线电正被扫描占用。
+    await tester.pump(const Duration(seconds: 2));
+    expect(scanCalls, 2, reason: '无身份 idle 态由面板持扫描权');
+
+    await tester.tap(find.text('Z f_8014411'));
+    await tester.pump();
+    await tester.pump();
+    expect(AppServices.instance.bleSession.state, BleSessionState.pairing,
+        reason: '点设备行进入首配握手');
+    expect(stopScanCalls, 1,
+        reason: '状态切 pairing 时先停面板在途扫描,无线电让给握手');
+    expect(connectCalls, 1, reason: '停扫后发起设备连接');
+
+    // pairing 期间扫描权归会话,周期循环不得复活第三窗。
+    await tester.pump(const Duration(seconds: 3));
+    expect(scanCalls, 2, reason: '握手期间面板不续扫');
+
+    if (!secondScan.isCompleted) secondScan.complete(const []);
+    await tester.pump();
+    await disposePage(tester, drain: const Duration(seconds: 16));
+    expect(AppServices.instance.bleSession.state, BleSessionState.idle,
+        reason: '拆面板取消首配等待,握手超时沿收口 idle');
+  });
 
   testWidgets('拆面板废在途重连:退避即刻醒,退避到点也不续跑(取消语义)',
       (tester) async {

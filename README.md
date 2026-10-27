@@ -87,7 +87,7 @@ docs/                架构文档
 ```bash
 flutter pub get
 flutter run                  # 连接设备运行
-flutter test                 # 全量单测(2026-10-27 基线:1633 passed / 1 skipped)
+flutter test                 # 全量单测(2026-10-27 基线:1634 passed / 0 skipped)
 
 # HarmonyOS(切到 SIG fork 的 flutter,备好 DevEco SDK / hvigor / ohpm 环境)
 flutter build hap
