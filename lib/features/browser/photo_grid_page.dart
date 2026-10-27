@@ -1033,6 +1033,11 @@ class _PhotoGridPageState extends State<PhotoGridPage>
   Widget _cell(_GridItem cell, int index, List<_GridItem> cells, {Key? key}) {
     final group = cell.group;
     _noteBuilt(index, cells); // 构建沿 = 预取锚点沿(前瞻预热)
+    // 当前格不在 [_noteBuilt] 的前瞻窗内(窗口排除自身),必须直接发起;
+    // 否则最新/筛选后首个视频永远拿不到 mvhd 时长。
+    if (cell.isVideo) {
+      _ratings.repository.requestVideoDuration(cell.rep.handle);
+    }
     _ratings.ensure(group); // 评级轻量段即发(可见格先答,后台队只兜底)
     final selected = _selected.contains(cell.key);
     final stars = _ratings.ratingOf(group);

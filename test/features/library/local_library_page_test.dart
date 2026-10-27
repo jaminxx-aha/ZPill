@@ -984,7 +984,8 @@ void main() {
 
     await openFilterMenu(tester);
     // 排序区(共享):三行平铺,当前键(时间)行尾示排序图标。
-    // 筛选区 = 共享两级联子面板入口(格式 + 评级;评级未建立仅格式)。
+    // 筛选区 = 共享两级联子面板入口(格式 + 评级)。评级快照为空也保留
+    // 入口,便于直接筛「无评级」。
     expect(find.text('排序'), findsOneWidget);
     expect(find.text('时间'), findsOneWidget);
     expect(find.text('文件名'), findsOneWidget);
@@ -992,7 +993,7 @@ void main() {
     expect(sortIconShown(tester), isTrue);
     expect(find.text('筛选'), findsOneWidget);
     expect(find.byKey(const ValueKey('formatFilter-entry')), findsOneWidget);
-    expect(find.byKey(const ValueKey('ratingFilter-entry')), findsNothing);
+    expect(find.byKey(const ValueKey('ratingFilter-entry')), findsOneWidget);
     expect(find.text('视图选项'), findsOneWidget);
     expect(find.text('连拍聚合'), findsOneWidget);
     // 排序行无勾(勾位语言专属格式/评级多选)

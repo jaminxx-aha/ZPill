@@ -32,6 +32,7 @@ final class _FakeRepo implements ObjectRepository {
 
   /// 视频时长预置(测试直设,免 PTP 脚本)。
   final Map<int, Duration> durations = {};
+  final List<int> durationRequests = [];
   Completer<List<CameraAlbum>>? _pending;
   int resetCalls = 0;
 
@@ -75,7 +76,7 @@ final class _FakeRepo implements ObjectRepository {
   @override
   Duration? durationFor(int handle) => durations[handle];
   @override
-  void requestVideoDuration(int handle) {}
+  void requestVideoDuration(int handle) => durationRequests.add(handle);
 
   @override
   int ratingForHandle(int handle) => ratings[handle] ?? 0;
@@ -321,6 +322,8 @@ void main() {
     await tester.pumpAndSettle();
 
     // 摄像机角标退场;时长胶囊上屏(150s → 2:30),黑底同格式角标。
+    expect(repo.durationRequests, contains(1),
+        reason: '首位视频当前格也必须发起探测,不能只依赖后续格的前瞻窗');
     expect(find.byIcon(Icons.videocam), findsNothing);
     expect(find.text('2:30'), findsOneWidget);
 

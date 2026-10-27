@@ -988,15 +988,14 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
       ...sortMenuSection(
           context, _sort, _sections, () => setState(() {}), _onSort),
       menuSectionDivider,
-      // 筛选区(共享,头行可折叠):格式 + 评级级联子面板(快照装载且
-      // 非空后出评级;已知档位 + 删除候选,「已评级」不设行)。
+      // 筛选区(共享,头行可折叠):格式 + 评级级联子面板。评级入口始终
+      // 保留(空库也能筛「无评级」),数据就绪后筛选结果随快照刷新。
       filterMenuSectionHeader(context, context.t('libpage.filter'), 'filter',
           _sections, () => setState(() {})),
       if (!_sections.isCollapsed('filter')) ...[
         ...formatFilterMenuSection(context, _formatSelection, _toggleFormat),
-        if (_ratings.loaded && _ratings.hasAny)
-          ...ratingFilterMenuSection(
-              context, _ratingSelection, _toggleRatingFilter),
+        ...ratingFilterMenuSection(
+            context, _ratingSelection, _toggleRatingFilter),
       ],
       menuSectionDivider,
       // 显示区(共享,头行可折叠):评级/格式角标按需上格。

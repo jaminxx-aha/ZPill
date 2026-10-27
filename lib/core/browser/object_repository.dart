@@ -100,8 +100,8 @@ abstract interface class ObjectRepository {
   /// 视频时长(容器 mvhd 解析;null = 未探测/探测失败)。
   Duration? durationFor(int handle);
 
-  /// 请求探测视频时长(容器行走,数次小读;去重,fire-and-forget,
-  /// 成果经 [updates] 发布)。
+  /// 请求探测视频时长(容器行走,数次小读;去重,失败有限重试,
+  /// fire-and-forget,成果经 [updates] 发布)。
   void requestVideoDuration(int handle);
 
   /// 单文件评级(0 = 未评/未取到)。
@@ -447,7 +447,14 @@ final class ObjectRepositoryImpl implements ObjectRepository {
   }
 
   final Map<int, Duration> _videoDurations = {};
-  final Set<int> _videoDurationQueried = {};
+  final Map<int, int> _videoDurationAttempts = {};
+  final Set<int> _videoDurationInFlight = {};
+
+  /// 容器解析或分块读失败的最多尝试次数(首次 + 两次重试)。相机忙时
+  /// 0x101B 可能瞬时拒答,不能一次失败就永久不显时长。
+  static const int _maxVideoDurationAttempts = 3;
+  static const Duration _videoDurationRetryDelay =
+      Duration(milliseconds: 300);
 
   @override
   Duration? durationFor(int handle) => _videoDurations[handle];
@@ -456,24 +463,45 @@ final class ObjectRepositoryImpl implements ObjectRepository {
   void requestVideoDuration(int handle) {
     final entry = _byHandle[handle];
     if (entry == null || entry.kind != ObjectKind.video) return;
-    if (!_videoDurationQueried.add(handle)) return;
+    if (_videoDurations.containsKey(handle) ||
+        _videoDurationInFlight.contains(handle)) {
+      return;
+    }
+    final attempts = _videoDurationAttempts[handle] ?? 0;
+    if (attempts >= _maxVideoDurationAttempts) return;
+    final attempt = attempts + 1;
+    _videoDurationAttempts[handle] = attempt;
+    _videoDurationInFlight.add(handle);
+    final generation = _generation;
     unawaited(() async {
       try {
-        final d = await readVideoDuration((off, len) async {
-          try {
-            return await session.getPartialObject(handle, off, len);
-          } on Object {
-            return null;
-          }
-        });
+        final d = await readVideoDuration(
+            (off, len) => session.getPartialObject(handle, off, len));
+        if (generation != _generation || !_byHandle.containsKey(handle)) return;
         if (d != null) {
           _videoDurations[handle] = d;
           _scheduleRatingPublish(); // 借评级发布管线广播(页侧重建取值)
+        } else {
+          _retryVideoDuration(handle, attempt, generation);
         }
       } on Object {
-        // 探测失败:不显时长
+        _retryVideoDuration(handle, attempt, generation);
+      } finally {
+        if (generation == _generation) {
+          _videoDurationInFlight.remove(handle);
+        }
       }
     }());
+  }
+
+  void _retryVideoDuration(int handle, int attempt, int generation) {
+    if (attempt >= _maxVideoDurationAttempts || generation != _generation) {
+      return;
+    }
+    unawaited(Future<void>.delayed(_videoDurationRetryDelay, () {
+      if (generation != _generation) return;
+      requestVideoDuration(handle);
+    }));
   }
 
   /// 评级回退补读(0x9434 不可用时的旧路):按缓存序(新→旧)逐适用
@@ -633,6 +661,9 @@ final class ObjectRepositoryImpl implements ObjectRepository {
     _generation++;
     _byHandle = <int, ObjectEntry>{};
     _ratings.clear();
+    _videoDurations.clear();
+    _videoDurationAttempts.clear();
+    _videoDurationInFlight.clear();
     _ratingQueried.clear();
     _ratingInFlight.clear();
     _metaRated.clear();
@@ -652,7 +683,12 @@ final class ObjectRepositoryImpl implements ObjectRepository {
   void removeHandles(Iterable<int> handles) {
     var removed = false;
     for (final h in handles.toSet()) {
-      if (_byHandle.remove(h) != null) removed = true;
+      if (_byHandle.remove(h) != null) {
+        removed = true;
+        _videoDurations.remove(h);
+        _videoDurationAttempts.remove(h);
+        _videoDurationInFlight.remove(h);
+      }
     }
     if (removed) {
       final n = _byHandle.length;

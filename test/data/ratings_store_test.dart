@@ -96,7 +96,7 @@ void main() {
     expect(controller.ratingOf(file), 0);
   });
 
-  test('store 失败:loaded 保持 false(筛选分区不出现),读值恒 0', () async {
+  test('store 失败:loaded 保持 false,读值恒 0', () async {
     final controller = LibraryRatings(store: _FailingStore());
     addTearDown(controller.dispose);
     await pumpEventQueue();

@@ -237,6 +237,29 @@ Uint8List _metaDataset(List<(int handle, int attr)> entries) {
   return w.takeBytes();
 }
 
+/// ftyp + moov[mvhd v0],duration/timescale = 150s;四笔 64B 分块读足够
+/// 箱行走完成(本用例只关心首轮失败后的重试能拿到时长)。
+Uint8List _durationMov() {
+  const timescale = 1000;
+  const duration = 150000;
+  return Uint8List.fromList([
+    0, 0, 0, 16, 0x66, 0x74, 0x79, 0x70, ...List.filled(8, 0x20),
+    0, 0, 0, 48, 0x6d, 0x6f, 0x6f, 0x76,
+    0, 0, 0, 40, 0x6d, 0x76, 0x68, 0x64,
+    0x00, 0x00, 0x00, 0x00,
+    0, 0, 0, 1, 0, 0, 0, 2,
+    (timescale >> 24) & 0xff,
+    (timescale >> 16) & 0xff,
+    (timescale >> 8) & 0xff,
+    timescale & 0xff,
+    (duration >> 24) & 0xff,
+    (duration >> 16) & 0xff,
+    (duration >> 8) & 0xff,
+    duration & 0xff,
+    0, 0, 0, 1, 1, 0, 0, 0,
+  ]);
+}
+
 int _infoCount(FakePtpTransport fake) =>
     fake.requests
         .where((r) => r.opcode == PtpOperationCode.getObjectInfo)
@@ -1590,6 +1613,37 @@ void main() {
     expect(repo.ratingsLoaded, isFalse);
     expect(repo.ratingForHandle(0x13), 0);
     expect(repo.groupOf(0x13), isNull);
+  });
+
+  test('视频时长:首次分块读失败后有限重试,成功后广播', () async {
+    final fake = FakePtpTransport();
+    final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
+    _replyPagedHandles(fake);
+    _replyRoots(fake);
+    fake.reply(_okData(_rootProbeDataset()));
+    fake.reply(_okData(_page101Dataset()));
+    fake.reply(_okData(_page100Dataset()));
+    await repo.loadAlbums();
+
+    final mov = _durationMov();
+    fake.reply(_refused); // 首轮 0x101B 瞬时拒答
+    for (final off in const [0, 16, 24, 24]) {
+      fake.reply(_okData(Uint8List.sublistView(mov, off)));
+    }
+    fake.reply(_okData(_metaDataset(const []))); // +500ms 评级位图空表
+
+    repo.requestVideoDuration(0x22);
+    repo.requestVideoDuration(0x22); // 在途去重
+    await Future<void>.delayed(const Duration(milliseconds: 900));
+
+    expect(repo.durationFor(0x22), const Duration(seconds: 150));
+    final reads = fake.requests
+        .where((r) =>
+            r.opcode == PtpOperationCode.getPartialObject &&
+            r.params.first == 0x22)
+        .length;
+    expect(reads, greaterThanOrEqualTo(5),
+        reason: '至少 1 笔失败 + 重试的 4 笔 mvhd 箱行走;评级后台可能另读容器');
   });
 
   test('0x4007 ObjectInfoChanged:相机侧改评沿重拉评级(两向同步)',
