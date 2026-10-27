@@ -22,6 +22,26 @@ img.Image _gradient(int w, int h) {
 
 Uint8List _jpeg(img.Image image) => Uint8List.fromList(img.encodeJpg(image));
 
+Uint8List _oversizedJpegHeader() => Uint8List.fromList([
+      0xFF,
+      0xD8,
+      0xFF,
+      0xC0,
+      0x00,
+      0x0B,
+      0x08,
+      0x27,
+      0x10,
+      0x27,
+      0x10,
+      0x01,
+      0x01,
+      0x11,
+      0x00,
+      0xFF,
+      0xD9,
+    ]);
+
 void main() {
   test('decodeForEdit:长边缩放、短边等比;小图不动', () {
     final big = _jpeg(_gradient(400, 200));
@@ -35,6 +55,18 @@ void main() {
 
   test('decodeForEdit:非 JPEG 返回 null', () {
     expect(decodeForEdit(Uint8List.fromList([1, 2, 3, 4])), isNull);
+  });
+
+  test('超大 JPEG 在整图解码前拒绝', () {
+    final oversized = _oversizedJpegHeader();
+    expect(decodeForEdit(oversized), isNull);
+    expect(
+      identical(
+        applyEdit(oversized, const PhotoEdit(rotationQuarter: 1)),
+        oversized,
+      ),
+      isTrue,
+    );
   });
 
   test('rotateRect:顺/逆互逆,四次回到原位', () {

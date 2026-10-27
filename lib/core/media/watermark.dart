@@ -25,6 +25,8 @@ import 'dart:ui' as ui;
 import 'package:flutter/painting.dart';
 import 'package:image/image.dart' as img;
 
+import 'jpeg_limits.dart';
+
 
 final class WatermarkOptions {
   const WatermarkOptions({required this.style, this.text});
@@ -104,14 +106,15 @@ Future<Uint8List> applyWatermark(Uint8List jpeg, WatermarkOptions options,
     {TextRaster raster = defaultTextRaster}) async {
   if (options.style == WatermarkStyle.off) return jpeg;
   if (jpeg.length < 4 || jpeg[0] != 0xFF || jpeg[1] != 0xD8) return jpeg;
+  final canvas = jpegEncodedCanvasSize(jpeg);
+  if (canvas == null) return jpeg; // 帧头无 SOF:解码必失败,原样直返
+  if (canvas.$1 * canvas.$2 > kMaxJpegDecodePixels) return jpeg;
   img.ExifData? exif;
   try {
     exif = readJpegExif(jpeg);
   } on Exception {
     exif = null;
   }
-  final canvas = jpegEncodedCanvasSize(jpeg);
-  if (canvas == null) return jpeg; // 帧头无 SOF:解码必失败,原样直返
   // 显示宽:EXIF Orientation 5~8 烘焙时宽高互换(与 bakeOrientation 同口径)。
   final orientation = exif?.imageIfd.orientation ?? 1;
   final displayWidth =

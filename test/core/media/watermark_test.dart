@@ -115,6 +115,26 @@ Future<img.Image> _fakeRaster(String text, double fontSizePx, int color) async {
   return image;
 }
 
+Uint8List _oversizedJpegHeader() => Uint8List.fromList([
+      0xFF,
+      0xD8,
+      0xFF,
+      0xC0,
+      0x00,
+      0x0B,
+      0x08,
+      0x27,
+      0x10,
+      0x27,
+      0x10,
+      0x01,
+      0x01,
+      0x11,
+      0x00,
+      0xFF,
+      0xD9,
+    ]);
+
 /// 含 Model + Orientation 两项的极简 EXIF 载荷(IFD0:Model 走偏移路径,
 /// Orientation SHORT 内联;Model 是为了剥离方向标签后 EXIF 仍非空 ——
 /// image 包对空 EXIF 不写 APP1,输出会整体无 EXIF)。
@@ -341,6 +361,25 @@ void main() {
             const WatermarkOptions(style: WatermarkStyle.corner, text: 'Aha'),
             raster: _fakeRaster),
         same(junk));
+  });
+
+  test('超大 SOF:光栅和解码前直返原实例', () async {
+    final oversized = _oversizedJpegHeader();
+    var rasterCalls = 0;
+    Future<img.Image> raster(String text, double size, int color) async {
+      rasterCalls++;
+      return _fakeRaster(text, size, color);
+    }
+
+    expect(
+      await applyWatermark(
+        oversized,
+        const WatermarkOptions(style: WatermarkStyle.corner, text: 'Aha'),
+        raster: raster,
+      ),
+      same(oversized),
+    );
+    expect(rasterCalls, 0);
   });
 
   test('文本光栅抛异常:原实例直返(水印不拖垮传输)', () async {

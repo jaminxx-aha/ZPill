@@ -25,6 +25,26 @@ Uint8List _gradientJpeg() {
   return Uint8List.fromList(img.encodeJpg(image));
 }
 
+Uint8List _oversizedSofJpeg() => Uint8List.fromList([
+      0xFF,
+      0xD8,
+      0xFF,
+      0xC0,
+      0x00,
+      0x0B,
+      0x08,
+      0x27,
+      0x10,
+      0x27,
+      0x10,
+      0x01,
+      0x01,
+      0x11,
+      0x00,
+      0xFF,
+      0xD9,
+    ]);
+
 Uint8List _whiteCornerJpeg() {
   final image = img.Image(width: 32, height: 24);
   for (var y = 0; y < 24; y++) {
@@ -171,6 +191,12 @@ void main() {
           jpegSofSize(
               Uint8List.fromList([0xFF, 0xD8, 0xFF, 0xD9])), // 只有起止标记
           isNull);
+    });
+
+    test('超大 SOF 分析前拒绝,不做整图解码', () {
+      final oversized = _oversizedSofJpeg();
+      expect(jpegSofSize(oversized), (width: 10000, height: 10000));
+      expect(analyzeJpegFrame(oversized), isNull);
     });
   });
 

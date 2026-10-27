@@ -22,6 +22,7 @@ import 'package:image/image.dart' as img;
 
 import 'cube_lut.dart';
 import 'film_presets.dart';
+import 'jpeg_limits.dart';
 
 /// 标量调节(全部 1/0 = 不动):亮度/对比度/饱和度 0..2(1 = 原样),
 /// 暖调 -1..1(正 = 阴影压蓝、高光限蓝;负 = 反向偏冷)。
@@ -127,6 +128,7 @@ Rect rotateRectCounterClockwise(Rect r) => Rect.fromLTRB(
 /// 非 JPEG / 解码失败 → 原样返回(同一实例)。
 Uint8List applyEdit(Uint8List jpeg, PhotoEdit edit) {
   if (edit.isNeutral) return jpeg;
+  if (!jpegWithinDecodeLimits(jpeg)) return jpeg;
   img.Image? image;
   try {
     image = img.decodeJpg(jpeg);
@@ -235,6 +237,7 @@ int _m8(double v) {
 /// 预览解码:方向烘焙 + 长边缩到 [maxEdge](交互期处理小图,保存时
 /// [applyEdit] 用原字节)。缩放不裁剪,归一化裁剪矩形两档通用。
 img.Image? decodeForEdit(Uint8List jpeg, {int maxEdge = 1600}) {
+  if (!jpegWithinDecodeLimits(jpeg)) return null;
   img.Image? image;
   try {
     image = img.decodeJpg(jpeg);

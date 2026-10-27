@@ -12,6 +12,7 @@ import 'dart:typed_data';
 
 import 'package:image/image.dart' as img;
 
+import '../media/jpeg_limits.dart';
 import 'peaking_engines.dart';
 import 'scopes.dart';
 
@@ -196,6 +197,10 @@ FrameAnalysis? analyzeJpegFrame(
   int waveformCols = 64,
   int vectorN = scopeVectorGridN,
 }) {
+  if (!jpegWithinDecodeLimits(jpeg,
+      maxPixels: kMaxPreviewJpegDecodePixels)) {
+    return null;
+  }
   // 解码器对畸形/截断字节可能抛 Error(image 包格式嗅探的越界读,
   // 实测 4B 垃圾触发 RangeError)—— 任何失败一律 null,不上抛。
   Object? decoded;

@@ -11,10 +11,16 @@ library;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
+import 'jpeg_limits.dart';
+
 Future<Uint8List?> trimLetterboxJpeg(
   Uint8List jpeg, {
   int blackThreshold = 10,
 }) async {
+  if (!jpegWithinDecodeLimits(jpeg,
+      maxPixels: kMaxPreviewJpegDecodePixels)) {
+    return null;
+  }
   ui.Image? sourceImage; // 解码原图(finally 释放)
   ui.Image? croppedImage; // 裁剪结果(finally 释放)
   try {
