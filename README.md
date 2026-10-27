@@ -93,6 +93,9 @@ flutter test                 # 全量单测(2026-10-27 基线:1634 passed / 0 sk
 flutter build hap
 ```
 
+发布版本号、Android 环境变量签名和 HarmonyOS 本地签名边界见
+[docs/RELEASE.md](docs/RELEASE.md)。常规 CI 只产出无敏感密钥的 Debug APK。
+
 ## 测试与开发工具
 
 | 工具 | 用途 |

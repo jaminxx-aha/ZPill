@@ -10,6 +10,9 @@ flutter_*.log
 # 平台工程(flutter create 生成后生效)
 android/.gradle/
 android/local.properties
+android/key.properties
+android/**/*.jks
+android/**/*.keystore
 ios/Pods/
 ios/Flutter/ephemeral
 ios/.symlinks
@@ -20,6 +23,10 @@ ohos/.hvigor/
 ohos/.clangd/
 ohos/.clang-format
 ohos/.appanalyzer/
+ohos/**/*.cer
+ohos/**/*.p12
+ohos/**/*.p7b
+ohos/**/signing/
 
 # Python(tools/ptpip_probe)
 __pycache__/
