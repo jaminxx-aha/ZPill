@@ -13,7 +13,7 @@
  *   防御,双开直接 throw busy);
  * - 失败经 Promise reject(String 错误码:阶段:LIBRAW 错误值)。
  *
- * LibRaw 0.21.2(LICENSE.LGPL/CDDL 双许可)静态编入本 .so,源码见
+ * LibRaw 0.22.3(LICENSE.LGPL/CDDL 双许可)静态编入本 .so,源码见
  * libraw/ 子目录(显式清单见 CMakeLists.txt)。
  */
 #include "napi/native_api.h"
@@ -23,6 +23,10 @@
 #include <atomic>
 #include <chrono>
 #include <cstring>
+#include <exception>
+#include <limits>
+#include <memory>
+#include <new>
 #include <string>
 #include <vector>
 
@@ -33,6 +37,11 @@ namespace {
 
 /** 在途闸:通道虽单飞,防御并发调用(双开即 throw busy)。 */
 std::atomic<bool> g_busy{false};
+
+/** 手机端硬边界:相机 RAW 再大也不应让解析器拿到进程级内存耗尽。 */
+constexpr unsigned kMaxRawMemoryMb = 512;
+constexpr uint64_t kMaxSourcePixels = 256ULL * 1024ULL * 1024ULL;
+constexpr uint64_t kMaxOutputPixels = 32ULL * 1024ULL * 1024ULL;
 
 /** 解码载荷:入参与出产,execute(工作线程)/complete(JS 线程)接力。 */
 struct DecodeJob {
@@ -67,61 +76,105 @@ bool DecodeToRgba(const std::string &path, bool halfSize,
                                  .count()) +
               "ms ";
     };
-    LibRaw r;
-    // 显影参数:相机白平衡 + sRGB + 8bit + 自动亮度;halfSize 走
-    // superpixel(2×2 合一,免 demosaic,~1/4 像素量,长边减半仍罩
-    // 2560 观看档)。
-    r.imgdata.params.use_camera_wb = 1;
-    r.imgdata.params.output_bps = 8;
-    r.imgdata.params.output_color = 1; // sRGB
-    r.imgdata.params.no_auto_bright = 0;
-    if (halfSize) {
-        r.imgdata.params.half_size = 1;
-    }
-    int ret = r.open_file(path.c_str());
-    if (ret != LIBRAW_SUCCESS) {
-        err = "open:" + std::to_string(ret);
+    try {
+        LibRaw r;
+        r.imgdata.rawparams.max_raw_memory_mb = kMaxRawMemoryMb;
+        // 显影参数:相机白平衡 + sRGB + 8bit + 自动亮度;halfSize 走
+        // superpixel(2×2 合一,免 demosaic,~1/4 像素量,长边减半仍罩
+        // 2560 观看档)。
+        r.imgdata.params.use_camera_wb = 1;
+        r.imgdata.params.output_bps = 8;
+        r.imgdata.params.output_color = 1; // sRGB
+        r.imgdata.params.no_auto_bright = 0;
+        if (halfSize) {
+            r.imgdata.params.half_size = 1;
+        }
+        int ret = r.open_file(path.c_str());
+        if (ret != LIBRAW_SUCCESS) {
+            err = "open:" + std::to_string(ret);
+            return false;
+        }
+        const uint64_t sourcePixels =
+            static_cast<uint64_t>(r.imgdata.sizes.raw_width) *
+            static_cast<uint64_t>(r.imgdata.sizes.raw_height);
+        if (sourcePixels == 0 || sourcePixels > kMaxSourcePixels) {
+            err = "open:size-limit";
+            return false;
+        }
+        lap("open");
+        ret = r.unpack();
+        if (ret != LIBRAW_SUCCESS) {
+            err = "unpack:" + std::to_string(ret);
+            return false;
+        }
+        lap("unpack");
+        ret = r.dcraw_process();
+        if (ret != LIBRAW_SUCCESS) {
+            err = "process:" + std::to_string(ret);
+            return false;
+        }
+        lap("process");
+
+        int outWidth = 0;
+        int outHeight = 0;
+        int outColors = 0;
+        int outBits = 0;
+        r.get_mem_image_format(&outWidth, &outHeight, &outColors, &outBits);
+        if (outWidth <= 0 || outHeight <= 0 || outColors != 3 ||
+            outBits != 8) {
+            err = "output:format";
+            return false;
+        }
+        const uint64_t outputPixels =
+            static_cast<uint64_t>(outWidth) *
+            static_cast<uint64_t>(outHeight);
+        const uint64_t maxSizeTPixels =
+            static_cast<uint64_t>(std::numeric_limits<size_t>::max() / 4);
+        if (outputPixels == 0 || outputPixels > kMaxOutputPixels ||
+            outputPixels > maxSizeTPixels) {
+            err = "output:size-limit";
+            return false;
+        }
+
+        int memErr = 0;
+        std::unique_ptr<libraw_processed_image_t,
+                        decltype(&libraw_dcraw_clear_mem)>
+            img(r.dcraw_make_mem_image(&memErr), &libraw_dcraw_clear_mem);
+        if (!img) {
+            err = "mem_image:" + std::to_string(memErr);
+            return false;
+        }
+        const uint64_t expectedRgbBytes = outputPixels * 3ULL;
+        if (img->type != LIBRAW_IMAGE_BITMAP || img->colors != 3 ||
+            img->bits != 8 || img->width != outWidth ||
+            img->height != outHeight ||
+            static_cast<uint64_t>(img->data_size) != expectedRgbBytes) {
+            err = "output:data";
+            return false;
+        }
+
+        width = outWidth;
+        height = outHeight;
+        out.resize(static_cast<size_t>(outputPixels) * 4);
+        const uint8_t *src = img->data; // RGB888 打平
+        for (size_t i = 0; i < outputPixels; i++) {
+            out[i * 4] = src[i * 3];
+            out[i * 4 + 1] = src[i * 3 + 1];
+            out[i * 4 + 2] = src[i * 3 + 2];
+            out[i * 4 + 3] = 255;
+        }
+        lap("mem");
+        return true;
+    } catch (const std::bad_alloc &) {
+        err = "exception:alloc";
+        return false;
+    } catch (const std::exception &) {
+        err = "exception:std";
+        return false;
+    } catch (...) {
+        err = "exception:unknown";
         return false;
     }
-    lap("open");
-    ret = r.unpack();
-    if (ret != LIBRAW_SUCCESS) {
-        err = "unpack:" + std::to_string(ret);
-        return false;
-    }
-    lap("unpack");
-    ret = r.dcraw_process();
-    if (ret != LIBRAW_SUCCESS) {
-        err = "process:" + std::to_string(ret);
-        return false;
-    }
-    lap("process");
-    int memErr = 0;
-    libraw_processed_image_t *img = r.dcraw_make_mem_image(&memErr);
-    if (img == nullptr) {
-        err = "mem_image:" + std::to_string(memErr);
-        return false;
-    }
-    if (img->type != LIBRAW_IMAGE_BITMAP || img->colors != 3 ||
-        img->bits != 8) {
-        err = "fmt:" + std::to_string(img->type);
-        libraw_dcraw_clear_mem(img);
-        return false;
-    }
-    width = img->width;
-    height = img->height;
-    const size_t px = static_cast<size_t>(width) * static_cast<size_t>(height);
-    out.resize(px * 4);
-    const uint8_t *src = img->data; // RGB888 打平
-    for (size_t i = 0; i < px; i++) {
-        out[i * 4] = src[i * 3];
-        out[i * 4 + 1] = src[i * 3 + 1];
-        out[i * 4 + 2] = src[i * 3 + 2];
-        out[i * 4 + 3] = 255;
-    }
-    libraw_dcraw_clear_mem(img);
-    lap("mem");
-    return true;
 }
 
 /** 工作线程:纯解码,不碰 napi。 */

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.5.0)
 project(rawdecoder)
 
-# LibRaw 0.21.2(LICENSE.LGPL/CDDL 双许可,见 libraw/ 内 LICENSE 文件)静态编入;
+# LibRaw 0.22.3(LICENSE.LGPL/CDDL 双许可,见 libraw/ 内 LICENSE 文件)静态编入;
 set(LIBRAW_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/libraw)
 include_directories(${LIBRAW_ROOT})
 
@@ -17,9 +17,13 @@ set(LIBRAW_SOURCES
   libraw/src/decoders/generic.cpp
   libraw/src/decoders/kodak_decoders.cpp
   libraw/src/decoders/load_mfbacks.cpp
+  libraw/src/decoders/olympus14.cpp
+  libraw/src/decoders/pana8.cpp
   libraw/src/decoders/smal.cpp
+  libraw/src/decoders/sonycc.cpp
   libraw/src/decoders/unpack.cpp
   libraw/src/decoders/unpack_thumb.cpp
+  libraw/src/decompressors/losslessjpeg.cpp
   libraw/src/demosaic/aahd_demosaic.cpp
   libraw/src/demosaic/ahd_demosaic.cpp
   libraw/src/demosaic/dcb_demosaic.cpp
@@ -111,7 +115,10 @@ add_library(rawdecoder SHARED
   ${FDKAAC_SOURCES}
 )
 target_include_directories(rawdecoder PRIVATE ${FDKAAC_INCLUDES})
-target_compile_definitions(rawdecoder PRIVATE USE_ZLIB)
+target_compile_definitions(rawdecoder PRIVATE
+  USE_ZLIB
+  LIBRAW_MAX_ALLOC_MB_DEFAULT=512
+)
 target_link_libraries(
   rawdecoder
   PUBLIC libz.so

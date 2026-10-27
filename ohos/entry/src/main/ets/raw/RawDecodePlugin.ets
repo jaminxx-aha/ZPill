@@ -15,7 +15,7 @@
  *   变换,闸上直拒落原图源(宁缺毋歪,相机也不产)。图库 JPG 小档
  *   管线吃本通道(2026-10-26 快速下滑黑块根修,此前 ohos 上 JPG 恒走
  *   全幅原图解码,滚动供数跟不上)。
- * - **NEF/NRW**:**LibRaw 真解码**(rawdecoder.so,LibRaw 0.21.2 静态
+ * - **NEF/NRW**:**LibRaw 真解码**(rawdecoder.so,LibRaw 0.22.3 静态
  *   编入,LICENSE.LGPL/CDDL)—— 全显影管线(相机白平衡/sRGB/8bit/
  *   自动亮度),halfSize superpixel 半尺寸免 demosaic 提速(长边减半
  *   仍罩 2560 观看档),RGBA → createPixelMap → 长边压档(scale)→
