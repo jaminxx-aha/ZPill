@@ -41,7 +41,11 @@ public final class GalleryPlugin: NSObject, FlutterPlugin {
     case "dataDir":
       // applicationSupport(沙盒内应用私有,持久):客户端身份/配对记录等状态文件
       let appSupport = NSSearchPathForDirectoriesInDomains(.applicationSupportDirectory, .userDomainMask, true)[0]
-      result(Self.ensureSubdir(dataSubdir, base: appSupport))
+      let dataDir = Self.ensureSubdir(dataSubdir, base: appSupport)
+      if let dataDir {
+        Self.excludeFromBackup(dataDir)
+      }
+      result(dataDir)
     case "importFiles": importFiles(call.arguments, result: result)
     default: result(FlutterMethodNotImplemented)
     }
@@ -57,6 +61,20 @@ public final class GalleryPlugin: NSObject, FlutterPlugin {
     } catch {
       NSLog("[GalleryPlugin] createDirectory \(dir): \(error)")
       return nil
+    }
+  }
+
+  /// Pairing identities and device-local logs must not migrate to another
+  /// device through iCloud backup. User media stays in Documents and remains
+  /// eligible for backup.
+  private static func excludeFromBackup(_ path: String) {
+    var url = URL(fileURLWithPath: path, isDirectory: true)
+    var values = URLResourceValues()
+    values.isExcludedFromBackup = true
+    do {
+      try url.setResourceValues(values)
+    } catch {
+      NSLog("[GalleryPlugin] excludeFromBackup \(path): \(error)")
     }
   }
 

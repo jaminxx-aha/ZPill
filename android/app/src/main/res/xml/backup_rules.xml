@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <!-- Pairing identities, device records, settings snapshots and logs are
+         device-local state. Re-pair instead of cloning them onto a new device. -->
+    <exclude domain="file" path="nikonpill-data/" />
+</full-backup-content>
