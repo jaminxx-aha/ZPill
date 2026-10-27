@@ -264,7 +264,16 @@ final class UsbPtpTransport implements PtpTransport {
     if (n == 0) return Uint8List(0);
     final out = BytesBuilder(copy: false);
     while (out.length < n) {
-      out.add(await pipe.bulkRead(n - out.length, timeoutMs: timeoutMs));
+      final want = n - out.length;
+      final chunk = await pipe.bulkRead(want, timeoutMs: timeoutMs);
+      if (chunk.isEmpty) {
+        throw TimeoutException('bulkRead 返回空块(契约要求 ≥1B 或超时)');
+      }
+      if (chunk.length > want) {
+        throw FormatException(
+            'bulkRead 超读:请求 $want B,返回 ${chunk.length} B');
+      }
+      out.add(chunk);
     }
     return out.toBytes();
   }
@@ -278,6 +287,10 @@ final class UsbPtpTransport implements PtpTransport {
     if (chunk.isEmpty) {
       // 契约上 bulkRead 要么 ≥1 字节要么抛超时;空返回按超时处理
       throw TimeoutException('bulkRead 窗口内未收到数据');
+    }
+    if (chunk.length > maxLen) {
+      throw FormatException(
+          'bulkRead 超读:请求至多 $maxLen B,返回 ${chunk.length} B');
     }
     return chunk;
   }

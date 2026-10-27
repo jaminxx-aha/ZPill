@@ -288,6 +288,26 @@ void main() {
         throwsStateError,
       );
     });
+
+    test('bulkRead 空块不无限循环,按超时收口并排空', () async {
+      final pipe = _BadUsbPipe(returnEmpty: true);
+      final t = UsbPtpTransport(pipe: pipe);
+      await expectLater(
+        t.execute(const PtpRequest(opcode: PtpOperationCode.getDeviceInfo)),
+        throwsA(isA<TimeoutException>()),
+      );
+      expect(pipe.drainCalls, 1);
+    });
+
+    test('bulkRead 超过请求长度立即按格式错误收口并排空', () async {
+      final pipe = _BadUsbPipe(returnEmpty: false);
+      final t = UsbPtpTransport(pipe: pipe);
+      await expectLater(
+        t.execute(const PtpRequest(opcode: PtpOperationCode.getDeviceInfo)),
+        throwsFormatException,
+      );
+      expect(pipe.drainCalls, 1);
+    });
   });
 
   group('中止后排空(drainIn,nico 三件套之三)', () {
@@ -417,6 +437,26 @@ void main() {
       expect(pipe.drainCalls, 1);
     });
   });
+}
+
+final class _BadUsbPipe implements UsbBytePipe {
+  _BadUsbPipe({required this.returnEmpty});
+
+  final bool returnEmpty;
+  int drainCalls = 0;
+
+  @override
+  Future<void> bulkOut(Uint8List bytes) async {}
+
+  @override
+  Future<Uint8List> bulkRead(int maxLen, {required int timeoutMs}) async =>
+      returnEmpty ? Uint8List(0) : Uint8List(maxLen + 1);
+
+  @override
+  Future<void> drainIn() async => drainCalls++;
+
+  @override
+  Stream<Uint8List> get interruptEvents => const Stream.empty();
 }
 
 Uint8List concat(Iterable<Uint8List> chunks) {
