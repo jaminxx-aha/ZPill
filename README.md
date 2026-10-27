@@ -121,6 +121,7 @@ flutter build hap
 ## 更多文档
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — 总体分层、关键数据流、三端能力差异
+- [docs/SECURITY.md](docs/SECURITY.md) — 协议、凭据、原生解析与发布安全边界
 - [lib/core/README.md](lib/core/README.md) — core 分层与测试策略
 - [lib/core/ptpip/README.md](lib/core/ptpip/README.md) — 尼康 Wi-Fi 方言定案
 - [lib/core/ptpusb/README.md](lib/core/ptpusb/README.md) — PTP/USB 容器差异备忘
