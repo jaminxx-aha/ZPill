@@ -1,0 +1,8 @@
+# Ceilings for Dart files at or above 2000 lines.
+# Existing entries may shrink or be split, but must not grow.
+# Raising a ceiling requires an explicit architecture review.
+3438 test/features/remote/remote_page_test.dart
+3351 lib/features/remote/remote_controller.dart
+2556 test/features/library/local_library_page_test.dart
+2282 lib/features/library/local_library_page.dart
+2029 test/features/connection/connection_page_test.dart

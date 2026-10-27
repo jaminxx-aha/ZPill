@@ -1,7 +1,7 @@
-# core/ — 纯 Dart 业务核心(不 import 任何 Flutter 库)
+# core/ — 业务核心(受控 Flutter 例外)
 
-三端 100% 共享的代码都在这里;禁止出现 `package:flutter/**`、`dart:io` 之外的
-平台 API(dart:io 的 Socket 属于传输实现,允许在 ptpip/channels.dart 使用)。
+三端共享的协议、状态机和媒体管线都在这里。默认只写纯 Dart;仅 UI 相邻的
+监听状态与 `dart:ui` 图像处理可按精确白名单例外,不得新增宽泛 Flutter 依赖。
 
 ## 分层与依赖方向(只允许向下)
 
@@ -17,8 +17,19 @@ core/log        统一日志门面 AppLog:分级分域 + 环形缓冲 + 脱敏(�
 ```
 
 - `ptpip`/`ptpusb` → `ptp`;`camera` → `ptp`;`browser`/`transfer` → `ptp` + 相互不依赖
-- 所有对平台(WiFi 状态、相册、后台、BLE、USB)的需求经 `lib/platform/` 的接口注入,
-  core 不感知三端差异
+- BLE、USB、相册、RAW 解码只允许依赖 `lib/platform/` 中已登记的契约入口,
+  不得依赖平台具体实现
+- 禁止反向 import `features/`、`data/`、`app_*`、`design/`、`debug/`
+
+## 架构与规模闸
+
+```bash
+dart run tools/check_architecture.dart
+```
+
+- Flutter / `dart:ui` 例外按文件与 import 精确登记在脚本内,新增依赖会失败
+- 达到 2000 行的 Dart 文件必须登记行数预算;既有超大文件只能缩小或拆分
+- CI 在 analyze 和 test 前执行该闸
 
 ## 测试策略
 

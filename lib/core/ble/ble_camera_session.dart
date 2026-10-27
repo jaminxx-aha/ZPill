@@ -26,8 +26,6 @@ import 'dart:async';
 import 'dart:math';
 import 'dart:typed_data';
 
-import 'package:flutter/services.dart' show PlatformException;
-
 import '../../l10n/message.dart';
 import '../../platform/ble_scanner.dart';
 
@@ -312,9 +310,7 @@ final class BleCameraSession {
   /// (writeCharacteristic 返回 false,不走 GATT 回调、不触发 SMP),
   /// 其余读写/CCCD 全通 —— 配对协议第一帧发不出去,容器安全栈缺口。
   bool _isCryptoWall(Object e) =>
-      e is PlatformException &&
-      e.code == 'writeFailed' &&
-      (e.message?.contains('被拒') ?? false);
+      bleErrorCode(e) == 'writeFailed' && bleErrorMessage(e).contains('被拒');
 
   /// 断连重连一次尝试:按已存身份 deviceId 扫广播,命中即连接并以
   /// 已存 device/nonce 复用握手。无命中只推进退避(返回 false)。
@@ -605,17 +601,11 @@ final class BleCameraSession {
       await _host.write(kNikonCharWifi, Uint8List.fromList([value]));
       _trace('$label → 0x2005=0x${value.toRadixString(16)}');
       return true;
-    } on PlatformException catch (e) {
-      // 上屏文案只取 message(裸 PlatformException dump 是四段噪音,
-      // 用户要看的是「连接已断开」不是构造参数)。
-      lastError = (
-        key: 'ble.opFail',
-        args: {'label': label, 'e': e.message ?? e.code},
-      );
-      return false;
     } on Exception catch (e) {
+      // 平台错误只取 message(裸 dump 是四段噪音,用户要看的是
+      // 「连接已断开」而不是构造参数);其他异常保留普通文本。
       lastError =
-          (key: 'ble.opFail', args: {'label': label, 'e': e.toString()});
+          (key: 'ble.opFail', args: {'label': label, 'e': bleErrorMessage(e)});
       return false;
     }
   }
@@ -760,7 +750,7 @@ final class BleCameraSession {
       // 断链类写失败不上红字(2026-10-21 用户反馈):链路死亡沿自己会
       // 接手(断连 → 2s 快试重连 → ready 沿缓存回补),红字只留真实拒
       // 收(GPS 会话未醒等)。判定 = 平台错误码 disconnected。
-      if (e is! PlatformException || e.code != 'disconnected') {
+      if (!isBleDisconnectedError(e)) {
         lastError = (key: 'ble.geoWriteFail', args: {'e': e.toString()});
       }
     }
@@ -772,7 +762,7 @@ final class BleCameraSession {
       _lastTimeOkAt = t;
     } on Exception catch (e) {
       // 断链静默同 _sendGeo:重连 ready 沿 TIME 锚清零,首拍即补校时。
-      if (e is! PlatformException || e.code != 'disconnected') {
+      if (!isBleDisconnectedError(e)) {
         lastError = (key: 'ble.timeWriteFail', args: {'e': e.toString()});
       }
     }

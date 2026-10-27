@@ -19,7 +19,7 @@ flowchart TD
         transfers[transfers 传输队列]
         settings[settings 设置/日志]
     end
-    subgraph CORE["core/ — 纯 Dart,零 Flutter 依赖,三端 100% 共享"]
+    subgraph CORE["core/ — 协议/状态/媒体业务核心,Flutter 例外受闸"]
         ptp[ptp 标准层:码表/会话/链路抽象]
         ptpip[ptpip 无线链路]
         ptpusb[ptpusb USB 链路]
@@ -52,12 +52,16 @@ flowchart TD
     PLAT --> NATIVE
 ```
 
-**依赖铁律**(analyzer + review 双重把关):
+**依赖铁律**(`tools/check_architecture.dart` + review 双重把关):
 
-1. `core/` 不 import 任何 `package:flutter/**`(纯 Dart,可脱离 Flutter 单测)
-2. `core/` 不感知平台 —— 对 WiFi/相册/后台/BLE/USB 的需求只依赖 `platform/` 接口
-3. UI 按钮**必须**绑定 ViewModel(Controller),禁止绕过 Controller 直连协议层
-4. 依赖方向单向:`features → core / platform / data`,`platform → core(仅模型)`,无环
+1. `core/` 默认是纯 Dart;仅 6 个 UI 相邻文件可按精确 import 白名单使用
+   `ValueNotifier` / `ChangeNotifier` 或 `dart:ui` 图像处理 API,名单只能收缩
+2. `core/` 对 BLE、USB、相册、RAW 解码只依赖 4 个 `platform/` 契约入口
+   (共 5 条 import),不得引用平台具体实现
+3. `core/` 禁止反向 import `features/`、`data/`、`app_*`、`design/`、`debug/`
+4. UI 按钮**必须**绑定 ViewModel(Controller),禁止绕过 Controller 直连协议层
+5. 依赖方向单向:`features → core / platform / data`,`platform → core(仅模型)`,
+   `data → core(仅模型)`,无环
 
 ## 2. 模块职责
 
@@ -159,6 +163,9 @@ channel 命名统一 `nikonpill/<service>`,完整契约表与三端落地进度�
 - **e2e 回环**:`test/e2e` 用例内起 `tools/mock_camera`(同一实现),
   我方真 transport/session 走真 TCP 全链路断言,无相机可回归
 - **i18n 闸**:catalog 完整性测试(zh/en 键集与占位符一致)
+- **架构/规模闸**:`dart run tools/check_architecture.dart` 检查 core 框架与
+  平台契约白名单、禁止反向依赖;Dart 文件达到 2000 行必须进入
+  [file_size_budget.txt](../tools/file_size_budget.txt),既有预算只能下降
 - **真机**:协议常量一律探针先行、以真机响应为准回填 Dart 侧;功能就绪
   以「真实数据、端到端跑通」为准
 - 规模:截至 2026-10-27 为 112 个测试文件、1634 passed / 0 skipped
@@ -168,6 +175,7 @@ channel 命名统一 `nikonpill/<service>`,完整契约表与三端落地进度�
 
 - [README.md](../README.md) — 功能总览与环境/命令
 - [lib/core/README.md](../lib/core/README.md) — core 分层细则
+- [tools/check_architecture.dart](../tools/check_architecture.dart) — 可执行架构与文件规模闸
 - [lib/core/ptpip/README.md](../lib/core/ptpip/README.md) — 尼康 Wi-Fi 方言定案
 - [lib/core/ptpusb/README.md](../lib/core/ptpusb/README.md) — PTP/USB 容器差异备忘
 - [lib/platform/README.md](../lib/platform/README.md) — 平台适配层现状

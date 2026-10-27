@@ -26,7 +26,7 @@
 /// 无 inspect 自然豁免。时钟注入:单测零真实挂钟。
 library;
 
-import 'package:flutter/foundation.dart' show Uint8List;
+import 'dart:typed_data';
 
 /// 看门狗输出的动作信号([LiveViewWatchdog.inspect] 返回 null = 无动作)。
 enum LiveViewWatchdogSignal {

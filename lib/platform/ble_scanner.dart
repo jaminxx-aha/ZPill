@@ -139,6 +139,16 @@ abstract interface class BleHost {
   Future<void> disconnect();
 }
 
+/// 平台错误的稳定读取面:业务核心无需直接依赖 Flutter services。
+String? bleErrorCode(Object error) =>
+    error is PlatformException ? error.code : null;
+
+String bleErrorMessage(Object error) =>
+    error is PlatformException ? error.message ?? error.code : error.toString();
+
+bool isBleDisconnectedError(Object error) =>
+    bleErrorCode(error) == 'disconnected';
+
 /// 本机手机型号(`nikonpill/ble` `deviceName`;相机侧注册名
 /// 「<手机型号>-NikonPill」的型号段,组装在 BleCameraSession.
 /// composeControllerName):iOS hw.machine 对照市场名 / Android 市场名

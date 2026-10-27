@@ -36,8 +36,6 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:flutter/foundation.dart' show visibleForTesting;
-
 import '../../platform/gallery_saver.dart';
 import '../../platform/raw_decoder.dart';
 import '../log/app_log.dart';
@@ -612,7 +610,6 @@ class ThumbnailCache {
 /// 增量账断言「账实相符」。顶层函数而非实例成员:测试替身对
 /// [ThumbnailCache] 是 implements(仅 pathFor/reset),加实例成员会破
 /// 它们;同库可及私有字段。生产不可达。
-@visibleForTesting
 ({int account, Map<String, int> entries}) debugLruAccount(
     ThumbnailCache cache, ThumbSource source) {
   final lru = cache._lruFor(source);

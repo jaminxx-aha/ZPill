@@ -86,6 +86,7 @@ docs/                架构文档
 
 ```bash
 flutter pub get
+dart run tools/check_architecture.dart  # core 依赖边界 + 大文件预算
 flutter run                  # 连接设备运行
 flutter test                 # 全量单测(2026-10-27 基线:1634 passed / 0 skipped)
 
@@ -101,6 +102,7 @@ flutter build hap
 | 工具 | 用途 |
 |---|---|
 | `tools/mock_camera` | 纯 Dart「假尼康相机」:CLI 常驻供 app 手动连接;同一实现驱动 `test/e2e` 回环用例,无相机也可回归 |
+| `tools/check_architecture.dart` | core 框架/平台依赖白名单与 2000 行文件预算闸(CI 强制执行) |
 | `tools/ptpip_probe` | Python PTP-IP 真机验证 CLI(零依赖) |
 | `tools/usb_probe` | Python USB 探针(镜头 / 存储 / 模式族) |
 | `tools/ble_pair` | macOS BLE GATT 只读发现 CLI(Swift) |
