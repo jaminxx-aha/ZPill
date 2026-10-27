@@ -12,7 +12,7 @@
 **连接**
 
 - BLE 配对走 SnapBridge 方言:握手换身份、GATT 读出相机 WiFi 凭据、写开关直接唤醒相机的 WiFi 服务
-- 三种接入:相机热点(AP)/ 相机入同一局域网(STA,mDNS 自动发现)/ USB 线连;Android 支持程序化加入热点,其余端手动指引
+- 三种接入:相机热点(AP)/ 相机入同一局域网(STA,mDNS 自动发现)/ USB 线连;Android / HarmonyOS 支持程序化加入热点,iOS 按手动指引降级
 - USB 与无线双链路经 `PtpLinkRouter` 汇合同一会话,自动重连、心跳保活;解除配对有确认窗
 
 **拍摄**
@@ -87,7 +87,7 @@ docs/                架构文档
 ```bash
 flutter pub get
 flutter run                  # 连接设备运行
-flutter test                 # 全量单测(约 1400 用例)
+flutter test                 # 全量单测(2026-10-27 基线:1633 passed / 1 skipped)
 
 # HarmonyOS(切到 SIG fork 的 flutter,备好 DevEco SDK / hvigor / ohpm 环境)
 flutter build hap

@@ -12,10 +12,8 @@ import kotlin.math.max
  * NikonPill 视频(Android 平台,native 侧)。
  *
  * 对应 Dart 契约 lib/platform/video_player.dart(MethodChannel
- * `nikonpill/video`),本轮先落**抽帧与帧率探测**两方法(iOS
- * VideoPlugin.swift 已在产;全屏 play/内嵌播放 Android 待补 —— 调用方
- * MissingPluginException 回落路径只对 play/内嵌,thumbnail/frameRate
- * 现已可用):
+ * `nikonpill/video`),当前覆盖全屏播放、抽帧与帧率探测;内嵌平台视图
+ * 尚未落地,调用方按全屏路径回退:
  *
  * - `thumbnail({path, maxPixelSize})`:取 0.1s 处一帧(iOS 取同点位避
  *   纯黑首帧),按 METADATA_KEY_VIDEO_ROTATION 旋转正立(与 iOS
@@ -24,6 +22,7 @@ import kotlin.math.max
  * - `frameRate({path})`:METADATA_KEY_CAPTURE_FRAMERATE 是拍摄帧率
  *   (API 28+),多数设备只回整档;退路 = 帧数/时长估算,拿不到 = null
  *   (调用方不设顺帧门,直放)。
+ * - `play({path, rate})`:MediaPlayer + VideoActivity 全屏播放。
  *
  * 线程:通道调用在主线程,retriever 抽帧是重活 —— 切后台队列执行,
  * 结果回主线程交付(MethodChannel.Result 线程契约)。

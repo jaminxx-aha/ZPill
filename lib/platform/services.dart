@@ -6,16 +6,17 @@
 /// | channel                | Android(Kotlin)      | iOS(Swift)             | ohos(ArkTS)          |
 /// |------------------------|------------------------|------------------------|-----------------------|
 /// | `nikonpill/network`  | WifiManager/Connectivity | NEHotspotNetwork*     | @ohos.wifiManager     |
-/// |   (join/release)     | WifiNetworkSpecifier ✓ | NEHotspot 代码就位*** | (system_basic,待)  |
+/// |   (join/release/scan)| WifiNetworkSpecifier   | NEHotspot 受 entitlement 限制 | 候选配置族       |
 /// | `nikonpill/gallery`  | MediaStore             | PHPhotoLibrary         | photoAccessHelper     |
-/// | `nikonpill/bg`       | WorkManager+前台服务   | BGTaskScheduler        | 后台任务+通知         |
+/// | `nikonpill/bg`       | 前台服务               | BGTaskScheduler        | backgroundTaskManager |
 /// | `nikonpill/ble`      | BluetoothLeScanner     | CoreBluetooth          | @ohos.bluetooth.ble   |
 /// | `nikonpill/usb`      | UsbManager bulk        | ImageCaptureCore**     | @ohos.usb             |
 /// | `nikonpill/nsd`      | NsdManager             | NetServiceBrowser      | @ohos.net.mdns        |
 /// | `nikonpill/motion`   | SensorManager 重力     | CoreMotion             | @ohos.sensor          |
 /// | `nikonpill/location` | LocationManager        | CoreLocation           | geoLocationManager    |
-/// | `nikonpill/raw`      | (待补 libraw)         | ImageIO RAW            | (待补)               |
-/// | `nikonpill/video`    | VideoActivity 全屏播放 | AVKit+平台视图         | VideoSheet+平台视图   |
+/// | `nikonpill/raw`      | HEIF;真 RAW 回落缩略图 | ImageIO RAW            | image + LibRaw        |
+/// | `nikonpill/video`    | MediaPlayer 全屏+抽帧  | AVKit+平台视图         | AVPlayer+平台视图     |
+/// | `nikonpill/video_lut`| Media3 Transformer    | AVAssetExportSession   | LibRaw C++ 管线       |
 ///
 /// *iOS 普通应用拿不到当前 WiFi SSID(需 entitlement 且大多被拒),
 /// 实际策略:直接尝试默认网关直连,详见 docs/ARCHITECTURE.md。
@@ -46,8 +47,8 @@ final class PlatformServices {
   static late final WifiJoiner wifiJoiner;
   static late final GallerySaver gallery;
   static late final BackgroundTransferScheduler background;
-  /// BLE 宿主(`nikonpill/ble`:扫描/GATT 读写订阅;iOS 已实现,
-  /// Android/ohos 待补,缺失时调用抛 MissingPluginException 按降级处理)。
+  /// BLE 宿主(`nikonpill/ble`:扫描/GATT 读写订阅;三端已有实现,
+  /// 真机状态见 platform/README.md)。
   /// 协议层(配对/GEO/TIME)在 lib/core/ble/,本层零方言知识。
   static late final BleHost ble;
   static late final UsbHostChannel usb;
@@ -64,17 +65,16 @@ final class PlatformServices {
   /// 编译过待真机验证,native 缺失时调用报错按「无位置」降级)。
   static late final LocationHost location;
 
-  /// 定位流 + 后台授权(`nikonpill/location/stream`;iOS 已实现,
-  /// Android/ohos 待补,缺失时订阅抛 MissingPluginException 降级)。
+  /// 定位流 + 后台授权(`nikonpill/location/stream`;三端已有实现,
+  /// 系统后台权限差异由各平台 native 侧降级)。
   static late final LocationStreamHost locationStream;
 
-  /// RAW→JPEG 原生解码(`nikonpill/raw`;iOS 已实现,Android/ohos 待补,
-  /// 缺失时 ThumbnailCache 回落 GetThumb 小图)。NEF 查看的数据源,
-  /// 见 raw_decoder.dart 头注释。
+  /// RAW/HEIF→JPEG 原生解码(`nikonpill/raw`;iOS/ohos 可解真 RAW,
+  /// Android 覆盖 HEIF,NEF 回落 GetThumb/内嵌缩略图)。
   static late final RawDecoder rawDecoder;
 
-  /// 视频播放(`nikonpill/video`:全屏 play + 内嵌平台视图两路;iOS
-  /// 已实现,Android/ohos 待补,缺失时调用报错按「平台不支持」提示)。
+  /// 视频播放(`nikonpill/video`:全屏 play + 内嵌平台视图两路;
+  /// Android 当前为全屏/抽帧/帧率,内嵌视图由上层回退)。
   static late final VideoPlayer videoPlayer;
 
   static bool _bootstrapped = false;

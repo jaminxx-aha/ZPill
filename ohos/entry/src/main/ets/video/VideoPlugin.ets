@@ -2,8 +2,7 @@
  * NikonPill 视频(ohos 平台,native 侧)。
  *
  * 对应 Dart 契约 lib/platform/video_player.dart(MethodChannel
- * `nikonpill/video`),本轮落**抽帧**方法(iOS VideoPlugin.swift 已在
- * 产;全屏 play/内嵌播放 ohos 待补 —— 调用方回落路径不依赖它们):
+ * `nikonpill/video`),当前覆盖抽帧、全屏播放与内嵌平台视图:
  *
  * - `thumbnail({path, maxPixelSize})`:@ohos.multimedia.media 的
  *   AVImageGenerator(API 12+,本 SDK @since 23 形态)取 0.1s 处一帧

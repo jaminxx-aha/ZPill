@@ -1,8 +1,8 @@
 /// BLE 宿主契约:扫描 / GATT 连接 / 读写 / 订阅(三端同一 channel 契约)。
 ///
-/// 对应原生:iOS CoreBluetooth(ios/Runner/BlePlugin.swift);Android
-/// BluetoothLeScanner、ohos @ohos.bluetooth.ble 待补(缺失时调用抛
-/// MissingPluginException,上层按「平台不支持」降级)。
+/// 对应原生:iOS CoreBluetooth、Android BluetoothLeScanner、
+/// ohos @ohos.bluetooth.ble;真机状态见 platform/README.md。平台通道
+/// 缺失时调用抛 MissingPluginException,上层按「平台不支持」降级。
 ///
 /// 铁律:
 /// - 扫描必须设超时(相机 BLE 广播仅在配对模式持续约 60-120s)

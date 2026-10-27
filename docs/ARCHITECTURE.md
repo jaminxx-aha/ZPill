@@ -92,7 +92,8 @@ flowchart TD
 AP:热点启发式检测(SSID 片段/网段)→ 默认网关直连 `192.168.1.1:15740`;
 STA:相机入同一局域网,mDNS `_ptp._tcp` 自动发现后直连;
 BLE 配对:四步握手(身份持久化,重连免重配)→ GATT 读出 WiFi 凭据、
-写开关唤醒相机 WiFi → join AP(Android 程序化加入,其余端手动指引)→
+写开关唤醒相机 WiFi → join AP(Android / HarmonyOS 程序化加入,iOS 按
+手动指引降级)→
 转 AP 流程。殊途汇入同一 `CameraConnection` 状态机:
 `detecting → connecting → pairing`(首连配对码确认)→ `connected`;
 断链转 `reconnecting` 按退避重拨(取景页保留冻结帧不弹回),预算耗尽转
@@ -130,21 +131,23 @@ channel 命名统一 `nikonpill/<service>`,完整契约表与三端落地进度�
 
 | channel | Android | iOS | HarmonyOS |
 |---|---|---|---|
-| `network` | ConnectivityManager;**可程序化加入热点**(WifiNetworkSpecifier + bindProcessToNetwork,系统可弹确认框) | 拿不到 SSID(降级:网关直连);join 不可 | wifiManager(读侧) |
+| `network` | ConnectivityManager;**join / release / scanAps**(WifiNetworkSpecifier + bindProcessToNetwork) | 拿不到 SSID(降级:网关直连);join 受 Network Extension entitlement 限制 | wifiManager;**join / release / scanAps**(候选配置族) |
 | `gallery` | MediaStore | PHPhotoLibrary | photoAccessHelper |
-| `bg` | dataSync 前台服务(可靠) | BGTaskScheduler(尽力,前台续传) | 后台任务+通知 |
-| `ble` | 待补 → 按不可用降级 | CoreBluetooth | 待补 → 按不可用降级 |
+| `bg` | dataSync 前台服务 | BGTaskScheduler(尽力,前台续传) | backgroundTaskManager 长时任务 |
+| `ble` | BluetoothLeScanner + GATT | CoreBluetooth | @ohos.bluetooth.ble |
 | `usb` | UsbManager bulk | ImageCaptureCore(公开 API;dext 路线已弃) | @ohos.usb |
 | `nsd` | NsdManager | NetServiceBrowser | @ohos.net.mdns |
 | `motion` | SensorManager | CoreMotion | @ohos.sensor |
 | `location` | LocationManager | CoreLocation(含常驻定位流) | geoLocationManager |
-| `raw` | 待补 → 回落内嵌缩略图 | ImageIO RAW 解码 | 待补 → 回落 |
-| `video` | 待补 → 提示不支持 | AVKit(全屏 + 内嵌平台视图) | 待补 → 提示不支持 |
+| `raw` | HEIF/ImageDecoder;真 RAW 回落内嵌缩略图 | ImageIO RAW 解码 | image + LibRaw(NEF/HIF/JPG) |
+| `video` | MediaPlayer 全屏 + 抽帧/帧率;内嵌视图未落地 | AVKit(全屏 + 内嵌平台视图) | AVPlayer(全屏 + 内嵌平台视图) |
+| `video_lut` | Media3 Transformer | AVAssetExportSession + CIColorCube | LibRaw C++ LUT 管线 |
 | `log` | 原生日志合流 AppLog | 同左 | 同左 |
 
 能力缺失时**降级而不是崩溃**是本层总原则(iOS 无 SSID → 网关直连;
 后台受限 → 前台传输提示;native 缺失 → MissingPluginException 按
 不可用降级,`PlatformServices.bootstrap()` 注入、测试可覆盖为 Fake)。
+表中记录实现面,真机验证进度以项目本地待办账本的平台分项为准。
 
 ## 5. 测试策略
 
@@ -158,7 +161,8 @@ channel 命名统一 `nikonpill/<service>`,完整契约表与三端落地进度�
 - **i18n 闸**:catalog 完整性测试(zh/en 键集与占位符一致)
 - **真机**:协议常量一律探针先行、以真机响应为准回填 Dart 侧;功能就绪
   以「真实数据、端到端跑通」为准
-- 规模:97 个测试文件、约 1400 用例(`flutter test`)
+- 规模:截至 `d90c200` 为 112 个测试文件、1633 passed / 1 skipped
+  (`flutter test`)
 
 ## 6. 文档索引
 

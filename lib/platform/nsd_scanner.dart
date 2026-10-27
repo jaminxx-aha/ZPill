@@ -100,8 +100,8 @@ abstract interface class NsdScanner {
 /// 经 `nikonpill/nsd`(方法 start/stop)+ `nikonpill/nsd/events`
 /// (EventChannel,载荷 Map{event: found|lost, …})。
 ///
-/// native 未实现的平台(ohos/Android)调 start 会抛
-/// MissingPluginException —— 由上层捕获并降级为「手动输入 IP」。
+/// native 旧版或对应平台通道缺失时,start 会抛 MissingPluginException
+/// —— 由上层捕获并降级为「手动输入 IP」。
 final class MethodChannelNsdScanner implements NsdScanner {
   static const MethodChannel _methods = MethodChannel('nikonpill/nsd');
   static const EventChannel _events = EventChannel('nikonpill/nsd/events');

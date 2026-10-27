@@ -3,9 +3,8 @@
 /// 对应 native:Android Media3 Transformer(SingleColorLut +
 /// ToInt16PcmAudioProcessor + FrameworkMuxer 防 fragmented-MP4,借
 /// Camera_Bridge 思路);iOS AVAssetExportSession +
-/// AVVideoComposition(applyingCIFiltersWithHandler)内 CIColorCube。
-/// ohos 未实现(native 侧无 handler,`isSupported` 如实 false,UI
-/// 据此隐藏入口)。
+/// AVVideoComposition(applyingCIFiltersWithHandler)内 CIColorCube;
+/// ohos 走 rawdecoder.so 的 C++ 解封装、硬解、CPU LUT 与硬编管线。
 ///
 /// 契约:
 /// - `export(path, lut)`:native 自选 cacheDir 临时输出,导出完成返回
@@ -27,7 +26,7 @@ import 'package:flutter/services.dart';
 import '../core/media/cube_lut.dart';
 
 abstract interface class VideoLutExportHost {
-  /// 平台是否带导出实现(ohos false)。探测走真调用,通道缺失
+  /// 平台是否带导出实现。探测走真调用,通道缺失
   /// (MissingPluginException)即不支持,不按平台名硬编码。
   Future<bool> isSupported();
 

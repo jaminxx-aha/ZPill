@@ -14,14 +14,20 @@ channel 契约表提供实现。
 
 ## 现状
 
-- 三端均已实现:usb / nsd / gallery / bg / motion / location / log
-  (iOS 真机闭环面最广;ohos USB/相册真机闭环,nsd 编译过待真机;
-  Android 编译过待真机;Android bg = dataSync 前台服务)
-- iOS 另有 ble / location/stream / raw / video;Android/ohos 缺这些通道,
-  上层按 MissingPluginException 降级(raw → 内嵌缩略图回落,
-  video → 平台不支持提示,ble → 按不可用降级)
-- network join 仅 Android 可程序化加入热点;iOS/ohos 调用返回 unsupported,
-  按手动指引降级(iOS 拿不到 SSID,一律网关直连)
+- `network / gallery / bg / ble / usb / nsd / motion / location /
+  location/stream / raw / video / video_lut / log` 三端均已有对应
+  实现文件。
+- iOS 真机闭环面最广,BLE→WiFi 凭据交接已端到端验收;Android 当前
+  APK 可构建,平台服务仍待有设备时回归;ohos 已有多项真机验收记录,
+  未统一复核的剩余项按项目本地待办账本分项记账。
+- network join:Android 用 WifiNetworkSpecifier,ohos 用候选配置族;
+  iOS 的 hotspot join 依赖 Network Extension entitlement,缺失时按
+  手动入网指引降级。
+- raw:Android 覆盖 HEIF,NEF 回落内嵌缩略图;iOS 走 ImageIO RAW;
+  ohos 走 Image + LibRaw。video:三端均支持全屏,Android 当前没有
+  内嵌平台视图,内嵌视图调用由上层回退。
+- bg:Android 为 dataSync 前台服务,iOS 为 BGTaskScheduler,ohos 为
+  backgroundTaskManager 长时任务。
 
 `PlatformServices.bootstrap()` 在 main() 注入,测试可覆盖为 Fake;
 各通道三端落地进度以 [services.dart](services.dart) 契约表内注释为准。

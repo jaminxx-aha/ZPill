@@ -52,8 +52,8 @@ final class LocationSample {
 
 /// 定位流宿主(`nikonpill/location/stream` EventChannel + 授权方法)。
 /// 未授权时流上无事件(native 静默),状态经 [authorizationStatus] 查询;
-/// native 未实现(M2 后的 Android/ohos)抛 MissingPluginException 按
-/// 「无定位」降级。
+/// native 旧版或平台通道缺失时抛 MissingPluginException,按「无定位」
+/// 降级。三端后台权限差异由各平台 native 侧如实收口。
 abstract interface class LocationStreamHost {
   /// 起流(native startUpdatingLocation,distanceFilter 3m;幂等)。
   Future<void> startStream();
