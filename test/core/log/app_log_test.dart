@@ -82,16 +82,18 @@ void main() {
       expect(out.endsWith('…+8B'), isTrue);
     });
 
-    test('sensitive 短块整体打码', () {
+    test('sensitive ≤32B 整体打码(含 17B 配对帧)', () {
       expect(AppLog.hex([1, 2, 3], sensitive: true), '<脱敏 3B>');
+      expect(AppLog.hex(List.filled(17, 1), sensitive: true), '<脱敏 17B>');
+      expect(AppLog.hex(List.filled(32, 1), sensitive: true), '<脱敏 32B>');
     });
 
-    test('sensitive 长块露前后 8B、中段打码', () {
+    test('sensitive 长块只露前后 4B、中段打码', () {
       final blob = List<int>.generate(97, (i) => (0xA0 + i) & 0xFF);
       final out = AppLog.hex(blob, sensitive: true);
-      expect(out.startsWith('A0 A1 A2 A3 A4 A5 A6 A7'), isTrue);
-      expect(out.endsWith('F9 FA FB FC FD FE FF 00'), isTrue);
-      expect(out.contains('…(脱敏 81B)'), isTrue);
+      expect(out.startsWith('A0 A1 A2 A3'), isTrue);
+      expect(out.endsWith('FD FE FF 00'), isTrue);
+      expect(out.contains('…(脱敏 89B)'), isTrue);
     });
 
     test('空与恰好 max 不加余量标记', () {

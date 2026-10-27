@@ -153,15 +153,15 @@ final class AppLog {
 
   /// 字节转储辅助:小端十六进制(与 ptp_diagnostics 口径一致,大写)。
   ///
-  /// [max] 截断尾部;[sensitive] 凭据/密钥类:≤16B 整体打码,更长只露
-  /// 前后 8B(加密 blob 的方言对拍仍可比头尾),中段一律 `…(脱敏 nB)`。
+  /// [max] 截断尾部;[sensitive] 凭据/密钥类:≤32B 整体打码,更长只露
+  /// 前后 4B(加密 blob 的方言对拍仍可比头尾),中段一律 `…(脱敏 nB)`。
   static String hex(List<int> bytes, {int max = 32, bool sensitive = false}) {
     if (bytes.isEmpty) return '(空)';
     if (sensitive) {
-      if (bytes.length <= 16) return '<脱敏 ${bytes.length}B>';
-      return '${_row(bytes.sublist(0, 8))} '
-          '…(脱敏 ${bytes.length - 16}B) '
-          '${_row(bytes.sublist(bytes.length - 8))}';
+      if (bytes.length <= 32) return '<脱敏 ${bytes.length}B>';
+      return '${_row(bytes.sublist(0, 4))} '
+          '…(脱敏 ${bytes.length - 8}B) '
+          '${_row(bytes.sublist(bytes.length - 4))}';
     }
     final take = bytes.length < max ? bytes.length : max;
     final row = _row(bytes.sublist(0, take));
