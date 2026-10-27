@@ -353,7 +353,7 @@ class _PhotoGridPageState extends State<PhotoGridPage>
     SchedulerBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       for (final c in targets) {
-        final future = _thumbFuture(c.rep);
+        final future = _thumbFuture(c.rep, prefetch: true);
         // 评级轻量段(0xDC8A 一笔)与缩略图同窗预热:格滚到视口时星档
         // 已在手,不再落后整个预热窗(重发由仓库去重集空转)。
         _ratings.ensure(c.group);
@@ -974,27 +974,39 @@ class _PhotoGridPageState extends State<PhotoGridPage>
   /// 网格缩略取数(句柄去重):失败不驻留 —— 移除在途 future 并限次
   /// 自动重试(3 次,间隔 3s;耗尽留断图占位,滚动重建自然再试)。旧版
   /// 失败 future 永驻缓存,断图格直到重进页面都不再尝试(2026-10-16
-  /// 真机复报「部分缩略图加载不出来」根因之一)。
-  Future<String> _thumbFuture(ObjectEntry rep) {
+  /// 真机复报「部分缩略图加载不出来」根因之一)。[prefetch] 仅用于屏外
+  /// 前瞻;同键滚入视口时由 [ThumbnailCache.promote] 提到可视档。
+  Future<String> _thumbFuture(ObjectEntry rep, {bool prefetch = false}) {
     final handle = rep.handle;
-    return _thumbFutures.putIfAbsent(handle, () {
-      final f = _thumbnails.pathFor(rep, ThumbSource.grid);
-      // 落盘路径记账(图档级失败删坏档用);onError 吞掉防未处理异常。
-      f.then<void>((p) => _thumbPaths[handle] = p, onError: (Object _) {});
-      return f.catchError((Object e) {
-        _thumbFutures.remove(handle);
-        final tries = (_thumbRetries[handle] ?? 0) + 1;
-        _thumbRetries[handle] = tries;
-        if (mounted && tries <= 3) {
-          Future<void>.delayed(const Duration(seconds: 3), () {
-            if (mounted && !_thumbFutures.containsKey(handle)) {
-              setState(() {});
-            }
-          });
-        }
-        throw e;
-      });
+    final existing = _thumbFutures[handle];
+    if (existing != null) {
+      // 预取先在飞,滚入视口时把队列位置提到可视档。
+      if (!prefetch) _thumbnails.promote(rep, ThumbSource.grid);
+      return existing;
+    }
+    final f = _thumbnails.pathFor(
+      rep,
+      ThumbSource.grid,
+      priority: prefetch ? ThumbPriority.prefetch : ThumbPriority.interactive,
+    );
+    final tracked = f.catchError((Object e) {
+      _thumbFutures.remove(handle);
+      final tries = (_thumbRetries[handle] ?? 0) + 1;
+      _thumbRetries[handle] = tries;
+      if (mounted && tries <= 3) {
+        Future<void>.delayed(const Duration(seconds: 3), () {
+          if (mounted && !_thumbFutures.containsKey(handle)) {
+            setState(() {});
+          }
+        });
+      }
+      throw e;
     });
+    _thumbFutures[handle] = tracked;
+    // 落盘路径记账(图档级失败删坏档用);onError 吞掉防未处理异常。
+    tracked.then<void>((p) => _thumbPaths[handle] = p,
+        onError: (Object _) {});
+    return tracked;
   }
 
   /// 图档级失败恢复(Image.file errorBuilder 沿):future 已完成但盘档

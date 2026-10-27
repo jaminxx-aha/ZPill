@@ -43,12 +43,19 @@ final class _FakeThumbs implements ThumbnailCache {
   int get previewMaxPixelSize => 2560;
 
   @override
-  Future<String> pathFor(ObjectEntry entry, ThumbSource source) async {
+  Future<String> pathFor(
+    ObjectEntry entry,
+    ThumbSource source, {
+    ThumbPriority priority = ThumbPriority.interactive,
+  }) async {
     if (source == ThumbSource.preview && hangPreviewHandles.contains(entry.handle)) {
       return Completer<String>().future; // 悬挂:席位未回
     }
     return '/tmp/zpill_test_preview_${entry.handle}.jpg';
   }
+
+  @override
+  void promote(ObjectEntry entry, ThumbSource source) {}
 
   @override
   Future<ExifCardData?> exifCardOf(ObjectEntry entry) async =>

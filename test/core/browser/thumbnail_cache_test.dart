@@ -234,6 +234,113 @@ void main() {
     expect(fake.requests.length, 2); // 一次缩略 + 一次头读
   });
 
+  test('缩略取数逐张完整流水:首图方向头读不排到整批缩略之后', () async {
+    final fake = FakePtpTransport();
+    for (var i = 0; i < 3; i++) {
+      fake
+        ..reply(_okData(_jpeg))
+        ..reply(_okData(_jpgHead(1)));
+    }
+    final cache = ThumbnailCache(
+        session: PtpSession(transport: fake), gallery: FakeGallerySaver());
+    final entries = [
+      for (var i = 0; i < 3; i++)
+        _entry(0x20 + i, name: 'DSC_000$i.JPG', size: 100 + i)
+    ];
+
+    await Future.wait([
+      for (final entry in entries) cache.pathFor(entry, ThumbSource.grid),
+    ]);
+
+    expect(
+      fake.requests.map((r) => r.opcode),
+      [
+        NikonOperationCode.getLargeThumb,
+        PtpOperationCode.getPartialObject,
+        NikonOperationCode.getLargeThumb,
+        PtpOperationCode.getPartialObject,
+        NikonOperationCode.getLargeThumb,
+        PtpOperationCode.getPartialObject,
+      ],
+      reason: '每张缩略与其方向头读连续完成,后续预取不插在首图两段之间',
+    );
+  });
+
+  test('屏外预取滚入视口:提升到可视档,先于剩余预取取数', () async {
+    final gate = Completer<void>();
+    final fake = FakePtpTransport()
+      ..replyAfter(gate.future, _okData(_jpeg)) // A 高清(挂住)
+      ..reply(_okData(_jpgHead(1))) // A 头读
+      ..reply(_okData(_jpeg)) // C 高清
+      ..reply(_okData(_jpgHead(1))) // C 头读
+      ..reply(_okData(_jpeg)) // B 高清
+      ..reply(_okData(_jpgHead(1))); // B 头读
+    final cache = ThumbnailCache(
+        session: PtpSession(transport: fake), gallery: FakeGallerySaver());
+    final a = _entry(0x20, name: 'A.JPG');
+    final b = _entry(0x21, name: 'B.JPG');
+    final c = _entry(0x22, name: 'C.JPG');
+
+    final pa = cache.pathFor(a, ThumbSource.grid,
+        priority: ThumbPriority.prefetch);
+    await _until(() => fake.requests.isNotEmpty);
+    // 预取已在拉取时滚入视口:共享同一 future,不补排第二份任务。
+    final paVisible = cache.pathFor(a, ThumbSource.grid);
+    expect(identical(pa, paVisible), isTrue);
+    final pb = cache.pathFor(b, ThumbSource.grid,
+        priority: ThumbPriority.prefetch);
+    final pc = cache.pathFor(c, ThumbSource.grid);
+    gate.complete();
+    await Future.wait([pa, pb, pc]);
+
+    expect(fake.requests.map((r) => r.params.first), [
+      a.handle,
+      a.handle,
+      c.handle,
+      c.handle,
+      b.handle,
+      b.handle,
+    ]);
+  });
+
+  test('普通 JPG 网格缩略跳过信箱边整图扫描', () async {
+    var trims = 0;
+    final fake = FakePtpTransport()
+      ..reply(_okData(_jpeg))
+      ..reply(_okData(_jpgHead(1)));
+    final cache = ThumbnailCache(
+      session: PtpSession(transport: fake),
+      gallery: FakeGallerySaver(),
+      jpegTrimmer: (data) async {
+        trims++;
+        return null;
+      },
+    );
+
+    await cache.pathFor(_entry(0x20), ThumbSource.grid);
+
+    expect(trims, 0, reason: 'JPG 静照没有固定画布信箱边,不做全幅解码扫描');
+  });
+
+  test('视频固定画布缩略仍走信箱边扫描', () async {
+    var trims = 0;
+    final fake = FakePtpTransport()..reply(_okData(_jpeg));
+    final cache = ThumbnailCache(
+      session: PtpSession(transport: fake),
+      gallery: FakeGallerySaver(),
+      jpegTrimmer: (data) async {
+        trims++;
+        return null;
+      },
+    );
+
+    await cache.pathFor(
+        _entry(0x20, name: 'DSC_0001.MOV', kind: ObjectKind.video),
+        ThumbSource.grid);
+
+    expect(trims, 1);
+  });
+
   test('内容键跨实例稳定:新实例直接命中磁盘,不进相机', () async {
     final gallery = FakeGallerySaver();
     final fake1 = FakePtpTransport()

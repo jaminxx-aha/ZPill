@@ -29,10 +29,12 @@
 ///
 /// 缓存键 = 文件名 + 字节数(内容键):跨会话稳定,不怕相机重连后
 /// handle 失效指向别的照片。拉取经 [PtpSession] 全局串行锁
-/// (相机一次一个事务);同键并发请求合并(网格滚动反复 build 不重复拉)。
+/// (相机一次一个事务);同键并发请求合并(网格滚动反复 build 不重复拉),
+/// 可视请求优先,单张缩略与方向头读连续执行。
 library;
 
 import 'dart:async';
+import 'dart:collection';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -47,10 +49,14 @@ import '../ptpip/transport.dart' show PtpLinkException;
 import '../ptp/ptp_session.dart';
 import '../transfer/object_downloader.dart';
 import 'object_entry.dart';
-import 'photo_group.dart' show isRawFile;
+import 'photo_group.dart' show isJpgFile, isRawFile;
 
 /// 缩略图来源档位。
 enum ThumbSource { grid, preview }
+
+/// 取图优先级:可视格先于屏外预取。相机事务本身全局串行,这里控制缓存
+/// 排队顺序,并在预取图滚入视口时原位提升。
+enum ThumbPriority { interactive, prefetch }
 
 /// 大图预览升级事件([ThumbnailCache.warmPreview] 整档解码完成后发;
 /// 查看器按 handle + 字节数匹配换图)。
@@ -58,21 +64,40 @@ typedef PreviewUpgrade = ({int handle, int sizeInBytes, String path});
 
 typedef _CachedThumb = ({String path, int bytes});
 
-/// 非 final + 依赖字段私有:widget 测试可 implements(仅 pathFor/reset,
-/// 注入假路径,避开平台目录/MethodChannel)。
+final class _ThumbJob {
+  _ThumbJob({
+    required this.entry,
+    required this.source,
+    required this.key,
+    required this.priority,
+  });
+
+  final ObjectEntry entry;
+  final ThumbSource source;
+  final String key;
+  final Completer<String> completer = Completer<String>();
+  ThumbPriority priority;
+
+  (ThumbSource, String) get pendingKey => (source, key);
+}
+
+/// 非 final + 依赖字段私有:widget 测试可 implements(仅 pathFor/promote/
+/// reset,注入假路径,避开平台目录/MethodChannel)。
 class ThumbnailCache {
   ThumbnailCache({
     required PtpSession session,
     required GallerySaver gallery,
     ObjectDownloader? downloader,
     RawDecoder? rawDecoder,
+    Future<Uint8List?> Function(Uint8List)? jpegTrimmer,
     this.previewMaxPixelSize = 2560,
     this.gridLimitBytes = 256 * 1024 * 1024,
     this.previewLimitBytes = 512 * 1024 * 1024,
   })  : _session = session,
         _gallery = gallery,
         _downloader = downloader ?? ObjectDownloader(session: session),
-        _rawDecoder = rawDecoder;
+        _rawDecoder = rawDecoder,
+        _jpegTrimmer = jpegTrimmer ?? trimLetterboxJpeg;
 
   final PtpSession _session;
   final GallerySaver _gallery;
@@ -83,6 +108,9 @@ class ThumbnailCache {
   /// NEF 预览管线用(原生 RAW 解码);null = 该平台无解码器
   /// (Android/ohos 待补)→ 回落 GetThumb 小图。
   final RawDecoder? _rawDecoder;
+
+  /// 固定画布缩略的黑边裁剪;普通 JPG 静照不走(测试可注入)。
+  final Future<Uint8List?> Function(Uint8List) _jpegTrimmer;
 
   /// NEF 解码长边上限(像素):对齐高端手机屏宽级缩放解码,
   /// 平衡清晰度/解码耗时/缓存体积(2560px JPEG ≈ 1-2MB)。
@@ -115,7 +143,15 @@ class ThumbnailCache {
       _previewBytes += delta;
     }
   }
-  final Map<(ThumbSource, String), Future<String>> _pending = {};
+  final Map<(ThumbSource, String), _ThumbJob> _pending = {};
+
+  /// 单张完整流水:缩略与方向头读都结束后再起下一张。若把每张首段
+  /// 一起发出,首图会排在整批首段之后等方向头读(首次进相册的冷缓存
+  /// 卡顿);低优先级队列只服务屏外预取。
+  final Queue<_ThumbJob> _interactiveQueue = Queue<_ThumbJob>();
+  final Queue<_ThumbJob> _prefetchQueue = Queue<_ThumbJob>();
+  _ThumbJob? _activeJob;
+  bool _pumping = false;
 
   /// FHD 席位非 JPEG 黑名单(本会话):0x920F 对 HIF 等对象会协议成功
   /// 但回 HEVC 编码预览(非 JPEG,引擎解不开)—— 记键免逐次重试浪费
@@ -217,7 +253,11 @@ class ThumbnailCache {
 
   /// 取 [entry] 在 [source] 档位的缩略图文件路径;内存/磁盘未命中时
   /// 向相机拉取并落盘。失败不缓存失败态(下次可重试),异常原样上抛。
-  Future<String> pathFor(ObjectEntry entry, ThumbSource source) {
+  Future<String> pathFor(
+    ObjectEntry entry,
+    ThumbSource source, {
+    ThumbPriority priority = ThumbPriority.interactive,
+  }) {
     final key = _keyFor(entry);
     final lru = _lruFor(source);
     // 命中即刷到 LRU 尾部(最新端);**盘档已无的命中当未命中**(LRU
@@ -260,11 +300,62 @@ class ThumbnailCache {
     final pendingKey = (source, key);
     final inFlight = _pending[pendingKey];
     if (inFlight != null) {
-      return inFlight;
+      if (priority == ThumbPriority.interactive) _promote(pendingKey);
+      return inFlight.completer.future;
     }
-    final fetch = _fetch(entry, source, key);
-    _pending[pendingKey] = fetch;
-    return fetch.whenComplete(() => _pending.remove(pendingKey));
+    final job = _ThumbJob(
+      entry: entry,
+      source: source,
+      key: key,
+      priority: priority,
+    );
+    _pending[pendingKey] = job;
+    _enqueue(job);
+    unawaited(_pump());
+    return job.completer.future;
+  }
+
+  /// 屏外预取滚入视口时提升排队位置;已开始的相机事务不打断。
+  void promote(ObjectEntry entry, ThumbSource source) {
+    _promote((source, _keyFor(entry)));
+  }
+
+  void _promote((ThumbSource, String) pendingKey) {
+    final job = _pending[pendingKey];
+    if (job == null || job.priority == ThumbPriority.interactive) return;
+    if (identical(job, _activeJob)) return; // 已在拉取,不入队第二份
+    job.priority = ThumbPriority.interactive;
+    _prefetchQueue.remove(job);
+    _interactiveQueue.add(job);
+  }
+
+  void _enqueue(_ThumbJob job) {
+    if (job.priority == ThumbPriority.interactive) {
+      _interactiveQueue.add(job);
+    } else {
+      _prefetchQueue.add(job);
+    }
+  }
+
+  Future<void> _pump() async {
+    if (_pumping) return;
+    _pumping = true;
+    while (_interactiveQueue.isNotEmpty || _prefetchQueue.isNotEmpty) {
+      final job = _interactiveQueue.isNotEmpty
+          ? _interactiveQueue.removeFirst()
+          : _prefetchQueue.removeFirst();
+      _activeJob = job;
+      try {
+        final path = await _fetch(job.entry, job.source, job.key);
+        if (!job.completer.isCompleted) job.completer.complete(path);
+      } on Object catch (e, st) {
+        if (!job.completer.isCompleted) job.completer.completeError(e, st);
+      } finally {
+        _pending.remove(job.pendingKey);
+        _activeJob = null;
+      }
+    }
+    _pumping = false;
   }
 
   /// 取 [entry] 原文件的 EXIF 摘要(查看器信息栏):64KB→16KB 头读
@@ -345,7 +436,7 @@ class ThumbnailCache {
               _fhdNonJpegKeys.add(key);
             } else {
               final oriented = await _orientThumb(entry, raw);
-              final data = await trimLetterboxJpeg(oriented) ?? oriented;
+              final data = await _trimLetterboxForEntry(entry, oriented);
               await fhdFile.writeAsBytes(data, flush: true);
               _remember(source, 'fhd_$key', fhdPath, data.length);
               await _evictIfNeeded(source);
@@ -384,10 +475,8 @@ class ThumbnailCache {
       data = source == ThumbSource.grid
           ? await _orientThumb(entry, await _session.getThumb(entry.handle))
           : await _fetchPreview(entry);
-      // 信箱黑边裁剪:相机内嵌缩略(HIF/NEF/视频均会)把画面信箱化进
-      // 固定画布,cover 裁不掉图内黑边;静照无黑边时裁剪自回 null;
-      // 暗场景由内容占比防误裁线兜底。
-      data = await trimLetterboxJpeg(data) ?? data;
+      // 固定画布缩略才裁信箱边;普通 JPG 静照跳过整幅解码+扫描。
+      data = await _trimLetterboxForEntry(entry, data);
     } catch (e) {
       _logFetchError(entry, source, e);
       rethrow;
@@ -425,13 +514,13 @@ class ThumbnailCache {
       return ltPath;
     }
     // ② 未降级:试 0x90C4(已降级时 session 层也会秒拒,这里直查免
-    //    一次异常开销)。HIF 的高清缩略同样信箱化进固定画布,落盘前
-    //    裁黑边(GetThumb 路径同款;无黑边裁剪自回 null 原样)。
+    //    一次异常开销)。
     if (!_session.largeThumbDegraded) {
       try {
         final oriented = await _orientThumb(
             entry, await _session.getLargeThumb(entry.handle, force: true));
-        final data = await trimLetterboxJpeg(oriented) ?? oriented;
+        // JPG 静照无固定画布信箱边,不付整图解码扫描成本。
+        final data = await _trimLetterboxForEntry(entry, oriented);
         await ltFile.writeAsBytes(data, flush: true);
         _remember(source, ltKey, ltPath, data.length);
         await _evictIfNeeded(source);
@@ -485,6 +574,13 @@ class ThumbnailCache {
   /// JPEG SOI 验签(0x920F 载荷是否真 JPEG:HIF 的 FHD 回 HEVC 编码)。
   static bool _isJpegBytes(Uint8List d) =>
       d.length >= 3 && d[0] == 0xFF && d[1] == 0xD8 && d[2] == 0xFF;
+
+  /// 固定画布缩略(HIF/NEF/视频)才做信箱边检测;JPG 静照原样落盘。
+  Future<Uint8List> _trimLetterboxForEntry(
+      ObjectEntry entry, Uint8List data) async {
+    if (entry.kind != ObjectKind.video && isJpgFile(entry)) return data;
+    return await _jpegTrimmer(data) ?? data;
+  }
 
   /// 小图末档回退(仅非 JPG 对象会到这里 —— JPG 已分流 [_fetchJpg];
   /// 照片到此处 = FHD 席位失败/会话降级,视频 = 海报):GetThumb 直取

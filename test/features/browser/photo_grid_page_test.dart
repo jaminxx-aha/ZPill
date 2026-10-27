@@ -128,7 +128,11 @@ final class _FakeThumbs implements ThumbnailCache {
   int get previewMaxPixelSize => 2560;
 
   @override
-  Future<String> pathFor(ObjectEntry entry, ThumbSource source) async {
+  Future<String> pathFor(
+    ObjectEntry entry,
+    ThumbSource source, {
+    ThumbPriority priority = ThumbPriority.interactive,
+  }) async {
     calls.add(entry.handle);
     if (failHandles.contains(entry.handle)) {
       throw Exception('假失败:${entry.name}');
@@ -137,6 +141,9 @@ final class _FakeThumbs implements ThumbnailCache {
     File(path).writeAsBytesSync(_tinyPng);
     return path;
   }
+
+  @override
+  void promote(ObjectEntry entry, ThumbSource source) {}
 
   @override
   Future<ExifCardData?> exifCardOf(ObjectEntry entry) async => null;
