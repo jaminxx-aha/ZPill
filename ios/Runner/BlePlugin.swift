@@ -32,6 +32,7 @@ public final class BlePlugin: NSObject, FlutterPlugin, CBCentralManagerDelegate,
   // 懒建:CBCentralManager 一创建即触发系统蓝牙权限弹窗,别在启动时抢。
   private var central: CBCentralManager?
   private var peripheral: CBPeripheral?
+  private var connectingPeripheral: CBPeripheral?
 
   private struct ScanHit {
     let peripheral: CBPeripheral
@@ -276,7 +277,7 @@ public final class BlePlugin: NSObject, FlutterPlugin, CBCentralManagerDelegate,
       result(FlutterError(code: "badArgs", message: "connectPaired 须传 peripheral uuid", details: nil))
       return
     }
-    guard peripheral == nil else {
+    guard peripheral == nil, connectingPeripheral == nil else {
       result(FlutterError(code: "busy", message: "已有连接在途,先 disconnect", details: nil))
       return
     }
@@ -288,12 +289,21 @@ public final class BlePlugin: NSObject, FlutterPlugin, CBCentralManagerDelegate,
     }
     endScan()  // 连接前收掉在途扫描(iOS 扫描中发起连接易抖)
     pendingConnect = result
+    connectingPeripheral = target
     central.connect(target)
   }
 
   private func setNotify(_ uuidString: String?, result: @escaping FlutterResult) {
+    guard peripheral?.state == .connected else {
+      result(FlutterError(code: "disconnected", message: "连接已断开", details: nil))
+      return
+    }
     guard let characteristic = findCharacteristic(uuidString) else {
       result(FlutterError(code: "notFound", message: "特征不存在:\(uuidString ?? "")", details: nil))
+      return
+    }
+    guard pendingNotifies[characteristic.uuid] == nil else {
+      result(FlutterError(code: "busy", message: "同特征已有订阅在途", details: nil))
       return
     }
     pendingNotifies[characteristic.uuid] = result
@@ -301,6 +311,10 @@ public final class BlePlugin: NSObject, FlutterPlugin, CBCentralManagerDelegate,
   }
 
   private func read(_ uuidString: String?, result: @escaping FlutterResult) {
+    guard peripheral?.state == .connected else {
+      result(FlutterError(code: "disconnected", message: "连接已断开", details: nil))
+      return
+    }
     guard let characteristic = findCharacteristic(uuidString) else {
       result(FlutterError(code: "notFound", message: "特征不存在:\(uuidString ?? "")", details: nil))
       return
@@ -314,6 +328,10 @@ public final class BlePlugin: NSObject, FlutterPlugin, CBCentralManagerDelegate,
   }
 
   private func write(uuid: String?, data: Data, withoutResponse: Bool, result: @escaping FlutterResult) {
+    guard peripheral?.state == .connected else {
+      result(FlutterError(code: "disconnected", message: "连接已断开", details: nil))
+      return
+    }
     guard let characteristic = findCharacteristic(uuid) else {
       result(FlutterError(code: "notFound", message: "特征不存在:\(uuid ?? "")", details: nil))
       return
@@ -332,6 +350,10 @@ public final class BlePlugin: NSObject, FlutterPlugin, CBCentralManagerDelegate,
   }
 
   private func disconnect(result: @escaping FlutterResult) {
+    if let connectingPeripheral {
+      central?.cancelPeripheralConnection(connectingPeripheral)
+      self.connectingPeripheral = nil
+    }
     if let peripheral {
       central?.cancelPeripheralConnection(peripheral)
       self.peripheral = nil  // 立即释放:随后的 connect 不再撞 busy 守卫
@@ -340,9 +362,30 @@ public final class BlePlugin: NSObject, FlutterPlugin, CBCentralManagerDelegate,
       // 逐特征闸位会占死:之后该特征每笔 withResponse 写/读都报 busy
       // (「TIME 写失败 busy」真机实证 2026-10-19)。迟到回调安全:
       // 闸位已清,回调里的 removeValue 扑空,不会二次应答。
-      failPendingOps("disconnected")
     }
+    failPendingConnect(FlutterError(
+      code: "disconnected", message: "连接已断开", details: nil))
+    failPendingOps("disconnected")
     result(nil)
+  }
+
+  private func failPendingConnect(_ error: FlutterError) {
+    guard let result = pendingConnect else { return }
+    pendingConnect = nil
+    result(error)
+  }
+
+  private func abortConnect(
+    _ peripheral: CBPeripheral, code: String, message: String
+  ) {
+    if connectingPeripheral?.identifier == peripheral.identifier {
+      connectingPeripheral = nil
+    }
+    if self.peripheral?.identifier == peripheral.identifier {
+      self.peripheral = nil
+    }
+    central?.cancelPeripheralConnection(peripheral)
+    failPendingConnect(FlutterError(code: code, message: message, details: nil))
   }
 
   /// 直达系统蓝牙设置页(App-Prefs 私有 scheme,新 iOS 可能失效 →
@@ -453,6 +496,9 @@ public final class BlePlugin: NSObject, FlutterPlugin, CBCentralManagerDelegate,
     emit(["type": "preconnected",
           "uuid": peripheral.identifier.uuidString.lowercased()])
     NativeLog.w("ble", "BLE 已连接(\(peripheral.identifier.uuidString.lowercased())),150ms 礼让后开始发现服务")
+    if connectingPeripheral?.identifier == peripheral.identifier {
+      connectingPeripheral = nil
+    }
     self.peripheral = peripheral
     peripheral.delegate = self
     servicesPendingDiscovery.removeAll()
@@ -471,29 +517,53 @@ public final class BlePlugin: NSObject, FlutterPlugin, CBCentralManagerDelegate,
 
   public func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral,
                              error: Error?) {
-    pendingConnect?(FlutterError(code: "connectFailed",
-                                 message: error.map(String.init(describing:)) ?? "连接失败", details: nil))
-    pendingConnect = nil
+    if connectingPeripheral?.identifier == peripheral.identifier {
+      connectingPeripheral = nil
+    }
+    failPendingConnect(FlutterError(
+      code: "connectFailed",
+      message: error.map(String.init(describing:)) ?? "连接失败",
+      details: nil))
     emit(["type": "error", "code": "connectFailed",
           "message": error.map(String.init(describing:)) ?? "连接失败"])
   }
 
   public func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral,
                              error: Error?) {
-    NativeLog.w("ble", "BLE 断连:\(peripheral.identifier.uuidString.lowercased())\(error.map { " err=\($0)" } ?? "")")
+    let nsError = error as NSError?
+    let reason = nsError.map {
+      " domain=\($0.domain) code=\($0.code) desc=\($0.localizedDescription)"
+    } ?? ""
+    NativeLog.e("ble", "BLE 断连:\(peripheral.identifier.uuidString.lowercased())\(reason)")
+    if connectingPeripheral?.identifier == peripheral.identifier {
+      connectingPeripheral = nil
+    }
+    failPendingConnect(FlutterError(
+      code: "disconnected", message: "连接已断开", details: reason))
     if self.peripheral?.identifier == peripheral.identifier {
       self.peripheral = nil
       failPendingOps("disconnected")
     }
-    emit(["type": "disconnected", "uuid": peripheral.identifier.uuidString.lowercased()])
+    var disconnectEvent: [String: Any] = [
+      "type": "disconnected",
+      "uuid": peripheral.identifier.uuidString.lowercased(),
+    ]
+    if let nsError {
+      disconnectEvent["errorDomain"] = nsError.domain
+      disconnectEvent["errorCode"] = nsError.code
+      disconnectEvent["errorMessage"] = nsError.localizedDescription
+    }
+    emit(disconnectEvent)
   }
 
   // MARK: - CBPeripheralDelegate
 
   public func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
     if let error {
-      pendingConnect?(FlutterError(code: "discoveryFailed", message: String(describing: error), details: nil))
-      pendingConnect = nil
+      abortConnect(
+        peripheral,
+        code: "discoveryFailed",
+        message: String(describing: error))
       return
     }
     let services = peripheral.services ?? []
@@ -509,6 +579,13 @@ public final class BlePlugin: NSObject, FlutterPlugin, CBCentralManagerDelegate,
 
   public func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService,
                          error: Error?) {
+    if let error {
+      abortConnect(
+        peripheral,
+        code: "discoveryFailed",
+        message: String(describing: error))
+      return
+    }
     servicesPendingDiscovery.remove(service.uuid)
     if servicesPendingDiscovery.isEmpty {
       finishConnect(peripheral)

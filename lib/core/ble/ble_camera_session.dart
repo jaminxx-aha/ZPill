@@ -195,6 +195,7 @@ final class BleCameraSession {
   /// 谁也不会真的再连 —— 假在途卡死)。
   int _cancelEpoch = 0;
   int _backoffStep = 0;
+  Future<bool>? _retryReconnectInFlight;
 
   /// 深睡闸门连续跳过轮数(episode 限频日志用;非闸沿归零)。
   int _standbySkips = 0;
@@ -327,7 +328,19 @@ final class BleCameraSession {
   /// 监督超时掐链,Zf 深睡被动重连固有开销 ~12s),而被动扫描不惊动
   /// 相机;闸门期退避冻结在 2s,相机唤醒(半按快门,bit0=0)后下一
   /// 轮即快连。手动重连(显式用户意图)传 false 绕闸。
-  Future<bool> retryReconnect({bool gateStandby = true}) async {
+  Future<bool> retryReconnect({bool gateStandby = true}) {
+    final active = _retryReconnectInFlight;
+    if (active != null) return active;
+    final attempt = _retryReconnect(gateStandby: gateStandby);
+    _retryReconnectInFlight = attempt;
+    return attempt.whenComplete(() {
+      if (identical(_retryReconnectInFlight, attempt)) {
+        _retryReconnectInFlight = null;
+      }
+    });
+  }
+
+  Future<bool> _retryReconnect({required bool gateStandby}) async {
     if (identity == null ||
         (_state != BleSessionState.reconnecting &&
             _state != BleSessionState.idle)) {
@@ -343,8 +356,25 @@ final class BleCameraSession {
       if (direct) return true;
     }
     final epoch = _cancelEpoch; // 十三轮:取消沿迟到收口不推态。
-    final devices = await _host.scanForDeviceId(identity!.deviceId,
-        timeout: const Duration(seconds: 8));
+    final List<BleDevice> devices;
+    try {
+      devices = await _host.scanForDeviceId(
+        identity!.deviceId,
+        timeout: const Duration(seconds: 8),
+      );
+    } on Exception catch (e) {
+      // 扫描被系统/另一条流程打断时不能把驱动循环抛出 Future 外:
+      // 旧实现会让后续 Timer 回调直接断尾,表现为怎么点都不再重连。
+      lastError = (
+        key: 'ble.reconnectScanFail',
+        args: {'e': bleErrorMessage(e)},
+      );
+      _backoffStep = min(_backoffStep + 1, _backoffSeconds.length - 1);
+      if (epoch == _cancelEpoch) {
+        _setState(BleSessionState.reconnecting);
+      }
+      return false;
+    }
     lastRetryGated = false;
     final match = devices.isEmpty ? null : devices.first;
     lastMatchName = match?.name ?? '';
@@ -525,6 +555,15 @@ final class BleCameraSession {
   /// 状态),纪元推进让各尝试的 catch 不再推 reconnecting。
   Future<void> disconnect() async {
     _cancelEpoch++;
+    directFirstPending = false;
+    try {
+      // 重连扫描不像面板扫描那样由页面显式停;若用户在 8s 扫描窗内点
+      // 重连/断开,旧实现只能等扫描自然收口。先收扫描再拆链,避免旧
+      // attempt 继续占着单飞槽。
+      await _host.stopScan();
+    } on Exception {
+      // 平台未起扫/通道不支持时无妨。
+    }
     final pending = _handshake;
     if (pending != null) {
       _abandonHandshake(pending);
@@ -809,21 +848,27 @@ final class BleCameraSession {
           // 凡权限含 read 一律读;失败照常继续不挡握手。
           _trace('全特征表 ${characteristics.length} 项:'
               '${characteristics.entries.map((c) => '${_shortId(c.key)}(${c.value})').join(' ')}');
-          unawaited(() async {
-            for (final c in characteristics.entries) {
-              if (!c.value.contains('read')) continue;
-              if (c.key == kNikonCharPairing || c.key == kNikonCharNot1) {
-                continue;
+          //
+          // 这组全表读取只为首配触发系统的加密特征访问。复用身份重连时
+          // 相机已经注册，继续并发读整表只会增加握手前后 GATT 流量与
+          // 被相机踢链的机会，因此不在重连路径执行。
+          if (!_resuming) {
+            unawaited(() async {
+              for (final c in characteristics.entries) {
+                if (!c.value.contains('read')) continue;
+                if (c.key == kNikonCharPairing || c.key == kNikonCharNot1) {
+                  continue;
+                }
+                try {
+                  final v = await _host.read(c.key);
+                  _trace('read ${_shortId(c.key)} → '
+                      '${v == null ? 'null' : '${v.length}B'}');
+                } on Exception catch (e) {
+                  _trace('read ${_shortId(c.key)} 失败:$e');
+                }
               }
-              try {
-                final v = await _host.read(c.key);
-                _trace('read ${_shortId(c.key)} → '
-                    '${v == null ? 'null' : '${v.length}B'}');
-              } on Exception catch (e) {
-                _trace('read ${_shortId(c.key)} 失败:$e');
-              }
-            }
-          }());
+            }());
+          }
           // 会话控制面观察(SnapBridge 方言):帧落诊断日志,不参与状态机。
           await _host.setNotify(kNikonCharStatusForControl);
           await _host.setNotify(kNikonCharControlPoint);
@@ -866,8 +911,10 @@ final class BleCameraSession {
             if (_kickStreak >= 6) {
               lastError = (key: 'ble.reconnectRejected', args: null);
             } else {
-              lastError =
-                  (key: 'ble.handshakeStartFail', args: {'e': e.toString()});
+              lastError = (
+                key: 'ble.handshakeStartFail',
+                args: {'e': bleErrorMessage(e)},
+              );
               if (_kickStreak < 4) _backoffStep = 0; // 瞬时踢:2s 快试
             }
           }

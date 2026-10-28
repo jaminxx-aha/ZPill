@@ -72,6 +72,7 @@ const Map<String, String> zhCatalog = {
   'ble.stage2ConnectTimeout': '二段连接超时(相机不应答)',
   'ble.stage2ConnectFail': '二段连接失败:{e}',
   'ble.stage2ScanNoBroadcast': '二段扫描无相机广播',
+  'ble.reconnectScanFail': '重连扫描失败:{e}',
   'ble.notConnectedReadCred': 'BLE 未连接,无法读 AP 凭据',
   'ble.noCredBroadcast': '相机未下发 AP 凭据(0x2004 空)',
   'ble.credLengthAbnormal': 'AP 凭据长度异常({n}B,应为 97B)',

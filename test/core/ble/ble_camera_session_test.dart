@@ -30,11 +30,13 @@ final class FakeBleHost implements BleHost {
   final deviceIdScans = <int>[]; // scanForDeviceId 调用记录(让路断言)
   int? reconnectDeviceId;
   Uint8List? reconnectMfg;
+  Object? scanIdError;
   final connects = <String>[];
   List<BleDevice> scanResult = const [];
 
   /// scanForDeviceId 调用数(连接页 hero 测试断言「重连循环真发了扫」)。
   int scanIdCalls = 0;
+  int scanIdStarts = 0;
 
   /// 扫描闸(可空):非空时 scanForDeviceId 挂起等放行 —— 取消沿落在
   /// 扫描窗内的竞态用例(预连接纪元闸)。
@@ -65,6 +67,9 @@ final class FakeBleHost implements BleHost {
   Future<List<BleDevice>> scanForDeviceId(int deviceId,
       {Duration timeout = const Duration(seconds: 10)}) async {
     scanIdCalls++;
+    scanIdStarts++;
+    final error = scanIdError;
+    if (error != null) throw error;
     final gate = scanGate;
     if (gate != null) {
       await gate.future;
@@ -207,14 +212,17 @@ void main() {
   Future<void> runHandshake(
       {bool resume = false,
       BleCameraSession? target,
-      bool? gateStandby}) async {
+      bool? gateStandby,
+      Map<String, String> characteristics = const {}}) async {
     final s = target ?? session;
     Object? ok;
     final done = resume
         ? s.retryReconnect(gateStandby: gateStandby ?? true).then((v) => ok = v)
         : s.pair(device);
-    host.emit(const BleConnected(
-        uuid: 'P1', characteristics: {}, writeWithoutResponseMtu: 20));
+    host.emit(BleConnected(
+        uuid: 'P1',
+        characteristics: characteristics,
+        writeWithoutResponseMtu: 20));
     await pump();
     final stage1 = PairingMessage.decode(host.lastWrite(kNikonCharPairing));
     host.emit(BleNotified(
@@ -655,6 +663,54 @@ void main() {
     host.writeError = null;
     expect(await fut, isFalse);
     expect(host.scanIdCalls, 1); // 落回扫描(静默态空扫一轮)
+  });
+
+  test('并发重连请求单飞:扫描窗内只起一轮,后到调用共享结果', () async {
+    await runHandshake();
+    host.emit(const BleDisconnected('P1'));
+    await pump();
+    session.directFirstPending = false;
+    host.reconnectDeviceId = null;
+    final gate = host.scanGate = Completer<void>();
+    final first = session.retryReconnect();
+    final second = session.retryReconnect();
+    await pump();
+    expect(host.scanIdStarts, 1);
+    gate.complete();
+    expect(await Future.wait([first, second]), [false, false]);
+  });
+
+  test('重连扫描异常收口为失败,不打断上层重试循环', () async {
+    await runHandshake();
+    host.emit(const BleDisconnected('P1'));
+    await pump();
+    session.directFirstPending = false;
+    host.scanIdError = PlatformException(code: 'busy', message: '已有扫描在途');
+    expect(await session.retryReconnect(), isFalse);
+    expect(session.state, BleSessionState.reconnecting);
+    expect(session.lastError?.key, 'ble.reconnectScanFail');
+  });
+
+  test('显式 disconnect 清掉直连优先,避免手动重连先撞旧 UUID', () async {
+    session.directFirstPending = true;
+    await session.disconnect();
+    expect(session.directFirstPending, isFalse);
+  });
+
+  test('首配扫全特征触发系统配对;复用重连不做整表读', () async {
+    const readable = '00002a00-0000-1000-8000-00805f9b34fb';
+    await runHandshake(characteristics: const {readable: 'read'});
+    await pump();
+    expect(host.readCalls, contains(readable));
+
+    final readsAfterPair = host.readCalls.length;
+    host.emit(const BleDisconnected('P1'));
+    await pump();
+    session.directFirstPending = false;
+    host.reconnectDeviceId = session.identity!.deviceId;
+    await runHandshake(resume: true, characteristics: const {readable: 'read'});
+    await pump();
+    expect(host.readCalls.length, readsAfterPair);
   });
 
   test('ready 断连 → reconnecting;重连复用身份(deviceId/nonce 不变)', () async {

@@ -91,6 +91,7 @@ const Map<String, String> enCatalog = {
   'ble.stage2ConnectTimeout': 'Stage-2 connect timed out (camera not responding)',
   'ble.stage2ConnectFail': 'Stage-2 connect failed: {e}',
   'ble.stage2ScanNoBroadcast': 'Stage-2 scan found no camera broadcast',
+  'ble.reconnectScanFail': 'Reconnect scan failed: {e}',
   'ble.notConnectedReadCred': 'BLE not connected — cannot read AP credentials',
   'ble.noCredBroadcast': 'Camera sent no AP credentials (0x2004 empty)',
   'ble.credLengthAbnormal': 'AP credentials length abnormal ({n}B, expected 97B)',
