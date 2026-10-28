@@ -755,7 +755,7 @@ class _ConnectionPageState extends State<ConnectionPage>
     final L10nMessage? hintMsg = !ready
         ? (controller.wifiAwakePending
             ? const (key: 'conn.wifiManualConnectHint', args: null)
-            : session.lastError)
+            : session.displayError)
         : null;
     // 图标坐标恒定(见 _heroTopGap,四方式同位);四轮裁定「配对信息
     // 往上移」:红卡/按钮/配对面板紧随图标之下,剩余空间全在底部

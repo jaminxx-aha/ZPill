@@ -157,6 +157,39 @@ final class BleCameraSession {
     if (!_errorCtrl.isClosed) _errorCtrl.add(v);
   }
 
+  static const _transientRecoveryErrorKeys = {
+    'ble.handshakeStartFail',
+    'ble.handshakeDisconnected',
+    'ble.stage2DirectTimeout',
+    'ble.stage2ConnectTimeout',
+    'ble.stage2ConnectFail',
+    'ble.stage2ScanNoBroadcast',
+    'ble.stage2HandshakeTimeout',
+    'ble.reconnectScanFail',
+  };
+
+  /// 面向固定错误位的消息。单次握手/扫描失败是自动恢复过程中的正常
+  /// 中间态，只保留在 [lastError] 与日志里；状态头已显示“重连中”。
+  /// 连续 6 次被相机拒绝后转为终态提示。
+  L10nMessage? get displayError {
+    final error = _lastError;
+    if (error == null) return null;
+    if (error.key == 'ble.reconnectRejected') return error;
+    if (_state == BleSessionState.pairing ||
+        _state == BleSessionState.reconnecting) {
+      return null;
+    }
+    if (_pairWaitActive && _transientRecoveryErrorKeys.contains(error.key)) {
+      return null;
+    }
+    if (identity != null &&
+        _kickStreak < 6 &&
+        _transientRecoveryErrorKeys.contains(error.key)) {
+      return null;
+    }
+    return error;
+  }
+
   /// 最近一次 [retryReconnect] 是否被深睡闸门拦下(下轮尝试开跑即失效;
   /// 上层配对页日志据此区分「无命中」与「被闸」)。
   bool lastRetryGated = false;
@@ -244,6 +277,7 @@ final class BleCameraSession {
     return _pairWithWait(device).timeout(waitTimeout, onTimeout: () async {
       _cancelEpoch++; // 纪元推闸:废在途握手/循环(迟到收口沿自灭)
       if (_state == BleSessionState.pairing) _failHandshake();
+      lastError = (key: 'ble.pairWaitTimeout', args: null);
       throw BlePairingException('配对等待超时 —— 相机须停在「连接至智能设备」配对页(广播窗约'
           ' 30s)再点扫描连接');
     });

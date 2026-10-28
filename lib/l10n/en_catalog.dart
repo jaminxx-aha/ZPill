@@ -102,6 +102,8 @@ const Map<String, String> enCatalog = {
   'ble.geoWriteFail': 'GEO write failed: {e}',
   'ble.timeWriteFail': 'TIME write failed: {e}',
   'ble.handshakeStartFail': 'Handshake start failed: {e}',
+  'ble.pairWaitTimeout':
+      'Pairing timed out — keep the camera on the “Connect to smart device” screen and retry',
   'ble.cryptoWall':
       'Bluetooth pairing is not supported here — the encrypted link cannot be established (Android-on-HarmonyOS containers)',
   'ble.reconnectRejected':

@@ -627,6 +627,33 @@ void main() {
     host.writeError = null;
   });
 
+  test('临时握手断连不占固定错误位;连续 6 次拒绝后才显示终态', () async {
+    await runHandshake();
+    host.emit(const BleDisconnected('P1'));
+    await pump();
+    session.directFirstPending = false;
+    host.writeError = PlatformException(code: 'disconnected', message: '连接已断开');
+
+    for (var attempt = 1; attempt <= 6; attempt++) {
+      host.reconnectDeviceId = session.identity!.deviceId;
+      final pending = session.retryReconnect();
+      await pump();
+      host.emit(const BleConnected(
+          uuid: 'P1', characteristics: {}, writeWithoutResponseMtu: 20));
+      await pump();
+      expect(await pending, isFalse);
+      expect(session.state, BleSessionState.reconnecting);
+      if (attempt < 6) {
+        expect(session.lastError?.key, 'ble.handshakeStartFail');
+        expect(session.displayError, isNull);
+      } else {
+        expect(session.lastError?.key, 'ble.reconnectRejected');
+        expect(session.displayError?.key, 'ble.reconnectRejected');
+      }
+    }
+    host.writeError = null;
+  });
+
   test('断链类写失败不上红字:静默缓存;非断链失败照常上报', () async {
     await runHandshake();
     now = now.add(const Duration(seconds: 3)); // 过首写门
