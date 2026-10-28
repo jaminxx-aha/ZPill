@@ -17,6 +17,7 @@ import 'dart:convert' show base64Decode, base64Encode;
 import 'dart:typed_data' show Uint8List;
 
 import '../ptp/device_prop.dart';
+import '../ptp/operation_codes.dart';
 import '../ptp/ptp_session.dart';
 
 /// 快照里的单个设备属性。
@@ -208,16 +209,21 @@ final class CameraConfigSnapshotter {
   ///
   /// 有设定文件 blob 先走 0x946E(单事务整档写卡 1;**只写卡不生效**,
   /// 机身菜单载入后才应用 —— 成功即整档恢复,报告 [RestoreReport.blobSaved]
-  /// 如实标注);blob 失败(无卡/拒写/旧档无 blob)回落逐属性:
+  /// 如实标注);blob 遇 0x2019 有界退避、0x201E 重开会话,终态失败
+  /// (无卡/拒写/旧档无 blob)回落逐属性:
   /// GetDevicePropDesc 复查(可写性以**当下**上报为准,快照时的
   /// writable 只作预过滤;类型漂移跳过)→ SetDevicePropValue。写路径
   /// 总闸未开时直接抛 UnsupportedError(零流量)。型号不匹配不拦截,
   /// 报告里提示。
   static Future<RestoreReport> restore(
-      PtpSession session, CameraConfigSnapshot snapshot) async {
+    PtpSession session,
+    CameraConfigSnapshot snapshot, {
+    Future<void> Function(Duration)? delay,
+  }) async {
     if (!PtpSession.kSetPropEnabled) {
       throw UnsupportedError('恢复已被总闸关断(kSetPropEnabled=false,紧急关断)');
     }
+    final wait = delay ?? Future<void>.delayed;
     var applied = 0, skipped = 0, failed = 0;
     var modelMismatch = false;
     try {
@@ -231,8 +237,8 @@ final class CameraConfigSnapshotter {
     // 盲写匿名文件到卡,直接走逐属性。
     if (blob != null && blob.isNotEmpty && (snapshot.settingsBlobName ?? '').isNotEmpty) {
       try {
-        await session.sendCameraSettingData(
-            snapshot.settingsBlobName ?? '', blob);
+        await _sendRestoredBlob(
+            session, snapshot.settingsBlobName ?? '', blob, wait);
         return RestoreReport(
             applied: 0,
             skipped: 0,
@@ -261,8 +267,11 @@ final class CameraConfigSnapshotter {
           skipped++; // 类型漂移:值的语义不可比,宁跳不错
           continue;
         }
-        await session.setDevicePropValue(
-            PtpDevicePropValue(code: p.code, dataType: desc.dataType, value: p.value));
+        await _writeRestoredProp(
+            session,
+            PtpDevicePropValue(
+                code: p.code, dataType: desc.dataType, value: p.value),
+            wait);
         applied++;
       } on Exception {
         failed++;
@@ -270,5 +279,62 @@ final class CameraConfigSnapshotter {
     }
     return RestoreReport(
         applied: applied, skipped: skipped, failed: failed, modelMismatch: modelMismatch);
+  }
+
+  static Future<void> _sendRestoredBlob(
+    PtpSession session,
+    String name,
+    Uint8List data,
+    Future<void> Function(Duration) delay,
+  ) async {
+    var busyAttempts = 0;
+    var sessionRetried = false;
+    while (true) {
+      try {
+        await session.sendCameraSettingData(name, data);
+        return;
+      } on PtpResponseException catch (e) {
+        if (e.responseCode == PtpResponseCode.deviceBusy && busyAttempts < 2) {
+          busyAttempts++;
+          await delay(Duration(milliseconds: 200 * busyAttempts));
+          continue;
+        }
+        if (e.responseCode == PtpResponseCode.sessionAlreadyOpen &&
+            !sessionRetried) {
+          sessionRetried = true;
+          await session.reopen();
+          continue;
+        }
+        rethrow;
+      }
+    }
+  }
+
+  static Future<void> _writeRestoredProp(
+    PtpSession session,
+    PtpDevicePropValue value,
+    Future<void> Function(Duration) delay,
+  ) async {
+    var busyAttempts = 0;
+    var sessionRetried = false;
+    while (true) {
+      try {
+        await session.setDevicePropValue(value);
+        return;
+      } on PtpResponseException catch (e) {
+        if (e.responseCode == PtpResponseCode.deviceBusy && busyAttempts < 2) {
+          busyAttempts++;
+          await delay(Duration(milliseconds: 200 * busyAttempts));
+          continue;
+        }
+        if (e.responseCode == PtpResponseCode.sessionAlreadyOpen &&
+            !sessionRetried) {
+          sessionRetried = true;
+          await session.reopen();
+          continue;
+        }
+        rethrow;
+      }
+    }
   }
 }

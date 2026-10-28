@@ -696,6 +696,10 @@ const Map<String, String> enCatalog = {
   'remote.errPropWriteDialLatch':
       'This parameter is owned by a physical body dial; enable APP Takeover first',
   'remote.errPropWriteLatch': ' — enable APP Takeover first',
+  'remote.errPropBusy':
+      'Camera busy; {label} was not written. Please retry shortly',
+  'remote.errPropSession':
+      'Camera session lost synchronization and recovery failed; reconnect the camera',
   'remote.errPropBounce':
       '{label} was sent, but the camera bounced back to its own value ({v}) — this parameter is owned by '
       'a body dial; the video-exposure write path remains unsolved',

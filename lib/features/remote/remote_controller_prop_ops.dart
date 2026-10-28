@@ -604,6 +604,17 @@ mixin _RemotePropOps on _RemoteCore {
       }
     } on Exception catch (e) {
       if (e is PtpResponseException &&
+          e.responseCode == PtpResponseCode.deviceBusy) {
+        error = (
+          key: 'remote.errPropBusy',
+          args: {'label': param?.label ?? '--'},
+        );
+        return;
+      } else if (e is PtpResponseException &&
+          e.responseCode == PtpResponseCode.sessionAlreadyOpen) {
+        error = (key: 'remote.errPropSession', args: null);
+        return;
+      } else if (e is PtpResponseException &&
           e.responseCode == PtpResponseCode.accessDenied) {
         // 控制锁(OpenZCine lockedControls 口径):相机拒绝这个参数
         // 的遥控 → 读出条打锁标,直到写通或断连。
@@ -649,26 +660,59 @@ mixin _RemotePropOps on _RemoteCore {
   /// 接管门)原样上抛。非 dialOwned / 账面关:原样上抛走正常错误路径。
   Future<void> _writeWithTakeoverSelfHeal(
       ShootingParam? param, PtpDevicePropValue value) async {
-    try {
-      await session.setDevicePropValue(value);
-      return;
-    } on PtpResponseException catch (e) {
-      if (e.responseCode != PtpResponseCode.accessDenied ||
-          !(param?.dialOwned ?? false) ||
-          !_takeoverActive) {
-        rethrow;
-      }
+    var busyAttempts = 0;
+    var sessionRetried = false;
+    while (true) {
       try {
-        await session.changeCameraMode(1); // 重打闩(幂等,0x2001)
-      } on Object {
-        // 重打失败:账面落闸,原 0x200F 照实上抛(响应码保留,文案/
-        // 锁标判据不变)。
-        _takeoverActive = false;
-        engine.remoteHeld = false;
-        if (!_disposed) notifyListeners();
-        throw e;
+        await session.setDevicePropValue(value);
+        return;
+      } on PtpResponseException catch (e, stack) {
+        if (e.responseCode == PtpResponseCode.deviceBusy && busyAttempts < 2) {
+          busyAttempts++;
+          await _delay(Duration(milliseconds: 200 * busyAttempts));
+          continue;
+        }
+        if (e.responseCode == PtpResponseCode.sessionAlreadyOpen &&
+            !sessionRetried) {
+          // 0x201E 表示相机侧会话账已丢/残留。重开会话会清掉 remote
+          // 闩,持有接管时必须重打再写,不能把参数静默写进非接管态。
+          sessionRetried = true;
+          final restoreTakeover = _takeoverActive;
+          try {
+            await session.reopen();
+            if (restoreTakeover) {
+              await session.changeCameraMode(1);
+            }
+          } on Object {
+            if (restoreTakeover) {
+              _takeoverActive = false;
+              engine.remoteHeld = false;
+              if (!_disposed) notifyListeners();
+            }
+            // 对 UI 保留“会话失步且恢复失败”的原始 0x201E 语义;恢复动作
+            // 自身的次级错误不覆盖用户下一步应做的“重新连接”判断。
+            Error.throwWithStackTrace(e, stack);
+          }
+          continue;
+        }
+        if (e.responseCode != PtpResponseCode.accessDenied ||
+            !(param?.dialOwned ?? false) ||
+            !_takeoverActive) {
+          rethrow;
+        }
+        try {
+          await session.changeCameraMode(1); // 重打闩(幂等,0x2001)
+        } on Object {
+          // 重打失败:账面落闸,原 0x200F 照实上抛(响应码保留,文案/
+          // 锁标判据不变)。
+          _takeoverActive = false;
+          engine.remoteHeld = false;
+          if (!_disposed) notifyListeners();
+          throw e;
+        }
+        await session.setDevicePropValue(value); // 重试;仍拒原样上抛
+        return;
       }
-      await session.setDevicePropValue(value); // 重试;仍拒原样上抛
     }
   }
 

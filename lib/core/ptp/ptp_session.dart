@@ -289,6 +289,16 @@ mixin _SessionCore {
     await _serialized(_openLocked);
   }
 
+  /// 强制重建 PTP 会话(参数写入/快照恢复遇 0x201E 时用)。
+  /// 相机可能实际已关会话而本地账仍为开;先置本地账为未开,再走
+  /// [_openLocked] 的 0x201E Close+Open 自愈。
+  Future<void> reopen() async {
+    await _serialized(() async {
+      _sessionOpen = false;
+      await _openLocked();
+    });
+  }
+
   /// 保护态乐观覆盖(会话内,句柄 → 是否保护):0x1012 SetObjectProtection
   /// 无读回应答,查看器以本会话发出/读回的写为准;挂在会话上 —— 页
   /// State 每次进页重建,页面级缓存重开即清空(2026-10-16 真机复报

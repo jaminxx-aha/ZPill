@@ -88,6 +88,25 @@ void main() {
       expect(session.isSessionOpen, isTrue);
     });
 
+    test('reopen 强制重走 OpenSession,不吃本地 isOpen 短路', () async {
+      final fake = FakePtpTransport()
+        ..reply(const PtpResult(responseCode: PtpResponseCode.ok))
+        ..reply(
+            const PtpResult(responseCode: PtpResponseCode.sessionAlreadyOpen))
+        ..reply(const PtpResult(responseCode: PtpResponseCode.ok))
+        ..reply(const PtpResult(responseCode: PtpResponseCode.ok));
+      final session = PtpSession(transport: fake);
+      await session.open();
+      await session.reopen();
+      expect(session.isSessionOpen, isTrue);
+      expect(fake.requests.map((r) => r.opcode), [
+        PtpOperationCode.openSession,
+        PtpOperationCode.openSession,
+        PtpOperationCode.closeSession,
+        PtpOperationCode.openSession,
+      ]);
+    });
+
     test('打开失败抛 PtpResponseException', () async {
       final fake = FakePtpTransport()
         ..reply(const PtpResult(responseCode: PtpResponseCode.generalError));

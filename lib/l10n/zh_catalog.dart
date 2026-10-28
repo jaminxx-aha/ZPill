@@ -593,6 +593,8 @@ const Map<String, String> zhCatalog = {
       '接管已开启仍被拒 —— 该模式下此参数由相机自动控制,请检查模式转盘',
   'remote.errPropWriteDialLatch': '该参数受机身物理拨盘控制,请先启用「APP 接管」',
   'remote.errPropWriteLatch': '—— 请先启用「APP 接管」',
+  'remote.errPropBusy': '相机忙,{label} 未写入,请稍后重试',
+  'remote.errPropSession': '相机会话已失步,自动恢复失败,请重新连接相机',
   'remote.errPropBounce':
       '{label}已发送,但相机回弹为机身值({v})—— 该参数由机身拨盘拥有,'
       '视频曝光写路径待解',

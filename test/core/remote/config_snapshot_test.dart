@@ -269,6 +269,70 @@ void main() {
       expect(report.applied, 1, reason: '逐属性兜底照常写');
     });
 
+    test('restore:0x946E 瞬时忙 → 退避后整档成功', () async {
+      PtpSession.kSetPropEnabled = true;
+      addTearDown(() => PtpSession.kSetPropEnabled = true);
+      transport
+        ..ok(data: _deviceInfoDataset([]))
+        ..reply(PtpResponseCode.deviceBusy)
+        ..reply(PtpResponseCode.deviceBusy)
+        ..ok();
+      final snap = CameraConfigSnapshot(
+        model: 'TestModel',
+        deviceVersion: 'V1.00',
+        capturedAt: DateTime.now(),
+        props: const [],
+        settingsBlobName: 'NCSET011.BIN',
+        settingsBlob: Uint8List.fromList([9, 8, 7]),
+      );
+      final waits = <Duration>[];
+      final report = await CameraConfigSnapshotter.restore(
+        session,
+        snap,
+        delay: (d) async => waits.add(d),
+      );
+
+      expect(report.blobSaved, isTrue);
+      expect(report.applied, 0);
+      expect(waits, const [
+        Duration(milliseconds: 200),
+        Duration(milliseconds: 400),
+      ]);
+      expect(
+          transport.requests
+              .where((r) => r.opcode == NikonOperationCode.sendCameraSettingData),
+          hasLength(3));
+    });
+
+    test('restore:0x946E 会话失步 → 重开后重写整档', () async {
+      PtpSession.kSetPropEnabled = true;
+      addTearDown(() => PtpSession.kSetPropEnabled = true);
+      transport
+        ..ok(data: _deviceInfoDataset([]))
+        ..reply(PtpResponseCode.sessionAlreadyOpen)
+        ..ok() // reopen: OpenSession
+        ..ok(); // 重试 0x946E
+      final snap = CameraConfigSnapshot(
+        model: 'TestModel',
+        deviceVersion: 'V1.00',
+        capturedAt: DateTime.now(),
+        props: const [],
+        settingsBlobName: 'NCSET011.BIN',
+        settingsBlob: Uint8List.fromList([9, 8, 7]),
+      );
+      final report = await CameraConfigSnapshotter.restore(session, snap);
+
+      expect(report.blobSaved, isTrue);
+      expect(
+          transport.requests
+              .where((r) => r.opcode == PtpOperationCode.openSession),
+          hasLength(1));
+      expect(
+          transport.requests
+              .where((r) => r.opcode == NikonOperationCode.sendCameraSettingData),
+          hasLength(2));
+    });
+
     test('restore:blob 无名字(截断档/旧档)→ 不盲写卡,直接逐属性', () async {
       PtpSession.kSetPropEnabled = true;
       addTearDown(() => PtpSession.kSetPropEnabled = true);
@@ -331,7 +395,9 @@ void main() {
             0x500F, PtpDataType.uint16, 200)) // 快照 uint32 ≠ 当下 u16 → 跳
         ..ok(data: _propDescDataset(
             0x5010, PtpDataType.uint16, 100)) // 仍可写 → 写
-        ..reply(PtpResponseCode.deviceBusy); // 0x1016 忙 → failed
+        ..reply(PtpResponseCode.deviceBusy)
+        ..reply(PtpResponseCode.deviceBusy)
+        ..reply(PtpResponseCode.deviceBusy); // 有界重试耗尽 → failed
 
       final snap = CameraConfigSnapshot(
         model: 'TestModel',
@@ -348,7 +414,8 @@ void main() {
               code: 0x5010, type: 'uint16', value: 100, writable: true),
         ],
       );
-      final report = await CameraConfigSnapshotter.restore(session, snap);
+      final report = await CameraConfigSnapshotter.restore(session, snap,
+          delay: (_) async {});
 
       expect(report.applied, 1);
       expect(report.skipped, 2, reason: '当下只读 + 类型漂移各计一跳');
@@ -357,11 +424,78 @@ void main() {
       final writes = transport.requests
           .where((r) => r.opcode == PtpOperationCode.setDevicePropValue)
           .toList();
-      expect(writes, hasLength(2), reason: '跳过的属性不发 0x1016');
+      expect(writes, hasLength(4), reason: '末项忙重试 3 次;跳过项不发 0x1016');
       expect(writes.first.params, [0x5007]);
       expect(writes.first.dataOut, Uint8List.fromList([28, 0]));
       expect(writes.last.params, [0x5010]);
       expect(writes.last.dataOut, Uint8List.fromList([100, 0]));
+      expect(
+        writes.map((r) => r.params.single),
+        [0x5007, 0x5010, 0x5010, 0x5010],
+      );
+    });
+
+    test('瞬时 0x2019:两次退避后写成功,不计失败', () async {
+      PtpSession.kSetPropEnabled = true;
+      addTearDown(() => PtpSession.kSetPropEnabled = true);
+      transport
+        ..ok(data: _deviceInfoDataset([]))
+        ..ok(data: _propDescDataset(0x5007, PtpDataType.uint16, 28))
+        ..reply(PtpResponseCode.deviceBusy)
+        ..reply(PtpResponseCode.deviceBusy)
+        ..ok();
+      final snap = CameraConfigSnapshot(
+        model: 'TestModel',
+        deviceVersion: 'V1.00',
+        capturedAt: DateTime.now(),
+        props: const [
+          ConfigPropSnapshot(
+              code: 0x5007, type: 'uint16', value: 28, writable: true),
+        ],
+      );
+      final waits = <Duration>[];
+      final report = await CameraConfigSnapshotter.restore(
+        session,
+        snap,
+        delay: (d) async => waits.add(d),
+      );
+      expect(report.applied, 1);
+      expect(report.failed, 0);
+      expect(waits, const [
+        Duration(milliseconds: 200),
+        Duration(milliseconds: 400),
+      ]);
+    });
+
+    test('0x201E:重开会话后继续写当前属性', () async {
+      PtpSession.kSetPropEnabled = true;
+      addTearDown(() => PtpSession.kSetPropEnabled = true);
+      transport
+        ..ok(data: _deviceInfoDataset([]))
+        ..ok(data: _propDescDataset(0x5007, PtpDataType.uint16, 28))
+        ..reply(PtpResponseCode.sessionAlreadyOpen)
+        ..ok() // reopen: OpenSession
+        ..ok(); // 重试写
+      final snap = CameraConfigSnapshot(
+        model: 'TestModel',
+        deviceVersion: 'V1.00',
+        capturedAt: DateTime.now(),
+        props: const [
+          ConfigPropSnapshot(
+              code: 0x5007, type: 'uint16', value: 28, writable: true),
+        ],
+      );
+      final report = await CameraConfigSnapshotter.restore(session, snap);
+      expect(report.applied, 1);
+      expect(report.failed, 0);
+      expect(
+          transport.requests
+              .where((r) => r.opcode == PtpOperationCode.openSession),
+          hasLength(1));
+      expect(
+          transport.requests
+              .where((r) => r.opcode == PtpOperationCode.setDevicePropValue),
+          hasLength(2));
     });
 
     test('型号不一致:不拦截,报告标记', () async {

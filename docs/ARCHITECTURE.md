@@ -169,7 +169,7 @@ channel 命名统一 `zpill/<service>`,完整契约表与三端落地进度见
   [file_size_budget.txt](../tools/file_size_budget.txt),既有预算只能下降
 - **真机**:协议常量一律探针先行、以真机响应为准回填 Dart 侧;功能就绪
   以「真实数据、端到端跑通」为准
-- 规模:截至 2026-10-29 为 114 个测试文件、1666 passed / 0 skipped
+- 规模:截至 2026-10-29 为 114 个测试文件、1673 passed / 0 skipped
   (`flutter test`)
 
 ## 6. 文档索引

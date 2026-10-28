@@ -796,8 +796,36 @@ void _propGroups() {
           reason: '拨盘级参数的只读上报是拨盘语义,接管模型覆盖(不拦)');
     });
 
-    test('门禁开:写失败(0x2019 忙)→ 报错,值不漂移', () async {
+    test('门禁开:0x2019 忙有界重试,耗尽后报忙且值不漂移', () async {
       PtpSession.kSetPropEnabled = true; // 翻 session 总闸(controller 闸已注入)
+      addTearDown(() => PtpSession.kSetPropEnabled = true);
+      controller.dispose();
+      controller = RemoteController(
+        session: PtpSession(transport: transport),
+        connection: conn,
+        engine: LiveViewEngine(
+            session: PtpSession(transport: transport), delay: delay.call),
+        delay: (_) async {},
+        aeDelay: delay.call,
+        setPropGate: () => true,
+      );
+
+      _scriptParams(transport);
+      _emitConnected(transport, conn);
+      await pumpEventQueue();
+
+      transport
+        ..reply(PtpResponseCode.deviceBusy)
+        ..reply(PtpResponseCode.deviceBusy)
+        ..reply(PtpResponseCode.deviceBusy);
+      await controller.setParam(PtpDevicePropCode.fNumber, 320);
+      expect(controller.error?.key, 'remote.errPropBusy');
+      expect(controller.exposure?.fNumber, 280, reason: '失败后原值不动');
+      expect(controller.writing, isFalse);
+    });
+
+    test('0x201E 会话失步 → 重开会话后自动重写一次', () async {
+      PtpSession.kSetPropEnabled = true;
       addTearDown(() => PtpSession.kSetPropEnabled = true);
       controller.dispose();
       controller = RemoteController(
@@ -813,11 +841,65 @@ void _propGroups() {
       _emitConnected(transport, conn);
       await pumpEventQueue();
 
-      transport.reply(PtpResponseCode.deviceBusy); // 0x1016 忙
+      transport.ok(); // 显式启用接管
+      expect(await controller.enableTakeover(), isTrue);
+      transport
+        ..reply(PtpResponseCode.sessionAlreadyOpen) // 首次参数写
+        ..ok() // reopen: OpenSession
+        ..ok() // 重打接管 0x90C2(1)
+        ..ok() // 参数写重试
+        ..ok(data: _propDescDataset(
+            PtpDevicePropCode.fNumber, PtpDataType.uint16, 320));
       await controller.setParam(PtpDevicePropCode.fNumber, 320);
-      expect(controller.error?.key, 'remote.errPropWriteDial',
-          reason: '光圈是指令拨盘参数,接管失败文案走拨盘支');
+
+      expect(controller.error, isNull);
+      expect(controller.exposure?.fNumber, 320);
+      expect(
+          transport.requests
+              .where((r) => r.opcode == PtpOperationCode.openSession),
+          hasLength(1));
+      expect(
+          transport.requests
+              .where((r) => r.opcode == PtpOperationCode.setDevicePropValue),
+          hasLength(2));
+      expect(
+          transport.requests
+              .where((r) => r.opcode == NikonOperationCode.changeCameraMode)
+              .map((r) => r.params),
+          [
+            [1],
+            [1]
+          ]);
+    });
+
+    test('0x201E 重开会话失败 → 提示会话失步并停止重写', () async {
+      PtpSession.kSetPropEnabled = true;
+      addTearDown(() => PtpSession.kSetPropEnabled = true);
+      controller.dispose();
+      controller = RemoteController(
+        session: PtpSession(transport: transport),
+        connection: conn,
+        engine: LiveViewEngine(
+            session: PtpSession(transport: transport), delay: delay.call),
+        delay: delay.call,
+        setPropGate: () => true,
+      );
+
+      _scriptParams(transport);
+      _emitConnected(transport, conn);
+      await pumpEventQueue();
+
+      transport
+        ..reply(PtpResponseCode.sessionAlreadyOpen) // 首次参数写
+        ..reply(PtpResponseCode.generalError); // reopen 失败
+      await controller.setParam(PtpDevicePropCode.fNumber, 320);
+
+      expect(controller.error?.key, 'remote.errPropSession');
       expect(controller.exposure?.fNumber, 280, reason: '失败后原值不动');
+      expect(
+          transport.requests
+              .where((r) => r.opcode == PtpOperationCode.setDevicePropValue),
+          hasLength(1));
       expect(controller.writing, isFalse);
     });
 
