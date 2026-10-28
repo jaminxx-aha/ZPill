@@ -91,7 +91,7 @@ docs/                架构文档
 flutter pub get
 dart run tools/check_architecture.dart  # core/data/platform 依赖边界 + 大文件预算
 flutter run                  # 连接设备运行
-flutter test                 # 全量单测(2026-10-29 基线:1665 passed / 0 skipped)
+flutter test                 # 全量单测(2026-10-29 基线:1666 passed / 0 skipped)
 
 # HarmonyOS(切到 SIG fork 的 flutter,备好 DevEco SDK / hvigor / ohpm 环境)
 flutter build hap

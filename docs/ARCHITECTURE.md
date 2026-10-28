@@ -107,12 +107,13 @@ BLE 配对:四步握手(身份持久化,重连免重配)→ GATT 读出 WiFi 凭
 attach 进路由器,同一状态机同一下游。
 
 **取景**:连接即取景(RemoteController 于 connected 沿串链自驱)→
-`LiveViewEngine`:0x9201 起景 → 帧间 50ms 步进轮询 0x9203 → 0x9202
+`LiveViewEngine`:0x9201 起景 → 帧间 50ms 步进轮询 0x9428 → 0x9202
 收景,失败指数退避、连续 5 帧转 failed;watchdog 专管「事务成功但内容
 冻结」的同帧楔死(探测命令通道,忙则保持、不忙重启取景,预算耗尽升级
 整链重连);帧头解析后一份帧分析同时喂直方图/斑马纹/伪色/峰值/示波器;
-高质量档经 Catmull-Rom fragment shader 上采样。拍摄页不可见只挂轮询,
-取景生命周期跟连接走。
+高质量档经 Catmull-Rom fragment shader 上采样。iOS ImageCaptureCore
+额外把 0x9428 命令起点限制为 100ms 一拍,避免上层节拍压垮 IC 通道。
+拍摄页不可见只挂轮询,取景生命周期跟连接走。
 
 **浏览/传输**:浏览页 → `ObjectRepository`(handle 只来自
 GetObjectHandles 响应)→ 相册分组 + 缩略图缓存(GetThumb/大缩略,RAW 走
@@ -168,7 +169,7 @@ channel 命名统一 `zpill/<service>`,完整契约表与三端落地进度见
   [file_size_budget.txt](../tools/file_size_budget.txt),既有预算只能下降
 - **真机**:协议常量一律探针先行、以真机响应为准回填 Dart 侧;功能就绪
   以「真实数据、端到端跑通」为准
-- 规模:截至 2026-10-29 为 114 个测试文件、1665 passed / 0 skipped
+- 规模:截至 2026-10-29 为 114 个测试文件、1666 passed / 0 skipped
   (`flutter test`)
 
 ## 6. 文档索引

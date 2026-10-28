@@ -50,8 +50,13 @@ private let kContainerTypeEvent: UInt16 = 4
 private let kAsyncEventTxid: UInt32 = 0xFFFFFFFF  // 异步事件无关联事务(真机实证)
 private let kOpcodeOpenSession: UInt16 = 0x1002
 private let kOpcodeCloseSession: UInt16 = 0x1003
+private let kOpcodeNikonGetLiveViewImageEx: UInt16 = 0x9428
 private let kResponseOk: UInt16 = 0x2001
 private let kResponseSessionAlreadyOpen: UInt16 = 0x201E
+
+// ImageCaptureCore 不适合按 Dart 层 50ms 节拍连打取帧。按命令起点
+// 限制最高 10fps；单笔事务本身更慢时自然降到真实往返速度。
+private let kIcLiveViewMinimumStartIntervalNs: UInt64 = 100_000_000
 
 // staging 里单个容器的长度上限:命令/属性数据远小于此,超了即流错位。
 private let kMaxStagedContainerBytes = 64 * 1024 * 1024
@@ -314,6 +319,7 @@ private final class IcPtpSession {
   private var completionResponse: Data?
   private var completionPtpResponse: Data?
   private let completionSem = DispatchSemaphore(value: 0)
+  private var lastLiveViewCommandStartedAt: UInt64?
 
   init?(camera: ICCameraDevice) {
     self.camera = camera
@@ -461,6 +467,19 @@ private final class IcPtpSession {
     completionResponse = nil
     completionPtpResponse = nil
     lock.unlock()
+
+    if opcode == kOpcodeNikonGetLiveViewImageEx {
+      // bulkRead runs on the serial usbQueue, so this gate is race-free.
+      let now = DispatchTime.now().uptimeNanoseconds
+      if let previous = lastLiveViewCommandStartedAt,
+        now >= previous,
+        now - previous < kIcLiveViewMinimumStartIntervalNs
+      {
+        let remaining = kIcLiveViewMinimumStartIntervalNs - (now - previous)
+        Thread.sleep(forTimeInterval: Double(remaining) / 1_000_000_000)
+      }
+      lastLiveViewCommandStartedAt = DispatchTime.now().uptimeNanoseconds
+    }
 
     DispatchQueue.main.async { [weak self] in
       guard let self = self else { return }
@@ -640,17 +659,22 @@ public final class UsbHostPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
     return nil
   }
 
-  /// didReceivePTPEvent 的字节格式未经真机实证,防御性归一(真机核对后回填):
-  /// 1. 已是完整事件容器(u32 长度含头 + u16 type=4)→ 原样转发;
-  /// 2. 裸事件块 u16 code + N×u32 参数 → 合成标准容器(txid=0xFFFFFFFF);
-  /// 3. 都不是 → NSLog dump 丢弃(Dart 侧单条 FormatException 也会静默
-  ///    丢弃,双保险不断流)。
+  /// didReceivePTPEvent 在不同 IC 版本可能给出标准 12B 头、PTP/USB
+  /// 10B 头、无长度头的 8B 头或裸 eventCode+参数。统一转换成 Dart
+  /// 传输层要求的 12B 事件容器；参数区必须 4B 对齐。
   private func forwardEvent(_ data: Data) {
-    guard let normalized = normalizePtpEvent(data) else {
-      NSLog("zpill/usb: 无法归一的 PTP 事件(%ld B): %@",
-            data.count, data.map { String(format: "%02x", $0) }.joined())
+    guard let (normalized, shape) = normalizePtpEvent(data) else {
+      NativeLog.e(
+        "usb",
+        "无法归一的 PTP 事件(\(data.count)B): "
+          + data.map { String(format: "%02x", $0) }.joined())
       return
     }
+    let eventCode = u16le(normalized, 6)
+    NativeLog.i(
+      "usb",
+      "IC PTP 事件 \(shape) → \(data.count)B/"
+        + String(format: "0x%04X", eventCode))
     // IC 委托回调在主线程;sink 恒主线程投递(已在主线程则原样转发)。
     let sink = eventSink
     let payload = FlutterStandardTypedData(bytes: Data(normalized))
@@ -659,23 +683,70 @@ public final class UsbHostPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
     }
   }
 
-  private func normalizePtpEvent(_ data: Data) -> [UInt8]? {
+  private func normalizePtpEvent(_ data: Data) -> ([UInt8], String)? {
     let n = data.count
+    guard n >= 2 else { return nil }
+
+    // Standard USB event container: u32 length + u16 type + u16 code + u32 txid.
     if n >= kContainerHeaderLength, Int(u32le(data, 0)) == n,
-      u16le(data, 4) == kContainerTypeEvent
+      u16le(data, 4) == kContainerTypeEvent,
+      (n - kContainerHeaderLength) % 4 == 0
     {
-      return [UInt8](data)
+      return ([UInt8](data), "12B")
     }
-    if n >= 2, (n - 2) % 4 == 0 {
-      var out = [UInt8]()
-      appendU32(UInt32(kContainerHeaderLength + n - 2), to: &out)
-      appendU16(kContainerTypeEvent, to: &out)
-      appendU16(u16le(data, 0), to: &out)
-      appendU32(kAsyncEventTxid, to: &out)
-      out.append(contentsOf: data.dropFirst(2))
-      return out
+
+    // PTP/USB interrupt header: u16 length + u16 type + u16 code + u32 txid.
+    if n >= 10,
+      Int(u16le(data, 0)) == n,
+      u16le(data, 2) == kContainerTypeEvent,
+      (n - 10) % 4 == 0
+    {
+      return (
+        makeEventContainer(
+          code: u16le(data, 4),
+          txid: u32le(data, 6),
+          params: [UInt8](data.dropFirst(10))),
+        "10B"
+      )
+    }
+
+    // Length omitted: u16 type + u16 code + u32 txid.
+    if n >= 8,
+      u16le(data, 0) == kContainerTypeEvent,
+      (n - 8) % 4 == 0
+    {
+      return (
+        makeEventContainer(
+          code: u16le(data, 2),
+          txid: u32le(data, 4),
+          params: [UInt8](data.dropFirst(8))),
+        "8B"
+      )
+    }
+
+    // Bare event: u16 code + optional u32 params.
+    if (n - 2) % 4 == 0 {
+      return (
+        makeEventContainer(
+          code: u16le(data, 0),
+          txid: kAsyncEventTxid,
+          params: [UInt8](data.dropFirst(2))),
+        "raw"
+      )
     }
     return nil
+  }
+
+  private func makeEventContainer(
+    code: UInt16, txid: UInt32, params: [UInt8]
+  ) -> [UInt8] {
+    var out = [UInt8]()
+    appendU32(UInt32(kContainerHeaderLength + params.count), to: &out)
+    appendU16(kContainerTypeEvent, to: &out)
+    appendU16(code, to: &out)
+    appendU32(txid, to: &out)
+    out.append(contentsOf: params)
+    return out
   }
 
   // ── usbQueue 串行段 ─────────────────────────────────────────────
