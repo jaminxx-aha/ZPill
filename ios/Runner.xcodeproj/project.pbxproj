@@ -28,6 +28,8 @@
 		7A10000200000000000000AB /* VolumeKeyPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A10000100000000000000AB /* VolumeKeyPlugin.swift */; };
 		7A10000400000000000000AB /* VideoLutExportPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A10000300000000000000AB /* VideoLutExportPlugin.swift */; };
 		7A10000600000000000000AC /* NativeLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A10000500000000000000AC /* NativeLog.swift */; };
+		7A10000800000000000000AD /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A10000700000000000000AD /* SceneDelegate.swift */; };
+		7A10000A00000000000000AE /* EABluetoothAccessoryPickerWorkaround.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A10000900000000000000AE /* EABluetoothAccessoryPickerWorkaround.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -83,6 +85,8 @@
 		7A10000100000000000000AB /* VolumeKeyPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VolumeKeyPlugin.swift; sourceTree = "<group>"; };
 		7A10000300000000000000AB /* VideoLutExportPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoLutExportPlugin.swift; sourceTree = "<group>"; };
 		7A10000500000000000000AC /* NativeLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeLog.swift; sourceTree = "<group>"; };
+		7A10000700000000000000AD /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneDelegate.swift; sourceTree = "<group>"; };
+		7A10000900000000000000AE /* EABluetoothAccessoryPickerWorkaround.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EABluetoothAccessoryPickerWorkaround.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -146,6 +150,8 @@
 				1498D2321E8E86230040F4C2 /* GeneratedPluginRegistrant.h */,
 				1498D2331E8E89220040F4C2 /* GeneratedPluginRegistrant.m */,
 				74858FAE1ED2DC5600515810 /* AppDelegate.swift */,
+				7A10000700000000000000AD /* SceneDelegate.swift */,
+				7A10000900000000000000AE /* EABluetoothAccessoryPickerWorkaround.swift */,
 				74858FAD1ED2DC5600515810 /* Runner-Bridging-Header.h */,
 				7A10000100000000000000A1 /* GalleryPlugin.swift */,
 				7A10000100000000000000A2 /* UsbHostPlugin.swift */,
@@ -318,6 +324,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				74858FAF1ED2DC5600515810 /* AppDelegate.swift in Sources */,
+				7A10000800000000000000AD /* SceneDelegate.swift in Sources */,
+				7A10000A00000000000000AE /* EABluetoothAccessoryPickerWorkaround.swift in Sources */,
 				1498D2341E8E89220040F4C2 /* GeneratedPluginRegistrant.m in Sources */,
 				7A10000200000000000000A1 /* GalleryPlugin.swift in Sources */,
 				7A10000200000000000000A2 /* UsbHostPlugin.swift in Sources */,

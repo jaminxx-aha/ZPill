@@ -162,10 +162,9 @@ public final class BlePlugin: NSObject, FlutterPlugin, CBCentralManagerDelegate,
 
   /// 系统蓝牙配件选择器(ExternalAccessory 公开 API,SnapBridge iOS 同款
   /// —— 2026-10-20 手机 unified log 取证:其弹码窗即此 picker,经它完成
-  /// 经典 BR/EDR SSP bond,CTKD 顺带派生 BLE 密钥)。宿主 Info.plist
-  /// **不得带 UIApplicationSceneManifest**(选择器建窗走 legacy 生命周期
-  /// 查法,scene manifest 宿主建出无 scene 窗永不可见、回调悬挂 ——
-  /// 2026-10-20 真机判别实验实锤)。`name` 过滤设备名:NSPredicate 键名
+  /// 经典 BR/EDR SSP bond,CTKD 顺带派生 BLE 密钥)。2026-10-29 宿主已迁移
+  /// UIScene/FlutterSceneDelegate;选择器仍走 ExternalAccessory 公开 API,
+  /// 真机验证 scene 宿主下弹窗可见且回调正常。`name` 过滤设备名:NSPredicate 键名
   /// 黑盒,评估崩 valueForUndefinedKey,调用方须传 nil;完成码字符串
   /// 回传:success / alreadyConnected / cancelled / failed。completion
   /// 回调线程不定,须折回主线程回 Flutter。
@@ -173,6 +172,7 @@ public final class BlePlugin: NSObject, FlutterPlugin, CBCentralManagerDelegate,
     let predicate: NSPredicate? =
       name.map { NSPredicate(format: "name CONTAINS[c] %@", $0) }
     DispatchQueue.main.async {
+      let pickerSession = EABluetoothAccessoryPickerWorkaround.begin()
       EAAccessoryManager.shared().showBluetoothAccessoryPicker(withNameFilter: predicate) { error in
         // 完成码:EABluetoothAccessoryPickerErrorCode(0=alreadyConnected
         // 1=notFound 2=cancelled 3=failed);Swift 对该 NS_ENUM 的导入名
@@ -187,7 +187,10 @@ public final class BlePlugin: NSObject, FlutterPlugin, CBCentralManagerDelegate,
         } else {
           outcome = "success"
         }
-        DispatchQueue.main.async { result(outcome) }
+        DispatchQueue.main.async {
+          EABluetoothAccessoryPickerWorkaround.end(pickerSession)
+          result(outcome)
+        }
       }
     }
   }
