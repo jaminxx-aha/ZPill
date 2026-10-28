@@ -20,8 +20,29 @@ tools/check_release_config.sh
 
 `.github/workflows/ci.yml` runs on pull requests and pushes to `main`. It
 checks release configuration, analyzes, runs the full test suite, builds an
-Android debug APK, and uploads that APK as a short-lived artifact. CI does not
-receive production signing keys and therefore never publishes a release.
+Android debug APK, and compiles the iOS simulator app. It uploads the Android
+APK as a short-lived artifact. CI does not receive production signing keys and
+therefore never publishes a release.
+
+`.github/workflows/harmonyos-ci.yml` is the manual HarmonyOS build lane. It must
+run on a self-hosted runner labeled `harmonyos` with the OpenHarmony-SIG Flutter
+fork and DevEco Studio installed. Configure these repository variables when the
+defaults do not match the runner:
+
+- `DEVECO_HOME`: absolute DevEco Studio `Contents` directory.
+- `OHOS_FLUTTER`: absolute path to the OHOS fork's `flutter` executable.
+- `DEVECO_SDK_HOME`: absolute DevEco SDK directory, normally
+  `$DEVECO_HOME/sdk`.
+- `JAVA_HOME`: JDK used by Hvigor, normally DevEco Studio's bundled JBR.
+
+Run `bash tools/build_ohos_ci.sh` locally to exercise the same path. The lane
+produces an unsigned debug HAP and never reads release signing credentials.
+
+`.github/workflows/android-device-ci.yml` is the manual Android device smoke
+lane. It runs on a self-hosted runner labeled `android` with `adb` available,
+then builds, installs, cold-launches, and checks for process death or a fatal
+exception. Override `ANDROID_PACKAGE` and `ANDROID_ACTIVITY` through repository
+variables when using a custom brand.
 
 ## Android Release Signing
 

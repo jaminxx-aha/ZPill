@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -13,7 +12,6 @@ import 'package:z_pill/core/media/cube_lut.dart';
 import 'package:z_pill/core/ptpip/object_format.dart';
 import 'package:z_pill/core/transfer/transfer_engine.dart';
 import 'package:z_pill/core/transfer/transfer_task.dart';
-import 'package:z_pill/core/utils/byte_writer.dart';
 import 'package:z_pill/data/ratings_store.dart';
 import 'package:z_pill/features/common/trash_rating_icon.dart';
 import 'package:z_pill/features/common/sort_bars_icon.dart';
@@ -26,6 +24,8 @@ import 'package:z_pill/platform/gallery_saver.dart';
 import 'package:z_pill/platform/raw_decoder.dart';
 import 'package:z_pill/platform/video_lut_export.dart';
 import 'package:z_pill/platform/video_player.dart';
+
+import 'local_library_test_fixtures.dart';
 
 /// 伪相册服务:downloadsDir 指向临时目录,importFiles 落账可断言;
 /// thumbsDir 用独立子目录(NEF 网格缩略落盘,不污染 downloadsDir 清单)。
@@ -226,79 +226,6 @@ final class _FakeEngine implements TransferEngine {
   Future<void> clearHistory() async {}
 }
 
-/// 带 EXIF 的「JPG」字节(SOI + APP1 Exif + EOI,无图像数据):IFD0
-/// Make/Model + Exif 子表 光圈/快门/ISO/焦距,无 takenAt(时间行走
-/// mtime 兜底的用例语义)。布局:头 8 + IFD0 42(8..49,3 条目)+
-/// Exif 54(50..103)+ 数据区(104..)。Make/Model 用真实长度(>4B)
-/// —— EXIF 规则:值 ≤4 字节内联存储,短串会踩中内联路径测不到偏移。
-Uint8List _jpgExifBytes() {
-  const ascii = 2, short = 3, long = 4, rational = 5;
-  const makeOff = 104,
-      modelOff = 122,
-      fNumOff = 131,
-      expOff = 139,
-      focalOff = 147;
-  final w = ByteWriter()
-    ..u16(0x4949)
-    ..u16(42)
-    ..u32(8)
-    // IFD0:Make / Model / Exif 指针(count 含结尾 NUL:17 字符 → 18)
-    ..u16(3)
-    ..u16(0x010F)
-    ..u16(ascii)
-    ..u32(18)
-    ..u32(makeOff)
-    ..u16(0x0110)
-    ..u16(ascii)
-    ..u32(9)
-    ..u32(modelOff)
-    ..u16(0x8769)
-    ..u16(long)
-    ..u32(1)
-    ..u32(50)
-    ..u32(0)
-    // Exif 子表:光圈 / 快门 / ISO / 焦距
-    ..u16(4)
-    ..u16(0x829D)
-    ..u16(rational)
-    ..u32(1)
-    ..u32(fNumOff)
-    ..u16(0x829A)
-    ..u16(rational)
-    ..u32(1)
-    ..u32(expOff)
-    ..u16(0x8827)
-    ..u16(short)
-    ..u32(1)
-    ..u16(100)
-    ..u16(0)
-    ..u16(0x920A)
-    ..u16(rational)
-    ..u32(1)
-    ..u32(focalOff)
-    ..u32(0)
-    // 数据区
-    ..raw('NIKON CORPORATION'.codeUnits)
-    ..u8(0)
-    ..raw('NIKON Zf'.codeUnits)
-    ..u8(0)
-    ..u32(2)
-    ..u32(1) // ƒ/2
-    ..u32(1)
-    ..u32(250) // 1/250s
-    ..u32(40)
-    ..u32(1); // 40mm
-  final payload = w.takeBytes();
-  final segLen = 2 + 6 + payload.length;
-  return Uint8List.fromList([
-    0xFF, 0xD8, //
-    0xFF, 0xE1, (segLen >> 8) & 0xFF, segLen & 0xFF, //
-    ...'Exif'.codeUnits, 0, 0, //
-    ...payload, //
-    0xFF, 0xD9, //
-  ]);
-}
-
 /// 打开筛选弹层(右上 tune 按钮,tooltip 定位;点任意行即收,换档每步重开)。
 Future<void> openFilterMenu(WidgetTester tester) async {
   await tester.tap(find.byTooltip('筛选'));
@@ -344,41 +271,8 @@ bool sortIconShown(WidgetTester tester) => find
     .evaluate()
     .isNotEmpty;
 
-/// 最小 NEF 合成(II 小端,IFD0@8 条目升序):宽/高/方向/JPEG 偏移/
-/// 长度 + 填充 + [thumb] 内嵌缩略。结构对齐 Zf NEF(nef_thumb.dart
-/// 提取器口径),专供「无原生 RAW 解码器 → 内嵌缩略兜底」用例。
-Uint8List _nefWithEmbeddedThumb(Uint8List thumb, {int orientation = 1}) {
-  final entries = <(int, int, int)>[
-    (0x0100, 4, 160), // width
-    (0x0101, 4, 120), // height
-    (0x0112, 3, orientation), // Orientation(SHORT)
-    (0x0201, 4, 0), // JPEGInterchangeFormat(合成时回填)
-    (0x0202, 4, thumb.length),
-  ]..sort((a, b) => a.$1.compareTo(b.$1));
-  const ifdOffset = 8;
-  final ifdSize = 2 + entries.length * 12 + 4;
-  final thumbOffset = ifdOffset + ifdSize + 64;
-  final out = Uint8List(thumbOffset + thumb.length);
-  final d = ByteData.view(out.buffer);
-  out.setAll(0, [0x49, 0x49, 0x2A, 0x00]); // II*\0
-  d.setUint32(4, ifdOffset, Endian.little);
-  d.setUint16(ifdOffset, entries.length, Endian.little);
-  for (var i = 0; i < entries.length; i++) {
-    final e = ifdOffset + 2 + i * 12;
-    final (tag, type, value) = entries[i];
-    d.setUint16(e, tag, Endian.little);
-    d.setUint16(e + 2, type, Endian.little);
-    d.setUint32(e + 4, 1, Endian.little); // count
-    d.setUint32(e + 8, tag == 0x0201 ? thumbOffset : value, Endian.little);
-  }
-  d.setUint32(ifdOffset + 2 + entries.length * 12, 0, Endian.little);
-  out.setRange(thumbOffset, thumbOffset + thumb.length, thumb);
-  return out;
-}
-
 void main() {
   late Directory dir;
-
   setUp(() {
     dir = Directory.systemTemp.createTempSync('zpill_library');
     // AppServices 惰性装配(查看器 DeSqueezedImage 首触)会起 BLE 身份
@@ -441,7 +335,7 @@ void main() {
           LibraryRatings? ratings}) =>
       MaterialApp(
           home: LocalLibraryPage(
-            uiPrefs: InMemoryUiPrefsStore(),
+        uiPrefs: InMemoryUiPrefsStore(),
         controller: controller,
         gallery: gallery,
         rawDecoder: rawDecoder ?? _FakeRawDecoder(fail: true),
@@ -616,10 +510,14 @@ void main() {
     ]);
     // 重写 timescale(物理 44-47)/duration(48-51)= 150s:
     final ts = 1000, dur = 150000; // 150s
-    mov[44] = (ts >> 24) & 0xff; mov[45] = (ts >> 16) & 0xff;
-    mov[46] = (ts >> 8) & 0xff; mov[47] = ts & 0xff;
-    mov[48] = (dur >> 24) & 0xff; mov[49] = (dur >> 16) & 0xff;
-    mov[50] = (dur >> 8) & 0xff; mov[51] = dur & 0xff;
+    mov[44] = (ts >> 24) & 0xff;
+    mov[45] = (ts >> 16) & 0xff;
+    mov[46] = (ts >> 8) & 0xff;
+    mov[47] = ts & 0xff;
+    mov[48] = (dur >> 24) & 0xff;
+    mov[49] = (dur >> 16) & 0xff;
+    mov[50] = (dur >> 8) & 0xff;
+    mov[51] = dur & 0xff;
     final f = File('${dir.path}/c.mov');
     f.writeAsBytesSync(mov);
     f.setLastModifiedSync(DateTime(2026, 10, 3));
@@ -886,7 +784,7 @@ void main() {
     // 带 EXIF 的「JPG」(SOI+APP1+EOI,无图像数据:网格解码走占位,
     // 头读只认头部)。无 takenAt → 时间行回落文件 mtime(「时间」非
     // 「拍摄时间」)。
-    File('${dir.path}/exif.jpg').writeAsBytesSync(_jpgExifBytes());
+    File('${dir.path}/exif.jpg').writeAsBytesSync(jpgExifBytes());
     writeFile('v.mov', modified: DateTime(2026, 10, 4));
     final gallery = _FakeGallery(dir);
     final controller =
@@ -1047,12 +945,12 @@ void main() {
         of: find.text('导出到系统相册'), matching: find.byType(FilledButton)));
     expect(exportBtn().onPressed, isNotNull); // 勾选即启用
 
-    await tester.tap(find.byType(Image).first); // b 再点 = 取消
+    await tester.tap(find.byKey(const ValueKey('b.jpg'))); // b 再点 = 取消
     await tester.pumpAndSettle();
     expect(find.text('已选 0 项'), findsOneWidget);
     expect(exportBtn().onPressed, isNull); // 空选禁用
 
-    await tester.tap(find.byType(Image).at(1)); // a 勾上
+    await tester.tap(find.byKey(const ValueKey('a.jpg'))); // a 勾上
     await tester.pumpAndSettle();
     expect(find.text('已选 1 项'), findsOneWidget);
     expect(exportBtn().onPressed, isNotNull); // 勾选即启用
@@ -1077,11 +975,11 @@ void main() {
 
     await tester.longPress(find.byType(Image).first); // b(最新在前)预选
     await tester.pumpAndSettle();
-    await tester.tap(find.byType(Image).at(1)); // a 勾上
+    await tester.tap(find.byKey(const ValueKey('a.jpg'))); // a 勾上
     await tester.pumpAndSettle();
     expect(find.text('已选 2 项'), findsOneWidget);
 
-    await tester.tap(find.byType(Image).first); // b 再点 = 取消
+    await tester.tap(find.byKey(const ValueKey('b.jpg'))); // b 再点 = 取消
     await tester.pumpAndSettle();
     expect(find.text('已选 1 项'), findsOneWidget);
     // b 格未选圈 + b 段头「未全选」圈(共享段头多选沿)
@@ -1224,7 +1122,8 @@ void main() {
       await tester.pump();
     }
     expect(decoder.calls, [('${dir.path}/c.nef', 512)]);
-    expect(File('${gallery.thumbs.path}/libv4_c.nef_3.jpg').existsSync(), isTrue);
+    expect(
+        File('${gallery.thumbs.path}/libv4_c.nef_3.jpg').existsSync(), isTrue);
 
     // 点 NEF 格进查看器:标题 + 2560px 全尺寸解码(假 JPEG 解不开走
     // errorBuilder,Image 组件在即可)。格键 = 文件名(缩略解码后
@@ -1234,12 +1133,9 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('c.nef'), findsWidgets); // 查看器 AppBar
     expect(decoder.calls.last, ('${dir.path}/c.nef', 2560));
-    expect(
-        find.byWidgetPredicate((w) => w is Image && w.image is MemoryImage),
+    expect(find.byWidgetPredicate((w) => w is Image && w.image is MemoryImage),
         findsOneWidget);
-    expect(
-        find.byWidgetPredicate(
-            (w) => w is Image && w.image is ResizeImage),
+    expect(find.byWidgetPredicate((w) => w is Image && w.image is ResizeImage),
         findsOneWidget);
   });
 
@@ -1282,7 +1178,8 @@ void main() {
 
     // 与 NEF 同管线:格缩略 512px 解码一次,落盘 thumbsDir(libv3 键)。
     expect(decoder.calls, [('${dir.path}/c.hif', 512)]);
-    expect(File('${gallery.thumbs.path}/libv4_c.hif_3.jpg').existsSync(), isTrue);
+    expect(
+        File('${gallery.thumbs.path}/libv4_c.hif_3.jpg').existsSync(), isTrue);
 
     // 点 HIF 格进查看器:标题 + 2560px 全尺寸解码(假 JPEG 解不开走
     // errorBuilder,Image 组件在即可)。两枚 Image = 300px 防黑闪垫底 +
@@ -1291,12 +1188,9 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('c.hif'), findsWidgets); // 查看器 AppBar
     expect(decoder.calls.last, ('${dir.path}/c.hif', 2560));
-    expect(
-        find.byWidgetPredicate((w) => w is Image && w.image is MemoryImage),
+    expect(find.byWidgetPredicate((w) => w is Image && w.image is MemoryImage),
         findsOneWidget);
-    expect(
-        find.byWidgetPredicate(
-            (w) => w is Image && w.image is ResizeImage),
+    expect(find.byWidgetPredicate((w) => w is Image && w.image is ResizeImage),
         findsOneWidget);
   });
 
@@ -1334,7 +1228,7 @@ void main() {
     // 解码器时网格缩略的真身,与相机相册 GetThumb 同质)。
     final jpeg =
         Uint8List.fromList(img.encodeJpg(img.Image(width: 4, height: 4)));
-    final nef = _nefWithEmbeddedThumb(jpeg, orientation: 8);
+    final nef = nefWithEmbeddedThumb(jpeg, orientation: 8);
     File('${dir.path}/c.nef').writeAsBytesSync(nef);
     final gallery = _FakeGallery(dir);
     final controller =
@@ -1342,8 +1236,7 @@ void main() {
     await tester.pumpWidget(host(gallery, controller));
     await drainAppFiles(tester, controller);
 
-    final cache =
-        File('${gallery.thumbs.path}/libv4_c.nef_${nef.length}.jpg');
+    final cache = File('${gallery.thumbs.path}/libv4_c.nef_${nef.length}.jpg');
     // 缩略串行链内嵌缩略提取是真 IO(RandomAccessFile 头读/段读):
     // FakeAsync 域完成回调只在 runAsync 出窗上浮,逐窗排水至小档落盘。
     var written = false;
@@ -1368,7 +1261,7 @@ void main() {
     // 后台升级(libv4hi_),落盘沿通知重建换图。
     final jpeg =
         Uint8List.fromList(img.encodeJpg(img.Image(width: 4, height: 4)));
-    final nef = _nefWithEmbeddedThumb(jpeg, orientation: 8);
+    final nef = nefWithEmbeddedThumb(jpeg, orientation: 8);
     File('${dir.path}/c.nef').writeAsBytesSync(nef);
     final gallery = _FakeGallery(dir);
     final decoder = _FakeRawDecoder();
@@ -1404,7 +1297,7 @@ void main() {
     // LibRaw 升级失败(如截断件):小档继续在格,解码器恰一次调用。
     final jpeg =
         Uint8List.fromList(img.encodeJpg(img.Image(width: 4, height: 4)));
-    final nef = _nefWithEmbeddedThumb(jpeg);
+    final nef = nefWithEmbeddedThumb(jpeg);
     File('${dir.path}/c.nef').writeAsBytesSync(nef);
     final gallery = _FakeGallery(dir);
     final decoder = _FakeRawDecoder(fail: true);
@@ -1437,7 +1330,7 @@ void main() {
     // —— 不再死在「解码失败」。HIF 解码失败不走此兜底(见上一组)。
     final jpeg =
         Uint8List.fromList(img.encodeJpg(img.Image(width: 4, height: 4)));
-    final nef = _nefWithEmbeddedThumb(jpeg, orientation: 8);
+    final nef = nefWithEmbeddedThumb(jpeg, orientation: 8);
     File('${dir.path}/c.nef').writeAsBytesSync(nef);
     final gallery = _FakeGallery(dir);
     final decoder = _FakeRawDecoder(fail: true);
@@ -1664,7 +1557,8 @@ void main() {
     expect(orientationCalls().last, ['DeviceOrientation.portraitUp']);
   });
 
-  testWidgets('MOV:无内嵌视图平台(Android)回落海报帧 + 播放钮'
+  testWidgets(
+      'MOV:无内嵌视图平台(Android)回落海报帧 + 播放钮'
       '(点了走原生全屏播放)', (tester) async {
     writeFile('c.mov', modified: DateTime(2026, 10, 3));
     final gallery = _FakeGallery(dir);
@@ -1795,7 +1689,8 @@ void main() {
 
     // 小档解码一次、落盘 thumbsDir(与 NEF/MOV 同管线同键式)
     expect(decoder.calls, [('${dir.path}/a.jpg', 512)]);
-    expect(File('${gallery.thumbs.path}/libv4_a.jpg_3.jpg').existsSync(), isTrue);
+    expect(
+        File('${gallery.thumbs.path}/libv4_a.jpg_3.jpg').existsSync(), isTrue);
 
     // 格已换小档源:provider 指向小档文件,gapless 换源保帧不闪
     final image = tester.widget<Image>(find.byType(Image).first);
@@ -1849,8 +1744,7 @@ void main() {
       await tester.pump();
     }
     await tester.pumpAndSettle();
-    final requested =
-        decoder.calls.map((c) => c.$1.split('/').last).toSet();
+    final requested = decoder.calls.map((c) => c.$1.split('/').last).toSet();
     // 倒序 index 25 = f04、index 12 = f17:都在视口外,预取窗照拉
     expect(requested.contains('f04.jpg'), isTrue,
         reason: '视口外文件已预取(requested=${requested.length})');
@@ -1892,15 +1786,16 @@ void main() {
     // 预热解码是引擎真异步:逐窗排水到 f27 小档入缓存(f27 = 段1
     // index 26:首段 24 格 + 段1 首格都会被构建(离屏段也建首格做几何
     // 估算),f27 在所有构建/持有范围之外,是干净的判据)
-    final f27Provider = gridThumbImageProvider(
-        '${gallery.thumbs.path}/libv4_f27.jpg_3.jpg');
+    final f27Provider =
+        gridThumbImageProvider('${gallery.thumbs.path}/libv4_f27.jpg_3.jpg');
     final f27Key = await f27Provider.obtainKey(ImageConfiguration.empty);
     final cache = PaintingBinding.instance.imageCache;
     for (var i = 0; i < 40 && !cache.containsKey(f27Key); i++) {
       await tester.runAsync(
           () => Future<void>.delayed(const Duration(milliseconds: 20)));
       await tester.pump();
-      debugPrint('F$i pending=${cache.pendingImageCount} live=${cache.liveImageCount} size=${cache.currentSize}');
+      debugPrint(
+          'F$i pending=${cache.pendingImageCount} live=${cache.liveImageCount} size=${cache.currentSize}');
     }
     expect(cache.containsKey(f27Key), isTrue,
         reason: '首过预取窗已把从未构建的 f27 小档预热进解码缓存');
@@ -2310,8 +2205,7 @@ void main() {
     }
   });
 
-  testWidgets('渐进放大动效:格缩略挂 HeroZoom,点格查看器初始页同 tag 配对+缩略垫底',
-      (tester) async {
+  testWidgets('渐进放大动效:格缩略挂 HeroZoom,点格查看器初始页同 tag 配对+缩略垫底', (tester) async {
     useTallSurface(tester);
     // 真字节(可解码):查看器缩略垫底层无 errorBuilder 语义外另有
     // 断言(提供器同源),假字节走错误道测不出。
@@ -2331,7 +2225,9 @@ void main() {
 
     // 格缩略挂动效锚(HeroZoom 包 Image,tag = 图库侧配对键)。
     expect(find.byType(HeroZoom), findsOneWidget);
-    expect(find.byWidgetPredicate((w) => w is Hero && w.tag == 'lib-grid-${a.path}'),
+    expect(
+        find.byWidgetPredicate(
+            (w) => w is Hero && w.tag == 'lib-grid-${a.path}'),
         findsOneWidget);
 
     // 点格进查看器:初始页挂同 tag 配对件(PageView 只建初始页,恰一枚;
@@ -2339,7 +2235,9 @@ void main() {
     await tester.tap(find.byType(HeroZoom));
     await tester.pumpAndSettle();
     expect(find.text('a.jpg'), findsWidgets); // 查看器 AppBar 标题
-    expect(find.byWidgetPredicate((w) => w is Hero && w.tag == 'lib-grid-${a.path}'),
+    expect(
+        find.byWidgetPredicate(
+            (w) => w is Hero && w.tag == 'lib-grid-${a.path}'),
         findsOneWidget);
     expect(
         find.byWidgetPredicate((w) =>
@@ -2354,8 +2252,7 @@ void main() {
     expect(find.byType(HeroZoom), findsOneWidget);
   });
 
-  testWidgets('动效锚:NEF/MOV 缩略上格挂 HeroZoom,点格查看器同 tag 配对',
-      (tester) async {
+  testWidgets('动效锚:NEF/MOV 缩略上格挂 HeroZoom,点格查看器同 tag 配对', (tester) async {
     useTallSurface(tester);
     // 假件回真路径(libv4 落盘),字节假 → 格/查看器 Image 走 errorBuilder,
     // 但 HeroZoom/锚组件在场 —— 显档记账与配对链正是本用例断言面。
@@ -2384,15 +2281,19 @@ void main() {
 
     // 两格都挂动效锚(NEF 原生缩略 + MOV 抽帧)。
     expect(find.byType(HeroZoom), findsNWidgets(2));
-    expect(find.byWidgetPredicate(
-        (w) => w is Hero && w.tag == 'lib-grid-${mov.path}'), findsOneWidget);
+    expect(
+        find.byWidgetPredicate(
+            (w) => w is Hero && w.tag == 'lib-grid-${mov.path}'),
+        findsOneWidget);
 
     // 点 NEF 格进查看器:初始页同 tag 配对(_nativeBody aspectBox)。
     await tester.tap(find.byKey(const ValueKey('a.nef')));
     await tester.pumpAndSettle();
     expect(find.text('a.nef'), findsWidgets); // 查看器 AppBar 标题
-    expect(find.byWidgetPredicate(
-        (w) => w is Hero && w.tag == 'lib-grid-${nef.path}'), findsOneWidget);
+    expect(
+        find.byWidgetPredicate(
+            (w) => w is Hero && w.tag == 'lib-grid-${nef.path}'),
+        findsOneWidget);
     await tester.pageBack();
     await tester.pumpAndSettle();
 
@@ -2400,8 +2301,10 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('b.mov')));
     await tester.pumpAndSettle();
     expect(find.text('b.mov'), findsWidgets);
-    expect(find.byWidgetPredicate(
-        (w) => w is Hero && w.tag == 'lib-grid-${mov.path}'), findsOneWidget);
+    expect(
+        find.byWidgetPredicate(
+            (w) => w is Hero && w.tag == 'lib-grid-${mov.path}'),
+        findsOneWidget);
     await tester.pageBack();
     await tester.pumpAndSettle();
   });
@@ -2455,8 +2358,7 @@ void main() {
     expect(find.text('a.jpg'), findsWidgets); // 仍在查看器(弹回)
   });
 
-  testWidgets('下拉跟手:拖拽中图片跟手(下移+缩小)、chrome 渐隐,松手弹回复位',
-      (tester) async {
+  testWidgets('下拉跟手:拖拽中图片跟手(下移+缩小)、chrome 渐隐,松手弹回复位', (tester) async {
     useTallSurface(tester);
     File writeReal(String name, DateTime modified) {
       final f = File('${dir.path}/$name');
@@ -2482,8 +2384,8 @@ void main() {
 
     debugPrint('[跟手探针] === 纵拖 ===');
     // 持续拖拽 80px(不过阈值):图片跟手下移 + 缩小;chrome 渐隐。
-    final gesture = await tester.startGesture(
-        tester.getCenter(find.byType(PageView)));
+    final gesture =
+        await tester.startGesture(tester.getCenter(find.byType(PageView)));
     await gesture.moveBy(const Offset(0, 20));
     await tester.pump();
     await gesture.moveBy(const Offset(0, 60));
@@ -2491,8 +2393,7 @@ void main() {
     final during = tester.getRect(hero);
     expect(during.top, greaterThan(rest.top), reason: '跟手下移');
     expect(during.height, lessThan(rest.height), reason: '轻微缩小');
-    expect(
-        find.byWidgetPredicate((w) => w is Opacity && w.opacity < 1),
+    expect(find.byWidgetPredicate((w) => w is Opacity && w.opacity < 1),
         findsWidgets,
         reason: 'chrome 渐隐');
 

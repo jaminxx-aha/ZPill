@@ -89,16 +89,18 @@ docs/                架构文档
 
 ```bash
 flutter pub get
-dart run tools/check_architecture.dart  # core 依赖边界 + 大文件预算
+dart run tools/check_architecture.dart  # core/data/platform 依赖边界 + 大文件预算
 flutter run                  # 连接设备运行
-flutter test                 # 全量单测(2026-10-27 基线:1634 passed / 0 skipped)
+flutter test                 # 全量单测(2026-10-29 基线:1661 passed / 0 skipped)
 
 # HarmonyOS(切到 SIG fork 的 flutter,备好 DevEco SDK / hvigor / ohpm 环境)
 flutter build hap
 ```
 
 发布版本号、Android 环境变量签名和 HarmonyOS 本地签名边界见
-[docs/RELEASE.md](docs/RELEASE.md)。常规 CI 只产出无敏感密钥的 Debug APK。
+[docs/RELEASE.md](docs/RELEASE.md)。常规 CI 产出无敏感密钥的 Android Debug
+APK 并编译 iOS 模拟器 App;HarmonyOS 由自托管专用工作流产出 unsigned
+Debug HAP,Android 设备冒烟另走自托管专用工作流。
 
 ## 测试与开发工具
 

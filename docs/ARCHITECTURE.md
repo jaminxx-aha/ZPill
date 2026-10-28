@@ -164,11 +164,11 @@ channel 命名统一 `zpill/<service>`,完整契约表与三端落地进度见
   我方真 transport/session 走真 TCP 全链路断言,无相机可回归
 - **i18n 闸**:catalog 完整性测试(zh/en 键集与占位符一致)
 - **架构/规模闸**:`dart run tools/check_architecture.dart` 检查 core 框架与
-  平台契约白名单、禁止反向依赖;Dart 文件达到 2000 行必须进入
+  平台契约白名单,并约束 core/data/platform 不得反向依赖上层;Dart 文件达到 2000 行必须进入
   [file_size_budget.txt](../tools/file_size_budget.txt),既有预算只能下降
 - **真机**:协议常量一律探针先行、以真机响应为准回填 Dart 侧;功能就绪
   以「真实数据、端到端跑通」为准
-- 规模:截至 2026-10-27 为 112 个测试文件、1634 passed / 0 skipped
+- 规模:截至 2026-10-29 为 114 个测试文件、1661 passed / 0 skipped
   (`flutter test`)
 
 ## 6. 文档索引

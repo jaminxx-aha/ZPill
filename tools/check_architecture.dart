@@ -49,7 +49,7 @@ void main() {
   final root = File.fromUri(Platform.script).absolute.parent.parent;
   final violations = <String>[];
 
-  _checkCoreImports(root, violations);
+  _checkLayerImports(root, violations);
   _checkFileBudgets(root, violations);
 
   if (violations.isNotEmpty) {
@@ -69,23 +69,27 @@ void main() {
     'architecture: OK '
     '($frameworkEdges framework exceptions, '
     '$contractEdges platform contracts, '
+    '3 layer roots, '
     '$_largeFileThreshold-line budget)',
   );
 }
 
-void _checkCoreImports(Directory root, List<String> violations) {
-  final coreDirectory = Directory('${root.path}/lib/core');
-  if (!coreDirectory.existsSync()) {
-    violations.add('missing lib/core directory');
-    return;
+void _checkLayerImports(Directory root, List<String> violations) {
+  final files = <File>[];
+  for (final layer in const ['core', 'data', 'platform']) {
+    final directory = Directory('${root.path}/lib/$layer');
+    if (!directory.existsSync()) {
+      violations.add('missing lib/$layer directory');
+      continue;
+    }
+    files.addAll(
+      directory
+          .listSync(recursive: true)
+          .whereType<File>()
+          .where((file) => file.path.endsWith('.dart')),
+    );
   }
-
-  final files = coreDirectory
-      .listSync(recursive: true)
-      .whereType<File>()
-      .where((file) => file.path.endsWith('.dart'))
-      .toList()
-    ..sort((a, b) => a.path.compareTo(b.path));
+  files.sort((a, b) => a.path.compareTo(b.path));
 
   for (final file in files) {
     final source = _relative(root, file.path);
@@ -96,7 +100,7 @@ void _checkCoreImports(Directory root, List<String> violations) {
       final importUri = match.group(1)!;
       final line = index + 1;
 
-      if (_isFrameworkImport(importUri)) {
+      if (source.startsWith('lib/core/') && _isFrameworkImport(importUri)) {
         final allowed =
             _frameworkExceptions[source]?.contains(importUri) ?? false;
         if (!allowed) {
@@ -110,11 +114,12 @@ void _checkCoreImports(Directory root, List<String> violations) {
       final target = _resolveImport(root, source, importUri);
       if (target == null) continue;
 
-      if (_isForbiddenLayer(target)) {
+      if (_isForbiddenLayer(source, target)) {
         violations.add('$source:$line imports upward into $target');
       }
 
-      if (target.startsWith('lib/platform/')) {
+      if (source.startsWith('lib/core/') &&
+          target.startsWith('lib/platform/')) {
         final allowed =
             _platformContractExceptions[source]?.contains(target) ?? false;
         if (!allowed) {
@@ -197,17 +202,29 @@ void _checkFileBudgets(Directory root, List<String> violations) {
 bool _isFrameworkImport(String importUri) =>
     importUri.startsWith('package:flutter/') || importUri.startsWith('dart:ui');
 
-bool _isForbiddenLayer(String path) {
-  if (path.startsWith('lib/features/') ||
-      path.startsWith('lib/data/') ||
-      path.startsWith('lib/design/') ||
-      path.startsWith('lib/debug/')) {
+bool _isForbiddenLayer(String source, String target) {
+  if (_isAppLayer(target)) {
     return true;
   }
-  return path == 'lib/app.dart' ||
-      path == 'lib/app_services.dart' ||
-      path.startsWith('lib/app_');
+  if (source.startsWith('lib/data/')) {
+    return target.startsWith('lib/features/') ||
+        target.startsWith('lib/platform/') ||
+        target.startsWith('lib/design/') ||
+        target.startsWith('lib/debug/');
+  }
+  if (source.startsWith('lib/platform/')) {
+    return target.startsWith('lib/features/') ||
+        target.startsWith('lib/data/') ||
+        target.startsWith('lib/design/') ||
+        target.startsWith('lib/debug/');
+  }
+  return false;
 }
+
+bool _isAppLayer(String path) =>
+    path == 'lib/app.dart' ||
+    path == 'lib/app_services.dart' ||
+    path.startsWith('lib/app_');
 
 String? _resolveImport(Directory root, String source, String importUri) {
   const packagePrefix = 'package:z_pill/';

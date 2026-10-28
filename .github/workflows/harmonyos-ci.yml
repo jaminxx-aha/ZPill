@@ -1,0 +1,39 @@
+name: HarmonyOS CI
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: harmonyos-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build debug HAP
+    runs-on: [self-hosted, harmonyos]
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Build debug HAP
+        env:
+          DEVECO_HOME: ${{ vars.DEVECO_HOME }}
+          OHOS_FLUTTER: ${{ vars.OHOS_FLUTTER }}
+          DEVECO_SDK_HOME: ${{ vars.DEVECO_SDK_HOME }}
+          JAVA_HOME: ${{ vars.JAVA_HOME }}
+        run: bash tools/build_ohos_ci.sh
+
+      - name: Upload unsigned debug HAP
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: zpill-debug-unsigned-hap
+          path: build/ohos/hap/entry-default-unsigned.hap
+          if-no-files-found: error
+          retention-days: 7
