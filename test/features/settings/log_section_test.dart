@@ -37,6 +37,19 @@ void main() {
     expect(find.text('暂无日志'), findsOneWidget);
   });
 
+  testWidgets('域过滤:BLE 档只留 ble 域', (tester) async {
+    AppLog.i(AppLog.protocol, 'ptp line');
+    AppLog.e(AppLog.ble, 'ble line');
+
+    await tester.pumpWidget(const MaterialApp(home: LogViewerPage()));
+    expect(find.textContaining('ptp line'), findsOneWidget);
+
+    await tester.tap(find.text('蓝牙'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('ble line'), findsOneWidget);
+    expect(find.textContaining('ptp line'), findsNothing);
+  });
+
   testWidgets('复制全部:剪贴板收到头注 + 全量 dump', (tester) async {
     AppLog.w(AppLog.ble, 'BLE 断连');
     Object? copied;

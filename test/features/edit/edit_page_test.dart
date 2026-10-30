@@ -8,6 +8,7 @@ import 'package:image/image.dart' as img;
 import 'package:z_pill/core/ptpip/object_format.dart' show ObjectKind;
 import 'package:z_pill/features/common/widgets/states.dart';
 import 'package:z_pill/features/edit/edit_page.dart';
+import 'package:z_pill/l10n/l10n.dart';
 import 'package:z_pill/platform/gallery_saver.dart';
 
 final class FakeGallerySaver implements GallerySaver {
@@ -56,7 +57,8 @@ Uint8List _jpeg({int w = 80, int h = 60}) {
   final image = img.Image(width: w, height: h);
   for (var y = 0; y < h; y++) {
     for (var x = 0; x < w; x++) {
-      image.setPixelRgba(x, y, x * 255 ~/ (w - 1), y * 255 ~/ (h - 1), 128, 255);
+      image.setPixelRgba(
+          x, y, x * 255 ~/ (w - 1), y * 255 ~/ (h - 1), 128, 255);
     }
   }
   return Uint8List.fromList(img.encodeJpg(image));
@@ -77,7 +79,10 @@ IconButton _iconButton(WidgetTester tester, IconData icon) =>
     tester.widget<IconButton>(find.widgetWithIcon(IconButton, icon));
 
 bool _saveEnabled(WidgetTester tester) =>
-    _iconButton(tester, Icons.save_outlined).onPressed != null;
+    tester
+        .widget<FilledButton>(find.widgetWithText(FilledButton, '保存'))
+        .onPressed !=
+    null;
 
 bool _resetEnabled(WidgetTester tester) =>
     _iconButton(tester, Icons.restart_alt).onPressed != null;
@@ -105,8 +110,8 @@ Future<void> _pumpPage(
 Future<void> _drainBoot(WidgetTester tester, Finder terminus) async {
   for (var i = 0; i < 50; i++) {
     if (terminus.evaluate().isNotEmpty) return;
-    await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 1)));
+    await tester
+        .runAsync(() => Future<void>.delayed(const Duration(milliseconds: 1)));
     await tester.pump();
   }
   fail('编辑页引导未在窗口预算内落定: $terminus');
@@ -252,7 +257,8 @@ void main() {
 
     tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
       SystemChannels.platform,
-      (call) async => call.method == 'Clipboard.getData' ? {'text': '垃圾'} : null,
+      (call) async =>
+          call.method == 'Clipboard.getData' ? {'text': '垃圾'} : null,
     );
     await tester.tap(find.text('从剪贴板导入 .cube/.xmp'));
     await tester.pump();
@@ -308,7 +314,7 @@ void main() {
     await tester.pump();
     expect(find.text('应用'), findsOneWidget);
 
-    await tester.tap(find.text('取消'));
+    await tester.tap(find.widgetWithText(TextButton, '取消'));
     await tester.pump();
     expect(_saveEnabled(tester), isFalse); // 取消:无参数落下
 
@@ -366,7 +372,7 @@ void main() {
       await tester.pump();
       expect(_saveEnabled(tester), isTrue); // 脏
 
-      await tester.tap(find.byType(BackButton));
+      await tester.tap(find.widgetWithText(OutlinedButton, '取消'));
       await tester.pump();
       expect(find.byType(EditPage), findsOneWidget); // 被拦未退
       expect(find.byType(AlertDialog), findsOneWidget);
@@ -379,7 +385,7 @@ void main() {
       await _pumpPushed(tester, gallery: gallery);
       await tester.tap(find.text('右转 90°'));
       await tester.pump();
-      await tester.tap(find.byType(BackButton));
+      await tester.tap(find.widgetWithText(OutlinedButton, '取消'));
       await tester.pump();
 
       await tester.tap(find.text('放弃'));
@@ -393,10 +399,10 @@ void main() {
       await _pumpPushed(tester, gallery: gallery);
       await tester.tap(find.text('右转 90°'));
       await tester.pump();
-      await tester.tap(find.byType(BackButton));
+      await tester.tap(find.widgetWithText(OutlinedButton, '取消'));
       await tester.pump();
 
-      await tester.tap(find.text('取消'));
+      await tester.tap(find.widgetWithText(TextButton, '取消'));
       await tester.pumpAndSettle();
       expect(find.byType(AlertDialog), findsNothing);
       expect(find.byType(EditPage), findsOneWidget);
@@ -416,7 +422,7 @@ void main() {
 
       // await 落点后先泵一帧再交互(工程规律:直接 tap 会静默丢)。
       await tester.pump();
-      await tester.tap(find.byType(BackButton));
+      await tester.tap(find.widgetWithText(OutlinedButton, '取消'));
       await tester.pumpAndSettle();
       expect(find.byType(AlertDialog), findsNothing); // 不弹确认
       expect(find.byType(EditPage), findsNothing); // 直接退出
@@ -523,5 +529,55 @@ void main() {
     expect(p.r, inInclusiveRange(193, 223));
     expect(p.g, inInclusiveRange(81, 111));
     expect(p.b, inInclusiveRange(33, 63));
+  });
+  testWidgets('字号 1.3:编辑页工具条/旋转面板不溢出', (tester) async {
+    final gallery = FakeGallerySaver();
+    addTearDown(() {
+      if (gallery.root.existsSync()) gallery.root.deleteSync(recursive: true);
+    });
+    await tester.pumpWidget(MaterialApp(
+      home: Builder(
+        builder: (context) => MediaQuery(
+          data: MediaQuery.of(context)
+              .copyWith(textScaler: const TextScaler.linear(1.3)),
+          child: EditPage(
+            jpeg: _jpeg(),
+            filename: 'DSC_1234.jpg',
+            gallery: gallery,
+          ),
+        ),
+      ),
+    ));
+    await tester.pump();
+    await _drainBoot(tester, find.byType(Image));
+    expect(tester.takeException(), isNull, reason: '编辑页 1.3x');
+    expect(find.text('翻转'), findsOneWidget);
+  });
+
+  testWidgets('320 英文:旋转面板三等分不溢出(长标签缩放)', (tester) async {
+    tester.view
+      ..physicalSize = const Size(320, 568)
+      ..devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    final gallery = FakeGallerySaver();
+    addTearDown(() {
+      if (gallery.root.existsSync()) gallery.root.deleteSync(recursive: true);
+    });
+    await tester.pumpWidget(L10nScope(
+      code: 'en',
+      child: MaterialApp(
+        home: EditPage(
+          jpeg: _jpeg(),
+          filename: 'DSC_1234.jpg',
+          gallery: gallery,
+        ),
+      ),
+    ));
+    await tester.pump();
+    await _drainBoot(tester, find.byType(Image));
+    expect(tester.takeException(), isNull, reason: 'Rotate Left/Right 长标签');
+    expect(find.text('Rotate Left 90°'), findsOneWidget);
+    expect(find.text('Rotate Right 90°'), findsOneWidget);
+    expect(find.text('Flip'), findsOneWidget);
   });
 }

@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -417,6 +418,79 @@ void main() {
           home: Scaffold(body: FramingOverlay(aspect: null))));
       expect(tester.takeException(), isNull,
           reason: 'aspect null = 不遮幅,安全框/中心标照画(默认关则空层)');
+    });
+  });
+
+  group('wrapHalfTurn:俯仰半圈折返(2026-10-30 raw=3 pitch 翻 180° 根修)', () {
+    const d2r = math.pi / 180;
+    double deg(double rad) => rad / d2r;
+
+    test('机身倒置:176.5° 折回 -3.5°;正常姿态原样不动', () {
+      expect(deg(wrapHalfTurn(176.5 * d2r)), closeTo(-3.5, 1e-9));
+      expect(deg(wrapHalfTurn(-4.9 * d2r)), closeTo(-4.9, 1e-9));
+      expect(wrapHalfTurn(0), 0);
+    });
+
+    test('折返边界:±90° 保留,越界折到另一侧', () {
+      expect(deg(wrapHalfTurn(90 * d2r)), closeTo(90, 1e-9));
+      expect(deg(wrapHalfTurn(100 * d2r)), closeTo(-80, 1e-9));
+      expect(deg(wrapHalfTurn(-100 * d2r)), closeTo(80, 1e-9));
+      expect(deg(wrapHalfTurn(359 * d2r)), closeTo(-1, 1e-9));
+    });
+  });
+
+  group('levelSegments:水平仪线段几何(纯函数,2026-10-30 raw=3 出框根修)', () {
+    // 真机口径的取景矩形(402pt 屏宽,画面底边让出控制区后的显示区)。
+    const area = Rect.fromLTWH(7, 0, 388, 690);
+    final diag =
+        math.sqrt(area.width * area.width + area.height * area.height);
+
+    test('横线:参考线满跨取景横轴;俯仰上下移,线仍横跨全宽', () {
+      final seg = levelSegments(area: area, angleRad: 0, pitchRad: 1.3);
+      expect(seg.refStart, const Offset(7, 345));
+      expect(seg.refEnd, const Offset(395, 345));
+      // 1.3 rad × 120 ≈ 156pt:中线下移,仍钳在取景内。
+      expect(seg.midY, closeTo(area.center.dy + 156, 1e-9));
+      expect(seg.horizonStart.dy, closeTo(seg.midY, 1e-9));
+      expect(seg.horizonEnd.dy, closeTo(seg.midY, 1e-9));
+      // 两端都伸出取景左右边 → 裁剪后贴满取景宽,不留空隙。
+      expect(seg.horizonStart.dx, lessThanOrEqualTo(area.left));
+      expect(seg.horizonEnd.dx, greaterThanOrEqualTo(area.right));
+    });
+
+    test('侧躺竖线:俯仰走法向左右移,不沿自身滑动(raw=3 真机绿线越出根修)', () {
+      // 旧实现把 +156 一律加在 y 上:竖线沿着自己滑动,端点被推出
+      // 取景底边(真机落到了曝光条和快门键上)。
+      final seg =
+          levelSegments(area: area, angleRad: math.pi / 2, pitchRad: 1.3);
+      // 竖线中点 y 不随俯仰变,而是左右横移。
+      expect(seg.midY, closeTo(area.center.dy, 1e-9));
+      expect(seg.horizonStart.dx, closeTo(area.center.dx - 156, 1e-6));
+      expect(seg.horizonEnd.dx, closeTo(area.center.dx - 156, 1e-6));
+      // 两端伸出取景上下边 → 裁剪后贴满取景高,不留空隙也不出框。
+      expect(seg.horizonStart.dy, lessThanOrEqualTo(area.top));
+      expect(seg.horizonEnd.dy, greaterThanOrEqualTo(area.bottom));
+      // 侧躺时参考线随内容轴取竖轴。
+      expect(seg.refStart, Offset(area.center.dx, area.top));
+      expect(seg.refEnd, Offset(area.center.dx, area.bottom));
+    });
+
+    test('大俯仰/任意角度:中点钳在取景内,两端对角长度外可裁出满跨', () {
+      for (final angle in [0.3, 1.0, 2.0, 4.0]) {
+        final seg =
+            levelSegments(area: area, angleRad: angle, pitchRad: 9);
+        final mid = Offset(
+            (seg.horizonStart.dx + seg.horizonEnd.dx) / 2,
+            (seg.horizonStart.dy + seg.horizonEnd.dy) / 2);
+        expect(area.inflate(1e-6).contains(mid), isTrue,
+            reason: 'angle=$angle 中点越出取景');
+        expect((seg.horizonStart - mid).distance,
+            greaterThanOrEqualTo(diag - 1e-6),
+            reason: 'angle=$angle 起点不够长');
+        expect((seg.horizonEnd - mid).distance,
+            greaterThanOrEqualTo(diag - 1e-6),
+            reason: 'angle=$angle 终点不够长');
+      }
     });
   });
 }

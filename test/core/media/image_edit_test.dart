@@ -14,7 +14,8 @@ img.Image _gradient(int w, int h) {
   final image = img.Image(width: w, height: h);
   for (var y = 0; y < h; y++) {
     for (var x = 0; x < w; x++) {
-      image.setPixelRgba(x, y, x * 255 ~/ (w - 1), y * 255 ~/ (h - 1), 128, 255);
+      image.setPixelRgba(
+          x, y, x * 255 ~/ (w - 1), y * 255 ~/ (h - 1), 128, 255);
     }
   }
   return image;
@@ -93,8 +94,7 @@ void main() {
     expect(ccw.top, closeTo(r.top, 1e-9));
 
     // 顺一次再逆一次 = 恒等
-    final roundTrip =
-        rotateRectCounterClockwise(rotateRectClockwise(r));
+    final roundTrip = rotateRectCounterClockwise(rotateRectClockwise(r));
     expect(roundTrip.left, closeTo(r.left, 1e-9));
     expect(roundTrip.top, closeTo(r.top, 1e-9));
     expect(roundTrip.bottom, closeTo(r.bottom, 1e-9));
@@ -111,8 +111,7 @@ void main() {
     image.setPixelRgba(0, 0, 255, 0, 0, 255);
     image.setPixelRgba(3, 0, 0, 0, 255, 255);
 
-    final out = applyEditToImage(
-        image, const PhotoEdit(rotationQuarter: 1));
+    final out = applyEditToImage(image, const PhotoEdit(rotationQuarter: 1));
     expect(out.width, 2);
     expect(out.height, 4);
     expect(out.getPixel(1, 0).r, 255); // 红到右上
@@ -140,8 +139,7 @@ void main() {
 
     final gray = applyEditToImage(
       image,
-      const PhotoEdit(
-          adjustments: EditAdjustments(saturation: 0)),
+      const PhotoEdit(adjustments: EditAdjustments(saturation: 0)),
     );
     final p = gray.getPixel(0, 0);
     expect(p.r, p.g);
@@ -149,11 +147,9 @@ void main() {
 
     final bright = applyEditToImage(
       image,
-      const PhotoEdit(
-          adjustments: EditAdjustments(brightness: 1.5)),
+      const PhotoEdit(adjustments: EditAdjustments(brightness: 1.5)),
     );
-    expect(bright.getPixel(0, 0).r,
-        greaterThan(p.r + 10));
+    expect(bright.getPixel(0, 0).r, greaterThan(p.r + 10));
   });
 
   test('暖调:正暖阴影偏暖(红升蓝降),负暖反向', () {
@@ -163,14 +159,11 @@ void main() {
       image.setPixelRgba(1, 0, 60, 60, 60, 255);
       return image;
     }
+
     final warm = applyEditToImage(
-        mk(),
-        const PhotoEdit(
-            adjustments: EditAdjustments(warmth: 1)));
+        mk(), const PhotoEdit(adjustments: EditAdjustments(warmth: 1)));
     final cool = applyEditToImage(
-        mk(),
-        const PhotoEdit(
-            adjustments: EditAdjustments(warmth: -1)));
+        mk(), const PhotoEdit(adjustments: EditAdjustments(warmth: -1)));
     final w = warm.getPixel(0, 0);
     final c = cool.getPixel(0, 0);
     expect(w.r, greaterThan(w.b));
@@ -178,14 +171,13 @@ void main() {
   });
 
   test('LUT:inverts 表插值反色', () {
-    final invert = CubeLut.fromFunction(
-        'inv', 3, (r, g, b) => [1 - r, 1 - g, 1 - b]);
+    final invert =
+        CubeLut.fromFunction('inv', 3, (r, g, b) => [1 - r, 1 - g, 1 - b]);
     final image = img.Image(width: 3, height: 1);
     image.setPixelRgba(0, 0, 255, 0, 0, 255);
     image.setPixelRgba(1, 0, 0, 255, 0, 255);
     image.setPixelRgba(2, 0, 0, 0, 255, 255);
-    final out = applyEditToImage(
-        image, PhotoEdit(lut: invert));
+    final out = applyEditToImage(image, PhotoEdit(lut: invert));
     expect(out.getPixel(0, 0).r, lessThan(10));
     expect(out.getPixel(0, 0).b, greaterThan(240));
     expect(out.getPixel(1, 0).g, lessThan(10)); // 绿 → 品红
@@ -195,7 +187,8 @@ void main() {
   test('LUT 恒等表:烘焙链逐像素字节相等(零改动语义)', () {
     // 保存链经 applyEditToImage 逐像素查表;恒等表必须原样往返,
     // 锁死「LUT 为 null 时零改动」之外的第二层零改动语义。
-    final identity = CubeLut.fromFunction('identity', 2, (r, g, b) => [r, g, b]);
+    final identity =
+        CubeLut.fromFunction('identity', 2, (r, g, b) => [r, g, b]);
     final src = _gradient(64, 32);
     final out = applyEditToImage(src, PhotoEdit(lut: identity));
     expect(out.width, 64);
@@ -230,11 +223,13 @@ void main() {
 
   test('applyEdit:非 JPEG 原样直返;旋转可解码输出', () {
     final notJpeg = Uint8List.fromList(List.filled(64, 7));
-    expect(identical(applyEdit(notJpeg, const PhotoEdit(rotationQuarter: 2)), notJpeg),
+    expect(
+        identical(
+            applyEdit(notJpeg, const PhotoEdit(rotationQuarter: 2)), notJpeg),
         isTrue);
 
-    final rotated =
-        applyEdit(_jpeg(_gradient(40, 30)), const PhotoEdit(rotationQuarter: 1));
+    final rotated = applyEdit(
+        _jpeg(_gradient(40, 30)), const PhotoEdit(rotationQuarter: 1));
     final decoded = img.decodeJpg(rotated)!;
     expect(decoded.width, 30);
     expect(decoded.height, 40);
@@ -295,8 +290,7 @@ void main() {
     expect(withFilm.copyWith(clearFilmPreset: true).isNeutral, isTrue);
   });
 
-  test('applyEdit:胶片矩阵烘焙进 JPEG 产物(徕卡黑白 → 灰,容差区间)',
-      () {
+  test('applyEdit:胶片矩阵烘焙进 JPEG 产物(徕卡黑白 → 灰,容差区间)', () {
     final preset = filmPresets.firstWhere((p) => p.id == 'leicaMonochrome');
     final image = img.Image(width: 40, height: 30);
     for (var y = 0; y < 30; y++) {
@@ -321,5 +315,26 @@ void main() {
     final out = applyEdit(jpeg, const PhotoEdit(rotationQuarter: 1));
     final card = exifCardDataOf(readJpegExif(out)!);
     expect(card.takenAt, isNotNull);
+  });
+  test('applyEdit:水平镜像左右互换,裁剪框同步镜像', () {
+    final image = img.Image(width: 4, height: 2);
+    for (var y = 0; y < 2; y++) {
+      for (var x = 0; x < 4; x++) {
+        final left = x < 2;
+        image.setPixelRgba(x, y, left ? 255 : 0, 0, left ? 0 : 255, 255);
+      }
+    }
+    final out = applyEditToImage(
+        image,
+        const PhotoEdit(
+          flipHorizontal: true,
+          cropRect: Rect.fromLTRB(0, 0, 0.5, 1),
+        ));
+    // 先镜像,原左半裁剪框同步镜像到右半(现在是红)。
+    expect(out.width, 2);
+    final p = out.getPixel(0, 0);
+    expect(p.r, greaterThan(200));
+    expect(p.b, lessThan(40));
+    expect(const PhotoEdit(flipHorizontal: true).isNeutral, isFalse);
   });
 }

@@ -17,7 +17,8 @@ void main() {
   setUp(() {
     dir = Directory.systemTemp.createTempSync('zpill_smoke');
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(MethodChannelGallerySaver.channel,
+        .setMockMethodCallHandler(
+            MethodChannelGallerySaver.channel,
             (call) async => switch (call.method) {
                   'dataDir' || 'previewsDir' || 'downloadsDir' => dir.path,
                   _ => null,
@@ -56,8 +57,8 @@ void main() {
     // 帧上 —— 逐窗排水到收口(单例跨用例保值,首用例排水后续直通)。
     final transfers = AppServices.instance.transfersController;
     for (var i = 0; i < 20 && !transfers.appFilesScanned; i++) {
-      await tester
-          .runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)));
       await tester.pump();
     }
     await tester.pumpAndSettle();
@@ -69,10 +70,9 @@ void main() {
     expect(find.text('相机'), findsWidgets); // AppBar 标题 + 底部 tab
     // 状态行常驻(2026-10-19 改版):圆点+状态词;「当前方式」字样
     // 整删,说明藏方式行 ⓘ 后;方式入口收进右上角弹层。
-    expect(find.text('未连接'), findsOneWidget);
-    expect(find.text('有线'), findsOneWidget); // 方式行(五轮;默认方式 = 有线)
-    expect(find.text('连接相机'), findsNothing); // 中央连接钮退役(五轮:点图标连接)
-    expect(find.text('当前方式:有线'), findsNothing);
+    expect(find.text('未连接'), findsOneWidget); // 状态行
+    expect(find.text('有线'), findsOneWidget, reason: 'AppBar 方式位(默认 USB/有线)');
+    expect(find.text('连接相机'), findsNothing, reason: '旧版 hero 图标即连接钮,无中央文字钮');
     expect(find.text('扫描相机'), findsNothing); // 扫描钮退役(STA 自动扫)
   });
 
@@ -86,8 +86,8 @@ void main() {
     await tester.tap(find.text('图库'));
     await tester.pumpAndSettle();
     expect(find.text('图库'), findsWidgets); // AppBar + tab
-    expect(find.text('应用内还没有文件\n(在相机相册里选择「下载到应用」)'),
-        findsOneWidget);
+    expect(find.textContaining('应用内还没有文件'), findsOneWidget);
+    expect(find.textContaining('下载到应用'), findsOneWidget);
   });
 
   testWidgets('设置 tab:配置项在场', (tester) async {
@@ -99,5 +99,17 @@ void main() {
     expect(find.text('自动传输(速传)'), findsOneWidget);
     expect(find.text('水印'), findsOneWidget);
     expect(find.text('语言'), findsOneWidget); // i18n 第一期(2026-10-14)
+  });
+  testWidgets('系统字号 1.3:三 tab 与设置页不溢出', (tester) async {
+    tester.platformDispatcher.textScaleFactorTestValue = 1.3;
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+    await boot(tester);
+    expect(tester.takeException(), isNull, reason: '相机首页 1.3x');
+    await tester.tap(find.text('图库'));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull, reason: '图库 1.3x');
+    await tester.tap(find.text('设置'));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull, reason: '设置 1.3x');
   });
 }

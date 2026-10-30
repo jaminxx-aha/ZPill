@@ -27,6 +27,53 @@ abstract final class AppColors {
   static const successLight = Color(0xFF1B7A45);
   static const successDark = Color(0xFF2EC76B);
 
+  // ── 第 2/3 轮设计语义别名(只增量,不改现有 ColorScheme) ─────────
+  // 管理页两级次级文字;R2 明确区分 ink2 与 muted,现有 scheme 只有
+  // onSurfaceVariant 一档。
+  static const ink2Light = Color(0xFF4F493F);
+  static const mutedLight = Color(0xFF7C7365);
+  static const ink2Dark = Color(0xFFCFC5B4);
+  static const mutedDark = Color(0xFFA49988);
+
+  /// 选中底的柔黄(浅色药丸/工具条)与柔黄上的深字。
+  static const amberSoftLight = Color(0xFFF6E3B8);
+  static const amberSoftDark = Color(0xFF4B3C1C);
+  static const amberInkLight = Color(0xFF2B2300);
+  static const amberInkDark = Color(0xFF221B00);
+
+  /// 信息蓝(相机/BLE/STA 工具),不参与主操作琥珀语义。
+  static const infoLight = Color(0xFF3E6F8E);
+  static const infoDark = Color(0xFF7FA8C2);
+
+  /// 警告面(过热/风险提示),与错误红分开。
+  static const warningContainerLight = Color(0xFFF8DCD4);
+  static const warningInkLight = Color(0xFF4A130B);
+  static const warningContainerDark = Color(0xFF4F2119);
+  static const warningInkDark = Color(0xFFF8D9D0);
+
+  static Color ink2(BuildContext context) =>
+      Theme.of(context).brightness == Brightness.dark ? ink2Dark : ink2Light;
+  static Color muted(BuildContext context) =>
+      Theme.of(context).brightness == Brightness.dark ? mutedDark : mutedLight;
+  static Color amberSoft(BuildContext context) =>
+      Theme.of(context).brightness == Brightness.dark
+          ? amberSoftDark
+          : amberSoftLight;
+  static Color amberInk(BuildContext context) =>
+      Theme.of(context).brightness == Brightness.dark
+          ? amberInkDark
+          : amberInkLight;
+  static Color info(BuildContext context) =>
+      Theme.of(context).brightness == Brightness.dark ? infoDark : infoLight;
+  static Color warningContainer(BuildContext context) =>
+      Theme.of(context).brightness == Brightness.dark
+          ? warningContainerDark
+          : warningContainerLight;
+  static Color warningInk(BuildContext context) =>
+      Theme.of(context).brightness == Brightness.dark
+          ? warningInkDark
+          : warningInkLight;
+
   static Color success(BuildContext context) =>
       Theme.of(context).brightness == Brightness.dark
           ? successDark

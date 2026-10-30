@@ -57,7 +57,6 @@ import '../../core/media/video_duration.dart';
 import '../../core/media/xmp_rgb_table.dart' show parseXmpRgbTable;
 import '../../core/ptpip/object_format.dart';
 import '../../design/app_colors.dart';
-import '../../design/app_dimens.dart';
 import '../../l10n/l10n.dart';
 import '../../platform/gallery_saver.dart';
 import '../../platform/raw_decoder.dart';
@@ -74,8 +73,8 @@ import '../common/widgets/hero_zoom.dart';
 import '../common/widgets/pull_away.dart';
 import '../common/widgets/photo_info_sheet.dart';
 import '../common/widgets/states.dart';
-import '../transfers/transfers_page.dart';
 import 'library_ratings.dart';
+import '../transfers/transfers_page.dart';
 import 'lut_export_sheet.dart';
 
 part 'local_library_viewer.dart';
@@ -485,7 +484,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
 
   /// 格首帧小档路径(同步解析,build 热路径直用):优先就绪表
   /// ([_resolvedThumbs],命中再验一次存在 —— cache 盘被系统回收时自动
-  /// 出表),未记过才探盘上双档(libv4hi_ 优先,与 [_decodeNefThumb] 的
+  /// 出表),未记过才探盘上双档(libv5hi_ 优先,与 [_decodeNefThumb] 的
   /// 「hi 优先」同口径),探中回填就绪表。全 miss 回 null = 原图源
   /// (首显原图是既有行为,小档生成完 gapless 换档)。
   ///
@@ -501,11 +500,11 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
       if (File(known).existsSync()) return known;
       _resolvedThumbs.remove(key); // 盘档被回收:出表,重探双档
     }
-    final hi = File('$dir/libv4hi_$key.jpg');
+    final hi = File('$dir/libv5hi_$key.jpg');
     if (hi.existsSync()) {
       return _resolvedThumbs[key] = hi.path;
     }
-    final small = File('$dir/libv4_$key.jpg');
+    final small = File('$dir/libv5_$key.jpg');
     if (small.existsSync()) {
       return _resolvedThumbs[key] = small.path;
     }
@@ -513,15 +512,15 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
   }
 
   /// NEF 网格缩略快车道:内嵌 160×120 缩略就地装配(IFD0 头读 + 缩略
-  /// 段读两次小 IO,毫秒级)→ 落 libv4_ 小档上格,顺手排 LibRaw 升级
+  /// 段读两次小 IO,毫秒级)→ 落 libv5_ 小档上格,顺手排 LibRaw 升级
   /// 档;无内嵌缩略(异常头/截断件)才排队走旧链(LibRaw 512 → 内嵌
   /// 兜底)。返回值永不抛(失败回 null 交负缓存,不毒化串行链)。
   Future<String?> _decodeNefThumb(File file, String key) async {
     try {
       final dir = await _gallery.thumbsDir();
-      final hi = File('$dir/libv4hi_$key.jpg');
+      final hi = File('$dir/libv5hi_$key.jpg');
       if (hi.existsSync()) return hi.path; // 升级档已就位:直给
-      final small = File('$dir/libv4_$key.jpg');
+      final small = File('$dir/libv5_$key.jpg');
       if (small.existsSync()) {
         _scheduleNefHi(file, key, dir); // 旧会话小档:补排升级
         return small.path;
@@ -546,7 +545,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
   }
 
   /// NEF 升级档排程(每键本会话一次):串行链上 LibRaw 512 真解码 →
-  /// libv4hi_ 落盘 → 记忆表出键 + 通知重建(下次 build 缓存命中换 hi
+  /// libv5hi_ 落盘 → 记忆表出键 + 通知重建(下次 build 缓存命中换 hi
   /// 档)。失败静默:内嵌小档继续顶着,不重试。链尾吞错(队列消费者
   /// 依赖链不抛)。
   void _scheduleNefHi(File file, String key, String dir) {
@@ -560,7 +559,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
     try {
       final jpeg = await _rawDecoder.decodeJpeg(file.path, maxPixelSize: 512);
       final trimmed = await trimLetterboxJpeg(jpeg) ?? jpeg;
-      await File('$dir/libv4hi_$key.jpg').writeAsBytes(trimmed, flush: true);
+      await File('$dir/libv5hi_$key.jpg').writeAsBytes(trimmed, flush: true);
       unawaited(_mediaThumbs.remove(key));
       _negThumbAt.remove(key);
       _thumbUpgrades.fire();
@@ -575,7 +574,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
     try {
       final dir = await _gallery.thumbsDir();
       final cache = File(
-          '$dir/libv4_$key.jpg'); // 键全量升版:NEF 缩略 LibRaw 真解码(旧 libv3_ 是内嵌缩略糊图)
+          '$dir/libv5_$key.jpg'); // 键全量升版:NEF 缩略 LibRaw 真解码(旧 libv3_ 是内嵌缩略糊图)
       if (cache.existsSync()) return cache.path;
       Uint8List jpeg;
       if (isVideoFilename(name)) {
@@ -608,7 +607,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
           if (embedded == null) {
             // HIF:伴生预览诊断(键位/在否),容器排障唯一观测面。
             if (isHeifFilename(name)) {
-              final companion = File('$dir/libv4_$key.jpg');
+              final companion = File('$dir/libv5_$key.jpg');
               AppLog.w(AppLog.browser,
                   'HIF 缩略解码失败:${companion.path} exists=${companion.existsSync()}');
             }
@@ -617,8 +616,11 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
           jpeg = injectJpegOrientation(embedded.jpeg, embedded.orientation);
         }
       }
-      // 信箱黑边裁剪(HIF/NEF 预览同样信箱化;无黑边原样)。
-      final trimmed = await trimLetterboxJpeg(jpeg);
+      // 信箱黑边裁剪只对固定画布预览(NEF/HIF/视频);普通 JPG 的
+      // 黑边是画面内容,裁了会让缩略图与原图不同比、进查看器回缩。
+      final needsTrim =
+          isVideoFilename(name) || isRawFilename(name) || isHeifFilename(name);
+      final trimmed = needsTrim ? await trimLetterboxJpeg(jpeg) : null;
       cache.writeAsBytesSync(trimmed ?? jpeg, flush: true);
       return cache.path;
     } on Object {
@@ -647,8 +649,6 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
         // stat 走缓存(见 _statOf),进度事件高频重建不逐文件摸盘。
         final files = sortMedia(List<File>.of(_controller.appFiles), _sort,
             (f) => (_statOf(f).$1, _nameOf(f), _statOf(f).$2));
-        final activeCount =
-            _controller.tasks.where((t) => !t.isTerminal).length;
         final filtered = _filtered(files);
         return Scaffold(
           appBar: AppBar(
@@ -656,11 +656,14 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
             // 标签同槽(左 16px)。centerTitle false 无 leading 时标题从
             // 默认 titleSpacing(24)起,须显式收窄。(设置页三十轮起
             // 唯一显式居中;二十九轮全局居中误扩当日收回。)
-            centerTitle: false,
-            titleSpacing: AppSpacing.lg,
-            title: Text(_selectMode
-                ? context.t('grid.selectedCount', {'n': _selected.length})
-                : context.t('shell.gallery')),
+            centerTitle: true,
+            title: Text(
+                _selectMode
+                    ? context.t('grid.selectedCount', {'n': _selected.length})
+                    : context.t('shell.gallery'),
+                // 2026-10-30:顶栏标题与相机页「相机」同字号
+                // (titleLarge),三 tab 统一。
+                style: Theme.of(context).textTheme.titleLarge),
             actions: [
               if (_selectMode) ...[
                 IconButton(
@@ -674,8 +677,6 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
                   icon: const Icon(Icons.close),
                 ),
               ] else ...[
-                // 传输徽标:进行中任务数角标,点击进传输页看任务列表。
-                _transfersBadge(context, activeCount),
                 _filterMenuAnchor(context),
                 const SizedBox(width: 8),
               ],
@@ -1065,42 +1066,6 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
       _selected.clear();
     });
     unawaited(_savePrefs());
-  }
-
-  Widget _transfersBadge(BuildContext context, int activeCount) {
-    return Stack(
-      alignment: Alignment.center,
-      children: [
-        IconButton(
-          tooltip: context.t('transfers.title'),
-          onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute<void>(builder: (_) => const TransfersPage())),
-          icon: const Icon(Icons.swap_vert),
-        ),
-        if (activeCount > 0)
-          Positioned(
-            top: 6,
-            right: 4,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-              decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.error,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              constraints: const BoxConstraints(minWidth: 14),
-              child: Text(
-                '$activeCount',
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 9,
-                  height: 1.4,
-                ),
-              ),
-            ),
-          ),
-      ],
-    );
   }
 
   /// 可点进查看器:Flutter 可解码图片 / HIF·NEF 原生解码 / MOV 原生

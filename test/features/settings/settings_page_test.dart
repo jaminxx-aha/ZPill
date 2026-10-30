@@ -20,7 +20,8 @@ void main() {
   setUp(() {
     dir = Directory.systemTemp.createTempSync('zpill_settings');
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(MethodChannelGallerySaver.channel,
+        .setMockMethodCallHandler(
+            MethodChannelGallerySaver.channel,
             (call) async => switch (call.method) {
                   'dataDir' || 'previewsDir' || 'downloadsDir' => dir.path,
                   _ => null,
@@ -58,14 +59,30 @@ void main() {
     // 帧上 —— 逐窗排水到收口(单例跨用例保值,首用例排水后续直通)。
     final transfers = AppServices.instance.transfersController;
     for (var i = 0; i < 20 && !transfers.appFilesScanned; i++) {
-      await tester
-          .runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)));
       await tester.pump();
     }
     await tester.pumpAndSettle();
     await tester.tap(find.text('设置'));
     await tester.pumpAndSettle();
   }
+
+  testWidgets('四组卡片小节标题在场(设置重排口径)', (tester) async {
+    await boot(tester);
+
+    for (final title in const [
+      '拍摄与监看',
+      '传输与存储',
+      '应用与外观',
+      '设备与诊断',
+    ]) {
+      expect(find.text(title), findsOneWidget, reason: '第 4 轮分组: $title');
+    }
+    // 字号=真实系统缩放读数行(无假动作);后台传输无数据支撑,仍缺席。
+    expect(find.text('字号'), findsOneWidget);
+    expect(find.text('后台传输'), findsNothing);
+  });
 
   testWidgets('文本框:点空白散焦收键盘,输入随焦点离开落库', (tester) async {
     await boot(tester);
@@ -92,9 +109,8 @@ void main() {
   testWidgets('深色模式:三段切换即时改 themeMode 并落库', (tester) async {
     await boot(tester);
 
-    ThemeMode appMode() => tester
-        .widget<MaterialApp>(find.byType(MaterialApp))
-        .themeMode!;
+    ThemeMode appMode() =>
+        tester.widget<MaterialApp>(find.byType(MaterialApp)).themeMode!;
     // 语言行(2026-10-14)的 system 段也叫「跟随系统」:主题行的点按
     // 限定在主题 SegmentedButton 内,避免二义。
     Finder themeSeg(String label) => find.descendant(
@@ -119,8 +135,7 @@ void main() {
     expect(appMode(), ThemeMode.system);
   });
 
-  testWidgets('语言:三段切换即时落库,t() 经真实 scope 翻转,locale 跟随',
-      (tester) async {
+  testWidgets('语言:三段切换即时落库,t() 经真实 scope 翻转,locale 跟随', (tester) async {
     await boot(tester);
 
     Finder langSeg(String label) => find.descendant(
@@ -128,8 +143,7 @@ void main() {
         matching: find.text(label));
     Locale? appLocale() =>
         tester.widget<MaterialApp>(find.byType(MaterialApp)).locale;
-    String scopeCode() =>
-        tester.widget<L10nScope>(find.byType(L10nScope)).code;
+    String scopeCode() => tester.widget<L10nScope>(find.byType(L10nScope)).code;
 
     // 默认中文:选择器显示原文;locale 锁 zh。
     expect(AppServices.instance.settingsController.settings.language,

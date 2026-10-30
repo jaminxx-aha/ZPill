@@ -34,7 +34,10 @@ final class _PageEngine implements TransferEngine {
   @override
   Future<void> removeRecord(String taskId) async {
     removed.add(taskId);
-    emit([for (final t in snapshot) if (t.id != taskId) t]);
+    emit([
+      for (final t in snapshot)
+        if (t.id != taskId) t
+    ]);
   }
 
   @override
@@ -81,8 +84,8 @@ void main() {
         TransfersController(engine: engine, gallery: _FakeGallery());
     addTearDown(controller.dispose);
 
-    await tester.pumpWidget(
-        MaterialApp(home: TransfersPage(controller: controller)));
+    await tester
+        .pumpWidget(MaterialApp(home: TransfersPage(controller: controller)));
     engine.emit([
       // 入队序 t1(旧)→ t2(新);t3 还在跑。
       _completed('t1', DateTime(2026, 10, 24, 9, 0, 10),
@@ -102,11 +105,15 @@ void main() {
     await tester.pump();
 
     final titles = tester
-        .widgetList<ListTile>(find.byType(ListTile))
-        .map((t) => (t.title! as Text).data)
+        .widgetList<Text>(find.byType(Text))
+        .map((t) => t.data)
+        .whereType<String>()
         .toList();
-    expect(titles, ['C.JPG', 'B.JPG', 'A.JPG'],
-        reason: '进行中置顶,历史按下载时间倒序(新在前)');
+    expect(titles, containsAll(<String>['C.JPG', 'B.JPG', 'A.JPG']),
+        reason: '三行都在树上(文件名仍为行标题)');
+    double topOf(String name) => tester.getTopLeft(find.text(name)).dy;
+    expect(topOf('C.JPG'), lessThan(topOf('B.JPG')), reason: '进行中置顶');
+    expect(topOf('B.JPG'), lessThan(topOf('A.JPG')), reason: '历史按下载时间倒序(新在前)');
 
     // B 行数据行:下载时间 · 大小 · 耗时 · 速度(200KB/5s = 0.0MB/s 起底)。
     final meta = tester
@@ -124,8 +131,8 @@ void main() {
         TransfersController(engine: engine, gallery: _FakeGallery());
     addTearDown(controller.dispose);
 
-    await tester.pumpWidget(
-        MaterialApp(home: TransfersPage(controller: controller)));
+    await tester
+        .pumpWidget(MaterialApp(home: TransfersPage(controller: controller)));
     engine.emit([
       _completed('t1', DateTime(2026, 10, 24, 9, 0, 10),
           startedAt: DateTime(2026, 10, 24, 9, 0), downloadMs: 4000),
@@ -155,14 +162,76 @@ void main() {
     expect(engine.removed, ['t1']);
   });
 
+  testWidgets('过滤档:计数与真实筛选(全部/处理中/完成/失败)', (tester) async {
+    final engine = _PageEngine();
+    final controller =
+        TransfersController(engine: engine, gallery: _FakeGallery());
+    addTearDown(controller.dispose);
+
+    await tester
+        .pumpWidget(MaterialApp(home: TransfersPage(controller: controller)));
+    engine.emit([
+      _completed('t1', DateTime(2026, 10, 24, 9, 0, 10)),
+      _completed('t2', DateTime(2026, 10, 24, 10, 0, 10)),
+      TransferTask(
+        id: 't3',
+        handle: 3,
+        filename: 'RUN.JPG',
+        totalBytes: 100,
+        destination: TransferDestination.app,
+        state: TransferState.running,
+        receivedBytes: 50,
+      ),
+      TransferTask(
+        id: 't4',
+        handle: 4,
+        filename: 'FAIL.MOV',
+        totalBytes: 1000,
+        destination: TransferDestination.gallery,
+        state: TransferState.failed,
+        receivedBytes: 400,
+        attempts: 2,
+        finishedAt: DateTime(2026, 10, 24, 11, 0),
+      ),
+    ]);
+    await tester.pump();
+
+    expect(find.text('全部 4'), findsOneWidget);
+    expect(find.text('处理中 1'), findsOneWidget);
+    expect(find.text('完成 2'), findsOneWidget);
+    expect(find.text('失败 1'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('transfer-filter-failed')));
+    await tester.pumpAndSettle();
+    expect(find.text('FAIL.MOV'), findsOneWidget);
+    expect(find.text('RUN.JPG'), findsNothing);
+    expect(find.text('A.JPG'), findsNothing);
+
+    await tester.tap(find.byKey(const ValueKey('transfer-filter-completed')));
+    await tester.pumpAndSettle();
+    expect(find.text('A.JPG'), findsOneWidget);
+    expect(find.text('B.JPG'), findsOneWidget);
+    expect(find.text('FAIL.MOV'), findsNothing);
+
+    await tester.tap(find.byKey(const ValueKey('transfer-filter-active')));
+    await tester.pumpAndSettle();
+    expect(find.text('RUN.JPG'), findsOneWidget);
+    expect(find.text('A.JPG'), findsNothing);
+
+    await tester.tap(find.byKey(const ValueKey('transfer-filter-all')));
+    await tester.pumpAndSettle();
+    expect(find.text('FAIL.MOV'), findsOneWidget);
+    expect(find.text('RUN.JPG'), findsOneWidget);
+  });
+
   testWidgets('空表:空态文案仍在(持久化清空后同口径)', (tester) async {
     final engine = _PageEngine();
     final controller =
         TransfersController(engine: engine, gallery: _FakeGallery());
     addTearDown(controller.dispose);
 
-    await tester.pumpWidget(
-        MaterialApp(home: TransfersPage(controller: controller)));
+    await tester
+        .pumpWidget(MaterialApp(home: TransfersPage(controller: controller)));
     engine.emit(const []);
     await tester.pump();
 

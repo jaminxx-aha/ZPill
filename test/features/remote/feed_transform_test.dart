@@ -18,8 +18,8 @@ void main() {
 
   group('FeedTransform 几何', () {
     test('无画面 = 恒等变换,逆映射 null', () {
-      final t = FeedTransform(
-          imageSize: Size.zero, boxSize: const Size(800, 600));
+      final t =
+          FeedTransform(imageSize: Size.zero, boxSize: const Size(800, 600));
       expect(t.hasImage, isFalse);
       expect(t.screenToNorm(const Offset(10, 10)), isNull);
       expect(t.imageRectToScreen(const Rect.fromLTWH(0, 0, 4, 4)), Rect.zero);
@@ -73,8 +73,7 @@ void main() {
       // 顺时针一圈换角:图像左上 (0,0) → 屏幕右上 (625, 0);图像
       // 左下 (0,24) → 屏幕左上 (175, 0)。rotateZ 的 cos(π/2) 非
       // 精确 0,角点对账用容差。
-      Offset corner(Offset p) =>
-          MatrixUtils.transformPoint(m, p);
+      Offset corner(Offset p) => MatrixUtils.transformPoint(m, p);
       expect(corner(const Offset(0, 0)).dx, closeTo(625, 1e-9));
       expect(corner(const Offset(0, 0)).dy, closeTo(0, 1e-9));
       expect(corner(const Offset(0, 24)).dx, closeTo(175, 1e-9));
@@ -178,6 +177,32 @@ void main() {
     });
   });
 
+  group('取景底对齐(2026-10-30:底边到曝光条 = 曝光条到快门)', () {
+    test('放得下:底边贴 bottomContentInset 上限,上方留空', () {
+      // 4:1 → 600×150;底让 60 → 可用 240;顶 90、底 240。
+      final t = FeedTransform(
+          imageSize: const Size(4, 1),
+          boxSize: const Size(600, 300),
+          bottomContentInset: 60,
+          bottomAlign: true);
+      expect(t.displayRect.top, 90);
+      expect(t.displayRect.bottom, 240);
+      expect(t.displayRect.height, 150);
+    });
+
+    test('高画幅:先缩进可用高,底边仍贴上限,整帧不越界', () {
+      final t = FeedTransform(
+          imageSize: const Size(1, 4),
+          boxSize: const Size(300, 300),
+          bottomContentInset: 60,
+          bottomAlign: true);
+      // 可用 300×240 → contain 60 → 60×240;顶 0、底 240。
+      expect(t.displayRect.top, 0);
+      expect(t.displayRect.bottom, 240);
+      expect(t.displayRect.height, 240);
+    });
+  });
+
   group('逆映射', () {
     FeedTransform t({
       int quarter = 0,
@@ -214,8 +239,7 @@ void main() {
       ];
       for (final c in cases) {
         for (final p in samples) {
-          final screen =
-              MatrixUtils.transformPoint(c.imageToScreen, p);
+          final screen = MatrixUtils.transformPoint(c.imageToScreen, p);
           final back = c.screenToNorm(screen)!;
           // 逆矩阵有浮点误差,角点对账用容差
           expect(back.dx, closeTo(p.dx / 640, 1e-6),
@@ -235,10 +259,8 @@ void main() {
       final lb = FeedTransform(
           imageSize: const Size(640, 480), boxSize: const Size(800, 400));
       expect(lb.displayRect.left, closeTo(400 / 3, 0.01));
-      expect(lb.screenToNorm(const Offset(50, 200)), isNull,
-          reason: '画面左缘外');
-      expect(lb.screenToNorm(const Offset(750, 200)), isNull,
-          reason: '画面右缘外');
+      expect(lb.screenToNorm(const Offset(50, 200)), isNull, reason: '画面左缘外');
+      expect(lb.screenToNorm(const Offset(750, 200)), isNull, reason: '画面右缘外');
       final edge = lb.screenToNorm(const Offset(400 / 3, 200));
       expect(edge!.dx, closeTo(0, 1e-9), reason: '角点恰在画面上:含在画面内');
       expect(edge.dy, closeTo(0.5, 1e-9));
@@ -250,8 +272,7 @@ void main() {
       // quarter 0:框 (288,192)-(352,288)(中心 320,240)→ 屏幕中心
       // (400,300),尺寸 64×96 × fitScale(800/640 = 1.25)= 80×120。
       final c = t();
-      expect(
-          c.imageRectToScreen(const Rect.fromLTWH(288, 192, 64, 96)),
+      expect(c.imageRectToScreen(const Rect.fromLTWH(288, 192, 64, 96)),
           const Rect.fromLTWH(360, 240, 80, 120));
       // quarter 1:宽高对调 → 96·s × 64·s。640×480 内容转置 480×640
       // 在 800×600:fitScale = 600/640 = 0.9375,displayRect =

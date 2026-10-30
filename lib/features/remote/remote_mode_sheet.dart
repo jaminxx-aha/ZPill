@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../l10n/l10n.dart';
+import 'glass_sheet.dart';
 import 'live_design.dart';
 import 'remote_controller.dart';
 import 'remote_param_sheet.dart' show TakeoverSection;
@@ -17,10 +18,8 @@ Future<void> showModeTakeoverSheet(
     BuildContext context, RemoteController controller,
     {required CaptureMode target}) async {
   var enabling = false;
-  await showModalBottomSheet<void>(
+  await showGlassModalSheet<void>(
     context: context,
-    backgroundColor: LiveDesign.of(context).surface,
-    showDragHandle: true,
     builder: (sheetContext) => SafeArea(
       child: AnimatedBuilder(
         animation: controller,

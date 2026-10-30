@@ -23,6 +23,7 @@
 /// 被快门柱占用 → 页面传 bottomRight)。
 library;
 
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart' show ValueListenable;
@@ -43,6 +44,17 @@ import 'live_view_overlays.dart';
 import 'monitor_toggles.dart';
 import 'remote_banner.dart';
 import 'remote_controller.dart';
+
+/// 内容角 → 画面旋转后的屏幕角(顺时针 quarter 圈)。直方图基角 =
+/// 内容右下、示波器基角 = 内容左下;画面侧躺时位置随内容一起转,
+/// 而不是永远钉屏幕右下/左下(2026-10-30 用户定案)。
+Alignment rotateOverlayCorner(Alignment a, int quarter) =>
+    switch (quarter % 4) {
+      1 => Alignment(-a.y, a.x), // 顺时针 90°
+      2 => Alignment(-a.x, -a.y),
+      3 => Alignment(a.y, -a.x),
+      _ => a,
+    };
 
 class RemoteFeedArea extends StatefulWidget {
   const RemoteFeedArea({
@@ -185,7 +197,7 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea>
         widget.controller.engine.header.value?.rotationRaw ?? 0);
     if (quarter == _headerQuarter) return;
     _headerQuarter = quarter;
-    if (_settings.value.autoRotateFeed) setState(() {});
+    setState(() {});
   }
 
   void _handleTapUp(TapUpDetails d, FeedTransform t) {
@@ -264,6 +276,19 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea>
           ? Size.zero
           : Size(fs.width.toDouble(), fs.height.toDouble());
       final settings = _settings.value;
+      // 2026-10-30 用户定案:相机横持(raw=0)时额外转 90°(画面更大);
+      // 相机竖持(raw 1/2/3)保持 autoRotate 的转正结果,不额外旋转。
+      // 触控对焦/AF 框随同一变换旋转。
+      // 额外 90° 只看缓存的自动转正 quarter(与画面同一来源):
+      // 偶数 quarter(0=横持 / 2=横持倒置)才补 90°;竖持 1/3 不补。
+      // header 当前值为空/滞后时也不会出现「画面正、叠层多转」。
+      final extraQuarter = _headerQuarter.isEven ? 1 : 0;
+      // 自动转正固定开启(2026-10-30 用户定案移除开关);画面显示
+      // quarter = header 转正 + 相机横持额外 90°。
+      final quarter = (_headerQuarter + extraQuarter) % 4;
+      // 叠层跟“画面内容最终朝向”:自动转正把画面转回正立时不再跟着
+      // 转,只有横持侧躺的那 90° 才跟(2026-10-30 定案图 A/B/C)。
+      final overlayQuarter = extraQuarter;
       // 监看 LUT:选中即自动走高质量渲染管线(仅 shader 路径能查表;
       // 设备不支持时 ShaderFeed 自行回落,无 LUT 但画面照常)。
       final lut = monitorLutOf(settings);
@@ -273,11 +298,29 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea>
         fit: widget.fit,
         // 旋转四分之一圈数由 header 监听沿缓存(_onHeaderQuarter):
         // 逐帧头对象不再触发整树 setState,旋转真翻转才重建。
-        quarter: settings.autoRotateFeed ? _headerQuarter : 0,
+        quarter: quarter,
         deSqueeze: settings.deSqueeze,
         zoom: _zoom,
         pan: _pan,
+        // 画面底边贴控制区上沿(2026-10-30 用户定案:取景底边到
+        // 曝光条的距离 = 曝光条到快门的距离),不再垂直居中。
+        bottomContentInset: widget.bottomInset,
+        bottomAlign: true,
       );
+      Widget placeOverlay(Alignment corner, Widget child) {
+        final rect = t.displayRect;
+        return Positioned(
+          left: corner.x < 0 ? rect.left + 8 : null,
+          right: corner.x > 0 ? boxSize.width - rect.right + 8 : null,
+          top: corner.y < 0 ? rect.top + 8 : null,
+          bottom: corner.y > 0
+              ? math.max(
+                  widget.bottomInset + 8, boxSize.height - rect.bottom + 8)
+              : null,
+          child: child,
+        );
+      }
+
       return GestureDetector(
         // opaque:letterbox 空白区点按也收下(不落穿透),出界点
         // screenToNorm 回 null —— 不挪对焦框(2026-10-16 用户定案)。
@@ -513,7 +556,13 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea>
                           onPressed: controller.enableTakeoverAndRetryLiveView,
                           style: FilledButton.styleFrom(
                             foregroundColor: live.bad,
-                            textStyle: const TextStyle(fontSize: 13),
+                            // 按钮 textStyle 是整组替换而非并入 textTheme:
+                            // 不补字体族会落系统字体(harness 里显 Ahem)。
+                            textStyle: const TextStyle(
+                              fontFamily: 'InterBadge',
+                              fontFamilyFallback: ['NotoSansSC'],
+                              fontSize: 13,
+                            ),
                           ),
                           icon:
                               const Icon(Icons.screen_lock_portrait, size: 16),
@@ -524,7 +573,11 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea>
                           onPressed: controller.toggleLiveView,
                           style: TextButton.styleFrom(
                             foregroundColor: live.bad,
-                            textStyle: const TextStyle(fontSize: 13),
+                            textStyle: const TextStyle(
+                              fontFamily: 'InterBadge',
+                              fontFamilyFallback: ['NotoSansSC'],
+                              fontSize: 13,
+                            ),
                           ),
                           icon: Icon(Icons.refresh, size: 16, color: live.bad),
                           label: Text(context.t('live.retry')),
@@ -559,39 +612,52 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea>
                 ),
               ),
             if (widget.toggles.histogram)
-              Align(
-                alignment: Alignment.bottomLeft,
-                child: Padding(
-                  padding: EdgeInsets.fromLTRB(8, 8, 8, 8 + widget.bottomInset),
+              placeOverlay(
+                rotateOverlayCorner(Alignment.bottomRight, overlayQuarter),
+                // 直方图钉在内容右下角,随画面内容朝向旋转。
+                RotatedBox(
+                  quarterTurns: overlayQuarter,
                   child: ValueListenableBuilder(
                     valueListenable: controller.analyzer.analysis,
                     builder: (context, FrameAnalysis? analysis, _) =>
-                        HistogramView(analysis: analysis),
+                        HistogramView(
+                      analysis: analysis,
+                      width:
+                          (boxSize.width * 0.38).clamp(120.0, 160.0).toDouble(),
+                    ),
                   ),
                 ),
               ),
-            // 示波器族(波形/RGB Parade/矢量/红绿灯四选一):与直方图
-            // 同锚(左下),双开时上移让位(直方图盒 64 + 贴边 8 + 间隙 4;
-            // 红绿灯盒 58 较矮,同让位口径从简,不差那 4px)。
+            // 示波器族(波形/RGB Parade/矢量/红绿灯四选一):2026-10-30
+            // 重排 —— 与直方图分居底部两角(右直方图/左示波器),不再
+            // 竖排叠放;两者同时开启也互不遮挡。
             if (widget.toggles.scope != ScopeKind.off)
-              Align(
-                alignment: Alignment.bottomLeft,
-                child: Padding(
-                  padding: EdgeInsets.fromLTRB(
-                      8,
-                      8,
-                      8,
-                      8 +
-                          widget.bottomInset +
-                          (widget.toggles.histogram ? 76 : 0)),
+              placeOverlay(
+                rotateOverlayCorner(Alignment.bottomLeft, overlayQuarter),
+                // 示波器钉在内容左下角,随画面内容朝向旋转。
+                RotatedBox(
+                  quarterTurns: overlayQuarter,
                   child: ValueListenableBuilder(
                     valueListenable: controller.analyzer.analysis,
                     // 红绿灯带标签由 TrafficLightsView 自行 t() 落地。
-                    builder: (context, FrameAnalysis? analysis, _) => ScopeView(
-                      kind: widget.toggles.scope,
-                      analysis: analysis,
-                      nLogScale: widget.toggles.scopeNLog,
-                    ),
+                    builder: (context, FrameAnalysis? analysis, _) {
+                      final size =
+                          (boxSize.width * 0.38).clamp(120.0, 160.0).toDouble();
+                      // 示波器盒与直方图同尺寸,内容按比例缩进盒内。
+                      return SizedBox(
+                        width: size,
+                        height: size / 2,
+                        child: FittedBox(
+                          fit: BoxFit.contain,
+                          child: ScopeView(
+                            kind: widget.toggles.scope,
+                            analysis: analysis,
+                            nLogScale: widget.toggles.scopeNLog,
+                            width: size,
+                          ),
+                        ),
+                      );
+                    },
                   ),
                 ),
               ),
@@ -647,9 +713,18 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea>
                   return LevelOverlay(
                     orientation: MotionOrientation(
                       // 帧头角为相机视角、度;符号换算待真机核对。
-                      pitchRad: level.signedPitch * d2r,
+                      // pitch 随机身倒置一并翻到 ~180°(roll≈180 时同样
+                      // 水平的姿态报 176.5°),折回半圈才是真实前后倾 ——
+                      // 原样用会把水平线顶到取景边缘(2026-10-30 真机
+                      // raw=3 用户报「和实际不一致」)。
+                      pitchRad: wrapHalfTurn(level.signedPitch * d2r),
                       rollRad: -level.signedRoll * d2r,
                     ),
+                    // 水平仪角度来自相机原始坐标,要叠加画面总旋转
+                    // (自动转正 + 额外 90°)才落到屏幕方向(真机数据:
+                    // 竖持 roll≈±90°,总 quarter 归零后才是横线)。
+                    quarterTurns: quarter,
+                    bounds: t.displayRect,
                   );
                 },
               ),

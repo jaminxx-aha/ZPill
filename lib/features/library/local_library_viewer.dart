@@ -202,14 +202,14 @@ class _LibraryViewerState extends State<_LibraryViewer>
           final safe = name.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
           final key = '${safe}_${file.lengthSync()}';
           final dir = await widget.gallery.thumbsDir();
-          final bytes = await File('$dir/libv4_$key.jpg').readAsBytes();
+          final bytes = await File('$dir/libv5_$key.jpg').readAsBytes();
           if (bytes.isNotEmpty) return bytes;
         } on Object {
           // 落到底:原样上抛
         }
       }
       if (!isRawFilename(_nameOf(file))) rethrow;
-      // 网格升级档优先(libv4hi_ = LibRaw 512 真解码,比内嵌 160×120
+      // 网格升级档优先(libv5hi_ = LibRaw 512 真解码,比内嵌 160×120
       // 清晰):LibRaw 大图解码失败时多半 512 档也失败,但升级档在场
       // 就用。无升级档回内嵌缩略装配(方向注入 + 黑边裁剪)。
       try {
@@ -217,7 +217,7 @@ class _LibraryViewerState extends State<_LibraryViewer>
         final safe = name.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
         final key = '${safe}_${file.lengthSync()}';
         final dir = await widget.gallery.thumbsDir();
-        return await File('$dir/libv4hi_$key.jpg').readAsBytes();
+        return await File('$dir/libv5hi_$key.jpg').readAsBytes();
       } on Object {
         // 无升级档:落回内嵌缩略
       }
@@ -347,15 +347,19 @@ class _LibraryViewerState extends State<_LibraryViewer>
         widget.heroTag != null &&
         widget.heroImage != null &&
         widget.heroThumbPath != null;
-    Widget zoomHero(Widget child, {bool aspectBox = false}) => hero
-        ? HeroZoom(
-            tag: widget.heroTag!,
-            thumbPath: widget.heroThumbPath!,
-            deSqueeze: AppServices.instance.settingsController.value.deSqueeze,
-            aspectBox: aspectBox,
-            child: child,
-          )
-        : child;
+    Widget zoomHero(Widget child,
+            {bool aspectBox = false, String? imagePath}) =>
+        hero
+            ? HeroZoom(
+                tag: widget.heroTag!,
+                thumbPath: widget.heroThumbPath!,
+                imagePath: imagePath,
+                deSqueeze:
+                    AppServices.instance.settingsController.value.deSqueeze,
+                aspectBox: aspectBox,
+                child: child,
+              )
+            : child;
     if (isVideoFilename(name)) {
       // 动效锚:海报显示位上挂透明 Hero(aspectBox 盒 = 海报 contain
       // 显示位);可见海报层铺满(contain 绘制)同位,航班落点即显示位,
@@ -406,7 +410,9 @@ class _LibraryViewerState extends State<_LibraryViewer>
                 ? Stack(fit: StackFit.expand, children: [
                     Image(
                       image: widget.heroImage!,
-                      fit: BoxFit.contain,
+                      // 与航班梭子同 cover:落点收梭子时缩略层不换 fit,
+                      // 避免 contain/cover 切换造成「突然缩小」。
+                      fit: BoxFit.cover,
                       gaplessPlayback: true,
                       excludeFromSemantics: true,
                       errorBuilder: (_, __, ___) => const SizedBox.shrink(),
@@ -415,6 +421,7 @@ class _LibraryViewerState extends State<_LibraryViewer>
                   ])
                 : _nativeBody(file),
             aspectBox: true,
+            imagePath: file.path,
           ),
         ),
       );
@@ -432,7 +439,9 @@ class _LibraryViewerState extends State<_LibraryViewer>
                 ? Stack(fit: StackFit.expand, children: [
                     Image(
                       image: widget.heroImage!,
-                      fit: BoxFit.contain,
+                      // 与航班梭子同 cover:落点收梭子时缩略层不换 fit,
+                      // 避免 contain/cover 切换造成「突然缩小」。
+                      fit: BoxFit.cover,
                       gaplessPlayback: true,
                       excludeFromSemantics: true,
                       errorBuilder: (_, __, ___) => const SizedBox.shrink(),
@@ -441,6 +450,7 @@ class _LibraryViewerState extends State<_LibraryViewer>
                   ])
                 : _imageBody(file),
             aspectBox: true,
+            imagePath: file.path,
           ),
         ),
       );
@@ -474,45 +484,47 @@ class _LibraryViewerState extends State<_LibraryViewer>
   Widget _nativeBody(File file) => FutureBuilder<Uint8List>(
         future: _decodeFor(file),
         builder: (context, snap) {
-          if (snap.hasData) {
-            return DeSqueezedImage(
-              image: MemoryImage(snap.data!),
-              deSqueeze:
-                  AppServices.instance.settingsController.value.deSqueeze,
-              errorBuilder: (context, error, stackTrace) => const Icon(
-                Icons.broken_image_outlined,
-                color: AppMedia.onMediaSubtle,
-                size: 48,
-              ),
-            );
-          }
-          if (snap.hasError) {
-            return Padding(
-              padding: const EdgeInsets.all(24),
-              child: Text(
-                context.t('libpage.decodeFailed'),
-                textAlign: TextAlign.center,
-                style: TextStyle(color: AppMedia.onMediaSubtle),
-              ),
-            );
-          }
-          // 解码中(LibRaw 45MP 硬成本秒级):磁盘缩略垫底 —— 网格刚
-          // 产出的 512 真解码图秒开不转圈,大图解完原位换清(_warmNeighbors
-          // 已预热,正常路径缩略都在盘上);无缩略(深链冷启)才转圈。
+          // 缩略图常驻垫底、原生大图就位后原位盖上 —— 换子树会出空帧,
+          // HIF 读档时表现为「模糊→闪一下→清晰」。无缩略(深链冷启)
+          // 才转圈。
           return FutureBuilder<String?>(
             future: widget.thumbFor(file),
             builder: (context, thumbSnap) {
-              final path = thumbSnap.data;
-              if (thumbSnap.hasData && path != null) {
-                return Image.file(
-                  File(path),
-                  fit: BoxFit.contain,
-                  gaplessPlayback: true,
-                  errorBuilder: (context, error, stackTrace) =>
-                      const CircularProgressIndicator(),
+              final path = thumbSnap.hasData ? thumbSnap.data : null;
+              final Widget thumb = path != null
+                  ? Image.file(
+                      File(path),
+                      fit: BoxFit.contain,
+                      gaplessPlayback: true,
+                      errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                    )
+                  : (snap.hasData
+                      ? const SizedBox.shrink()
+                      : const CircularProgressIndicator());
+              if (snap.hasError) {
+                return Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Text(
+                    context.t('libpage.decodeFailed'),
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: AppMedia.onMediaSubtle),
+                  ),
                 );
               }
-              return const CircularProgressIndicator();
+              if (!snap.hasData) return thumb;
+              return Stack(fit: StackFit.expand, children: [
+                thumb,
+                DeSqueezedImage(
+                  image: MemoryImage(snap.data!),
+                  deSqueeze:
+                      AppServices.instance.settingsController.value.deSqueeze,
+                  errorBuilder: (context, error, stackTrace) => const Icon(
+                    Icons.broken_image_outlined,
+                    color: AppMedia.onMediaSubtle,
+                    size: 48,
+                  ),
+                ),
+              ]);
             },
           );
         },
@@ -827,7 +839,7 @@ class _VideoPlayPageState extends State<_VideoPlayPage> {
   }
 }
 
-/// NEF 升级档换图通知(libv4hi_ 落盘沿 fire;网格 ListenableBuilder
+/// NEF 升级档换图通知(libv5hi_ 落盘沿 fire;网格 ListenableBuilder
 /// 合并监听,重建沿 _thumbFor 重查换 hi 档)。裸 ChangeNotifier 的
 /// notifyListeners 是 protected,子类包一层。
 class _ThumbUpgrades extends ChangeNotifier {

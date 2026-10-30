@@ -40,7 +40,7 @@ class CaptureControlRow extends StatelessWidget {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          _focusButton(context, live, controller),
+          CaptureFocusButton(controller: controller, size: 54),
           _shutterButton(context, live, controller, mode: mode),
           CaptureCircleButton(
             icon: Icons.tune,
@@ -111,7 +111,7 @@ class CaptureShutterColumn extends StatelessWidget {
         const SizedBox(height: 8),
         _shutterButton(context, live, controller, mode: mode),
         const SizedBox(height: 8),
-        _focusButton(context, live, controller),
+        CaptureFocusButton(controller: controller, size: 54),
         const SizedBox(height: 8),
         AlbumThumbButton(controller: controller, onTap: onOpenAlbum),
       ],
@@ -130,13 +130,17 @@ class CaptureCircleButton extends StatelessWidget {
     required this.icon,
     this.tooltip,
     this.onTap,
-    this.size = 54,
+    this.size = 48,
+    this.active = false,
   });
 
   final IconData icon;
   final String? tooltip;
   final VoidCallback? onTap;
   final double size;
+
+  /// 有状态键(如 APP 接管)的激活态:同一图标染金,不换形。
+  final bool active;
 
   @override
   Widget build(BuildContext context) {
@@ -152,15 +156,17 @@ class CaptureCircleButton extends StatelessWidget {
           customBorder: const CircleBorder(),
           child: Icon(
             icon,
-            size: 22,
-            color: onTap == null ? live.faint : live.text,
+            size: size >= 54 ? 22 : 20,
+            color: onTap == null
+                ? live.faint
+                : active
+                    ? live.accent
+                    : live.text,
           ),
         ),
       ),
     );
-    return tooltip == null
-        ? button
-        : Tooltip(message: tooltip!, child: button);
+    return tooltip == null ? button : Tooltip(message: tooltip!, child: button);
   }
 }
 
@@ -171,36 +177,73 @@ class CaptureCircleButton extends StatelessWidget {
 /// 不可能 —— 旧「对焦中禁点」把提示路堵死,点按哑掉,用户不明所以);
 /// 未连接/未开取景/机身 MF 档灰化(控制器拦截是第二道,这里先不给出
 /// 可点姿态)。
-Widget _focusButton(BuildContext context, LivePalette live, RemoteController controller) {
-  final usable = controller.linkUp &&
-      controller.liveViewActive &&
-      !controller.focusModeIsMf;
-  return Tooltip(
-    message: context.t('remote.autofocus'),
-    child: SizedBox(
-      width: 54,
-      height: 54,
-      child: Material(
-        color: live.glass,
-        shape: CircleBorder(side: BorderSide(color: live.hairline)),
-        child: InkWell(
-          onTap: usable ? controller.afDriveNow : null,
-          customBorder: const CircleBorder(),
-          child: Center(
-            child: controller.focusing
-                ? SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(
-                        strokeWidth: 2.2, color: live.accent),
-                  )
-                : Icon(Icons.center_focus_strong,
-                    size: 22, color: usable ? live.text : live.faint),
+class CaptureFocusButton extends StatelessWidget {
+  const CaptureFocusButton({
+    super.key,
+    required this.controller,
+    this.size = 48,
+  });
+
+  final RemoteController controller;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final live = LiveDesign.of(context);
+    final usable = controller.linkUp &&
+        controller.liveViewActive &&
+        !controller.focusModeIsMf;
+    return Tooltip(
+      message: context.t('remote.autofocus'),
+      child: SizedBox(
+        width: size,
+        height: size,
+        child: Material(
+          color: live.glass,
+          shape: CircleBorder(side: BorderSide(color: live.hairline)),
+          child: InkWell(
+            onTap: usable ? controller.afDriveNow : null,
+            customBorder: const CircleBorder(),
+            child: Center(
+              child: controller.focusing
+                  ? SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2.2, color: live.accent),
+                    )
+                  : Icon(Icons.center_focus_strong,
+                      size: 20, color: usable ? live.text : live.faint),
+            ),
           ),
         ),
       ),
-    ),
-  );
+    );
+  }
+}
+
+/// 快门钮独立入口(新底部五键/右缘竖列)。逻辑仍在 [_shutterButton],
+/// 只把尺寸参数化:竖屏 72/80/88/94、横屏 72,不再写死 78。
+class CaptureShutterButton extends StatelessWidget {
+  const CaptureShutterButton({
+    super.key,
+    required this.controller,
+    required this.mode,
+    this.size = 88,
+  });
+
+  final RemoteController controller;
+  final CaptureMode mode;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) => _shutterButton(
+        context,
+        LiveDesign.of(context),
+        controller,
+        mode: mode,
+        size: size,
+      );
 }
 
 /// 快门钮(OpenZCine PhotographyShutterButton 同款,2026-10-10
@@ -216,10 +259,9 @@ Widget _focusButton(BuildContext context, LivePalette live, RemoteController con
 /// 方块且保持全不透明(停录要醒目)。取景开启是录像前置(toggleRecord
 /// 的门,提前到视觉层降透明)。尺寸两向同 78(2026-10-12 用户定案
 /// 「横屏按钮保持和竖屏大小一样」,原横屏 64 废除)。
-Widget _shutterButton(BuildContext context, LivePalette live,
-    RemoteController controller,
-    {required CaptureMode mode}) {
-  const size = 78.0;
+Widget _shutterButton(
+    BuildContext context, LivePalette live, RemoteController controller,
+    {required CaptureMode mode, double size = 78}) {
   final photo = mode == CaptureMode.photo;
   // 照片档:间隔拍摄运行中让位(灰化;调度器按间隔驱动快门,手动
   // 按下/按住会被控制器拒并提示)。
@@ -285,11 +327,13 @@ Widget _shutterButton(BuildContext context, LivePalette live,
                 child: photo
                     ? (controller.selfTimerCountdown != null
                         ? _shutterCountdown(
-                            context, '${controller.selfTimerCountdown}',
+                            context,
+                            '${controller.selfTimerCountdown}',
                             'remote.countdownDelay',
                             color: live.onAccent)
                         : controller.bulbExposureCountdown != null
-                            ? _shutterCountdown(context,
+                            ? _shutterCountdown(
+                                context,
                                 '${controller.bulbExposureCountdown}',
                                 'remote.countdownExposure',
                                 color: Colors.white)
@@ -298,8 +342,7 @@ Widget _shutterButton(BuildContext context, LivePalette live,
                                     width: 22,
                                     height: 22,
                                     child: CircularProgressIndicator(
-                                        strokeWidth: 2.4,
-                                        color: live.onAccent),
+                                        strokeWidth: 2.4, color: live.onAccent),
                                   )
                                 : null)
                     : (rec
@@ -328,11 +371,11 @@ Widget _shutterCountdown(BuildContext context, String value, String labelKey,
     {required Color color}) {
   return Column(mainAxisSize: MainAxisSize.min, children: [
     Text(value,
-        style: TextStyle(
-            fontSize: 24, fontWeight: FontWeight.bold, color: color)),
+        style:
+            TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: color)),
     Text(context.t(labelKey),
-        style: TextStyle(
-            fontSize: 10, fontWeight: FontWeight.w600, color: color)),
+        style:
+            TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: color)),
   ]);
 }
 
@@ -341,12 +384,14 @@ Widget _shutterCountdown(BuildContext context, String value, String labelKey,
 /// —— 拍完即看)。竖屏底行左端(2026-10-12 自控制行迁出)与横屏快门
 /// 柱底共用。
 class AlbumThumbButton extends StatelessWidget {
-  const AlbumThumbButton({super.key, required this.controller, this.onTap});
+  const AlbumThumbButton(
+      {super.key, required this.controller, this.onTap, this.size = 48});
 
   final RemoteController controller;
 
   /// 点按 → 打开相机相册(页面侧路由);null 置灰。
   final VoidCallback? onTap;
+  final double size;
 
   @override
   Widget build(BuildContext context) {
@@ -355,11 +400,15 @@ class AlbumThumbButton extends StatelessWidget {
     return Tooltip(
       message: context.t('conn.cameraAlbum'),
       child: SizedBox(
-        width: 54,
-        height: 54,
+        width: size,
+        height: size,
         child: Material(
           color: live.glass,
-          shape: CircleBorder(side: BorderSide(color: live.hairline)),
+          shape: CircleBorder(
+            side: BorderSide(
+                color: thumb != null ? live.accent : live.hairline,
+                width: thumb != null ? 2 : 1),
+          ),
           child: InkWell(
             onTap: onTap,
             customBorder: const CircleBorder(),
@@ -368,7 +417,7 @@ class AlbumThumbButton extends StatelessWidget {
                     child: Image.memory(thumb,
                         fit: BoxFit.cover, gaplessPlayback: true))
                 : Icon(Icons.photo_library_outlined,
-                    size: 22, color: live.text),
+                    size: 20, color: live.text),
           ),
         ),
       ),

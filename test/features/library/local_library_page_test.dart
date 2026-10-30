@@ -1071,34 +1071,6 @@ void main() {
     await tester.pumpAndSettle();
   });
 
-  testWidgets('传输徽标:进行中任务数角标;点击进传输页', (tester) async {
-    final gallery = _FakeGallery(dir);
-    final engine = _FakeEngine();
-    final controller = TransfersController(engine: engine, gallery: gallery);
-    await tester.pumpWidget(host(gallery, controller));
-    await drainAppFiles(tester, controller);
-    expect(find.text('1'), findsNothing); // 无任务无角标
-
-    engine.tasksCtrl.add([
-      const TransferTask(
-          id: 't1',
-          handle: 1,
-          filename: 'DSC_0001.JPG',
-          totalBytes: 100,
-          destination: TransferDestination.app,
-          state: TransferState.running,
-          receivedBytes: 10),
-    ]);
-    await tester.pump();
-    expect(find.text('1'), findsOneWidget); // 徽标亮起
-
-    await tester.tap(find.byIcon(Icons.swap_vert));
-    await tester.pumpAndSettle();
-    // 传输页(真单例控制器,任务列表空态)
-    expect(find.text('传输'), findsOneWidget);
-    expect(find.text('暂无传输任务\n(在相机相册里多选或大图页单张下载)'), findsOneWidget);
-  });
-
   // ── NEF/视频可看可点(2026-10-09 补齐:原生格式不再只落图标格) ──
 
   testWidgets('NEF:网格缩略解码落盘,点进查看器解码大图', (tester) async {
@@ -1111,7 +1083,7 @@ void main() {
     await drainAppFiles(tester, controller);
 
     // 网格缩略:512px 解码一次(会话内合并),落盘 thumbsDir
-    // (内容键 + libv4_ 前缀,不与相机侧缩略键串台;键全量升版 = 黑边裁剪放开到全部缩略)。
+    // (内容键 + libv5_ 前缀,不与相机侧缩略键串台;键全量升版 = 黑边裁剪放开到全部缩略)。
     // NEF 先走快车道内嵌缩略提取(真 IO,FakeAsync 逐窗排水),3 字节
     // 假档无内嵌缩略 → 回落串行链 512 解码。
     var decoded = false;
@@ -1123,7 +1095,7 @@ void main() {
     }
     expect(decoder.calls, [('${dir.path}/c.nef', 512)]);
     expect(
-        File('${gallery.thumbs.path}/libv4_c.nef_3.jpg').existsSync(), isTrue);
+        File('${gallery.thumbs.path}/libv5_c.nef_3.jpg').existsSync(), isTrue);
 
     // 点 NEF 格进查看器:标题 + 2560px 全尺寸解码(假 JPEG 解不开走
     // errorBuilder,Image 组件在即可)。格键 = 文件名(缩略解码后
@@ -1179,7 +1151,7 @@ void main() {
     // 与 NEF 同管线:格缩略 512px 解码一次,落盘 thumbsDir(libv3 键)。
     expect(decoder.calls, [('${dir.path}/c.hif', 512)]);
     expect(
-        File('${gallery.thumbs.path}/libv4_c.hif_3.jpg').existsSync(), isTrue);
+        File('${gallery.thumbs.path}/libv5_c.hif_3.jpg').existsSync(), isTrue);
 
     // 点 HIF 格进查看器:标题 + 2560px 全尺寸解码(假 JPEG 解不开走
     // errorBuilder,Image 组件在即可)。两枚 Image = 300px 防黑闪垫底 +
@@ -1236,7 +1208,7 @@ void main() {
     await tester.pumpWidget(host(gallery, controller));
     await drainAppFiles(tester, controller);
 
-    final cache = File('${gallery.thumbs.path}/libv4_c.nef_${nef.length}.jpg');
+    final cache = File('${gallery.thumbs.path}/libv5_c.nef_${nef.length}.jpg');
     // 缩略串行链内嵌缩略提取是真 IO(RandomAccessFile 头读/段读):
     // FakeAsync 域完成回调只在 runAsync 出窗上浮,逐窗排水至小档落盘。
     var written = false;
@@ -1258,7 +1230,7 @@ void main() {
   testWidgets('NEF 有解码器:内嵌小档快车道即显,LibRaw 升级档后台换图', (tester) async {
     // 两档制(2026-10-25 真机复报「NEF 半天加载不出来」):小档 = 内嵌
     // 缩略就地装配(不占串行链、不调解码器),大档 = LibRaw 512 串行链
-    // 后台升级(libv4hi_),落盘沿通知重建换图。
+    // 后台升级(libv5hi_),落盘沿通知重建换图。
     final jpeg =
         Uint8List.fromList(img.encodeJpg(img.Image(width: 4, height: 4)));
     final nef = nefWithEmbeddedThumb(jpeg, orientation: 8);
@@ -1270,8 +1242,8 @@ void main() {
     await tester.pumpWidget(host(gallery, controller, rawDecoder: decoder));
     await drainAppFiles(tester, controller);
 
-    final small = File('${gallery.thumbs.path}/libv4_c.nef_${nef.length}.jpg');
-    final hi = File('${gallery.thumbs.path}/libv4hi_c.nef_${nef.length}.jpg');
+    final small = File('${gallery.thumbs.path}/libv5_c.nef_${nef.length}.jpg');
+    final hi = File('${gallery.thumbs.path}/libv5hi_c.nef_${nef.length}.jpg');
     // 快车道小档 + 升级档都是真 IO 链:逐窗排水至 hi 档落盘。
     var upgraded = false;
     for (var i = 0; i < 40 && !upgraded; i++) {
@@ -1306,7 +1278,7 @@ void main() {
     await tester.pumpWidget(host(gallery, controller, rawDecoder: decoder));
     await drainAppFiles(tester, controller);
 
-    final small = File('${gallery.thumbs.path}/libv4_c.nef_${nef.length}.jpg');
+    final small = File('${gallery.thumbs.path}/libv5_c.nef_${nef.length}.jpg');
     var written = false;
     for (var i = 0; i < 40 && !written; i++) {
       await tester.runAsync(
@@ -1318,7 +1290,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(
-        File('${gallery.thumbs.path}/libv4hi_c.nef_${nef.length}.jpg')
+        File('${gallery.thumbs.path}/libv5hi_c.nef_${nef.length}.jpg')
             .existsSync(),
         isFalse);
     expect(find.byType(Image), findsOneWidget);
@@ -1341,7 +1313,7 @@ void main() {
 
     // 网格先行:格缩略兜底同链,排完才可按格键点进查看器。
     final thumbCache =
-        File('${gallery.thumbs.path}/libv4_c.nef_${nef.length}.jpg');
+        File('${gallery.thumbs.path}/libv5_c.nef_${nef.length}.jpg');
     var written = false;
     for (var i = 0; i < 40 && !written; i++) {
       await tester.runAsync(
@@ -1568,12 +1540,12 @@ void main() {
     await tester.pumpWidget(host(gallery, controller, videoPlayer: player));
     await drainAppFiles(tester, controller);
 
-    // 抽帧一次(会话内合并),落盘 thumbsDir(libv4_ 前缀内容键,与
+    // 抽帧一次(会话内合并),落盘 thumbsDir(libv5_ 前缀内容键,与
     // NEF 同管线)。
     expect(player.thumbs, [('${dir.path}/c.mov', 512)]);
-    // 键全量升版(libv4_):黑边裁剪放开到全部缩略。
+    // 键全量升版(libv5_):黑边裁剪放开到全部缩略。
     expect(
-        File('${gallery.thumbs.path}/libv4_c.mov_3.jpg').existsSync(), isTrue);
+        File('${gallery.thumbs.path}/libv5_c.mov_3.jpg').existsSync(), isTrue);
 
     await tester.tap(find.byKey(const ValueKey('c.mov')));
     await tester.pumpAndSettle();
@@ -1690,13 +1662,13 @@ void main() {
     // 小档解码一次、落盘 thumbsDir(与 NEF/MOV 同管线同键式)
     expect(decoder.calls, [('${dir.path}/a.jpg', 512)]);
     expect(
-        File('${gallery.thumbs.path}/libv4_a.jpg_3.jpg').existsSync(), isTrue);
+        File('${gallery.thumbs.path}/libv5_a.jpg_3.jpg').existsSync(), isTrue);
 
     // 格已换小档源:provider 指向小档文件,gapless 换源保帧不闪
     final image = tester.widget<Image>(find.byType(Image).first);
     expect(image.gaplessPlayback, isTrue);
     final inner = (image.image as ResizeImage).imageProvider as FileImage;
-    expect(inner.file.path, '${gallery.thumbs.path}/libv4_a.jpg_3.jpg');
+    expect(inner.file.path, '${gallery.thumbs.path}/libv5_a.jpg_3.jpg');
   });
 
   testWidgets(
@@ -1705,7 +1677,7 @@ void main() {
     writeFile('a.jpg', modified: DateTime(2026, 10, 1));
     final gallery = _FakeGallery(dir);
     // 预置小档(上一会话留下的盘上状态):就绪表冷启即命中
-    final thumbPath = '${gallery.thumbs.path}/libv4_a.jpg_3.jpg';
+    final thumbPath = '${gallery.thumbs.path}/libv5_a.jpg_3.jpg';
     File(thumbPath).writeAsBytesSync([0xFF, 0xD8, 0xFF, 0xD9]);
     final decoder = _FakeRawDecoder();
     final controller =
@@ -1768,14 +1740,14 @@ void main() {
       // 第二日:f23..f00(index 0..23,分钟粒度保证段内序)
       final f = writeFile('f${(23 - i).toString().padLeft(2, '0')}.jpg',
           modified: DateTime(2026, 9, 2, 11, i));
-      File('${gallery.thumbs.path}/libv4_${f.uri.pathSegments.last}_3.jpg')
+      File('${gallery.thumbs.path}/libv5_${f.uri.pathSegments.last}_3.jpg')
           .writeAsBytesSync(realJpg);
     }
     for (var i = 24; i < 30; i++) {
       // 第一日:f29..f24(index 24..29)
       final f = writeFile('f${(29 - (i - 24)).toString().padLeft(2, '0')}.jpg',
           modified: DateTime(2026, 9, 1, 12, i - 24));
-      File('${gallery.thumbs.path}/libv4_${f.uri.pathSegments.last}_3.jpg')
+      File('${gallery.thumbs.path}/libv5_${f.uri.pathSegments.last}_3.jpg')
           .writeAsBytesSync(realJpg);
     }
     final decoder = _FakeRawDecoder();
@@ -1787,7 +1759,7 @@ void main() {
     // index 26:首段 24 格 + 段1 首格都会被构建(离屏段也建首格做几何
     // 估算),f27 在所有构建/持有范围之外,是干净的判据)
     final f27Provider =
-        gridThumbImageProvider('${gallery.thumbs.path}/libv4_f27.jpg_3.jpg');
+        gridThumbImageProvider('${gallery.thumbs.path}/libv5_f27.jpg_3.jpg');
     final f27Key = await f27Provider.obtainKey(ImageConfiguration.empty);
     final cache = PaintingBinding.instance.imageCache;
     for (var i = 0; i < 40 && !cache.containsKey(f27Key); i++) {
@@ -2242,7 +2214,7 @@ void main() {
     expect(
         find.byWidgetPredicate((w) =>
             w is Image &&
-            w.fit == BoxFit.contain &&
+            w.fit == BoxFit.cover &&
             w.image == gridThumbImageProvider(a.path)),
         findsOneWidget);
 
@@ -2254,7 +2226,7 @@ void main() {
 
   testWidgets('动效锚:NEF/MOV 缩略上格挂 HeroZoom,点格查看器同 tag 配对', (tester) async {
     useTallSurface(tester);
-    // 假件回真路径(libv4 落盘),字节假 → 格/查看器 Image 走 errorBuilder,
+    // 假件回真路径(libv5 落盘),字节假 → 格/查看器 Image 走 errorBuilder,
     // 但 HeroZoom/锚组件在场 —— 显档记账与配对链正是本用例断言面。
     final nef = writeFile('a.nef', modified: DateTime(2026, 10, 1));
     final mov = writeFile('b.mov', modified: DateTime(2026, 10, 2));
@@ -2454,5 +2426,35 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('b.jpg'), findsNothing); // 纵拉提交返回
     expect(find.byType(HeroZoom), findsNWidgets(2)); // 网格回位(两格锚)
+  });
+  testWidgets('查看器:图比盒首帧即定,不随后缩小(原图/缩略图比不同)', (tester) async {
+    useTallSurface(tester);
+    final full = img.Image(width: 600, height: 400);
+    img.fill(full, color: img.ColorRgb8(30, 60, 90));
+    final photo = File('${dir.path}/DSC_7000.JPG')
+      ..writeAsBytesSync(img.encodeJpg(full));
+    photo.setLastModifiedSync(DateTime(2026, 10, 30));
+    final gallery = _FakeGallery(dir);
+    final thumb = img.Image(width: 180, height: 100);
+    img.fill(thumb, color: img.ColorRgb8(30, 60, 90));
+    File('${gallery.thumbs.path}/'
+            'libv5_DSC_7000.JPG_${photo.lengthSync()}.jpg')
+        .writeAsBytesSync(img.encodeJpg(thumb));
+
+    final controller =
+        TransfersController(engine: _FakeEngine(), gallery: gallery);
+    await tester.pumpWidget(host(gallery, controller));
+    await drainAppFiles(tester, controller);
+    await tester.tap(find.byType(HeroZoom).first);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+    final box = find.descendant(
+        of: find.byType(InteractiveViewer), matching: find.byType(AspectRatio));
+    final before = tester.getSize(box.last);
+    await tester.pumpAndSettle();
+    final after = tester.getSize(box.last);
+    expect(after, before, reason: '盒首帧即定,不随后收缩');
+    expect(after.width / after.height, closeTo(1.5, 0.01),
+        reason: '用原图 3:2,不用缩略图 1.8');
   });
 }

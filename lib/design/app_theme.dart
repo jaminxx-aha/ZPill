@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'app_colors.dart';
+import 'app_dimens.dart';
 
 /// 应用主题:浅色 = 白底 + 统一黄按钮/选中态 + 墨色文字;深色 =
 /// LiveDesign 暖黑 + 同一统一黄(见 app_colors.dart)。红只做错误/
@@ -27,7 +28,7 @@ abstract final class AppTheme {
   static ThemeData get dark => _build(AppColors.darkScheme);
 
   static ThemeData _build(ColorScheme scheme,
-          {FilledButtonThemeData? filledButtonTheme}) {
+      {FilledButtonThemeData? filledButtonTheme}) {
     final base = ThemeData(
       useMaterial3: true,
       colorScheme: scheme,
@@ -71,8 +72,83 @@ abstract final class AppTheme {
     // textTheme 派生,一并带上;独立自建 TextStyle 的角落缺失时走系统
     // 回落,与旧行为一致)。
     final textTheme = base.textTheme.apply(fontFamilyFallback: _cjkFallback);
+    // 第 2 轮设计稿:浅色导航选中用琥珀 #B98A1E(深色仍是统一黄)。
+    final navSelected = scheme.brightness == Brightness.dark
+        ? scheme.secondary
+        : const Color(0xFFB98A1E);
     return base.copyWith(
       textTheme: textTheme,
+      // 第 2 轮确认的基础形状/密度:卡片 16、底部弹层 22、列表行 56。
+      // 颜色全部走 token,页面不再自带白卡/黑卡。
+      cardTheme: CardThemeData(
+        color: scheme.surfaceContainerLow,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        margin: EdgeInsets.zero,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppRadius.lg),
+          side: BorderSide(color: scheme.outlineVariant),
+        ),
+      ),
+      bottomSheetTheme: BottomSheetThemeData(
+        backgroundColor: scheme.surface,
+        modalBackgroundColor: scheme.surface,
+        surfaceTintColor: Colors.transparent,
+        showDragHandle: false,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(
+            top: Radius.circular(AppRadius.lg + 6),
+          ),
+        ),
+      ),
+      dividerTheme: DividerThemeData(
+        color: scheme.outlineVariant,
+        thickness: 1,
+        space: 1,
+      ),
+      listTileTheme: const ListTileThemeData(
+        minVerticalPadding: AppSpacing.sm,
+        contentPadding: EdgeInsets.symmetric(horizontal: AppSpacing.lg),
+      ),
+      chipTheme: base.chipTheme.copyWith(
+        shape: const StadiumBorder(),
+        side: BorderSide(color: scheme.outlineVariant),
+        backgroundColor: Colors.transparent,
+        selectedColor: Colors.transparent,
+        labelStyle: textTheme.labelMedium,
+      ),
+      segmentedButtonTheme: SegmentedButtonThemeData(
+        style: ButtonStyle(
+          shape: const WidgetStatePropertyAll(StadiumBorder()),
+          side:
+              WidgetStatePropertyAll(BorderSide(color: scheme.outlineVariant)),
+          backgroundColor: const WidgetStatePropertyAll(Colors.transparent),
+          foregroundColor: WidgetStateProperty.resolveWith((states) =>
+              states.contains(WidgetState.selected)
+                  ? scheme.onSurface
+                  : scheme.onSurfaceVariant),
+        ),
+      ),
+      snackBarTheme: const SnackBarThemeData(
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.all(Radius.circular(AppRadius.md)),
+        ),
+      ),
+      appBarTheme: base.appBarTheme.copyWith(
+        backgroundColor: scheme.surface,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        titleTextStyle: textTheme.titleLarge?.copyWith(
+          fontSize: 19,
+          fontWeight: FontWeight.w600,
+          color: scheme.onSurface,
+        ),
+        // 设计稿竖屏 50,但全局高度保持 46(存量页/测试几何);
+        // 需要 50 的页面在各自 AppBar 上覆写 toolbarHeight。
+        toolbarHeight: 46,
+      ),
       // 选中直充色落位:一旦提供 icon/label 主题即整组接管(M3 不再
       // 对未选态回落默认),未选也须显式给 onSurfaceVariant;选中色 =
       // secondary(亮 #8C7400/暗 #E9AC35,见上注)。标签字号沿用 M3
@@ -83,22 +159,22 @@ abstract final class AppTheme {
         iconTheme: WidgetStateProperty.resolveWith((states) => IconThemeData(
               size: 24,
               color: states.contains(WidgetState.selected)
-                  ? scheme.secondary
+                  ? navSelected
                   : scheme.onSurfaceVariant,
             )),
-        labelTextStyle: WidgetStateProperty.resolveWith((states) =>
-            textTheme.labelMedium!.apply(
-              color: states.contains(WidgetState.selected)
-                  ? scheme.secondary
-                  : scheme.onSurfaceVariant,
-            )),
+        labelTextStyle: WidgetStateProperty.resolveWith(
+            (states) => textTheme.labelMedium!.apply(
+                  color: states.contains(WidgetState.selected)
+                      ? navSelected
+                      : scheme.onSurfaceVariant,
+                )),
       ),
       navigationRailTheme: base.navigationRailTheme.copyWith(
-        selectedIconTheme: IconThemeData(size: 24, color: scheme.secondary),
+        selectedIconTheme: IconThemeData(size: 24, color: navSelected),
         unselectedIconTheme:
             IconThemeData(size: 24, color: scheme.onSurfaceVariant),
         selectedLabelTextStyle:
-            textTheme.labelMedium!.copyWith(color: scheme.secondary),
+            textTheme.labelMedium!.copyWith(color: navSelected),
         unselectedLabelTextStyle:
             textTheme.labelMedium!.copyWith(color: scheme.onSurfaceVariant),
       ),

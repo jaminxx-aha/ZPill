@@ -91,7 +91,8 @@ final class _GridPainter extends CustomPainter {
 }
 
 /// 过曝斑马纹(基于 [FrameAnalysis] 掩码,格间铺斜纹)。
-class ZebraOverlay extends StatelessWidget {  const ZebraOverlay({super.key, required this.analysis});
+class ZebraOverlay extends StatelessWidget {
+  const ZebraOverlay({super.key, required this.analysis});
 
   final FrameAnalysis? analysis;
 
@@ -128,7 +129,8 @@ final class _ZebraPainter extends CustomPainter {
         final cell = Rect.fromLTWH(
             rect.left + col * cellW, rect.top + row * cellH, cellW, cellH);
         // 格内 45° 斜纹,间距 stripePitch
-        for (var d = -cell.height; d < cell.width + cell.height;
+        for (var d = -cell.height;
+            d < cell.width + cell.height;
             d += stripePitch) {
           canvas.drawLine(
             Offset(cell.left + d, cell.bottom),
@@ -213,10 +215,9 @@ const kPeakingColors = <Color>[
 ];
 
 /// 峰值高亮色(档位索引 → 色;表外档回落金 = 旧行为)。纯函数,测试直取。
-Color peakingColorOf(int index) =>
-    index >= 0 && index < kPeakingColors.length
-        ? kPeakingColors[index]
-        : kPeakingGold;
+Color peakingColorOf(int index) => index >= 0 && index < kPeakingColors.length
+    ? kPeakingColors[index]
+    : kPeakingGold;
 
 class PeakingOverlay extends StatelessWidget {
   const PeakingOverlay(
@@ -271,16 +272,19 @@ final class _PeakingPainter extends CustomPainter {
 
 /// 直方图(左下角小窗,64 桶亮度)。
 class HistogramView extends StatelessWidget {
-  const HistogramView({super.key, required this.analysis});
+  const HistogramView({super.key, required this.analysis, this.width = 128});
 
   final FrameAnalysis? analysis;
+
+  /// 画面宽(高 = 宽 / 2);2026-10-30 重排:随屏宽自适应。
+  final double width;
 
   @override
   Widget build(BuildContext context) {
     return IgnorePointer(
       child: SizedBox(
-        width: 128,
-        height: 64,
+        width: width,
+        height: width / 2,
         child: ClipRRect(
           borderRadius: BorderRadius.circular(4),
           child: Container(
@@ -358,8 +362,8 @@ class FramingOverlay extends StatelessWidget {
 }
 
 final class _FramingPainter extends CustomPainter {
-  const _FramingPainter(this.aspect, this.deSqueeze, this.safeArea,
-      this.centerMark);
+  const _FramingPainter(
+      this.aspect, this.deSqueeze, this.safeArea, this.centerMark);
 
   final double? aspect;
   final double deSqueeze;
@@ -438,17 +442,21 @@ class WaveformView extends StatelessWidget {
     super.key,
     required this.analysis,
     this.nLogScale = false,
+    this.width = 160,
   });
 
   final FrameAnalysis? analysis;
   final bool nLogScale;
 
+  /// 宽(高 = 宽 × 9/16);2026-10-30 重排随屏宽自适应。
+  final double width;
+
   @override
   Widget build(BuildContext context) {
     return IgnorePointer(
       child: SizedBox(
-        width: 160,
-        height: 90,
+        width: width,
+        height: width * 9 / 16,
         child: ClipRRect(
           borderRadius: BorderRadius.circular(4),
           child: Container(
@@ -500,8 +508,7 @@ final class _WaveformPainter extends CustomPainter {
         paint.color = _waveformColor(density);
         // 桶 0(黑)在底,高端在顶;顶/底各留 1px 给刻度边。
         canvas.drawRect(
-          Rect.fromLTWH(
-              col * cellW, size.height - 1 - (bin + 1) * cellH,
+          Rect.fromLTWH(col * cellW, size.height - 1 - (bin + 1) * cellH,
               cellW + 0.5, cellH + 0.5),
           paint,
         );
@@ -569,17 +576,19 @@ class ParadeView extends StatelessWidget {
     super.key,
     required this.analysis,
     this.nLogScale = false,
+    this.width = 160,
   });
 
   final FrameAnalysis? analysis;
   final bool nLogScale;
+  final double width;
 
   @override
   Widget build(BuildContext context) {
     return IgnorePointer(
       child: SizedBox(
-        width: 160,
-        height: 90,
+        width: width,
+        height: width * 9 / 16,
         child: ClipRRect(
           borderRadius: BorderRadius.circular(4),
           child: Container(
@@ -633,8 +642,8 @@ final class _ParadePainter extends CustomPainter {
           final v = a.parade[base + col * bins + bin];
           if (v <= 0) continue;
           final density = (v / max).clamp(0.0, 1.0);
-          paint.color = _paradeChannelColors[ch]
-              .withValues(alpha: 0.25 + 0.75 * density);
+          paint.color =
+              _paradeChannelColors[ch].withValues(alpha: 0.25 + 0.75 * density);
           canvas.drawRect(
             Rect.fromLTWH(left + col * cellW,
                 size.height - 1 - (bin + 1) * cellH, cellW + 0.5, cellH + 0.5),
@@ -657,16 +666,17 @@ final class _ParadePainter extends CustomPainter {
 /// 同一 Rec.601 色度式自洽,75% 饱和原色恰落各自框内)+ 中心十字。
 /// 数据 = FrameAnalysis.vector(密度网格),数学见 core/remote/scopes.dart。
 class VectorView extends StatelessWidget {
-  const VectorView({super.key, required this.analysis});
+  const VectorView({super.key, required this.analysis, this.width = 96});
 
   final FrameAnalysis? analysis;
+  final double width;
 
   @override
   Widget build(BuildContext context) {
     return IgnorePointer(
       child: SizedBox(
-        width: 96,
-        height: 96,
+        width: width,
+        height: width,
         child: ClipRRect(
           borderRadius: BorderRadius.circular(4),
           child: Container(
@@ -716,9 +726,7 @@ final class _VectorPainter extends CustomPainter {
       final (tx, ty) = vectorTargets75[i];
       final at = Offset(c.dx + tx * r, c.dy - ty * r);
       canvas.drawRect(Rect.fromCenter(center: at, width: 7, height: 7), box);
-      _tinyLabel(
-          canvas,
-          vectorTargetLabels[i],
+      _tinyLabel(canvas, vectorTargetLabels[i],
           Offset(c.dx + tx * r + 5, c.dy - ty * r - 7));
     }
     final aa = a;
@@ -769,6 +777,7 @@ class TrafficLightsView extends StatelessWidget {
     super.key,
     required this.analysis,
     this.bandLabels,
+    this.width = 160,
   });
 
   final FrameAnalysis? analysis;
@@ -777,14 +786,20 @@ class TrafficLightsView extends StatelessWidget {
   /// 中文默认串,防未来调用点漏传泄漏);测试注入用。
   final List<String>? bandLabels;
 
+  final double width;
+
   @override
   Widget build(BuildContext context) {
     final labels = bandLabels ??
-        [context.t('remote.top'), context.t('remote.mid'), context.t('remote.bot')];
+        [
+          context.t('remote.top'),
+          context.t('remote.mid'),
+          context.t('remote.bot')
+        ];
     return IgnorePointer(
       child: SizedBox(
-        width: 160,
-        height: 58,
+        width: width,
+        height: width * 58 / 160,
         child: ClipRRect(
           borderRadius: BorderRadius.circular(4),
           child: Container(
@@ -837,10 +852,8 @@ final class _TrafficLightsPainter extends CustomPainter {
       void seg(double fraction, Color color) {
         final w = barW * fraction;
         if (w > 0) {
-          canvas.drawRect(
-              Rect.fromLTWH(x, barTop, w, 7),
-              Paint()
-                ..color = color.withValues(alpha: 0.25 + 0.75 * fraction));
+          canvas.drawRect(Rect.fromLTWH(x, barTop, w, 7),
+              Paint()..color = color.withValues(alpha: 0.25 + 0.75 * fraction));
         }
         x += w;
       }
@@ -886,11 +899,15 @@ class ScopeView extends StatelessWidget {
     required this.analysis,
     this.nLogScale = false,
     this.bandLabels,
+    this.width,
   });
 
   final ScopeKind kind;
   final FrameAnalysis? analysis;
   final bool nLogScale;
+
+  /// 宽;null = 各视图默认(波形/Parade 160、矢量 96、红绿灯 160)。
+  final double? width;
 
   /// 仅红绿灯消费(上/中/下带标签);null = 透传,TrafficLightsView
   /// 自行 t() 落地。
@@ -900,12 +917,13 @@ class ScopeView extends StatelessWidget {
   Widget build(BuildContext context) {
     return switch (kind) {
       ScopeKind.off => const SizedBox.shrink(),
-      ScopeKind.waveform =>
-        WaveformView(analysis: analysis, nLogScale: nLogScale),
-      ScopeKind.parade => ParadeView(analysis: analysis, nLogScale: nLogScale),
-      ScopeKind.vector => VectorView(analysis: analysis),
+      ScopeKind.waveform => WaveformView(
+          analysis: analysis, nLogScale: nLogScale, width: width ?? 160),
+      ScopeKind.parade => ParadeView(
+          analysis: analysis, nLogScale: nLogScale, width: width ?? 160),
+      ScopeKind.vector => VectorView(analysis: analysis, width: width ?? 96),
       ScopeKind.traffic => TrafficLightsView(
-          analysis: analysis, bandLabels: bandLabels),
+          analysis: analysis, bandLabels: bandLabels, width: width ?? 160),
     };
   }
 }
@@ -983,52 +1001,118 @@ Color afPointBoxColor(LiveViewFocusResult result) =>
 
 /// 水平仪:固定参考线 + 随姿态转动的地平线(pitch 平移,roll 旋转)。
 class LevelOverlay extends StatelessWidget {
-  const LevelOverlay({super.key, required this.orientation});
+  const LevelOverlay(
+      {super.key,
+      required this.orientation,
+      this.quarterTurns = 0,
+      this.bounds});
 
   final MotionOrientation orientation;
+
+  /// 跟随画面旋转的顺时针四分之一圈数(相机横持额外转 90° 时 = 1)。
+  final int quarterTurns;
+
+  /// 取景画面显示矩形(屏幕坐标):水平仪只画在这个范围内,不越出
+  /// 取景屏幕(2026-10-30 用户定案)。null = 整屏。
+  final Rect? bounds;
 
   @override
   Widget build(BuildContext context) {
     return RepaintBoundary(
       child: CustomPaint(
-        foregroundPainter: _LevelPainter(orientation),
+        foregroundPainter: _LevelPainter(orientation, quarterTurns, bounds),
         size: Size.infinite,
       ),
     );
   }
 }
 
+/// 半圈折返:把角度折算到 (-90°, 90°]。
+///
+/// 相机虚拟水平仪的 pitch 以机身屏为参考系:机身倒置(roll ≈ 180°)时
+/// 同样「水平」的姿态会上报 pitch ≈ 180°(2026-10-30 真机 raw=3 实证
+/// pitch 176.5° / roll 165.1°)。俯仰位移只认相对水平的真实前后倾,
+/// 原样使用会把水平线顶到取景边缘(用户报「绿线和实际不一致」)。
+double wrapHalfTurn(double rad) {
+  final r = rad % math.pi; // [0, π)
+  return r > math.pi / 2 ? r - math.pi : r;
+}
+
+/// 水平仪线段几何(纯函数,测试直取):roll 定角度、quarterTurns 跟随
+/// 画面旋转;俯仰沿地平线**法向**平移 —— 横线上下移、侧躺的竖线左右
+/// 移(原先一律加在 y 上,竖线等于沿自身滑动,大俯仰把线端推出取景)。
+/// 参考线贴内容轴(横线取横轴、竖线取竖轴)满跨取景;地平线以钳在
+/// 取景内的中点为轴,两端各拉到矩形对角线长度外,由调用方 clipRect
+/// 收到边界。返回坐标都在同一画布坐标系。
+({Offset refStart, Offset refEnd, Offset horizonStart, Offset horizonEnd,
+  double midY}) levelSegments({
+  required Rect area,
+  required double angleRad,
+  required double pitchRad,
+}) {
+  final cs = math.cos(angleRad);
+  final sn = math.sin(angleRad);
+  final shift = pitchRad * 120; // 弧度 → 像素(显示尺度)
+  final mid = Offset(
+    (area.center.dx - sn * shift)
+        .clamp(area.left, area.right)
+        .toDouble(),
+    (area.center.dy + cs * shift).clamp(area.top, area.bottom).toDouble(),
+  );
+  // 地平线更接近横线时参考线取横轴,更接近竖线时取竖轴(随内容朝向)。
+  final horizontal = cs.abs() >= sn.abs();
+  final refStart = horizontal
+      ? Offset(area.left, area.center.dy)
+      : Offset(area.center.dx, area.top);
+  final refEnd = horizontal
+      ? Offset(area.right, area.center.dy)
+      : Offset(area.center.dx, area.bottom);
+  // 对角线 = 矩形内两点最大距离:从内点任一方向都足够伸出边界。
+  final reach = math.sqrt(area.width * area.width + area.height * area.height);
+  return (
+    refStart: refStart,
+    refEnd: refEnd,
+    horizonStart: Offset(mid.dx - cs * reach, mid.dy - sn * reach),
+    horizonEnd: Offset(mid.dx + cs * reach, mid.dy + sn * reach),
+    midY: mid.dy,
+  );
+}
+
 final class _LevelPainter extends CustomPainter {
-  const _LevelPainter(this.orientation);
+  const _LevelPainter(this.orientation, [this.quarterTurns = 0, this.bounds]);
 
   final MotionOrientation orientation;
+  final int quarterTurns;
+  final Rect? bounds;
 
   @override
   void paint(Canvas canvas, Size size) {
-    final center = size.center(Offset.zero);
-    const halfLen = 90.0;
-    final pitchShift = orientation.pitchRad * 120; // 弧度 → 像素(显示尺度)
-    final roll = -orientation.rollRad; // 设备右倾 → 地平线左高右低
-    final cx = center.dx;
-    final cy = center.dy + pitchShift;
-    final dx = math.cos(roll) * halfLen;
-    final dy = math.sin(roll) * halfLen;
-    final horizon = Offset(cx - dx, cy - dy);
-    final horizonEnd = Offset(cx + dx, cy + dy);
+    final area = bounds ?? (Offset.zero & size);
+    final seg = levelSegments(
+      area: area,
+      angleRad: -orientation.rollRad + quarterTurns * math.pi / 2,
+      pitchRad: orientation.pitchRad,
+    );
     final ref = Paint()
       ..color = Colors.white.withValues(alpha: 0.5)
       ..strokeWidth = 1;
     final horizonPaint = Paint()
       ..color = Colors.green.withValues(alpha: 0.9)
       ..strokeWidth = 2;
-    canvas.drawLine(Offset(center.dx - halfLen, center.dy),
-        Offset(center.dx + halfLen, center.dy), ref);
-    canvas.drawLine(horizon, horizonEnd, horizonPaint);
+    // 线段按取景矩形外的长度画,clipRect 收到边界:线端永远贴着取景
+    // 边框(不留空隙),任何角度/俯仰都不越出取景(2026-10-30 用户
+    // 真机 raw=3 报「绿线超出去」,落在曝光条和快门键上)。
+    canvas.save();
+    canvas.clipRect(area);
+    canvas.drawLine(seg.refStart, seg.refEnd, ref);
+    canvas.drawLine(seg.horizonStart, seg.horizonEnd, horizonPaint);
+    canvas.restore();
 
     final textStyle = TextStyle(
       color: Colors.green.withValues(alpha: 0.9),
       fontSize: 10,
     );
+    // 读数保持正向(不随画布转),放在画面左侧、水平线下沿附近。
     TextPainter(
       text: TextSpan(
           text: '${orientation.pitchText} / ${orientation.rollText}',
@@ -1036,13 +1120,18 @@ final class _LevelPainter extends CustomPainter {
       textDirection: TextDirection.ltr,
     )
       ..layout()
-      ..paint(canvas, Offset(center.dx - halfLen, center.dy + 6));
+      ..paint(
+          canvas,
+          Offset(area.left + 8,
+              (seg.midY + 8).clamp(area.top + 4, area.bottom - 16).toDouble()));
   }
 
   @override
   bool shouldRepaint(_LevelPainter old) =>
       old.orientation.pitchRad != orientation.pitchRad ||
-      old.orientation.rollRad != orientation.rollRad;
+      old.orientation.rollRad != orientation.rollRad ||
+      old.quarterTurns != quarterTurns ||
+      old.bounds != bounds;
 }
 
 // ── 录制读出:时间码 + 声音电平表(OpenZCine 差集⑤)────────────────
@@ -1113,8 +1202,7 @@ class OverheatBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color =
-        level >= 3 ? LiveDesign.dark.bad : LiveDesign.dark.accent;
+    final color = level >= 3 ? LiveDesign.dark.bad : LiveDesign.dark.accent;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       decoration: BoxDecoration(

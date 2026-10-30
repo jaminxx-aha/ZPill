@@ -62,8 +62,11 @@ final class FeedTransform {
     this.deSqueeze = 1.0,
     this.zoom = 1.0,
     this.pan = Offset.zero,
+    this.bottomContentInset = 0.0,
+    this.bottomAlign = false,
   })  : assert(quarter >= 0 && quarter < 4),
-        assert(deSqueeze >= 1.0);
+        assert(deSqueeze >= 1.0),
+        assert(bottomContentInset >= 0.0);
 
   /// 取景帧像素尺寸(SOF 嗅探;空/零尺寸 = 无画面,变换恒等)。
   final Size imageSize;
@@ -87,6 +90,16 @@ final class FeedTransform {
   /// 缩放平移(屏幕系;zoom 为 1 时恒零)。
   final Offset pan;
 
+  /// 画面让出的底部高度(控制条/五键区):contain 适配时画面在
+  /// [0, boxHeight - bottomContentInset] 内垂直居中,而不是整屏居中
+  /// —— 2026-10-30 用户「画面往上移」定案。点按映射随同一矩形走。
+  final double bottomContentInset;
+
+  /// true = 画面底边贴 [bottomContentInset] 上限(底对齐);放不下时
+  /// 顶边钳 0、底边越入控制区(整帧仍可见,只是被浮层压住)。
+  /// 2026-10-30 用户定案:取景底边到曝光条的距离 = 曝光条到快门的距离。
+  final bool bottomAlign;
+
   bool get hasImage =>
       imageSize.width > 0 && imageSize.height > 0 && !boxSize.isEmpty;
 
@@ -101,14 +114,19 @@ final class FeedTransform {
 
   /// 适配倍率(zoom=1/pan=0 时图像边长 = imageSize 边长 × 此值)。fill
   /// 模式恒取指定轴的比例,displayRect 可越出取景盒(居中,越出被裁)。
+  /// 有 [bottomContentInset] 时按「盒宽 × 可用高」适配 —— 画面先缩进
+  /// 控制区上方,再底对齐,保证底边间隙的同时整帧不越界。
   double get fitScale {
     final c = contentSize;
     if (c.isEmpty || boxSize.isEmpty) return 1.0;
+    final availW = boxSize.width;
+    final availH = (boxSize.height - bottomContentInset)
+        .clamp(0.0, boxSize.height)
+        .toDouble();
     return switch (fit) {
-      FeedFit.contain =>
-        math.min(boxSize.width / c.width, boxSize.height / c.height),
-      FeedFit.widthFill => boxSize.width / c.width,
-      FeedFit.heightFill => boxSize.height / c.height,
+      FeedFit.contain => math.min(availW / c.width, availH / c.height),
+      FeedFit.widthFill => availW / c.width,
+      FeedFit.heightFill => availH / c.height,
     };
   }
 
@@ -119,8 +137,14 @@ final class FeedTransform {
     if (c.isEmpty || boxSize.isEmpty) return Offset.zero & boxSize;
     final s = fitScale;
     final size = c * s;
-    return Rect.fromLTWH((boxSize.width - size.width) / 2,
-        (boxSize.height - size.height) / 2, size.width, size.height);
+    final availH = (boxSize.height - bottomContentInset)
+        .clamp(0.0, boxSize.height)
+        .toDouble();
+    final top = bottomAlign
+        ? math.max(0.0, availH - size.height)
+        : (availH - size.height) / 2;
+    return Rect.fromLTWH(
+        (boxSize.width - size.width) / 2, top, size.width, size.height);
   }
 
   /// 图像像素 → 屏幕的全变换(外层 Transform 直接消费)。
@@ -177,8 +201,7 @@ final class FeedTransform {
     final w = rect.width * s;
     final h = rect.height * s;
     return quarter.isEven
-        ? Rect.fromCenter(
-            center: center, width: deSqueeze * w, height: h)
+        ? Rect.fromCenter(center: center, width: deSqueeze * w, height: h)
         : Rect.fromCenter(center: center, width: h, height: deSqueeze * w);
   }
 }

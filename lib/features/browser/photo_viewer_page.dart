@@ -195,7 +195,8 @@ class _PhotoViewerPageState extends State<PhotoViewerPage>
         // 读回失败:保持现状(下页翻回再试)
       } on Object catch (e) {
         // 意外(Error 类:无会话测试桩等)尽力而为,不挡查看
-        AppLog.w(AppLog.browser, '[查看器] 保护态读回失败 0x${handle.toRadixString(16)}: $e');
+        AppLog.w(
+            AppLog.browser, '[查看器] 保护态读回失败 0x${handle.toRadixString(16)}: $e');
       }
     }());
   }
@@ -212,8 +213,9 @@ class _PhotoViewerPageState extends State<PhotoViewerPage>
       if (!mounted) return;
       setState(() => _session.protectionOptimistic[handle] = protect);
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content:
-              Text(protect ? context.t('viewer.protected') : context.t('viewer.unprotected')),
+          content: Text(protect
+              ? context.t('viewer.protected')
+              : context.t('viewer.unprotected')),
           duration: const Duration(seconds: 2)));
     } on Exception catch (e) {
       if (!mounted) return;
@@ -269,8 +271,8 @@ class _PhotoViewerPageState extends State<PhotoViewerPage>
   void _onPullEnd(DragEndDetails details) {
     if (_fullscreen || _ivZoomed) return;
     final vy = details.velocity.pixelsPerSecond.dy;
-    final commit = _pull.dy >= kPullAwayCommitDistance ||
-        vy >= kPullAwayCommitVelocity;
+    final commit =
+        _pull.dy >= kPullAwayCommitDistance || vy >= kPullAwayCommitVelocity;
     if (commit) {
       // 位移冻结在释放位:航班以拖拽后的绘制位为起点飞回格位
       // (绘制变换进入框架实测;fromHero 航班中由占位件隐藏)。
@@ -368,8 +370,7 @@ class _PhotoViewerPageState extends State<PhotoViewerPage>
       if (!mounted) return;
       messenger
         ..hideCurrentSnackBar()
-        ..showSnackBar(SnackBar(
-            content: Text(context.t('viewer.ratingFail'))));
+        ..showSnackBar(SnackBar(content: Text(context.t('viewer.ratingFail'))));
     }
   }
 
@@ -381,8 +382,8 @@ class _PhotoViewerPageState extends State<PhotoViewerPage>
     if (widget.formats.isEmpty) return group;
     final subset = [
       for (final m in group.members)
-        if (mediaFormatOfFilename(m.name)
-            case final f? when widget.formats.contains(f))
+        if (mediaFormatOfFilename(m.name) case final f?
+            when widget.formats.contains(f))
           m,
     ];
     return subset.isEmpty ? group : PhotoGroup(subset);
@@ -400,8 +401,9 @@ class _PhotoViewerPageState extends State<PhotoViewerPage>
       filename: pair ? '${sub.jpg!.name} + ${sub.raw!.name}' : sub.name,
       sizeBytes: sub.totalBytes,
       // 连拍张数(值列)在本页预翻译,信息底单只包行标签
-      burstLabel:
-          group.isBurst ? context.t('viewer.burstCount', {'n': group.shotCount}) : null,
+      burstLabel: group.isBurst
+          ? context.t('viewer.burstCount', {'n': group.shotCount})
+          : null,
       fallbackTime: formatDateTime(group.capturedAt),
       loadExif: group.isVideo
           ? null
@@ -419,7 +421,9 @@ class _PhotoViewerPageState extends State<PhotoViewerPage>
     if (formats.isNotEmpty) {
       entries = [
         for (final m in group.members)
-          if (mediaFormatOfFilename(m.name) case final f? when formats.contains(f)) m,
+          if (mediaFormatOfFilename(m.name) case final f?
+              when formats.contains(f))
+            m,
       ];
       if (entries.isEmpty) {
         ScaffoldMessenger.of(context)
@@ -440,9 +444,8 @@ class _PhotoViewerPageState extends State<PhotoViewerPage>
     final where = destination == TransferDestination.gallery
         ? context.t('grid.toAlbum')
         : context.t('grid.toApp');
-    final tag = formats.isEmpty
-        ? ''
-        : '(${formats.map((f) => f.label).join('+')})';
+    final tag =
+        formats.isEmpty ? '' : '(${formats.map((f) => f.label).join('+')})';
     // Navigator 在展示时刻捕获(网格页同款):SnackBar 活得比本页久
     // (pop 后提示挂到上一页),届时 State 已 unmount,Navigator.of 会
     // 抛 defunct —— 捕获的根 Navigator 跨 pop 存活,窗口期内动作照常。
@@ -453,8 +456,8 @@ class _PhotoViewerPageState extends State<PhotoViewerPage>
           // SDK #173084(2025-08)起带 action 的 SnackBar 默认 persist=
           // true 永不自动消失:显式关掉,恢复随 duration 自动隐藏。
           persist: false,
-          content: Text(context.t(
-              'viewer.downloadStarted', {'where': where, 'tag': tag})),
+          content: Text(context
+              .t('viewer.downloadStarted', {'where': where, 'tag': tag})),
           action: SnackBarAction(
             label: context.t('viewer.viewProgress'),
             onPressed: widget.onOpenTransfers ??
@@ -468,7 +471,8 @@ class _PhotoViewerPageState extends State<PhotoViewerPage>
   Future<void> _edit(PhotoGroup group) async {
     final jpg = group.jpg;
     if (jpg == null) return;
-    unawaited(showLoadingOverlay(context, message: context.t('viewer.fetchingOriginal')));
+    unawaited(showLoadingOverlay(context,
+        message: context.t('viewer.fetchingOriginal')));
     try {
       final dl =
           await _downloader.download(jpg, targetDir: await _gallery.tempDir());
@@ -489,7 +493,8 @@ class _PhotoViewerPageState extends State<PhotoViewerPage>
       Navigator.of(context).pop(); // loading 对话框
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
-        ..showSnackBar(SnackBar(content: Text(context.t('viewer.fetchFailed'))));
+        ..showSnackBar(
+            SnackBar(content: Text(context.t('viewer.fetchFailed'))));
     }
   }
 
@@ -751,8 +756,7 @@ class _PhotoViewerPageState extends State<PhotoViewerPage>
                           foregroundColor: AppMedia.onMedia,
                           visualDensity: VisualDensity.compact,
                         ),
-                        onPressed: () =>
-                            setState(() => _revealDownload = true),
+                        onPressed: () => setState(() => _revealDownload = true),
                         icon: const Icon(Icons.download_outlined),
                         label: Text(context.t('grid.download')),
                       ),
@@ -905,7 +909,8 @@ class _PreviewImageState extends State<_PreviewImage> {
             ),
             const SizedBox(height: 8),
             Text(
-              context.t(isVideo ? 'viewer.tapPlay' : 'viewer.previewUnavailable'),
+              context
+                  .t(isVideo ? 'viewer.tapPlay' : 'viewer.previewUnavailable'),
               style: const TextStyle(color: AppMedia.onMediaMuted),
             ),
           ],

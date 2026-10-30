@@ -531,7 +531,7 @@ final class AppServices {
   /// 环境,本地图库缩略/查看器读这份相机 JPEG——优先拷相机相册已拉的
   /// 0x90C4 高清档(lt_v2_ 同内容键,零 RTT 零副作用),缺则 0x100A 小图
   /// (标准 op,不触碰 0x90C4 的会话降级旗标);载荷过 SOI 验签才落盘。
-  /// 键 = 图库缩略约定 `libv4_<安全名>_<字节数>`,网格缓存命中直读、
+  /// 键 = 图库缩略约定 `libv5_<安全名>_<字节数>`,网格缓存命中直读、
   /// 查看器解码失败回退同读。best-effort:失败静默(真 Android 走原生
   /// 解码,不依赖此件)。
   Future<void> _saveHeifCompanion(ObjectEntry entry, String path) async {
@@ -540,7 +540,7 @@ final class AppServices {
       final len = await File(path).length();
       final safe = entry.name.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
       final thumbs = await PlatformServices.gallery.thumbsDir();
-      final companion = File('$thumbs/libv4_${safe}_$len.jpg');
+      final companion = File('$thumbs/libv5_${safe}_$len.jpg');
       if (companion.existsSync()) return;
       Uint8List? jpeg;
       final lt = File('$thumbs/lt_v2_${safe}_${entry.sizeInBytes}.jpg');
@@ -563,7 +563,7 @@ final class AppServices {
       final trimmed = await trimLetterboxJpeg(jpeg);
       await companion.writeAsBytes(trimmed ?? jpeg, flush: true);
       AppLog.i(
-          AppLog.browser, 'HIF 伴生预览:${entry.name} → libv4_${safe}_$len.jpg');
+          AppLog.browser, 'HIF 伴生预览:${entry.name} → libv5_${safe}_$len.jpg');
     } on Exception {
       // 尽力而为:失败静默,传输照常完成
     }

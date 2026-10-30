@@ -1,8 +1,11 @@
+import 'dart:ui' show ImageFilter;
+
 import 'package:flutter/material.dart';
 
 import '../../data/settings_store.dart';
 import '../../l10n/l10n.dart';
 import '../edit/lut_presets.dart';
+import 'glass_sheet.dart';
 import 'live_design.dart';
 import 'monitor_toggles.dart';
 import 'remote_capture_strip.dart';
@@ -46,6 +49,15 @@ class CaptureSettingsPanel extends StatelessWidget {
     this.liveViewImageSize,
     this.liveViewImageCompression,
     this.maxHeight,
+    this.mode = CaptureMode.photo,
+    this.onModeChanged,
+    this.modeEnabled = true,
+    this.switchableTo = const {CaptureMode.photo, CaptureMode.video},
+    this.tab = 0,
+    this.onTabChanged,
+    this.landscape = false,
+    this.onDismiss,
+    this.sectionKeys,
   });
 
   final RemoteController controller;
@@ -91,48 +103,262 @@ class CaptureSettingsPanel extends StatelessWidget {
   /// 内容限高(null = 不限);超出内部滚动。
   final double? maxHeight;
 
+  /// 拍摄模式(照片/视频);模式切换已从底栏模式条迁入浮层头部。
+  final CaptureMode mode;
+  final ValueChanged<CaptureMode>? onModeChanged;
+  final bool modeEnabled;
+  final Set<CaptureMode> switchableTo;
+
+  /// 0 参数 / 1 对焦 / 2 监看 / 3 辅助。
+  final int tab;
+  final ValueChanged<int>? onTabChanged;
+
+  /// 横屏两栏(参数 / 控制),竖屏单列。
+  final bool landscape;
+
+  /// 点「点画面收起」/关闭入口(横屏全屏面板需要可关)。
+  final VoidCallback? onDismiss;
+
+  /// 页签跳转锚点(父页面持有;点页签滚到对应段,内容始终全量构建)。
+  final List<GlobalKey>? sectionKeys;
+
   @override
   Widget build(BuildContext context) {
     final live = LiveDesign.of(context);
-    final body = SingleChildScrollView(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _sectionHeader(live, context.t('remote.paramsGroup'), first: true),
-            // 参数区等宽格子(2026-10-17):旧变宽 Wrap 每行 4/6/4 参差、
-            // 优化校准槽位真名等长值溢出裁切,格化后行行对齐。
-            _CellGrid(
-              rowHeight: 46,
+    final body = <Widget>[
+      _sectionHeader(live, context.t('remote.paramsGroup'), first: true),
+      _CellGrid(
+        rowHeight: 46,
+        children: [
+          for (final p in orderedCaptureParams(
+              videoMode: controller.cameraMode == CaptureMode.video))
+            captureParamTileOf(
+                context, controller, activeParam, onEditParam, p),
+        ],
+      ),
+    ];
+    Widget anchored(int i, Widget child) => KeyedSubtree(
+          key: sectionKeys == null ? null : sectionKeys![i],
+          child: child,
+        );
+    final paramsSection = anchored(
+      0,
+      Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: body,
+      ),
+    );
+    final focusSection = anchored(
+      1,
+      Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _sectionHeader(live, context.t('remote.focusGroup'), first: true),
+          _focusControls(context),
+        ],
+      ),
+    );
+    final monitorSection = anchored(
+      2,
+      Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _sectionHeader(live, context.t('common.monitoring'), first: true),
+          _monitorToggles(context),
+          _liveViewQualityRows(context),
+        ],
+      ),
+    );
+    final assistSection = anchored(
+      3,
+      Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _sectionHeader(live, context.t('remote.assistGroup'), first: true),
+          _assistChips(context),
+        ],
+      ),
+    );
+    final content = landscape
+        ? <Widget>[
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                for (final p in orderedCaptureParams(
-                    videoMode: controller.cameraMode == CaptureMode.video))
-                  captureParamTileOf(
-                      context, controller, activeParam, onEditParam, p),
+                Expanded(child: paramsSection),
+                Container(width: 1, color: live.hairline),
+                Expanded(
+                  child: SingleChildScrollView(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        focusSection,
+                        monitorSection,
+                        assistSection,
+                      ],
+                    ),
+                  ),
+                ),
               ],
             ),
-            _sectionHeader(live, context.t('remote.focusGroup')),
-            _focusControls(context),
-            _sectionHeader(live, context.t('common.monitoring')),
-            _monitorToggles(context),
-            _liveViewQualityRows(context),
-            _sectionHeader(live, context.t('remote.assistGroup')),
-            _assistChips(context),
-          ],
+          ]
+        : <Widget>[
+            paramsSection,
+            const SizedBox(height: 4),
+            focusSection,
+            const SizedBox(height: 4),
+            monitorSection,
+            const SizedBox(height: 4),
+            assistSection,
+          ];
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxHeight: maxHeight ?? 560),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(16),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+          child: Container(
+            decoration: BoxDecoration(
+              color: live.surface.withValues(alpha: 0.38),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: live.hairline),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _header(context, live),
+                _tabs(context, live),
+                Flexible(
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: content,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );
-    return Container(
-      constraints:
-          maxHeight == null ? null : BoxConstraints(maxHeight: maxHeight!),
-      decoration: BoxDecoration(
-        color: live.glass,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: live.hairline),
+  }
+
+  Widget _header(BuildContext context, LivePalette live) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(14, 10, 12, 6),
+      child: Row(
+        children: [
+          Text(context.t('remote.panelTitle'),
+              style: TextStyle(
+                  fontSize: 14, fontWeight: FontWeight.w700, color: live.text)),
+          const SizedBox(width: 10),
+          _modePills(context, live),
+          const Spacer(),
+          InkWell(
+            onTap: onDismiss,
+            borderRadius: BorderRadius.circular(8),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+              child: Text(context.t('remote.panelDismiss'),
+                  style: TextStyle(fontSize: 10.5, color: live.muted)),
+            ),
+          ),
+        ],
       ),
-      child: body,
+    );
+  }
+
+  Widget _modePills(BuildContext context, LivePalette live) {
+    Widget segment(CaptureMode m, String label) {
+      final selected = mode == m;
+      final dimmed = !selected && !switchableTo.contains(m);
+      return InkWell(
+        key: ValueKey('capture-mode-${m.name}'),
+        onTap: modeEnabled && !selected && onModeChanged != null
+            ? () => onModeChanged!(m)
+            : null,
+        borderRadius: BorderRadius.circular(999),
+        child: Container(
+          height: 26,
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: selected ? live.accent : live.hairline),
+          ),
+          alignment: Alignment.center,
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 10.5,
+              fontWeight: FontWeight.w600,
+              color: selected
+                  ? live.text
+                  : dimmed
+                      ? live.faint
+                      : live.muted,
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Opacity(
+      opacity: modeEnabled ? 1 : 0.45,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          segment(CaptureMode.photo, context.t('common.photo')),
+          const SizedBox(width: 4),
+          segment(CaptureMode.video, context.t('common.video')),
+        ],
+      ),
+    );
+  }
+
+  Widget _tabs(BuildContext context, LivePalette live) {
+    const labels = [
+      'remote.tabParams',
+      'remote.tabFocus',
+      'remote.tabMonitor',
+      'remote.tabAssist'
+    ];
+    return Container(
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: live.hairline)),
+      ),
+      child: Row(
+        children: [
+          for (var i = 0; i < labels.length; i++)
+            Expanded(
+              child: InkWell(
+                onTap: onTabChanged == null ? null : () => onTabChanged!(i),
+                child: Container(
+                  height: 40,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    border: Border(
+                      bottom: BorderSide(
+                        color: tab == i ? live.accent : Colors.transparent,
+                        width: 2,
+                      ),
+                    ),
+                  ),
+                  child: Text(
+                    context.t(labels[i]),
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: tab == i ? live.text : live.muted,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
     );
   }
 
@@ -327,21 +553,21 @@ class CaptureSettingsPanel extends StatelessWidget {
                     : context.t('remote.matteValue',
                         {'v': toggles.framingAspect.label}),
                 selected: toggles.framingAspect != FramingAspect.off,
-                onTap: () => onTogglesChanged(toggles
-                    .copyWith(framingAspect: toggles.framingAspect.next)),
+                onTap: () => onTogglesChanged(toggles.copyWith(
+                    framingAspect: toggles.framingAspect.next)),
                 tooltip: context.t('remote.matteCycle')),
             _iconBoxTile(context,
                 icon: Icons.crop_free,
                 label: context.t('remote.safeArea'),
                 selected: toggles.framingSafeArea,
-                onTap: () => onTogglesChanged(
-                    toggles.copyWith(framingSafeArea: !toggles.framingSafeArea))),
+                onTap: () => onTogglesChanged(toggles.copyWith(
+                    framingSafeArea: !toggles.framingSafeArea))),
             _iconBoxTile(context,
                 icon: Icons.center_focus_weak,
                 label: context.t('remote.centerMark'),
                 selected: toggles.framingCenterMark,
-                onTap: () => onTogglesChanged(toggles
-                    .copyWith(framingCenterMark: !toggles.framingCenterMark))),
+                onTap: () => onTogglesChanged(toggles.copyWith(
+                    framingCenterMark: !toggles.framingCenterMark))),
             // 内屏强关(0x9422,B 组线上未验):乐观态会话级,tooltip 标
             // 实验性(副作用未知,断流由看门狗兜底)。
             _iconBoxTile(context,
@@ -564,7 +790,8 @@ class CaptureSettingsPanel extends StatelessWidget {
             live: LiveDesign.of(chipContext),
             label: controller.selfTimerSeconds == 0
                 ? context.t('remote.selfTimer')
-                : context.t('remote.selfTimerValue', {'s': '${controller.selfTimerSeconds}'}),
+                : context.t('remote.selfTimerValue',
+                    {'s': '${controller.selfTimerSeconds}'}),
             selected: controller.selfTimerSeconds > 0,
             // 间隔拍摄运行中:自拍让位(灰化)—— 定时 B 门/自拍倒计时
             // 与调度轮互相踩脚,先停轮再配。
@@ -590,8 +817,7 @@ class CaptureSettingsPanel extends StatelessWidget {
           onTap: controller.intervalActive
               ? controller.stopInterval
               : () => _pickInterval(context, controller),
-          tooltip: context.t(
-              'interval.tooltip'),
+          tooltip: context.t('interval.tooltip'),
         ),
       ],
     );
@@ -657,7 +883,7 @@ Widget _iconBoxTile(
   final live = LiveDesign.of(context);
   final box = SizedBox(
     width: 40,
-    height: 34,
+    height: 32,
     child: Material(
       color: selected ? live.accentDim : Colors.transparent,
       shape: RoundedRectangleBorder(
@@ -672,8 +898,11 @@ Widget _iconBoxTile(
             RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         child: Icon(icon,
             size: 18,
-            color:
-                !enabled ? live.faint : selected ? live.accent : live.muted),
+            color: !enabled
+                ? live.faint
+                : selected
+                    ? live.accent
+                    : live.muted),
       ),
     ),
   );
@@ -687,7 +916,7 @@ Widget _iconBoxTile(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
         tooltip == null ? box : Tooltip(message: tooltip, child: box),
-        const SizedBox(height: 2),
+        const SizedBox(height: 1),
         Text(label,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
@@ -720,8 +949,7 @@ Widget _optionRow(
         message: tooltip ?? label,
         child: Padding(
           padding: const EdgeInsets.fromLTRB(2, 2, 2, 0),
-          child: Text(label,
-              style: TextStyle(fontSize: 11, color: live.faint)),
+          child: Text(label, style: TextStyle(fontSize: 11, color: live.faint)),
         ),
       ),
       const SizedBox(height: 3),
@@ -838,9 +1066,10 @@ Future<void> _pickInterval(
     BuildContext chipContext, RemoteController controller) async {
   var intervalSec = 5;
   var shots = 10; // 0 = ∞
-  await showModalBottomSheet<void>(
+  await showGlassModalSheet<void>(
     context: chipContext,
-    backgroundColor: LiveDesign.of(chipContext).surface,
+    // 步进单沿用无手柄样式(参数/模式底单才有)。
+    handle: false,
     builder: (sheetContext) => SafeArea(
       child: StatefulBuilder(
         builder: (sheetContext, setSheetState) => Padding(
@@ -859,8 +1088,10 @@ Future<void> _pickInterval(
                 sheetContext,
                 label: sheetContext.t('interval.interval'),
                 valueLabel: intervalSec >= 60
-                    ? sheetContext.t('interval.minSec',
-                        {'m': '${intervalSec ~/ 60}', 's': '${intervalSec % 60}'})
+                    ? sheetContext.t('interval.minSec', {
+                        'm': '${intervalSec ~/ 60}',
+                        's': '${intervalSec % 60}'
+                      })
                     : sheetContext.t('common.seconds', {'s': '$intervalSec'}),
                 onDecr: intervalSec > 1
                     ? () => setSheetState(() => intervalSec--)
@@ -886,12 +1117,14 @@ Future<void> _pickInterval(
                 valueLabel: shots == 0
                     ? sheetContext.t('interval.unlimited')
                     : '$shots',
-                onDecr: shots > 0
-                    ? () => setSheetState(() => shots--)
-                    : null,
+                onDecr: shots > 0 ? () => setSheetState(() => shots--) : null,
                 onIncr: shots < 9999
                     ? () => setSheetState(() {
-                          shots += shots < 10 ? 5 : shots < 100 ? 10 : 100;
+                          shots += shots < 10
+                              ? 5
+                              : shots < 100
+                                  ? 10
+                                  : 100;
                         })
                     : null,
               ),
@@ -939,8 +1172,7 @@ Widget _intervalStepper(
           width: 40,
           height: 36,
           child: Icon(icon,
-              size: 20,
-              color: onTap != null ? live.text : live.faint),
+              size: 20, color: onTap != null ? live.text : live.faint),
         ),
       );
   return Padding(

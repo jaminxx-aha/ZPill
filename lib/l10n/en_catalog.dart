@@ -10,6 +10,85 @@ const Map<String, String> enCatalog = {
   'lang.zh': '中文',
   'lang.en': 'English',
   'common.settings': 'Settings',
+  'common.select': 'Select',
+  'common.close': 'Close',
+  'common.apply': 'Apply',
+  'common.reset': 'Reset',
+  'common.done': 'Done',
+  'common.filter': 'Filter',
+  'common.latest': 'Latest',
+  'common.all': 'All',
+  'common.today': 'Today',
+  'common.last7Days': 'Last 7 days',
+  'common.download': 'Download',
+  'common.edit': 'Edit',
+  'common.export': 'Export',
+  'common.back': 'Back',
+  'common.more': 'More',
+  'settings.sectionCapture': 'Capture & monitoring',
+  'settings.sectionTransfer': 'Transfer & storage',
+  'settings.sectionAppearance': 'App & appearance',
+  'settings.sectionDevice': 'Device & diagnostics',
+  'settings.theme': 'Theme',
+  'settings.fontSize': 'Text size',
+  'settings.fontSizeSubtitle': 'Follow system · capture params cap 1.3x',
+  'settings.monitorDefaults': 'Monitor defaults',
+  'settings.monitorDefaultsSubtitle': 'Live view / grid / histogram / peaking',
+  'settings.backgroundTransfer': 'Background transfer',
+  'settings.backgroundTransferSubtitle':
+      'iOS best effort · Android foreground service',
+  'libpage.title': 'On device',
+  'libpage.count': 'Files downloaded to app · {n}',
+  'libpage.emptyTitle': 'No files downloaded yet',
+  'libpage.emptyBody':
+      'Choose “Download to device” in the camera album; files appear here and can be edited or exported.',
+  'grid.latest': 'Latest',
+  'grid.downloadCount': 'Download {n}',
+  'grid.systemAlbum': 'System album',
+  'grid.appLibrary': 'App library',
+  'grid.systemAlbumSub': 'Import to the system album',
+  'grid.appLibrarySub': 'Keep in app for editing / export',
+  'grid.rememberChoice': 'Remember this choice',
+  'grid.rememberChoiceSub': 'Do not ask again',
+  'grid.startDownload': 'Start download · {n}',
+  'grid.downloadAndEdit': 'Download & edit',
+  'grid.swipeHint': 'Swipe to page',
+  'grid.zoomHint': 'Pinch to zoom',
+  'grid.fileType': 'File type',
+  'grid.date': 'Date',
+  'grid.unrated': 'Unrated',
+  'grid.rating1plus': '★ 1+',
+  'grid.rating3plus': '★ 3+',
+  'edit.flip': 'Flip',
+  'edit.toolRotate': 'Rotate',
+  'edit.toolCrop': 'Crop',
+  'edit.toolAdjust': 'Adjust',
+  'edit.toolLut': 'LUT',
+  'edit.toolFilm': 'Film',
+  'conn.reconnectShort': 'Reconnect',
+  'conn.changeMethod': 'Change method',
+  'conn.sectionMethods': 'Connection method',
+  'conn.methodUsbLabel': 'USB cable',
+  'conn.methodApLabel': 'Camera hotspot',
+  'conn.methodStaLabel': 'Same Wi-Fi',
+  'conn.methodBleLabel': 'Bluetooth tools',
+  'conn.savedSubtitle': 'Last {time}',
+  'conn.battery': 'Battery',
+  'conn.storageGb': 'Storage · GB',
+  'conn.lensMm': 'Lens · MM',
+  'conn.shutterCount': 'Shutter count',
+  'conn.readAt': 'Read at {time}',
+  'conn.connectionDetails': 'Connection details',
+  'conn.disconnectAction': 'Disconnect…',
+  'conn.enterCapture': 'Enter capture',
+  'conn.cancelConnect': 'Cancel connection',
+  'conn.cancelPairing': 'Cancel pairing',
+  'conn.pairingHelp': 'Pairing help',
+  'conn.changeConnection': 'Try another method',
+  'conn.techDetails': 'Technical details',
+  'conn.frozenData': 'Data frozen',
+  'conn.cancelReconnect': 'Cancel reconnect',
+  'conn.systemBluetooth': 'System Bluetooth settings',
   'settings.darkMode': 'Dark Mode',
   'settings.darkModeSubtitle': 'Follow system, or lock light/dark',
   'settings.language': 'Language',
@@ -86,15 +165,19 @@ const Map<String, String> enCatalog = {
   'ble.connect': 'Connect',
   'ble.wakeWifi': 'Wake Wi-Fi',
   'ble.closeWifi': 'Close Wi-Fi',
-  'ble.stage2HandshakeTimeout': 'Stage-2 handshake timed out (pairing window elapsed)',
-  'ble.stage2DirectTimeout': 'Stage-2 direct connect timed out (camera not responding)',
-  'ble.stage2ConnectTimeout': 'Stage-2 connect timed out (camera not responding)',
+  'ble.stage2HandshakeTimeout':
+      'Stage-2 handshake timed out (pairing window elapsed)',
+  'ble.stage2DirectTimeout':
+      'Stage-2 direct connect timed out (camera not responding)',
+  'ble.stage2ConnectTimeout':
+      'Stage-2 connect timed out (camera not responding)',
   'ble.stage2ConnectFail': 'Stage-2 connect failed: {e}',
   'ble.stage2ScanNoBroadcast': 'Stage-2 scan found no camera broadcast',
   'ble.reconnectScanFail': 'Reconnect scan failed: {e}',
   'ble.notConnectedReadCred': 'BLE not connected — cannot read AP credentials',
   'ble.noCredBroadcast': 'Camera sent no AP credentials (0x2004 empty)',
-  'ble.credLengthAbnormal': 'AP credentials length abnormal ({n}B, expected 97B)',
+  'ble.credLengthAbnormal':
+      'AP credentials length abnormal ({n}B, expected 97B)',
   'ble.readCredFail': 'Failed to read AP credentials: {e}',
   'ble.notConnectedOp': 'BLE not connected — cannot {label}',
   'ble.opFail': '{label} failed: {e}',
@@ -123,8 +206,7 @@ const Map<String, String> enCatalog = {
       'Save current camera settings as a named preset, or restore a preset back to the camera',
   'snapshot.emptyHint': 'Connect a camera to capture the current config',
   'snapshot.capture': 'Capture',
-  'snapshot.notConnectedCapture':
-      'Camera not connected; cannot capture config',
+  'snapshot.notConnectedCapture': 'Camera not connected; cannot capture config',
   'snapshot.savedNamed': 'Saved "{name}" ({n} properties)',
   'snapshot.captureFailed': 'Snapshot failed: {e}',
   'snapshot.saveFailed': 'Failed to save snapshot',
@@ -202,8 +284,7 @@ const Map<String, String> enCatalog = {
   'conn.wakeCameraWifi': 'Remote Connect Camera',
   'conn.hintToggle': 'Connection Info',
   'conn.wifiAwakeCardTitle': 'Camera Wi-Fi is on — join it manually',
-  'conn.wifiAwakeStep1':
-      'Open Settings > Wi-Fi and join the hotspot "{ssid}"',
+  'conn.wifiAwakeStep1': 'Open Settings > Wi-Fi and join the hotspot "{ssid}"',
   'conn.wifiAwakeStep2':
       'Password below (fetched over the secure Bluetooth channel)',
   'conn.wifiAwakeStep3':
@@ -218,16 +299,14 @@ const Map<String, String> enCatalog = {
       'Camera Wi-Fi is awake: Bluetooth released to let the camera raise hotspot "{ssid}"; credentials are on the connection page (choose "AP Hotspot" to see them) — join the hotspot, then tap "Connect to camera"',
   'conn.wifiAwake':
       'Camera Wi-Fi is awake: Bluetooth released to let the camera raise hotspot "{ssid}" — join the hotspot, then choose "AP Hotspot" on the connection page and tap "Connect to camera"',
-  'conn.joiningHotspot':
-      'Bluetooth released; joining camera hotspot "{ssid}"…',
+  'conn.joiningHotspot': 'Bluetooth released; joining camera hotspot "{ssid}"…',
   'conn.joinedHotspot':
       'Joined camera hotspot "{ssid}"; connecting to the camera…',
   'conn.scanningHotspot': 'Searching for the camera hotspot…',
   'conn.noCameraAp':
       'Camera hotspot not found — make sure the camera Wi-Fi is on',
   'conn.wifiPasswordTitle': 'Enter the camera hotspot password',
-  'conn.wifiPasswordHint':
-      'Shown on the camera screen (Wi-Fi connection view)',
+  'conn.wifiPasswordHint': 'Shown on the camera screen (Wi-Fi connection view)',
   'conn.wifiPasswordSave': 'Connect',
   'conn.autoJoinFailed':
       'Auto-join failed: {e} — join via system Wi-Fi manually (password on the camera screen), then choose "AP Hotspot" on the connection page and tap "Connect to camera"',
@@ -258,8 +337,7 @@ const Map<String, String> enCatalog = {
   'conn.scanCameras': 'Scan for Cameras',
   'conn.scanNothingHint':
       'Nothing found: the camera only broadcasts while on the "Waiting for connection" screen (leaving it stops broadcasting); if you just finished pairing on the camera, press OK on the camera first. You can also type the IP below to connect directly.',
-  'conn.cameraIpManual':
-      'Camera IP (type manually if the scan finds nothing)',
+  'conn.cameraIpManual': 'Camera IP (type manually if the scan finds nothing)',
   'conn.ipExample': 'e.g. 192.168.1.4',
   'conn.scanSubnet': 'Scan Subnet',
   'conn.scanningSubnet': 'Scanning subnet…',
@@ -301,6 +379,15 @@ const Map<String, String> enCatalog = {
       'This setting is controlled by the camera physical dial; the app can adjust it only after takeover is enabled. While takeover is active, the body dial may be locked and the camera screen may go dark; tap "APP Takeover Active" or disconnect to release.',
   'takeover.enable': 'Enable',
   'remote.paramsGroup': 'Shooting Params',
+  'remote.panelTitle': 'Capture Settings',
+  'remote.panelDismiss': 'Tap frame to close',
+  'remote.tabParams': 'Params',
+  'remote.tabFocus': 'Focus',
+  'remote.tabMonitor': 'Monitor',
+  'remote.tabAssist': 'Assist',
+  'remote.keyBack': 'Back',
+  'remote.keyRotate': 'Rotate',
+
   'remote.focusGroup': 'Focus',
   'remote.assistGroup': 'Assist',
   'remote.mfNear': 'MF Near',
@@ -576,8 +663,7 @@ const Map<String, String> enCatalog = {
       'The camera does not allow recording right now — switch the top "photo/video" lever to video and retry (the viewfinder stays on)',
   'remote.focusNearEnd': 'Focus reached the near limit',
   'remote.focusFarEnd': 'Focus reached the far limit',
-  'remote.nearLimitUnlock':
-      'Near limit reached; drive the other way to unlock',
+  'remote.nearLimitUnlock': 'Near limit reached; drive the other way to unlock',
   'remote.farLimitUnlock': 'Far limit reached; drive the other way to unlock',
   'remote.stepTooSmall': 'Step too small; the lens did not move',
   'remote.errMfUnavailable':
@@ -619,8 +705,7 @@ const Map<String, String> enCatalog = {
   'remote.countdownExposure': 'Exposure',
   'remote.sdramNoGallery':
       'Captured (SDRAM, not to card): no gallery channel attached; object not saved',
-  'remote.sdramSaved':
-      'Captured and saved to the gallery (SDRAM, not to card)',
+  'remote.sdramSaved': 'Captured and saved to the gallery (SDRAM, not to card)',
   'remote.sdramSaveFailed':
       'Captured (SDRAM, not to card): gallery save failed; retry from the transfers page',
   'remote.sdramSaving':
@@ -650,11 +735,10 @@ const Map<String, String> enCatalog = {
       'A shot is in progress; try starting interval shooting later',
   'remote.ivSkipBulb': 'Shutter is in Bulb/Time; this shot is skipped',
   'remote.ivDoneAll': 'Interval shooting complete: all {n} shots succeeded',
-  'remote.ivDone':
-      'Interval shooting complete: {n} succeeded, {f} failed',
+  'remote.ivDone': 'Interval shooting complete: {n} succeeded, {f} failed',
   'remote.ivAutoStop':
       'Interval shooting stopped automatically: {f} consecutive failures ({n} taken) — check the camera '
-      '(storage card / dial position / on-camera message)',
+          '(storage card / dial position / on-camera message)',
   'remote.ivStoppedAll': 'Interval shooting stopped: {n} shots in total',
   'remote.ivStopped': 'Interval shooting stopped: {n} succeeded, {f} failed',
   'remote.ivShutterYield':
@@ -702,7 +786,7 @@ const Map<String, String> enCatalog = {
       'Camera session lost synchronization and recovery failed; reconnect the camera',
   'remote.errPropBounce':
       '{label} was sent, but the camera bounced back to its own value ({v}) — this parameter is owned by '
-      'a body dial; the video-exposure write path remains unsolved',
+          'a body dial; the video-exposure write path remains unsolved',
   'remote.hintHardwareError': 'Camera hardware error',
   'remote.hintOutOfFocus': 'Out of focus',
   'remote.hintModeSwitchFailed':
@@ -735,8 +819,7 @@ const Map<String, String> enCatalog = {
   'grid.selectAll': 'Select All',
   'grid.clearSelection': 'Clear Selection',
   'common.refresh': 'Refresh',
-  'grid.noMatchNoDownload':
-      'No files matching "{label}"; download not started',
+  'grid.noMatchNoDownload': 'No files matching "{label}"; download not started',
   'grid.toAlbum': 'to the album',
   'grid.toApp': 'to the app',
   'grid.skipSuffix': ', {n} items without {s} skipped',
@@ -760,6 +843,8 @@ const Map<String, String> enCatalog = {
   'grid.formatFilter': 'Formats',
   'grid.show': 'Show',
   'grid.folderFilter': 'Folders',
+  'grid.exactRating': 'Exact rating',
+  'grid.ratingStar': '★{n}',
   'grid.rating': 'Rating',
   'grid.ratingFilter': 'Rating Filter',
   'grid.ratingNone': 'Unrated',
@@ -803,8 +888,7 @@ const Map<String, String> enCatalog = {
   'libpage.sortSize': 'File size',
   'libpage.viewOptions': 'View Options',
   'libpage.groupBursts': 'Group Bursts',
-  'libpage.exportedAlbum':
-      'Save to Photos',
+  'libpage.exportedAlbum': 'Save to Photos',
   'libpage.deleteSelected': 'Delete Selected',
   'libpage.deleteBody':
       'This will delete {n} files.\nThis cannot be undone (the originals on the camera are unaffected).',
@@ -820,8 +904,7 @@ const Map<String, String> enCatalog = {
   'libpage.deleteAppBody':
       'This will delete "{name}".\nThis cannot be undone (the original on the camera is unaffected).',
   'libpage.importAlbum': 'Import to System Album',
-  'libpage.importedAlbum':
-      'Save to Photos',
+  'libpage.importedAlbum': 'Save to Photos',
   'libpage.notImported': 'Not imported (cancelled or failed)',
   'lut.exportTitle': 'LUT Export',
   'lut.style': 'LUT Style',
@@ -829,8 +912,7 @@ const Map<String, String> enCatalog = {
   'lut.exportFailed': 'Export Failed',
   'lut.parseFailed': 'LUT Parse Failed',
   'libpage.savedToAlbum': 'Saved to the system album',
-  'libpage.decodeFailed':
-      'Decode failed (this platform may not support it)',
+  'libpage.decodeFailed': 'Decode failed (this platform may not support it)',
   'transfers.clearHistory': 'Clear History',
   'transfers.empty':
       'No transfer tasks yet\n(select multiple in the camera album, or download single items from the photo viewer)',
@@ -941,7 +1023,8 @@ const Map<String, String> enCatalog = {
   'fmt.shortJpgRaw': 'JPG+RAW',
   'fmt.jpgAndRaw': 'JPG + RAW',
   'log.title': 'Diagnostic Logs',
-  'log.subtitle': 'App runtime log (in-memory ring buffer, {n}/{cap} entries) — connection & transfer faults land here',
+  'log.subtitle':
+      'App runtime log (in-memory ring buffer, {n}/{cap} entries) — connection & transfer faults land here',
   'log.viewerTitle': 'Log Viewer',
   'log.refresh': 'Refresh',
   'log.copy': 'Copy all',

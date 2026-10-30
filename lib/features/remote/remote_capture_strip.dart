@@ -59,7 +59,8 @@ typedef CaptureParamState = ({
   bool locked,
 });
 
-CaptureParamState captureParamState(RemoteController controller, ShootingParam p) =>
+CaptureParamState captureParamState(
+        RemoteController controller, ShootingParam p) =>
     (
       value: controller.displayParamValue(
           p.code, controller.paramProps[p.code]?.value),
@@ -130,63 +131,66 @@ class CaptureParamTile extends StatelessWidget {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
           decoration: BoxDecoration(
-            color: active ? live.accentDim : Colors.transparent,
+            color: Colors.transparent,
             borderRadius: BorderRadius.circular(10),
             border: active
-                ? Border.all(
-                    color: live.accent.withValues(alpha: 0.5))
+                ? Border.all(color: live.accent.withValues(alpha: 0.6))
                 : null,
           ),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // 目录 label(shooting_param_catalog 产出)原文即
-                  // t() 键,显示点包 t()。Flexible 截断:等宽格子定宽后,
-                  // 长标签(H.265 色调/视频白平衡)不再溢出 —— 全名在
-                  // 编辑底单标题可见。
-                  Flexible(
-                    child: Text(
-                      context.t(param.label),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.w600,
-                        color: active
-                            ? live.accent.withValues(alpha: 0.85)
-                            : live.faint,
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // 目录 label(shooting_param_catalog 产出)原文即
+                    // t() 键,显示点包 t()。Flexible 截断:等宽格子定宽后,
+                    // 长标签(H.265 色调/视频白平衡)不再溢出 —— 全名在
+                    // 编辑底单标题可见。
+                    Flexible(
+                      child: Text(
+                        context.t(param.label),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w600,
+                          color: active
+                              ? live.accent.withValues(alpha: 0.85)
+                              : live.faint,
+                        ),
                       ),
                     ),
-                  ),
-                  if (locked) ...[
-                    const SizedBox(width: 2),
-                    Icon(Icons.lock, size: 8, color: live.accent),
+                    if (locked) ...[
+                      const SizedBox(width: 2),
+                      Icon(Icons.lock, size: 8, color: live.accent),
+                    ],
                   ],
-                ],
-              ),
-              const SizedBox(height: 2),
-              // 值文本(displayValue 经控制器路由 displayParamValue 产出)
-              // 为键+参记录,显示点 tm() 一次落地;「(自动)」后缀同查
-              // 目录。FittedBox 只缩不放:常规值(800/f/2.0/AF-C)原字号,
-              // 长值(槽位真名/1/160s(自动))整串缩到格宽内。
-              FittedBox(
-                fit: BoxFit.scaleDown,
-                child: Text(
-                  '${context.tm(displayValue)}${auto ? context.t('common.autoSuffix') : ''}',
-                  maxLines: 1,
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w500,
-                    color: auto ? live.muted : live.text,
-                    fontFeatures: const [FontFeature.tabularFigures()],
+                ),
+                const SizedBox(height: 2),
+                // 值文本(displayValue 经控制器路由 displayParamValue 产出)
+                // 为键+参记录,显示点 tm() 一次落地;「(自动)」后缀同查
+                // 目录。FittedBox 只缩不放:常规值(800/f/2.0/AF-C)原字号,
+                // 长值(槽位真名/1/160s(自动))整串缩到格宽内。
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Text(
+                    '${context.tm(displayValue)}${auto ? context.t('common.autoSuffix') : ''}',
+                    maxLines: 1,
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                      color: auto ? live.muted : live.text,
+                      fontFeatures: const [FontFeature.tabularFigures()],
+                    ),
                   ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),

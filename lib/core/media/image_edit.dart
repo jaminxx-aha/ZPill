@@ -60,6 +60,7 @@ final class EditAdjustments {
 final class PhotoEdit {
   const PhotoEdit({
     this.rotationQuarter = 0,
+    this.flipHorizontal = false,
     this.cropRect,
     this.adjustments = const EditAdjustments(),
     this.filmPreset,
@@ -68,6 +69,9 @@ final class PhotoEdit {
 
   /// 顺时针 90° 的整倍数(0..3)。
   final int rotationQuarter;
+
+  /// 水平镜像(旋转后、裁剪前的图像坐标;裁剪框同步镜像)。
+  final bool flipHorizontal;
 
   /// 归一化裁剪矩形(0..1,旋转后坐标系);null = 不裁。
   final Rect? cropRect;
@@ -82,6 +86,7 @@ final class PhotoEdit {
 
   bool get isNeutral =>
       rotationQuarter % 4 == 0 &&
+      !flipHorizontal &&
       cropRect == null &&
       adjustments.isNeutral &&
       filmPreset == null &&
@@ -89,6 +94,7 @@ final class PhotoEdit {
 
   PhotoEdit copyWith({
     int? rotationQuarter,
+    bool? flipHorizontal,
     Rect? cropRect,
     bool clearCrop = false,
     EditAdjustments? adjustments,
@@ -99,11 +105,10 @@ final class PhotoEdit {
   }) =>
       PhotoEdit(
         rotationQuarter: rotationQuarter ?? this.rotationQuarter,
-        cropRect:
-            clearCrop ? null : (cropRect ?? this.cropRect),
+        flipHorizontal: flipHorizontal ?? this.flipHorizontal,
+        cropRect: clearCrop ? null : (cropRect ?? this.cropRect),
         adjustments: adjustments ?? this.adjustments,
-        filmPreset:
-            clearFilmPreset ? null : (filmPreset ?? this.filmPreset),
+        filmPreset: clearFilmPreset ? null : (filmPreset ?? this.filmPreset),
         lut: clearLut ? null : (lut ?? this.lut),
       );
 }
@@ -153,14 +158,19 @@ img.Image applyEditToImage(img.Image baked, PhotoEdit edit) {
   if (quarter != 0) {
     out = img.copyRotate(out, angle: 90 * quarter);
   }
-  final crop = edit.cropRect;
+  var crop = edit.cropRect;
+  if (edit.flipHorizontal) {
+    out = img.flipHorizontal(out);
+    if (crop != null) {
+      crop =
+          Rect.fromLTRB(1 - crop.right, crop.top, 1 - crop.left, crop.bottom);
+    }
+  }
   if (crop != null && out.width > 0 && out.height > 0) {
     final x = (crop.left * out.width).round().clamp(0, out.width - 1);
     final y = (crop.top * out.height).round().clamp(0, out.height - 1);
-    final w =
-        (crop.width * out.width).round().clamp(1, out.width - x);
-    final h =
-        (crop.height * out.height).round().clamp(1, out.height - y);
+    final w = (crop.width * out.width).round().clamp(1, out.width - x);
+    final h = (crop.height * out.height).round().clamp(1, out.height - y);
     out = img.copyCrop(out, x: x, y: y, width: w, height: h);
   }
   final a = edit.adjustments;
@@ -177,8 +187,8 @@ img.Image applyEditToImage(img.Image baked, PhotoEdit edit) {
       } else {
         final c = -w;
         blacks = img.ColorRgb8(0, (10 * c).round(), (24 * c).round());
-        whites = img.ColorRgb8(
-            (255 - 20 * c).round(), (255 - 8 * c).round(), 255);
+        whites =
+            img.ColorRgb8((255 - 20 * c).round(), (255 - 8 * c).round(), 255);
       }
       // image 包陷阱:blacks/whites 缺省值是 0(黑),不是 1;mids 缺省
       // 时指数 = 1/0 = ∞ 会把图二值化。两者必须成套给,缺一全黑。

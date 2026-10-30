@@ -50,6 +50,7 @@ final class EditController extends ChangeNotifier {
 
   Uint8List? _previewJpeg;
   int _rotationQuarter = 0;
+  bool _flipHorizontal = false;
   Rect? _cropRect;
   EditAdjustments _adjustments = const EditAdjustments();
   FilmPreset? _filmPreset;
@@ -71,6 +72,7 @@ final class EditController extends ChangeNotifier {
   Uint8List? get previewJpeg => _previewJpeg;
 
   int get rotationQuarter => _rotationQuarter;
+  bool get flipHorizontal => _flipHorizontal;
   Rect? get cropRect => _cropRect;
   EditAdjustments get adjustments => _adjustments;
   FilmPreset? get filmPreset => _filmPreset;
@@ -78,6 +80,7 @@ final class EditController extends ChangeNotifier {
 
   PhotoEdit get edit => PhotoEdit(
         rotationQuarter: _rotationQuarter,
+        flipHorizontal: _flipHorizontal,
         cropRect: _cropRect,
         adjustments: _adjustments,
         filmPreset: _filmPreset,
@@ -126,6 +129,13 @@ final class EditController extends ChangeNotifier {
     _renderPreview();
   }
 
+  /// 水平镜像(旋转后、裁剪前;裁剪框留在旋转后坐标系,镜像后覆盖
+  /// 的是镜像内容 —— 与预览所见一致)。
+  void toggleFlipHorizontal() {
+    _flipHorizontal = !_flipHorizontal;
+    _renderPreview();
+  }
+
   /// 当前(旋转后)画幅尺寸 —— 裁剪 UI 的坐标基准。
   Size? get frameSize {
     final frame = _previewFrame;
@@ -170,6 +180,7 @@ final class EditController extends ChangeNotifier {
 
   void reset() {
     _rotationQuarter = 0;
+    _flipHorizontal = false;
     _cropRect = null;
     _adjustments = const EditAdjustments();
     _filmPreset = null;

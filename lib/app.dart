@@ -51,11 +51,10 @@ class ZPillApp extends StatelessWidget {
           // 的 avoidBounds 钳制),应用内容本就近边绘制 —— 清零后弹层
           // 缝隙由 open(position:) 精确控制(4px)。
           //
-          // textScaler 钉统一系数:系统动态字号只缩放 Text 不缩 Icon/
-          // 布局,平台字号档不同时同一份代码双端大小/折行全错位(设置
-          // 页实证)。系数 = iOS 端系统字号档实测值(标题/正文两线互证
-          // 0.83/0.85),以 iOS 观感为基准 —— iPhone 端不变,其余平台
-          // 对齐;网格角标格内另有绝对钉(见 media_grid),不受此影响。
+          // 字号:正文跟随系统 TextScaler(第 2 轮定案,不再全局钉
+          // 0.85);拍摄页在自身入口单独钳到 1.3(取景参数/五键的
+          // 密度上限),避免大字号把监看控件挤爆。网格角标仍按格内
+          // 绝对钉裁切(见 media_grid)。
           builder: (context, child) => MediaQuery(
             data: MediaQuery.of(context).copyWith(
               padding: MediaQuery.of(context).padding.copyWith(
@@ -63,7 +62,6 @@ class ZPillApp extends StatelessWidget {
                     right: 0,
                   ),
               displayFeatures: const [],
-              textScaler: const TextScaler.linear(0.85),
             ),
             child: child!,
           ),

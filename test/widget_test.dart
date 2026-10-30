@@ -16,7 +16,8 @@ void main() {
   setUp(() {
     dir = Directory.systemTemp.createTempSync('zpill_widget');
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(MethodChannelGallerySaver.channel,
+        .setMockMethodCallHandler(
+            MethodChannelGallerySaver.channel,
             (call) async => switch (call.method) {
                   'dataDir' || 'previewsDir' || 'downloadsDir' => dir.path,
                   _ => null,
@@ -43,7 +44,7 @@ void main() {
     }
   });
 
-  testWidgets('应用启动并渲染底部三 tab', (WidgetTester tester) async {
+  testWidgets('应用启动并渲染底部四 tab', (WidgetTester tester) async {
     // 加高视口:ListView 懒构建,折线下内容未 build 即不可断言。
     tester.view
       ..physicalSize = const Size(800, 2400)
@@ -54,29 +55,26 @@ void main() {
     // 帧上 —— 逐窗排水到收口。
     final transfers = AppServices.instance.transfersController;
     for (var i = 0; i < 20 && !transfers.appFilesScanned; i++) {
-      await tester
-          .runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)));
       await tester.pump();
     }
     await tester.pumpAndSettle();
 
-    // 底部导航三 tab(拍摄页 2026-10-08 改由相机页「进入拍摄」push
+    // 底部导航四 tab(拍摄页 2026-10-08 改由相机页「进入拍摄」push
     // 进入):标签文本与页内 AppBar 标题可能重名,故断言 NavigationBar
     // 的目的地而非全局唯一文本。
     final nav = tester.widget<NavigationBar>(find.byType(NavigationBar));
     final labels = nav.destinations
         .map((d) => (d as NavigationDestination).label)
         .toList();
-    expect(labels, ['相机', '图库', '设置']);
-    // 初始 tab = 相机:方式行(五轮)+ 状态行 + hero(点按即连接);说明
-    // 藏方式行 ⓘ 后;其余方式入口收进右上角弹层不占屏。
+    expect(labels, ['相机', '图库', '传输', '设置']);
+    // 旧版相机页:AppBar 方式位 + 状态行 + hero(点按即连接)。
     expect(find.text('未连接'), findsOneWidget, reason: '状态行常驻(灰点)');
-    expect(find.text('有线'), findsOneWidget, reason: '方式行标题(五轮)');
-    expect(find.text('连接相机'), findsNothing,
-        reason: '中央连接钮退役(五轮:点图标连接)');
-    expect(find.text('当前方式:有线'), findsNothing, reason: '「当前方式」字样整删');
+    expect(find.text('有线'), findsOneWidget, reason: 'AppBar 方式位(默认 USB)');
+    expect(find.text('连接相机'), findsNothing, reason: 'hero 图标即连接钮');
     expect(find.textContaining('C-to-C 数据线直连'), findsNothing,
-        reason: '说明藏方式行 ⓘ 后(点 ⓘ 弹窗)');
+        reason: '旧版方式说明收在 AppBar ⓘ 弹窗');
 
     // 右上角弹层:方式条目与收放(选中仅切换,真连接冒烟归
     // connection_page_test 假连接;壳冒烟只验条目)。

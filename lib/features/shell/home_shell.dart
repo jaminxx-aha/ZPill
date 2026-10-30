@@ -1,18 +1,19 @@
-/// 应用主框架:三 tab 导航(相机 / 图库 / 设置)—— 竖屏底部
+/// 应用主框架:四 tab 导航(相机 / 图库 / 传输 / 设置)—— 竖屏底部
 /// NavigationBar(高度钉 56,见 app_theme navigationBarTheme),横屏
 /// 换左侧 NavigationRail(底栏再矮也会吃掉监看画面高度)。
 ///
 /// 相机 = 连接 + 相机信息总览(相册入口);图库 = 「下载到应用」的
-/// 文件(传输徽标入口);设置 = 全局配置。拍摄页不再是 tab(2026-10-08
+/// 文件;传输 = 下载任务列表(2026-10-30 用户定案,位于图库与设置
+/// 之间);设置 = 全局配置。拍摄页不再是 tab(2026-10-08
 /// 用户明示):由相机页已连接视图「进入拍摄」全屏 push,返回即回相机
 /// 页 —— 底栏/侧栏全程不占监看画面。
 ///
 /// 内容槽 PageView(2026-10-20 用户明示):跟手横滑切台,相机→图库→
-/// 设置线性往复、尽头不回绕;底栏/侧栏点选仍即时 jump(保留即切手感,
-/// 不播跨页滑行动画)。每页包 [_KeepAlivePage] 常驻 —— 滑出 cacheExtent
-/// 外 State 也不丢,等价旧 IndexedStack 常驻语义。三页主体均为竖向
-/// ListView,横向 PageView 都在全屏 push 的查看器路由里,不与滑台
-/// 抢手势;滑台只挂起帧轮询,取景生命周期跟连接走(见下)。
+/// 传输→设置线性往复、尽头不回绕;底栏/侧栏点选仍即时 jump(保留即切
+/// 手感,不播跨页滑行动画)。每页包 [_KeepAlivePage] 常驻 —— 滑出
+/// cacheExtent 外 State 也不丢,等价旧 IndexedStack 常驻语义。各页主体
+/// 均为竖向 ListView,横向 PageView 都在全屏 push 的查看器路由里,不
+/// 与滑台抢手势;滑台只挂起帧轮询,取景生命周期跟连接走(见下)。
 ///
 /// 连接转正沿(有线/无线同一状态机)的「连接即取景」由 RemoteController
 /// 在自己的 states 订阅串链驱动([RemoteController._onConnectedChain],
@@ -31,16 +32,32 @@ import '../connection/connection_page.dart';
 import '../library/local_library_page.dart';
 import '../remote/remote_controller.dart';
 import '../settings/settings_page.dart';
+import '../transfers/transfers_page.dart';
 
-/// 三 tab 定义(NavigationBar / NavigationRail 共用;拍摄页不在列 ——
-/// 由相机页已连接视图「进入拍摄」push 进入)。
+/// 四 tab 定义(NavigationBar / NavigationRail 共用;拍摄页不在列 ——
+/// 由相机页已连接视图「进入拍摄」push 进入)。2026-10-30 用户定案:
+/// 传输页升为底栏 tab,位于图库与设置之间。
 const _tabs = <({IconData icon, IconData selectedIcon, String label})>[
-  (icon: Icons.photo_camera_outlined,
-      selectedIcon: Icons.photo_camera, label: 'shell.camera'),
-  (icon: Icons.photo_library_outlined,
-      selectedIcon: Icons.photo_library, label: 'shell.gallery'),
-  (icon: Icons.settings_outlined,
-      selectedIcon: Icons.settings, label: 'common.settings'),
+  (
+    icon: Icons.photo_camera_outlined,
+    selectedIcon: Icons.photo_camera,
+    label: 'shell.camera'
+  ),
+  (
+    icon: Icons.photo_library_outlined,
+    selectedIcon: Icons.photo_library,
+    label: 'shell.gallery'
+  ),
+  (
+    icon: Icons.swap_vert,
+    selectedIcon: Icons.swap_vert,
+    label: 'transfers.title'
+  ),
+  (
+    icon: Icons.settings_outlined,
+    selectedIcon: Icons.settings,
+    label: 'common.settings'
+  ),
 ];
 
 class HomeShell extends StatefulWidget {
@@ -65,8 +82,7 @@ class _HomeShellState extends State<HomeShell> {
   @override
   void initState() {
     super.initState();
-    _remote =
-        widget.remoteController ?? AppServices.instance.remoteController;
+    _remote = widget.remoteController ?? AppServices.instance.remoteController;
     // 拍摄页不再常驻 tab:未 push 挂载即不可见(原 tab 模式由
     // RemotePage(active:false) initState 汇报)。push 进页/返回由页面
     // 自身翻转;本句管住「停在相机页期间不流 USB 帧」(相机侧取景照
@@ -145,6 +161,7 @@ class _HomeShellState extends State<HomeShell> {
                   ),
                 ),
                 const _KeepAlivePage(child: LocalLibraryPage()),
+                const _KeepAlivePage(child: TransfersPage()),
                 const _KeepAlivePage(child: SettingsPage()),
               ],
             ),

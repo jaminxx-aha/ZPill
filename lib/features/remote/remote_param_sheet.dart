@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../core/ptp/operation_codes.dart';
 import '../../l10n/l10n.dart';
 import '../common/widgets/confirm_dialog.dart';
+import 'glass_sheet.dart';
 import 'live_design.dart';
 import 'remote_controller.dart';
 import 'shooting_param_catalog.dart';
@@ -48,10 +49,8 @@ Future<void> showParamEditSheet(
   final listCtrl = ScrollController();
   var centered = false;
   var enabling = false;
-  await showModalBottomSheet<void>(
+  await showGlassModalSheet<void>(
     context: context,
-    backgroundColor: LiveDesign.of(context).surface,
-    showDragHandle: true,
     builder: (sheetContext) => SafeArea(
       child: AnimatedBuilder(
         animation: controller,

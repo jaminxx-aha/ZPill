@@ -32,6 +32,8 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
+import '../../../core/media/watermark.dart' show jpegEncodedCanvasSize;
+
 /// 动效曲线与时长:路由淡入淡出与 Hero 航班同源同相(曲线分家则底图
 /// 与飞行图错拍)。easeOutCubic = 高初速(起速 ≈ 均速 3 倍)减速落定,
 /// 即系统图库弹簧手感的定程近似;回程框架以 reverseCurve(=flipped)
@@ -57,7 +59,8 @@ ImageProvider<Object> gridThumbImageProvider(String path) =>
 /// 航班图源数据([HeroZoom] 外围继承件):梭子经 context 从任一侧取
 /// 盘档路径自建图源(两侧同值,任取其一)。
 class HeroZoomData extends InheritedWidget {
-  const HeroZoomData({super.key, required this.thumbPath, required super.child});
+  const HeroZoomData(
+      {super.key, required this.thumbPath, required super.child});
 
   /// 格缩略盘档路径(配对两侧同值)。
   final String thumbPath;
@@ -82,9 +85,9 @@ Widget heroZoomShuttle(
   BuildContext fromHeroContext,
   BuildContext toHeroContext,
 ) {
-  final path = (HeroZoomData.of(fromHeroContext) ??
-          HeroZoomData.of(toHeroContext))!
-      .thumbPath;
+  final path =
+      (HeroZoomData.of(fromHeroContext) ?? HeroZoomData.of(toHeroContext))!
+          .thumbPath;
   return Stack(
     fit: StackFit.expand,
     children: [
@@ -123,8 +126,8 @@ class _ZoomPathTween extends RectTween {
     final e = end!;
     // t 已是缓动后进度(Hero.curve):尺寸恒等,中心拖尾(easeIn)。
     final size = Size.lerp(b.size, e.size, t)!;
-    final center = Offset.lerp(
-        b.center, e.center, kHeroZoomCenterCurve.transform(t))!;
+    final center =
+        Offset.lerp(b.center, e.center, kHeroZoomCenterCurve.transform(t))!;
     return Rect.fromCenter(
         center: center, width: size.width, height: size.height);
   }
@@ -148,6 +151,7 @@ class HeroZoom extends StatefulWidget {
     required this.tag,
     required this.thumbPath,
     required this.child,
+    this.imagePath,
     this.aspectBox = false,
     this.deSqueeze = 1.0,
   });
@@ -156,6 +160,11 @@ class HeroZoom extends StatefulWidget {
 
   /// 格缩略盘档路径(配对两侧同值;梭子图源与显示盒图比由此自建)。
   final String thumbPath;
+
+  /// 原图路径(可选):图比优先从 JPEG 帧头同步嗅探,首帧即定盒,
+  /// 避免缩略图异步解析回沿造成「展示完后突然缩小」(2026-10-30
+  /// 用户报障 DSC_6645.JPG)。非 JPEG/嗅探失败回落缩略图异步解析。
+  final String? imagePath;
 
   final Widget child;
 
@@ -186,6 +195,7 @@ class _HeroZoomState extends State<HeroZoom> {
     super.didUpdateWidget(oldWidget);
     // 格复用换图(渐进配对 NEF→JPG 等):路径变更重解析图比。
     if (widget.thumbPath != oldWidget.thumbPath ||
+        widget.imagePath != oldWidget.imagePath ||
         widget.deSqueeze != oldWidget.deSqueeze) {
       _aspect = null;
       if (widget.aspectBox) _resolveAspect();
@@ -194,6 +204,12 @@ class _HeroZoomState extends State<HeroZoom> {
 
   void _resolveAspect() {
     _removeListener();
+    // 原图 JPEG 帧头同步嗅探:首帧即定盒,无异步回沿的「缩小一下」。
+    final sync = _syncAspect();
+    if (sync != null) {
+      _aspect = sync;
+      return;
+    }
     final stream = gridThumbImageProvider(widget.thumbPath)
         .resolve(ImageConfiguration.empty);
     final listener = ImageStreamListener((info, _) {
@@ -204,6 +220,24 @@ class _HeroZoomState extends State<HeroZoom> {
     _stream = stream;
     _listener = listener;
     stream.addListener(listener);
+  }
+
+  /// 原图 JPEG 的显示图比(SOF 宽高);非 JPEG/读取失败 = null。
+  double? _syncAspect() {
+    final path = widget.imagePath;
+    if (path == null) return null;
+    try {
+      final file = File(path);
+      if (file.lengthSync() <= 0) return null;
+      final raf = file.openSync();
+      final bytes = raf.readSync(256 * 1024);
+      raf.closeSync();
+      final dims = jpegEncodedCanvasSize(bytes);
+      if (dims == null) return null;
+      return dims.$1 / dims.$2;
+    } on FileSystemException {
+      return null;
+    }
   }
 
   void _removeListener() {

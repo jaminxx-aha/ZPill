@@ -28,10 +28,12 @@ import 'package:flutter/services.dart' show Clipboard;
 import '../../core/media/cube_lut.dart';
 import '../../core/media/film_presets.dart';
 import '../../core/media/image_edit.dart';
-import '../../core/media/xmp_rgb_table.dart' show looksLikeXmp, parseXmpRgbTable;
+import '../../core/media/xmp_rgb_table.dart'
+    show looksLikeXmp, parseXmpRgbTable;
 import '../../core/ptpip/object_format.dart' show ObjectKind;
 import '../../core/transfer/object_downloader.dart' show ObjectDownloader;
 import '../../design/app_colors.dart';
+import '../../design/app_dimens.dart';
 import '../../design/app_haptics.dart';
 import '../../design/app_theme.dart';
 import '../../l10n/l10n.dart';
@@ -227,8 +229,8 @@ class _EditPageState extends State<EditPage> {
       final title = lut.title.isEmpty ? context.t('edit.untitled') : lut.title;
       // 带参模板在调用点先 t+填充;_toast 内的二次 t 对已填充串不命中
       // 键、原样回落(双重包裹无害,i18n-7 在案)。
-      _toast(context
-          .t('edit.importedTitle', {'title': title, 'size': lut.size}));
+      _toast(
+          context.t('edit.importedTitle', {'title': title, 'size': lut.size}));
     } on FormatException catch (e) {
       _toast(context.t('edit.importFailed', {'e': e.message}));
     }
@@ -266,11 +268,20 @@ class _EditPageState extends State<EditPage> {
   }
 
   @override
+  void dispose() {
+    // 控制器持子 isolate 渲染任务与引导 Future:页面销毁即收(dispose
+    // 后零投递,迟到结果作废)。
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     // 整页订阅控制器:保存/重置按钮的可用性随 edited 变化,不能只让
     // 预览区刷新(旋转/LUT 走 notifyListeners,不触发本 State 的 setState)。
     // PopScope 挂这层同理:canPop 随 edited 即时变(重置/保存成功复位后
     // 干净退出不拦)。
+    final scheme = Theme.of(context).colorScheme;
     return ListenableBuilder(
       listenable: _controller,
       builder: (context, _) => PopScope(
@@ -280,49 +291,112 @@ class _EditPageState extends State<EditPage> {
           _confirmDiscard();
         },
         child: Scaffold(
-          backgroundColor: AppMedia.background,
+          // R4:页面 chrome 跟随明暗主题,预览衬底仍纯黑。
+          backgroundColor: scheme.surface,
           appBar: AppBar(
-            backgroundColor: AppMedia.chrome,
-            foregroundColor: AppMedia.onMedia,
-            title: Text(widget.filename, style: const TextStyle(fontSize: 16)),
+            backgroundColor: scheme.surface,
+            foregroundColor: scheme.onSurface,
+            surfaceTintColor: Colors.transparent,
+            elevation: 0,
+            toolbarHeight: AppSizes.buttonLg, // 52
+            automaticallyImplyLeading: false,
+            centerTitle: true,
+            leadingWidth: 88,
+            leading: _cancelButton(context),
+            title: Text(
+              widget.filename,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: AppTypography.filename
+                  .copyWith(fontSize: 13, color: AppColors.muted(context)),
+            ),
             actions: [
               IconButton(
                 tooltip: context.t('edit.reset'),
-                onPressed: _controller.edited ? _reset : null,
+                onPressed: (_controller.edited && !_saving) ? _reset : null,
                 icon: const Icon(Icons.restart_alt),
               ),
-              IconButton(
-                tooltip: context.t('edit.saveToAlbum'),
-                onPressed: (_controller.edited && !_saving) ? _save : null,
-                icon: _saving
-                    ? const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(
-                            strokeWidth: 2, color: AppMedia.onMedia),
-                      )
-                    : const Icon(Icons.save_outlined),
-              ),
+              _saveButton(context),
+              const SizedBox(width: AppSpacing.sm),
             ],
           ),
-          body: _controller.booting
-              ? _statesOnMedia(
-                  LoadingState(message: context.t('edit.loadingPreview')))
-              : !_controller.isReady
-                  ? _statesOnMedia(EmptyState(
-                      icon: Icons.image_not_supported_outlined,
-                      // EmptyState 显示端已包 t(),此处再包属双重包裹(无害)
-                      message: context.t('edit.jpegOnly'),
-                    ))
-                  : Column(
-                      children: [
-                        Expanded(child: _previewArea()),
-                        _toolBar(),
-                      ],
-                    ),
+          body: Column(
+            children: [
+              Expanded(
+                child: ColoredBox(
+                  color: AppMedia.background,
+                  child: _stage(context),
+                ),
+              ),
+              if (_controller.isReady) _toolBar(context),
+            ],
+          ),
         ),
       ),
     );
+  }
+
+  /// 顶栏左「取消」:走 maybePop,脏态由 PopScope 拦下弹丢弃确认。
+  Widget _cancelButton(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(
+          left: AppSpacing.lg, top: AppSpacing.xs, bottom: AppSpacing.xs),
+      child: OutlinedButton(
+        onPressed: () => Navigator.of(context).maybePop(),
+        style: OutlinedButton.styleFrom(
+          minimumSize: const Size(64, 40),
+          padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
+          shape: const StadiumBorder(),
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        ),
+        child: Text(context.t('common.cancel')),
+      ),
+    );
+  }
+
+  /// 顶栏右「保存」:琥珀实底药丸;保存中翻进度并禁用(脏态才可点)。
+  Widget _saveButton(BuildContext context) {
+    final enabled = _controller.edited && !_saving;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: AppSpacing.xs),
+      child: Tooltip(
+        message: context.t('edit.saveToAlbum'),
+        child: FilledButton(
+          onPressed: enabled ? _save : null,
+          style: FilledButton.styleFrom(
+            minimumSize: const Size(64, 40),
+            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
+            shape: const StadiumBorder(),
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          ),
+          child: _saving
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: AppColors.onBrandYellow),
+                )
+              : Text(context.t('common.save')),
+        ),
+      ),
+    );
+  }
+
+  /// 预览舞台:引导态/非 JPEG 态铺在纯黑衬底上(深色状态主题保对比),
+  /// 就绪后是预览/裁剪区。
+  Widget _stage(BuildContext context) {
+    if (_controller.booting) {
+      return _statesOnMedia(
+          LoadingState(message: context.t('edit.loadingPreview')));
+    }
+    if (!_controller.isReady) {
+      return _statesOnMedia(EmptyState(
+        icon: Icons.image_not_supported_outlined,
+        // EmptyState 显示端已包 t(),此处再包属双重包裹(无害)
+        message: context.t('edit.jpegOnly'),
+      ));
+    }
+    return _previewArea();
   }
 
   void _reset() {
@@ -372,63 +446,117 @@ class _EditPageState extends State<EditPage> {
     );
   }
 
-  Widget _toolBar() {
-    return SafeArea(
-      top: false,
-      child: Material(
-        color: AppMedia.chrome,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            SizedBox(
-              height: 48,
-              child: Row(
-                children: [
-                  for (final t in _Tool.values)
-                    Expanded(
-                      child: IconButton(
-                        color: (t == _tool || (t == _Tool.crop && _cropping))
-                            ? AppMedia.onMedia
-                            : AppMedia.onMediaFaint,
-                        onPressed: () => t == _Tool.crop && !_cropping
-                            ? _enterCropMode()
-                            : _selectTool(t),
-                        icon: Icon(switch (t) {
-                          _Tool.rotate => Icons.rotate_right_outlined,
-                          _Tool.crop => Icons.crop,
-                          _Tool.adjust => Icons.tune,
-                          _Tool.lut => Icons.palette_outlined,
-                          _Tool.film => Icons.camera_roll,
-                        }),
-                        tooltip: switch (t) {
-                          _Tool.rotate => context.t('edit.rotate'),
-                          _Tool.crop => context.t('edit.crop'),
-                          _Tool.adjust => context.t('edit.adjust'),
-                          _Tool.lut => 'LUT',
-                          _Tool.film => context.t('film.title'),
-                        },
-                      ),
-                    ),
-                ],
-              ),
+  /// 底部:工具参数面板 + 分离线 + 五工具胶带。面板与胶带都跟主题
+  /// (surface);保存中整段压暗并禁点(保存中工具不响应)。
+  Widget _toolBar(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final landscape =
+        MediaQuery.orientationOf(context) == Orientation.landscape;
+    final panelHeight = landscape ? 120.0 : 168.0;
+    // R4 尺寸契约:工具胶带竖屏 52 / 横屏 42。
+    final stripHeight = landscape ? 42.0 : 52.0;
+    return Material(
+      color: scheme.surface,
+      child: SafeArea(
+        top: false,
+        child: IgnorePointer(
+          ignoring: _saving,
+          child: Opacity(
+            opacity: _saving ? 0.45 : 1,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SizedBox(
+                  height: panelHeight,
+                  child: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 150),
+                    child: _cropping
+                        ? _cropPanel()
+                        : SizedBox(
+                            key: ValueKey(_tool),
+                            child: _panelFor(context, _tool),
+                          ),
+                  ),
+                ),
+                Divider(height: 1, thickness: 1, color: scheme.outlineVariant),
+                _toolStrip(context, stripHeight),
+              ],
             ),
-            AnimatedSwitcher(
-              duration: const Duration(milliseconds: 150),
-              child: _cropping
-                  ? _cropPanel()
-                  : SizedBox(
-                      key: ValueKey(_tool),
-                      height: 168,
-                      child: switch (_tool) {
-                        _Tool.rotate => _rotatePanel(),
-                        _Tool.crop => _cropEntryPanel(),
-                        _Tool.adjust => _adjustPanel(),
-                        _Tool.lut => _lutPanel(),
-                        _Tool.film => _filmPanel(),
-                      },
-                    ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _panelFor(BuildContext context, _Tool tool) => switch (tool) {
+        _Tool.rotate => _rotatePanel(),
+        _Tool.crop => _cropEntryPanel(),
+        _Tool.adjust => _adjustPanel(context),
+        _Tool.lut => _lutPanel(),
+        _Tool.film => _filmPanel(),
+      };
+
+  /// 五工具胶带:图标 + 标签竖排;选中态琥珀柔底药丸。
+  Widget _toolStrip(BuildContext context, double height) {
+    final scheme = Theme.of(context).colorScheme;
+    return SizedBox(
+      height: height,
+      child: Row(
+        children: [
+          for (final tool in _Tool.values)
+            Expanded(child: _toolButton(context, tool, scheme)),
+        ],
+      ),
+    );
+  }
+
+  Widget _toolButton(BuildContext context, _Tool tool, ColorScheme scheme) {
+    final selected = _cropping ? tool == _Tool.crop : tool == _tool;
+    final (icon, labelKey) = switch (tool) {
+      _Tool.rotate => (Icons.rotate_right_outlined, 'edit.toolRotate'),
+      _Tool.crop => (Icons.crop, 'edit.toolCrop'),
+      _Tool.adjust => (Icons.tune, 'edit.toolAdjust'),
+      _Tool.lut => (Icons.palette_outlined, 'edit.toolLut'),
+      _Tool.film => (Icons.camera_roll, 'edit.toolFilm'),
+    };
+    final label = context.t(labelKey);
+    final ink = selected ? scheme.secondary : scheme.onSurfaceVariant;
+    return Tooltip(
+      message: label,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(AppRadius.md),
+        onTap: () => tool == _Tool.crop && !_cropping
+            ? _enterCropMode()
+            : _selectTool(tool),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(
+              horizontal: AppSpacing.xs, vertical: 3),
+          child: Container(
+            decoration: selected
+                ? BoxDecoration(
+                    color: AppColors.amberSoft(context),
+                    borderRadius: BorderRadius.circular(AppRadius.md),
+                  )
+                : null,
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(icon, size: 20, color: ink),
+                const SizedBox(height: 1),
+                Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 9.5,
+                    height: 1.1,
+                    fontWeight: FontWeight.w600,
+                    color: ink,
+                  ),
+                ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
     );
@@ -448,16 +576,27 @@ class _EditPageState extends State<EditPage> {
       required String label,
       required VoidCallback onTap,
     }) =>
-        OutlinedButton.icon(
-          style: OutlinedButton.styleFrom(foregroundColor: AppMedia.onMedia),
-          onPressed: onTap,
-          icon: Icon(icon),
-          // label 持 l10n 键(比例串等非键直通),显示点统一 t。
-          label: Text(context.t(label)),
+        Expanded(
+          child: OutlinedButton.icon(
+            onPressed: onTap,
+            // 320 宽 + 英文长标签(Rotate left/right)三连会横溢:
+            // 三等分收窄,标签按需缩放,图标不缩。
+            style: OutlinedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              minimumSize: const Size(0, 40),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            icon: Icon(icon, size: 18),
+            // label 持 l10n 键(比例串等非键直通),显示点统一 t。
+            label: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(context.t(label)),
+            ),
+          ),
         );
 
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 24),
+      padding: const EdgeInsets.symmetric(horizontal: 12),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
         children: [
@@ -465,10 +604,16 @@ class _EditPageState extends State<EditPage> {
               icon: Icons.rotate_left_outlined,
               label: 'edit.rotateLeft',
               onTap: _controller.rotateLeft),
+          const SizedBox(width: 6),
           button(
               icon: Icons.rotate_right_outlined,
               label: 'edit.rotateRight',
               onTap: _controller.rotateRight),
+          const SizedBox(width: 6),
+          button(
+              icon: Icons.flip,
+              label: 'edit.flip',
+              onTap: _controller.toggleFlipHorizontal),
         ],
       ),
     );
@@ -493,62 +638,58 @@ class _EditPageState extends State<EditPage> {
       (16 / 9, '16:9'),
       (9 / 16, '9:16'),
     ];
-    return SizedBox(
+    return Column(
       key: const ValueKey('crop-panel'),
-      height: 168,
-      child: Column(
-        children: [
-          SizedBox(
-            height: 44,
-            child: ListView(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              children: [
-                for (final (a, label) in aspects)
-                  Padding(
-                    padding: const EdgeInsets.only(right: 8),
-                    child: ChoiceChip(
-                      // 「自由」为键;1:1 等纯比例串非键,直通原样。
-                      label: Text(context.t(label)),
-                      selected: _aspect == a,
-                      onSelected: (_) => _setAspect(a),
-                    ),
-                  ),
+      children: [
+        SizedBox(
+          height: 44,
+          child: ListView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            children: [
+              for (final (a, label) in aspects)
                 Padding(
                   padding: const EdgeInsets.only(right: 8),
                   child: ChoiceChip(
-                    label: Text(context.t('edit.original')),
-                    selected: _aspect == -1,
-                    onSelected: (_) => _setAspect(-1),
+                    // 「自由」为键;1:1 等纯比例串非键,直通原样。
+                    label: Text(context.t(label)),
+                    selected: _aspect == a,
+                    onSelected: (_) => _setAspect(a),
                   ),
                 ),
-              ],
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: [
-                TextButton(
-                  style: TextButton.styleFrom(
-                      foregroundColor: AppMedia.onMediaMuted),
-                  onPressed: _exitCrop,
-                  child: Text(context.t('common.cancel')),
+              Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: ChoiceChip(
+                  label: Text(context.t('edit.original')),
+                  selected: _aspect == -1,
+                  onSelected: (_) => _setAspect(-1),
                 ),
-                // 「应用」是 Apply 动词(i18n-6 预留的决定:browser 段的
-                // 「到应用/下载到应用」是名词性介词片段,不同键不撞义)。
-                FilledButton(
-                    onPressed: _applyCrop, child: Text(context.t('edit.apply'))),
-              ],
-            ),
+              ),
+            ],
           ),
-        ],
-      ),
+        ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 24),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              TextButton(
+                onPressed: _exitCrop,
+                child: Text(context.t('common.cancel')),
+              ),
+              // 「应用」是 Apply 动词(i18n-6 预留的决定:browser 段的
+              // 「到应用/下载到应用」是名词性介词片段,不同键不撞义)。
+              FilledButton(
+                  onPressed: _applyCrop, child: Text(context.t('edit.apply'))),
+            ],
+          ),
+        ),
+      ],
     );
   }
 
-  Widget _adjustPanel() {
+  Widget _adjustPanel(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     Widget slider(
       String label,
       double value,
@@ -564,8 +705,8 @@ class _EditPageState extends State<EditPage> {
                 width: 52,
                 // label 持 l10n 键,显示点统一 t。
                 child: Text(context.t(label),
-                    style: const TextStyle(
-                        color: AppMedia.onMediaMuted, fontSize: 13))),
+                    style: TextStyle(
+                        color: scheme.onSurfaceVariant, fontSize: 13))),
             Expanded(
               child: Slider(
                 value: value.clamp(min, max),
@@ -581,8 +722,8 @@ class _EditPageState extends State<EditPage> {
                 width: 48,
                 child: Text(fmt(value),
                     textAlign: TextAlign.right,
-                    style: const TextStyle(
-                        color: AppMedia.onMediaFaint, fontSize: 12))),
+                    style: TextStyle(
+                        color: AppColors.muted(context), fontSize: 12))),
           ],
         );
 
@@ -596,17 +737,18 @@ class _EditPageState extends State<EditPage> {
     }
 
     String pct(double v) => '${(v * 100).round()}%';
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
+    // 四行滑条在横屏(面板 120)会超出:面板内滚动,竖屏 168 则刚好。
+    return SingleChildScrollView(
+      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
       child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          slider('edit.brightness', _brightness, 0.5, 1.5, pct, (v) => _brightness = v,
-              (_) => push()),
-          slider('edit.contrast', _contrast, 0.5, 1.5, pct, (v) => _contrast = v,
-              (_) => push()),
-          slider('edit.saturation', _saturation, 0, 2, pct, (v) => _saturation = v,
-              (_) => push()),
+          slider('edit.brightness', _brightness, 0.5, 1.5, pct,
+              (v) => _brightness = v, (_) => push()),
+          slider('edit.contrast', _contrast, 0.5, 1.5, pct,
+              (v) => _contrast = v, (_) => push()),
+          slider('edit.saturation', _saturation, 0, 2, pct,
+              (v) => _saturation = v, (_) => push()),
           slider('edit.warmth', _warmth, -1, 1, (v) => v.toStringAsFixed(1),
               (v) => _warmth = v, (_) => push()),
         ],
@@ -650,7 +792,6 @@ class _EditPageState extends State<EditPage> {
           ),
           const SizedBox(height: 8),
           OutlinedButton.icon(
-            style: OutlinedButton.styleFrom(foregroundColor: AppMedia.onMedia),
             onPressed: _importLutFromClipboard,
             icon: const Icon(Icons.content_paste),
             label: Text(context.t('edit.importClipboard')),

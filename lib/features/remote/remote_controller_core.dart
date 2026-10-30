@@ -158,9 +158,6 @@ mixin _RemoteCore on ChangeNotifier {
   /// 最近取景帧尺寸(SOF 嗅探):触控对焦坐标映射 + 页面画幅计算用。
   final frameSize = ValueNotifier<({int width, int height})?>(null);
 
-  /// 方向锁(会话级):图标与循环读这里,页面只发切换与系统下发。
-  final orientationLock = ValueNotifier<OrientationLock>(OrientationLock.auto);
-
   /// 触控对焦框位置;null = 无。
   AfBox? afBox;
 

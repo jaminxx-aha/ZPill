@@ -16,6 +16,8 @@ import '../../app_services.dart';
 import '../../core/transfer/speed_estimator.dart';
 import '../../core/transfer/transfer_engine.dart';
 import '../../core/transfer/transfer_task.dart';
+import '../../design/app_colors.dart';
+import '../../design/app_dimens.dart';
 import '../../l10n/l10n.dart';
 import '../../platform/gallery_saver.dart';
 import '../common/format.dart';
@@ -141,6 +143,34 @@ final class TransfersController extends ChangeNotifier {
   }
 }
 
+/// 传输页过滤档:全部 / 进行中 / 已完成 / 失败(计数实时取任务表)。
+enum _TransferFilter { all, active, completed, failed }
+
+/// 档位文案:词表暂无独立的「进行中 / 已完成 / 失败」档位键 ——
+/// 进行中复用 processing 状态词(去掉省略号),失败取失败模板冒号前
+/// 的状态词(中英模板同构),完成用 common.done。档位键补齐后改直取。
+String _filterLabel(BuildContext context, _TransferFilter filter) =>
+    switch (filter) {
+      _TransferFilter.all => context.t('common.all'),
+      _TransferFilter.active =>
+        context.t('transfers.processing').replaceAll('…', '').trim(),
+      _TransferFilter.completed => context.t('common.done'),
+      _TransferFilter.failed =>
+        _statusWord(context.t('transfers.failedRetries', {'e': '', 'n': ''})),
+    };
+
+/// 从「失败:{e}(重试 {n} 次)」类模板裁出冒号前的状态词(中英同构)。
+String _statusWord(String text) {
+  final index = text.indexOf(RegExp('[:：]'));
+  return index > 0 ? text.substring(0, index) : text;
+}
+
+/// 视频件(行图标按类型区分;MOV/MP4 为相机视频容器)。
+bool _isVideoFile(String filename) {
+  final upper = filename.toUpperCase();
+  return upper.endsWith('.MOV') || upper.endsWith('.MP4');
+}
+
 class TransfersPage extends StatefulWidget {
   const TransfersPage({super.key, this.controller});
 
@@ -156,6 +186,8 @@ class _TransfersPageState extends State<TransfersPage> {
   TransfersController get _controller =>
       widget.controller ?? AppServices.instance.transfersController;
 
+  _TransferFilter _filter = _TransferFilter.all;
+
   @override
   void initState() {
     super.initState();
@@ -168,14 +200,17 @@ class _TransfersPageState extends State<TransfersPage> {
       listenable: _controller,
       builder: (context, _) => Scaffold(
         appBar: AppBar(
-          title: Text(context.t('transfers.title')),
+          toolbarHeight: AppSizes.appBarPortrait,
+          centerTitle: true,
+          title: Text(context.t('transfers.title'),
+              style: Theme.of(context).textTheme.titleLarge),
           actions: [
             IconButton(
               tooltip: context.t('transfers.clearHistory'),
               onPressed: _controller.clearHistory,
               icon: const Icon(Icons.delete_sweep_outlined),
             ),
-            const SizedBox(width: 8),
+            const SizedBox(width: AppSpacing.sm),
           ],
         ),
         body: _body(),
@@ -186,17 +221,71 @@ class _TransfersPageState extends State<TransfersPage> {
   Widget _body() {
     final theme = Theme.of(context);
     final tasks = _controller.tasks;
+    final counts = {
+      for (final filter in _TransferFilter.values)
+        filter: tasks.where((task) => filter.allows(task)).length,
+    };
+    final filtered = [
+      for (final task in tasks)
+        if (_filter.allows(task)) task,
+    ];
+
+    final Widget content;
     if (tasks.isEmpty) {
       // EmptyState 显示端已包 t(),此处再包属双重包裹(无害,见 states.dart)
-      return EmptyState(
-          icon: Icons.download_outlined,
-          message: context.t('transfers.empty'));
+      content = EmptyState(
+          icon: Icons.download_outlined, message: context.t('transfers.empty'));
+    } else if (filtered.isEmpty) {
+      // 有任务但当前档为空:用既有「无」键,不假造「本档为空」文案。
+      content = EmptyState(
+          icon: Icons.filter_alt_off_outlined,
+          message: context.t('common.none'));
+    } else {
+      content = _taskList(context, theme, filtered);
     }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _filterBar(context, counts),
+        Expanded(child: content),
+      ],
+    );
+  }
+
+  Widget _filterBar(BuildContext context, Map<_TransferFilter, int> counts) {
+    final width = MediaQuery.sizeOf(context).width;
+    final pad = AppBreakpoints.pagePadding(width);
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      padding: EdgeInsets.fromLTRB(pad, AppSpacing.sm, pad, AppSpacing.xs),
+      child: Row(
+        children: [
+          for (final filter in _TransferFilter.values)
+            Padding(
+              padding: const EdgeInsets.only(right: AppSpacing.sm),
+              child: _FilterPill(
+                key: ValueKey('transfer-filter-${filter.name}'),
+                label:
+                    '${_filterLabel(context, filter)} ${counts[filter] ?? 0}',
+                selected: _filter == filter,
+                onSelected: () => setState(() => _filter = filter),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _taskList(
+      BuildContext context, ThemeData theme, List<TransferTask> display) {
     // 排序:进行中在前(入队序),历史按下载时间倒序(持久化记录一并
     // 由引擎快照给出)。
-    final actives = [for (final t in tasks) if (!t.isTerminal) t];
+    final actives = [
+      for (final t in display)
+        if (!t.isTerminal) t
+    ];
     final history = [
-      for (final t in tasks)
+      for (final t in display)
         if (t.isTerminal) t,
     ]..sort((a, b) {
         final epoch0 = DateTime.fromMillisecondsSinceEpoch(0);
@@ -204,12 +293,12 @@ class _TransfersPageState extends State<TransfersPage> {
         final fb = b.finishedAt ?? epoch0;
         return fb.compareTo(fa);
       });
-    final display = [...actives, ...history];
+    final rows = [...actives, ...history];
     return ListView.builder(
-      padding: const EdgeInsets.only(bottom: 16),
-      itemCount: display.length,
+      padding: const EdgeInsets.only(bottom: AppSpacing.xl),
+      itemCount: rows.length,
       itemBuilder: (_, i) {
-        final task = display[i];
+        final task = rows[i];
         final tile = _TaskTile(task: task, controller: _controller);
         if (!task.isTerminal) return tile; // 进行中:取消走行尾 ✕,不滑删
         // 左滑单独删除该记录(历史行);删除沿引擎同步出快照,行即消失。
@@ -219,9 +308,8 @@ class _TransfersPageState extends State<TransfersPage> {
           background: Container(
             color: theme.colorScheme.error,
             alignment: Alignment.centerRight,
-            padding: const EdgeInsets.only(right: 24),
-            child: Icon(Icons.delete_outline,
-                color: theme.colorScheme.onError),
+            padding: const EdgeInsets.only(right: AppSpacing.xl),
+            child: Icon(Icons.delete_outline, color: theme.colorScheme.onError),
           ),
           onDismissed: (_) => _controller.removeRecord(task.id),
           child: tile,
@@ -231,7 +319,49 @@ class _TransfersPageState extends State<TransfersPage> {
   }
 }
 
-/// 单任务行:状态文案 + 进度条(下载中)+ 取消按钮。
+/// 999 胶囊过滤片(与设置页同款视觉;跨模块不复用私有件,故本地一份)。
+class _FilterPill extends StatelessWidget {
+  const _FilterPill({
+    super.key,
+    required this.label,
+    required this.selected,
+    required this.onSelected,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return ChoiceChip(
+      label: Text(
+        label,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              fontWeight: FontWeight.w600,
+              color:
+                  selected ? AppColors.onBrandYellow : scheme.onSurfaceVariant,
+            ),
+      ),
+      selected: selected,
+      onSelected: (_) => onSelected(),
+      showCheckmark: false,
+      selectedColor: AppColors.accentYellow,
+      backgroundColor: Colors.transparent,
+      side: BorderSide(color: scheme.outlineVariant),
+      shape: const StadiumBorder(),
+      labelPadding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm),
+      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      visualDensity: VisualDensity.compact,
+    );
+  }
+}
+
+/// 单任务行:文件图标盒 + 文件名/状态/数据行 + 进度条(下载中)+ 行尾
+/// 取消(进行中)或终态状态标(完成/失败/取消)。
 class _TaskTile extends StatelessWidget {
   const _TaskTile({required this.task, required this.controller});
 
@@ -244,13 +374,13 @@ class _TaskTile extends StatelessWidget {
       return context.t('transfers.durationMinSec',
           {'m': d.inMinutes, 'n': d.inSeconds % 60});
     }
-    return context.t(
-        'transfers.durationSec', {'n': (d.inMilliseconds / 1000).toStringAsFixed(1)});
+    return context.t('transfers.durationSec',
+        {'n': (d.inMilliseconds / 1000).toStringAsFixed(1)});
   }
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final scheme = Theme.of(context).colorScheme;
     final speed = controller.speedOf(task.id);
     final eta = controller.etaOf(task);
 
@@ -264,8 +394,16 @@ class _TaskTile extends StatelessWidget {
       );
     } else {
       // processing 也不给取消钮:文件已完整落盘,后处理收尾后照常完成,
-      // 取消钮点了没反应,不如不给。
-      trailing = const SizedBox(width: 40); // 占位对齐
+      // 取消钮点了没反应,不如不给。终态给状态标(非按钮,无假动作)。
+      trailing = switch (task.state) {
+        TransferState.completed =>
+          Icon(Icons.check_circle, size: 22, color: AppColors.success(context)),
+        TransferState.failed =>
+          Icon(Icons.error_outline, size: 22, color: scheme.error),
+        TransferState.cancelled =>
+          Icon(Icons.block, size: 22, color: scheme.outline),
+        _ => const SizedBox(width: 22),
+      };
     }
 
     // 状态文案原文即 t() 键;字节量/速度为数字格式产物不抽,「剩 Ns」与
@@ -274,10 +412,15 @@ class _TaskTile extends StatelessWidget {
     final subtitle = switch (task.state) {
       TransferState.queued => context.t('transfers.queued'),
       TransferState.running => [
-          formatBytes(task.receivedBytes),
-          if (task.totalBytes > 0) '/ ${formatBytes(task.totalBytes)}',
+          // 设计稿口径:已收 / 总量 是一段,不拆成两段夹「· /」。
+          if (task.totalBytes > 0)
+            '${formatBytes(task.receivedBytes)} / '
+                '${formatBytes(task.totalBytes)}'
+          else
+            formatBytes(task.receivedBytes),
           if (speed != null) '${(speed / 1024 / 1024).toStringAsFixed(1)}MB/s',
-          if (eta != null) context.t('transfers.secondsLeft', {'n': eta.inSeconds + 1}),
+          if (eta != null)
+            context.t('transfers.secondsLeft', {'n': eta.inSeconds + 1}),
         ].join(' · '),
       // 已收满但还在拆分/水印/XMP(与下一文件的下载并行)。
       TransferState.processing => context.t('transfers.processing'),
@@ -305,55 +448,110 @@ class _TaskTile extends StatelessWidget {
           if (task.downloadSpeed case final s?)
             '${(s / 1024 / 1024).toStringAsFixed(1)}MB/s',
         ],
-      TransferState.failed ||
-      TransferState.cancelled => [
+      TransferState.failed || TransferState.cancelled => [
           formatRecentDateTime(task.finishedAt),
           if (task.elapsed case final d?) _durationLabel(context, d),
         ],
       _ => const <String?>[],
-    }.nonNulls.join(' · ');
+    }
+        .nonNulls
+        .join(' · ');
 
-    return ListTile(
-      dense: true,
-      leading: Icon(
-        task.destination == TransferDestination.gallery
-            ? Icons.photo_library_outlined
-            : Icons.folder_outlined,
-      ),
-      title: Text(task.filename, maxLines: 1, overflow: TextOverflow.ellipsis),
-      subtitle: Column(
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+          AppSpacing.lg, AppSpacing.md, AppSpacing.lg, AppSpacing.md),
+      child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(subtitle,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: task.state == TransferState.failed
-                    ? theme.colorScheme.error
-                    : null,
-              )),
-          if (meta.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.only(top: 2),
-              child: Text(meta,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: theme.textTheme.bodySmall
-                      ?.copyWith(color: theme.colorScheme.outline)),
+          Container(
+            width: AppSizes.iconVisual,
+            height: AppSizes.iconVisual,
+            decoration: BoxDecoration(
+              color: scheme.surfaceContainerHigh,
+              borderRadius: BorderRadius.circular(AppRadius.md),
             ),
-          if (task.state == TransferState.running)
-            Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: LinearProgressIndicator(value: task.progress),
+            child: Icon(
+              // 行图标按文件类型(设计稿:照片=image、视频=movie);
+              // 应用内目的地用文件夹表达去向。
+              _isVideoFile(task.filename)
+                  ? Icons.movie_outlined
+                  : task.destination == TransferDestination.gallery
+                      ? Icons.image_outlined
+                      : Icons.folder_outlined,
+              size: 20,
+              color: scheme.onSurfaceVariant,
             ),
-          if (task.state == TransferState.processing)
-            const Padding(
-              padding: EdgeInsets.only(top: 4),
-              child: LinearProgressIndicator(), // 不定进度:后处理无确定性刻度
+          ),
+          const SizedBox(width: AppSpacing.md),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(task.filename,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppTypography.titleS),
+                const SizedBox(height: 2),
+                Text(subtitle,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppTypography.bodyS.copyWith(
+                      color: task.state == TransferState.failed
+                          ? scheme.error
+                          : AppColors.muted(context),
+                    )),
+                if (meta.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Text(meta,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppTypography.bodyS
+                            .copyWith(color: AppColors.muted(context))),
+                  ),
+                if (task.state == TransferState.running)
+                  Padding(
+                    padding: const EdgeInsets.only(top: AppSpacing.sm),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(AppRadius.pill),
+                      child: LinearProgressIndicator(
+                        value: task.progress,
+                        minHeight: 4,
+                        color: AppColors.accentYellow,
+                        backgroundColor: scheme.surfaceContainerHighest,
+                      ),
+                    ),
+                  ),
+                if (task.state == TransferState.processing)
+                  Padding(
+                    padding: const EdgeInsets.only(top: AppSpacing.sm),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(AppRadius.pill),
+                      // 不定进度:后处理无确定性刻度
+                      child: LinearProgressIndicator(
+                        minHeight: 4,
+                        color: AppColors.accentYellow,
+                        backgroundColor: scheme.surfaceContainerHighest,
+                      ),
+                    ),
+                  ),
+              ],
             ),
+          ),
+          const SizedBox(width: AppSpacing.sm),
+          trailing,
         ],
       ),
-      trailing: trailing,
     );
   }
+}
+
+extension on _TransferFilter {
+  bool allows(TransferTask task) => switch (this) {
+        _TransferFilter.all => true,
+        _TransferFilter.active => !task.isTerminal,
+        _TransferFilter.completed => task.state == TransferState.completed,
+        _TransferFilter.failed => task.state == TransferState.failed,
+      };
 }

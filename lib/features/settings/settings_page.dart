@@ -1,4 +1,7 @@
-/// 设置页:深浅模式/速传开关/格式/水印/LUT/日志。
+/// 设置页:四组卡片(拍摄与监看 / 传输与存储 / 应用与外观 / 设备与诊断)。
+///
+/// 第 4 轮视觉:分组标题 + 16 圆角卡片、行前置图标、999 胶囊分段、琥珀
+/// 开关;控制器与回调口径不变(所有存量设置项都保留,仅重排)。
 library;
 
 import 'dart:async';
@@ -10,12 +13,15 @@ import '../../app_services.dart';
 import '../../core/browser/photo_group.dart';
 import '../../core/media/watermark.dart';
 import '../../data/settings_store.dart';
+import '../../design/app_colors.dart';
+import '../../design/app_dimens.dart';
 import '../../l10n/l10n.dart';
 import '../../platform/services.dart';
-import 'snapshot_controller.dart' show buildSnapshotSection;
 import 'log_section.dart' show buildLogSection;
+import 'settings_widgets.dart';
+import 'snapshot_controller.dart' show buildSnapshotSection;
 
-/// 取景页/取景区消费设置(autoRotateFeed/deSqueeze)时把本控制器当
+/// 取景页/取景区消费设置(deSqueeze)时把本控制器当
 /// [ValueListenable] 直挂:监听即 ChangeNotifier,值即 [settings]。
 class SettingsController extends ChangeNotifier
     implements ValueListenable<AppSettings> {
@@ -80,9 +86,6 @@ class SettingsController extends ChangeNotifier
 
   Future<void> setTemporalDenoise(bool value) =>
       _update(settings.copyWith(temporalDenoise: value));
-
-  Future<void> setAutoRotateFeed(bool value) =>
-      _update(settings.copyWith(autoRotateFeed: value));
 
   Future<void> setDeSqueeze(double value) =>
       _update(settings.copyWith(deSqueeze: value.clamp(1.0, 2.0)));
@@ -188,8 +191,7 @@ class _SettingsPageState extends State<SettingsPage> {
     }
     var granted = false;
     try {
-      var status =
-          await PlatformServices.locationStream.authorizationStatus();
+      var status = await PlatformServices.locationStream.authorizationStatus();
       if (status == 'notDetermined') {
         await PlatformServices.locationStream.requestAlwaysAuthorization();
         // 系统弹窗落定时长不定(用户手速):轮询等授权离开未定态,上限
@@ -199,8 +201,7 @@ class _SettingsPageState extends State<SettingsPage> {
         final deadline = DateTime.now().add(const Duration(seconds: 10));
         while (DateTime.now().isBefore(deadline)) {
           await Future<void>.delayed(const Duration(milliseconds: 500));
-          status =
-              await PlatformServices.locationStream.authorizationStatus();
+          status = await PlatformServices.locationStream.authorizationStatus();
           if (status != 'notDetermined') break;
         }
       }
@@ -225,294 +226,278 @@ class _SettingsPageState extends State<SettingsPage> {
   Widget build(BuildContext context) {
     final controller = AppServices.instance.settingsController;
     return Scaffold(
-      // 三十轮定稿:设置页是全 app 唯一显式居中的顶栏(二十九轮全局
-      // appBarTheme 居中误扩当日收回,连接/图库还原二十轮左位);显式
-      // 钉死防平台默认分叉(fork platformCenter:ohos/android 靠左、
-      // iOS 居中)。
+      // 第 4 轮设计稿:设置标题左对齐(三十轮「唯一显式居中顶栏」随
+      // 设计稿收编)。搜索未做真实过滤,不放图标 —— 无假按钮。
       appBar: AppBar(
         centerTitle: true,
-        title: Text(context.t('common.settings')),
+        toolbarHeight: AppSizes.appBarPortrait,
+        title: Text(context.t('common.settings'),
+            // 2026-10-30:与相机页「相机」同字号(titleLarge),三 tab 统一。
+            style: Theme.of(context).textTheme.titleLarge),
       ),
       body: ListenableBuilder(
         listenable: controller,
         builder: (context, _) => GestureDetector(
           // 点空白散焦收键盘:文本框自身的点按由它的手势竞技场赢下,不冲突
           onTap: () => FocusManager.instance.primaryFocus?.unfocus(),
-          child: ListView(
+          child: SingleChildScrollView(
             keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-            children: [
-              ListTile(
-                title: Text(context.t('settings.darkMode')),
-                subtitle: Text(context.t('settings.darkModeSubtitle')),
-              ),
-              // 主题三段走 t()(2026-10-16 真机 EN 抽查补漏;i18n-1 期
-              // 刻意不包 —— settings_page_test 曾全树断言恰一处
-              // 'Follow System',主题段同键再译即两处。现断言已收窄到
-              // 各行子树,system 段撞义复用 common.followSystem)。
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                child: SegmentedButton<AppThemeMode>(
-                  showSelectedIcon: false,
-                  segments: [
-                    ButtonSegment(
-                        value: AppThemeMode.system,
-                        label: Text(context.t('common.followSystem'))),
-                    ButtonSegment(
-                        value: AppThemeMode.light,
-                        label: Text(context.t('theme.light'))),
-                    ButtonSegment(
-                        value: AppThemeMode.dark,
-                        label: Text(context.t('theme.dark'))),
-                  ],
-                  selected: {controller.settings.themeMode},
-                  onSelectionChanged: (s) =>
-                      controller.setThemeMode(s.first),
-                ),
-              ),
-              ListTile(
-                title: Text(context.t('settings.language')),
-                subtitle: Text(context.t('settings.languageSubtitle')),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                child: SegmentedButton<AppLanguage>(
-                  showSelectedIcon: false,
-                  // 选项文案走 t():英文环境「跟随系统」→ Follow System
-                  // (「中文」「English」为专名不译)。第一期基建里语言行
-                  // 是唯一消费 enCatalog 的 UI,其余存量文案由后续抽取
-                  // agent 逐步包 t()(未命中键回落中文,不误翻)。
-                  segments: [
-                    for (final l in AppLanguage.values)
-                      ButtonSegment(value: l, label: Text(context.t(l.label))),
-                  ],
-                  selected: {controller.settings.language},
-                  onSelectionChanged: (s) => controller.setLanguage(s.first),
-                ),
-              ),
-              const Divider(),
-              SwitchListTile(
-                title: Text(context.t('settings.autoTransfer')),
-                subtitle: Text(context.t('settings.autoTransferSubtitle')),
-                value: controller.settings.autoTransfer,
-                onChanged: controller.setAutoTransfer,
-              ),
-              ListTile(
-                title: Text(context.t('settings.quickFormat')),
-                subtitle: Text(context.t(
-                    'settings.quickFormatSubtitle')),
-              ),
-              Padding(
-                // 行留白 16→8:抬高均分上限(可用宽/3 ≈ 119),给 'JPG+RAW'
-                // 单行换余量(按钮自身按内容取宽,行留白在装得下时不可见)。
-                padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
-                child: SegmentedButton<PhotoDownloadFormat>(
-                  showSelectedIcon: false,
-                  // 段标签钉单行:鸿蒙文本引擎在 "+" 处也给断行机会,不禁
-                  // 则窄屏被腰斩;段留白收到 M3 窄窗档(horizontal 4,默认
-                  // 12)再让一档 —— 字体字号不动(4afef1e 显式两行方案经
-                  // 用户改判回单行)。
-                  style: const ButtonStyle(
-                    padding: WidgetStatePropertyAll<EdgeInsetsGeometry>(
-                        EdgeInsets.symmetric(horizontal: 4, vertical: 8)),
-                  ),
-                  segments: [
-                    for (final f in PhotoDownloadFormat.values)
-                      ButtonSegment(
-                          value: f,
-                          label: Text(context.t(f.short), maxLines: 1)),
-                  ],
-                  selected: {
-                    controller.settings.autoTransferFormat,
-                  },
-                  onSelectionChanged: (s) =>
-                      controller.setAutoTransferFormat(s.first),
-                ),
-              ),
-              const Divider(),
-              // BLE GPS 注入总开关(2026-10-18 自连接页收编):打开沿
-              // 申请后台定位授权,失败即翻回不落库(见 _setBleGpsInject)。
-              SwitchListTile(
-                title: Text(context.t('conn.gpsInjection')),
-                subtitle: Text(context.t('conn.gpsInjectionHint')),
-                value: controller.settings.bleGpsInject,
-                onChanged: (on) =>
-                    unawaited(_setBleGpsInject(context, controller, on)),
-              ),
-              const Divider(),
-              ListTile(
-                title: Text(context.t('settings.xmpInjection')),
-                subtitle: Text(
-                    context.t('settings.xmpSubtitle')),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                child: TextField(
-                  controller: _creatorCtrl,
-                  focusNode: _creatorFocus,
-                  decoration: InputDecoration(
-                    labelText: context.t('settings.xmpAuthor'),
-                    border: const OutlineInputBorder(),
-                    isDense: true,
-                  ),
-                  onSubmitted: controller.setXmpCreator,
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                child: TextField(
-                  controller: _rightsCtrl,
-                  focusNode: _rightsFocus,
-                  decoration: InputDecoration(
-                    labelText: context.t('settings.xmpCopyright'),
-                    border: const OutlineInputBorder(),
-                    isDense: true,
-                  ),
-                  onSubmitted: controller.setXmpRights,
-                ),
-              ),
-              SwitchListTile(
-                title: Text(context.t('settings.writeRating')),
-                subtitle: Text(context.t('settings.writeRatingSubtitle')),
-                value: controller.settings.xmpInjectRating,
-                onChanged: controller.setXmpInjectRating,
-              ),
-              SwitchListTile(
-                title: Text(context.t('settings.writeGps')),
-                subtitle: Text(context.t('settings.writeGpsSubtitle')),
-                value: controller.settings.xmpInjectGps,
-                onChanged: controller.setXmpInjectGps,
-              ),
-              const Divider(),
-              ListTile(
-                title: Text(context.t('settings.watermark')),
-                subtitle: Text(context.t('settings.watermarkSubtitle')),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                child: SegmentedButton<WatermarkStyle>(
-                  showSelectedIcon: false,
-                  segments: [
-                    ButtonSegment(
-                        value: WatermarkStyle.off,
-                        label: Text(context.t('common.off'))),
-                    ButtonSegment(
-                        value: WatermarkStyle.corner,
-                        label: Text(context.t('settings.badge'))),
-                    ButtonSegment(
-                        value: WatermarkStyle.card,
-                        label: Text(context.t('settings.photoCard'))),
-                  ],
-                  selected: {controller.settings.watermarkStyle},
-                  onSelectionChanged: (s) =>
-                      controller.setWatermarkStyle(s.first),
-                ),
-              ),
-              if (controller.settings.watermarkStyle != WatermarkStyle.off)
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                  child: TextField(
-                    controller: _watermarkCtrl,
-                    focusNode: _watermarkFocus,
-                    decoration: InputDecoration(
-                      labelText: context.t('settings.watermarkText'),
-                      border: const OutlineInputBorder(),
-                      isDense: true,
-                    ),
-                    onSubmitted: controller.setWatermarkText,
-                  ),
-                ),
-              const Divider(),
-              ListTile(
-                title: Text(context.t('common.monitoring')),
-                subtitle: Text(context.t('settings.monitoringSubtitle')),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(context.t('settings.upscaling'),
-                      style: const TextStyle(fontSize: 13)),
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                child: SegmentedButton<FeedUpscaler>(
-                  showSelectedIcon: false,
-                  segments: [
-                    ButtonSegment(
-                        value: FeedUpscaler.off, label: Text(context.t('common.offShort'))),
-                    ButtonSegment(
-                        value: FeedUpscaler.fast, label: Text(context.t('common.fast'))),
-                    ButtonSegment(
-                        value: FeedUpscaler.quality,
-                        label: Text(context.t('common.highQuality'))),
-                  ],
-                  selected: {controller.settings.feedUpscaler},
-                  onSelectionChanged: (s) =>
-                      controller.setFeedUpscaler(s.first),
-                ),
-              ),
-              SwitchListTile(
-                title: Text(context.t('settings.temporalDenoise')),
-                subtitle: Text(
-                    context.t('settings.temporalDenoiseSubtitle')),
-                value: controller.settings.temporalDenoise,
-                onChanged: controller.setTemporalDenoise,
-              ),
-              SwitchListTile(
-                title: Text(context.t('settings.autoRotate')),
-                subtitle: Text(context.t('settings.autoRotateSubtitle')),
-                value: controller.settings.autoRotateFeed,
-                onChanged: controller.setAutoRotateFeed,
-              ),
-              ListTile(
-                title: Text(context.t('settings.desqueeze')),
-                subtitle: Text(context.t('settings.desqueezeSubtitle',
-                    {'v': controller.settings.deSqueeze.toStringAsFixed(2)})),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
-                child: Wrap(
-                  spacing: 6,
-                  children: [
-                    for (final preset in kDeSqueezePresets)
-                      ChoiceChip(
-                        showCheckmark: false, // 与分段钮统一:选中=实底,无 ✓
-                        label: preset == 1.0
-                            ? Text(context.t('common.offShort'))
-                            : Text('$preset×'),
-                        selected:
-                            controller.settings.deSqueeze == preset,
-                        onSelected: (_) =>
-                            controller.setDeSqueeze(preset),
-                      ),
-                  ],
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                child: Slider(
-                  min: 1.0,
-                  max: 2.0,
-                  divisions: 100,
-                  label:
-                      '${controller.settings.deSqueeze.toStringAsFixed(2)}×',
-                  value: controller.settings.deSqueeze,
-                  onChanged: controller.setDeSqueeze,
-                ),
-              ),
-              const Divider(),
-              ListTile(
-                title: Text(context.t('settings.transferQuality')),
-                subtitle: Text(context.t('settings.transferQualitySubtitle')),
-                enabled: false,
-              ),
-              buildSnapshotSection(context),
-              buildLogSection(context),
-            ],
+            padding: const EdgeInsets.only(bottom: AppSpacing.xxl),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _captureSection(context, controller),
+                _transferSection(context, controller),
+                _appearanceSection(context, controller),
+                _deviceSection(context, controller),
+              ],
+            ),
           ),
         ),
       ),
+    );
+  }
+
+  Widget _captureSection(BuildContext context, SettingsController controller) {
+    final s = controller.settings;
+    return SettingsSection(
+      titleKey: 'settings.sectionCapture',
+      children: [
+        SettingsControlRow(
+          leading: Icons.auto_awesome,
+          title: context.t('settings.upscaling'),
+          // 设计稿副题 = 三档并陈(关 · 快速 · 高质量)。
+          subtitle: [
+            context.t('common.offShort'),
+            context.t('common.fast'),
+            context.t('common.highQuality'),
+          ].join(' · '),
+          child: SettingsSegment<FeedUpscaler>(
+            value: s.feedUpscaler,
+            options: [
+              (value: FeedUpscaler.off, label: context.t('common.offShort')),
+              (value: FeedUpscaler.fast, label: context.t('common.fast')),
+              (
+                value: FeedUpscaler.quality,
+                label: context.t('common.highQuality')
+              ),
+            ],
+            onChanged: controller.setFeedUpscaler,
+          ),
+        ),
+        SettingsSwitchRow(
+          leading: Icons.blur_on,
+          title: context.t('settings.temporalDenoise'),
+          subtitle: context.t('settings.temporalDenoiseSubtitle'),
+          value: s.temporalDenoise,
+          onChanged: controller.setTemporalDenoise,
+        ),
+        SettingsControlRow(
+          leading: Icons.aspect_ratio,
+          title: context.t('settings.desqueeze'),
+          subtitle: context.t('settings.desqueezeSubtitle',
+              {'v': s.deSqueeze.toStringAsFixed(2)}),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Wrap(
+                spacing: AppSpacing.xs + 2,
+                runSpacing: AppSpacing.xs,
+                children: [
+                  for (final preset in kDeSqueezePresets)
+                    SettingsPillChip(
+                      label: preset == 1.0
+                          ? context.t('common.offShort')
+                          : '$preset×',
+                      selected: s.deSqueeze == preset,
+                      onSelected: () => controller.setDeSqueeze(preset),
+                    ),
+                ],
+              ),
+              Slider(
+                min: 1.0,
+                max: 2.0,
+                divisions: 100,
+                label: '${s.deSqueeze.toStringAsFixed(2)}×',
+                value: s.deSqueeze,
+                activeColor: AppColors.accentYellow,
+                inactiveColor:
+                    Theme.of(context).colorScheme.surfaceContainerHighest,
+                onChanged: controller.setDeSqueeze,
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _transferSection(BuildContext context, SettingsController controller) {
+    final s = controller.settings;
+    return SettingsSection(
+      titleKey: 'settings.sectionTransfer',
+      children: [
+        SettingsSwitchRow(
+          leading: Icons.bolt,
+          title: context.t('settings.autoTransfer'),
+          subtitle: context.t('settings.autoTransferSubtitle'),
+          value: s.autoTransfer,
+          onChanged: controller.setAutoTransfer,
+        ),
+        SettingsControlRow(
+          leading: Icons.photo_size_select_large,
+          title: context.t('settings.quickFormat'),
+          subtitle: context.t('settings.quickFormatSubtitle'),
+          child: SettingsSegment<PhotoDownloadFormat>(
+            value: s.autoTransferFormat,
+            // 四段窄屏:选中不加 ✓,段文案钉单行(鸿蒙在 "+" 处会断行)。
+            showSelectedIcon: false,
+            options: [
+              for (final f in PhotoDownloadFormat.values)
+                (value: f, label: context.t(f.short)),
+            ],
+            onChanged: controller.setAutoTransferFormat,
+          ),
+        ),
+        SettingsRow(
+          leading: Icons.high_quality_outlined,
+          title: context.t('settings.transferQuality'),
+          subtitle: context.t('settings.transferQualitySubtitle'),
+          enabled: false,
+        ),
+        SettingsRow(
+          leading: Icons.data_object,
+          title: context.t('settings.xmpInjection'),
+          subtitle: context.t('settings.xmpSubtitle'),
+        ),
+        SettingsTextField(
+          controller: _creatorCtrl,
+          focusNode: _creatorFocus,
+          label: context.t('settings.xmpAuthor'),
+          onSubmitted: controller.setXmpCreator,
+        ),
+        SettingsTextField(
+          controller: _rightsCtrl,
+          focusNode: _rightsFocus,
+          label: context.t('settings.xmpCopyright'),
+          onSubmitted: controller.setXmpRights,
+        ),
+        SettingsSwitchRow(
+          leading: Icons.star_outline,
+          title: context.t('settings.writeRating'),
+          subtitle: context.t('settings.writeRatingSubtitle'),
+          value: s.xmpInjectRating,
+          onChanged: controller.setXmpInjectRating,
+        ),
+        SettingsSwitchRow(
+          leading: Icons.location_on_outlined,
+          title: context.t('settings.writeGps'),
+          subtitle: context.t('settings.writeGpsSubtitle'),
+          value: s.xmpInjectGps,
+          onChanged: controller.setXmpInjectGps,
+        ),
+        SettingsControlRow(
+          leading: Icons.branding_watermark_outlined,
+          title: context.t('settings.watermark'),
+          subtitle: context.t('settings.watermarkSubtitle'),
+          child: SettingsSegment<WatermarkStyle>(
+            value: s.watermarkStyle,
+            options: [
+              (value: WatermarkStyle.off, label: context.t('common.off')),
+              (
+                value: WatermarkStyle.corner,
+                label: context.t('settings.badge')
+              ),
+              (
+                value: WatermarkStyle.card,
+                label: context.t('settings.photoCard')
+              ),
+            ],
+            onChanged: controller.setWatermarkStyle,
+          ),
+        ),
+        if (s.watermarkStyle != WatermarkStyle.off)
+          SettingsTextField(
+            controller: _watermarkCtrl,
+            focusNode: _watermarkFocus,
+            label: context.t('settings.watermarkText'),
+            onSubmitted: controller.setWatermarkText,
+          ),
+      ],
+    );
+  }
+
+  Widget _appearanceSection(
+      BuildContext context, SettingsController controller) {
+    final s = controller.settings;
+    return SettingsSection(
+      titleKey: 'settings.sectionAppearance',
+      children: [
+        SettingsControlRow(
+          title: context.t('settings.theme'),
+          subtitle: context.t('settings.darkModeSubtitle'),
+          child: SettingsSegment<AppThemeMode>(
+            value: s.themeMode,
+            options: [
+              (
+                value: AppThemeMode.system,
+                label: context.t('common.followSystem')
+              ),
+              (value: AppThemeMode.light, label: context.t('theme.light')),
+              (value: AppThemeMode.dark, label: context.t('theme.dark')),
+            ],
+            onChanged: controller.setThemeMode,
+          ),
+        ),
+        SettingsControlRow(
+          title: context.t('settings.language'),
+          subtitle: context.t('settings.languageSubtitle'),
+          child: SettingsSegment<AppLanguage>(
+            value: s.language,
+            options: [
+              for (final l in AppLanguage.values)
+                (value: l, label: context.t(l.label)),
+            ],
+            onChanged: controller.setLanguage,
+          ),
+        ),
+        SettingsRow(
+          leading: Icons.text_fields,
+          title: context.t('settings.fontSize'),
+          subtitle: context.t('settings.fontSizeSubtitle'),
+          trailing: Text(
+            '${MediaQuery.textScalerOf(context).scale(1).toStringAsFixed(2)}×',
+            style: TextStyle(
+              fontSize: 12,
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _deviceSection(BuildContext context, SettingsController controller) {
+    final s = controller.settings;
+    return SettingsSection(
+      titleKey: 'settings.sectionDevice',
+      // 快照区自带首条 Divider(与 GPS 行分隔),不能再自动插线。
+      insertDividers: false,
+      children: [
+        // BLE GPS 注入总开关(2026-10-18 自连接页收编):打开沿
+        // 申请后台定位授权,失败即翻回不落库(见 _setBleGpsInject)。
+        SettingsSwitchRow(
+          leading: Icons.bluetooth,
+          title: context.t('conn.gpsInjection'),
+          subtitle: context.t('conn.gpsInjectionHint'),
+          value: s.bleGpsInject,
+          onChanged: (on) =>
+              unawaited(_setBleGpsInject(context, controller, on)),
+        ),
+        buildSnapshotSection(context),
+        const Divider(height: 1),
+        buildLogSection(context),
+      ],
     );
   }
 }

@@ -16,8 +16,8 @@
 /// 布局(竖屏,2026-10-10 iPhone 相机式重排,用户六条需求:取景默认
 /// 开 / 拍照录像并一钮 / 对焦居中 / 设置右侧收参数与监看 / 隐藏显示
 /// 同位 / 旋转到底):
-/// - 取景画面**全幅铺底恒满宽**(2026-10-12 用户定案:竖拍画面两侧
-///   不留黑边 —— [FeedFit.widthFill],比屏更高的内容上下裁;底部两行
+/// - 取景画面**完整显示**(2026-10-30 用户定案:[FeedFit.contain],
+///   整帧可见,留背景带),不再满幅裁切;底部两行
 ///   按钮改浮层压画面下沿,「按钮整体往下移」):信息胶囊(链路点 +
 ///   设备名 + REC + APP 接管钮)浮在画面顶部。纯净监看(2026-10-17
 ///   用户定案改制):点页面**空白处**(信箱带/按钮间空档/取景盒外
@@ -40,25 +40,8 @@
 ///   十二轮起全部持久化 —— 关掉重进保持)+ 辅助芯片(对焦后拍/自拍/
 ///   APP 接管;吸收原 tune 辅助浮层)。
 ///
-/// 横屏**满高画面 + 移出画面的右缘快门柱**(2026-10-08 用户定案
-/// 「拍照按钮在右侧中间」;2026-10-12 三轮修正:取景盒右缩让柱
-/// **移出拍摄框**、[FeedFit.heightFill] **恒满高上下无黑边** ——
-/// 16:9 视频满高零黑边、3:2 照片满高余侧边;九轮:盒再左缩 60,画面
-/// 右移 30):顶栏一条(信息胶囊定宽 [kLandscapePillWidth]
-/// **居中于取景盒**,与贴底模式条同轴线 —— 八轮用户定案「上方按钮和
-/// 下方拍照/视频按钮基于取景居中对齐」;十轮顶距 6 + 胶囊高 38,
-/// 与贴底条 6+38 上下镜像;APP 接管钮入胶囊行尾);
-/// 快门柱**距物理屏右缘 [kScreenEdgePadding]**(六轮破安全区;
-/// 灵动岛在侧缘中点,岛侧快门右段入岛)全高居中,自上而下
-/// **旋转 / 设置 / 大圆环快门(78,同竖屏)/ 对焦 / 相册**(2026-10-12
-/// 用户定案柱序,方向钮自贴底条迁入柱顶;快门两向同大 = 用户定案
-/// 「横屏按钮保持和竖屏大小一样」;**十轮五件共轴于快门心**,
-/// 用户「以拍照按钮居中对齐,而不是右边对齐」);贴底条 = 模式条
-/// 独占(居中于画面子盒);设置浮层让位快门柱;拉焦轮 bottomRight
-/// (右上角留给录制读出)。纯净监看隐去全部控制浮层,只留画面与监看
-/// 叠层,再点任意空白恢复。方向按钮(恒显转屏图标,点按横↔竖直切,
-/// 初始态跟随系统)经 SystemChrome 强制,系统转屏锁开着也能切,不
-/// 依赖系统自动横竖屏设置。
+/// 拍摄页仅竖屏(2026-10-30 去掉横屏模式):无方向钮、无横屏取景台,
+/// 全局方向契约钉竖屏。
 ///
 /// 水平仪数据源:相机帧头虚拟水平仪(LiveViewHeader.level,机身侧水平
 /// 仪,OpenZCine 同源)。无帧(取景未开/失败)不显示任何水平仪 —— 手机
@@ -73,22 +56,21 @@
 /// connected 沿驱动(RemoteController.autoLiveViewOnConnect),进页
 /// 自动起景是对「用户显式关过/引擎失败后重进」的兜底,幂等。
 ///
-/// 离页两收口(2026-10-08 真机反馈):①横锁还竖 —— 方向钮是监看页
-/// 专属控件而 SystemChrome 全局生效,离页把外壳还竖(portraitUp 具体
-/// 方向,空表 All mask 会闪屏永不发),锁态复位 portrait;②断连即
-/// 退页 —— 链路没了监看页无从看,pop 回相机页(重连入口在彼)。
+/// 离页收口(2026-10-08 真机反馈):断连即退页 —— 链路没了监看页
+/// 无从看,pop 回相机页(重连入口在彼)。拍摄页现仅竖屏(2026-10-30
+/// 去掉横屏模式),无方向锁复位。
 library;
 
 import 'dart:async';
 import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import '../../app_services.dart';
 import '../../core/ble/ble_camera_session.dart';
 import '../../core/browser/album.dart';
 import '../../core/remote/peaking_engines.dart';
 import '../../data/settings_store.dart';
+import '../../design/app_haptics.dart';
 import '../../l10n/l10n.dart';
 import '../../platform/volume_keys.dart';
 import '../browser/photo_grid_page.dart';
@@ -96,12 +78,12 @@ import '../settings/settings_page.dart' show SettingsController;
 import 'feed_transform.dart';
 import 'live_design.dart';
 import 'monitor_toggles.dart';
-import 'remote_action_row.dart';
+import 'remote_capture_keys.dart';
 import 'remote_controller.dart';
+import 'remote_exposure_strip.dart';
 import 'remote_feed_area.dart';
-import 'remote_info_pill.dart';
+import 'remote_info_pill.dart' show recDurationLabel;
 import 'remote_mode_sheet.dart';
-import 'remote_mode_strip.dart';
 import 'remote_param_sheet.dart';
 import 'remote_settings_panel.dart';
 import 'shooting_param_catalog.dart';
@@ -161,6 +143,11 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   /// 对焦浮层退场 —— 对焦钮瘦身为一键 AF,MF 步进/拉焦轮迁入设置
   /// 浮层,只剩此一个非模态浮层)。
   bool _settingsOpen = false;
+
+  /// 拍摄设置浮层当前页签:0 参数 / 1 对焦 / 2 监看 / 3 辅助。
+  int _settingsTab = 0;
+
+  final _settingsSectionKeys = List<GlobalKey>.generate(4, (_) => GlobalKey());
 
   /// 纯净监看:隐去全部控制浮层(横幅/监看叠层/触控对焦保留)。
   bool _chromeHidden = false;
@@ -303,7 +290,6 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     _wasLinkUp = up;
     _wasRecovering = recovering;
     if (!dropped || !mounted) return;
-    _exitOrientationReset();
     Navigator.of(context).popUntil((r) => r.isFirst);
   }
 
@@ -453,10 +439,24 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     setState(() => _settingsOpen = !_settingsOpen);
   }
 
+  /// 页签是「滚到段」而不是隐藏段:设计稿的浮层虽然四个页签,但内容
+  /// 全量在同一个滚动区(参数/对焦/监看/辅助),页签只做锚点跳转。
+  void _selectSettingsTab(int i) {
+    setState(() => _settingsTab = i);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final ctx = _settingsSectionKeys[i].currentContext;
+      if (ctx == null) return;
+      unawaited(Scrollable.ensureVisible(
+        ctx,
+        duration: const Duration(milliseconds: 180),
+        alignment: 0.02,
+      ));
+    });
+  }
+
   /// 点空白处收设置浮层(2026-10-12 用户需求):收起动作由满铺
   /// GestureDetector 垫层承担 —— 竖屏一处(画面全幅铺底后底区两行
-  /// 也是浮层,整页满铺垫层连底区按钮间空白一起收)、横屏一处
-  /// (chrome 栈内);垫层**贪吃这一拍** —— 只收浮层,不触发取景画面
+  /// 也是浮层,整页满铺垫层连底区按钮间空白一起收);垫层**贪吃这一拍** —— 只收浮层,不触发取景画面
   /// 上的触控对焦。
   void _dismissSettings() {
     if (_settingsOpen) setState(() => _settingsOpen = false);
@@ -483,6 +483,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   /// - 已接管 → 直切,零面板。
   Future<void> _onStripMode(CaptureMode m) async {
     if (m == _effMode) return;
+    unawaited(AppHaptics.selection()); // 模式切换确认沿(原模式条触感)
     if (controller.cameraMode == null) {
       _setMode(m);
       return;
@@ -529,54 +530,29 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
-    // 横屏 = 监看布局(OpenZCine MonitorLayoutPolicy 口径):取景画面
-    // 全幅铺底占大块屏幕,控制件(信息胶囊/读出条/快门柱/浮层)以
-    // 玻璃浮层叠在画面上,而不是竖屏的「上下挤出」。
-    final body = MediaQuery.orientationOf(context) == Orientation.landscape
-        ? _landscapeBody(context)
-        : _portraitBody(context);
+    // 拍摄页只保留竖屏(2026-10-30 用户定案去掉横屏模式):全局方向
+    // 契约本就是钉竖屏,旋转钮与横屏监看布局一并移除。
+    final body = _portraitBody(context);
     return PopScope(
       canPop: true,
-      // 离页方向收口(返回钮/系统返回手势/断连退页都经此):pop 起点
-      // 即发,不等 dispose —— 转场与转屏并发,相机页落地即竖。
-      onPopInvokedWithResult: (didPop, _) {
-        if (didPop) _exitOrientationReset();
-      },
       child: Scaffold(
         backgroundColor: LiveDesign.of(context).background,
         // 破安全区(2026-10-12 六轮用户定案,参照 iOS 相机底部按钮距屏底
-        // 的距离):页面用**物理屏坐标**铺满,底区/横屏柱贴到物理屏缘
+        // 的距离):页面用**物理屏坐标**铺满,底区贴物理屏缘
         // 20([kScreenEdgePadding])。顶部 notch(竖屏胶囊/恢复钮/取景
-        // 盒 topInset)经 MediaQuery.padding 手动补偿;横屏上下安全
-        // 插入本为 0 无需补偿。灵动岛在横屏侧缘中点 —— 岛侧快门右段
-        // 会藏进岛里,是本定案的已知代价。九轮:竖屏左右边距亦统一 20
-        // (四缘一致)。
-        body: body,
+        // 盒 topInset)经 MediaQuery.padding 手动补偿;九轮:竖屏左右
+        // 边距亦统一 20 (四缘一致)。
+        body: MediaQuery.withClampedTextScaling(
+          maxScaleFactor: 1.3,
+          child: body,
+        ),
       ),
     );
   }
 
-  /// 离页方向收口(幂等):横锁期间离开监看页,把外壳还竖 —— 方向钮
-  /// 是监看页专属控件而 SystemChrome 全局生效,不还的话相机页/设置页
-  /// 跟着横(2026-10-08 真机反馈)。锁态一并复位 portrait:每次进页
-  /// 从竖起步、点按直切横竖(无白点一击)。发的是具体方向 portraitUp,
-  /// **不是空表 All mask**(空表 iOS 按物理姿态闪转,2026-10-08 定案
-  /// 永不发);portrait/auto 锁离页无需动作(本就全局竖)。
-  void _exitOrientationReset() {
-    if (controller.orientationLock.value != OrientationLock.landscape) {
-      return;
-    }
-    controller.orientationLock.value = OrientationLock.portrait;
-    unawaited(
-      SystemChrome.setPreferredOrientations(
-          const [DeviceOrientation.portraitUp]).catchError((Object _) {}),
-    );
-  }
-
-  /// 竖屏 iPhone 相机式排版(2026-10-10 重排;2026-10-12 三轮:画面
-  /// 全幅铺底恒满宽,底部两行改浮层压画面下沿;九轮:四缘统一 20):
-  /// 取景画面占整页([FeedFit.widthFill] —— 竖拍内容两侧不留黑边,
-  /// 比屏更高裁上下),信息胶囊(含 APP 接管钮)浮在画面顶部(顶距
+  /// 竖屏 iPhone 相机式排版(2026-10-10 重排;九轮:四缘统一 20):
+  /// 取景画面完整铺在页面内([FeedFit.contain] —— 整帧可见,留背景带),
+  /// 信息胶囊(含 APP 接管钮)浮在画面顶部(顶距
   /// 补 notch,六轮破安全区后手动补偿;左右 20);底部两行浮层压画面
   /// 下沿、距**物理屏缘 20**([kScreenEdgePadding] 破手势条安全区,
   /// 参照 iOS 相机底部按钮距离;左右同为 20 —— 九轮用户「左右两侧按钮
@@ -589,24 +565,55 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   /// 底锚浮在底区两行上方。纯净监看隐去顶部浮层与底部两行(点取景
   /// 画面空白隐藏/再点任意处恢复),监看叠层/横幅保留。
   ///
-  /// 监听拆两层(同横屏):feed 区 merge(controller+frame+status)
+  /// 监听拆两层:feed 区 merge(controller+frame+status)
   /// 逐帧刷;chrome 层只听 controller —— 帧到达只写 ValueNotifier 不
   /// notifyListeners,胶囊/读出行/按钮不必逐帧重建。
   Widget _portraitBody(BuildContext context) {
-    // 破安全区(六轮):页面物理坐标,顶部 notch 手动补偿(左右在竖屏
-    // 恒 0 不必补);底部压进手势条区距物理屏缘 20。
+    final size = MediaQuery.sizeOf(context);
     final pad = MediaQuery.paddingOf(context);
-    final panelMaxHeight = MediaQuery.sizeOf(context).height * 0.55;
+    final w = size.width;
+    final shutter = w <= 320
+        ? 72.0
+        : w <= 360
+            ? 80.0
+            : w < 430
+                ? 88.0
+                : 94.0;
+    final side = w <= 320 ? 44.0 : 48.0;
+    final designBottom = w <= 320
+        ? 16.0
+        : w <= 360
+            ? 20.0
+            : 46.0;
+    // 破安全区取物理屏缘,但不能压进手势条:320/360 档设计值(16/20)
+    // 小于 Android 手势条插入(常见 24) —— 以系统底插 +8 为下限,
+    // 393/430 档(46)本就在 34+8 之上,布局零变化。
+    final bottomSafe =
+        designBottom > pad.bottom + 8 ? designBottom : pad.bottom + 8;
+    final sideX = w <= 320
+        ? 16.0
+        : w <= 360
+            ? 20.0
+            : w < 430
+                ? 32.0
+                : 48.0;
+    final exposureH = w <= 320
+        ? 44.0
+        : w <= 360
+            ? 46.0
+            : w < 430
+                ? 52.0
+                : 50.0;
+    const gap = 12.0;
+    final exposureBottom = bottomSafe + shutter + gap;
+    final panelTop = pad.top + 62;
+    final panelMax = size.height * 0.55;
+    // 取景底边到曝光条顶 = 曝光条底到快门顶(gap):画面底对齐到
+    // 曝光条上沿再让一个 gap。
+    final feedBottom = exposureBottom + exposureH + gap;
     return Stack(
       fit: StackFit.expand,
       children: [
-        // feed 区不再监听 engine.frame(2026-10-22 帧沿收口):逐帧字节
-        // 更替只重建画面子树(RemoteFeedArea 内部 ValueListenableBuilder
-        // 自订),等待首帧↔画面的存在沿也由其 _onFramePresence 自理 ——
-        // 外层 merge 若留 frame,整个取景区(含全部叠层/浮层)随帧率
-        // 重建。controller/status 是低频沿(交互/起停景),照旧整树。
-        // 全幅铺底(不与底区两行分高):底区两行是浮层,画面延伸到其
-        // 下(2026-10-12「按钮整体往下移」)。
         AnimatedBuilder(
           animation: Listenable.merge([
             controller,
@@ -616,21 +623,31 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
             controller: controller,
             toggles: _toggles,
             onTapFocus: _handleFeedTap,
-            topInset: pad.top + kPortraitTopInset,
-            // 贴底叠层(横幅/直方图)让位底区两行浮层(含物理屏缘 20)。
-            bottomInset: kScreenEdgePadding + kPortraitBottomChromeHeight,
-            fit: FeedFit.widthFill,
+            topInset: pad.top + 56,
+            bottomInset: feedBottom,
+            // 竖屏也按 contain 完整显示整帧(上下/左右留背景带),
+            // 不再满幅裁剪两侧。
+            fit: FeedFit.contain,
             settingsListenable: _settings,
             hideChrome: _chromeHidden,
           ),
         ),
-        // 顶部浮层:信息胶囊(链路/张数/REC + APP 接管钮)+ 设置浮层
-        // (底锚居中,浮在底栏上方);经 IgnorePointer + AnimatedOpacity
-        // 支持纯净监看淡出。key 供测试定位(全树按类型找不到「chrome
-        // 这一层」,同横屏)。
+        if (pad.top > 0)
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            height: pad.top,
+            child: GestureDetector(
+              key: const ValueKey('capture-status-band'),
+              behavior: HitTestBehavior.opaque,
+              onTap: _chromeHidden ? _showChrome : _hideChrome,
+              child: ColoredBox(color: LiveDesign.of(context).background),
+            ),
+          ),
         Positioned.fill(
           child: IgnorePointer(
-            key: const ValueKey('portrait-chrome-top'),
+            key: const ValueKey('portrait-chrome'),
             ignoring: _chromeHidden,
             child: AnimatedOpacity(
               opacity: _chromeHidden ? 0 : 1,
@@ -639,11 +656,6 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                 animation: controller,
                 builder: (context, _) => Stack(
                   children: [
-                    // 点空白处收设置浮层(2026-10-12 用户需求):满铺
-                    // 手势层垫在全部 chrome 下、取景画面上 —— 画面全幅
-                    // 铺底后底区两行也在其上,点空白(含按钮间空档)即
-                    // 收且**贪吃这一拍**(不触发触控对焦);按钮在其上
-                    // 照常。
                     if (_settingsOpen)
                       Positioned.fill(
                         child: GestureDetector(
@@ -651,136 +663,74 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                           onTap: _dismissSettings,
                         ),
                       ),
-                    Positioned(
-                      top: pad.top + 8,
-                      left: kScreenEdgePadding,
-                      right: kScreenEdgePadding,
-                      child: RemoteInfoPill(
-                        controller: controller,
-                        onTakeoverRequest: _confirmTakeover,
-                        margin: EdgeInsets.zero,
-                      ),
-                    ),
                     if (_settingsOpen)
                       Positioned(
-                        bottom: kScreenEdgePadding +
-                            kPortraitBottomChromeHeight +
-                            8,
-                        left: kScreenEdgePadding,
-                        right: kScreenEdgePadding,
-                        child: Center(
-                          child: ConstrainedBox(
-                            constraints: const BoxConstraints(
-                                maxWidth: kCapturePanelWidth + 60),
-                            child: CaptureSettingsPanel(
-                              controller: controller,
-                              toggles: _toggles,
-                              activeParam: _activeParam,
-                              onEditParam: _editParam,
-                              onTogglesChanged: _updateToggles,
-                              onLiveViewToggle: _setLiveView,
-                              onLiveViewQualityChanged: _updateLiveViewQuality,
-                              onSdramCaptureChanged: _updateSdramCapture,
-                              onBleGpsInjectChanged: _updateBleGpsInject,
-                              onVolumeKeyShutterChanged:
-                                  _updateVolumeKeyShutter,
-                              bleGpsInject: _settings.value.bleGpsInject,
-                              bleReady: _bleReady,
-                              volumeKeyShutter: _volumeKeyShutter,
-                              volumeKeyShutterAvailable: _volumeKeys != null,
-                              liveViewImageSize:
-                                  _settings.value.liveViewImageSize,
-                              liveViewImageCompression:
-                                  _settings.value.liveViewImageCompression,
-                              maxHeight: panelMaxHeight,
-                            ),
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
-        // 底部两行浮层(2026-10-12 三轮:自「画面下方挤出」改压画面
-        // 下沿 —— 画面全幅铺底,按钮整体下移):控制行(对焦 | 快门 |
-        // 设置)→ 底行(相册 | 模式条 | 旋转);同受纯净监看淡出支配。
-        // 行内空白自吃:opaque 吸收层**垫在按钮之下**(Stack 兄弟而非
-        // 父级包装 —— 父级手势会进竞技场拖慢快门 onTapDown 的按下即拍
-        // /连拍语义,2026-10-12 定案),拍到空白不落到画面手势(不把
-        // 对焦点钳到画面底缘)。底锚 = 物理屏缘 20(六轮破安全区,参照
-        // iOS 相机底部按钮距离)。
-        Positioned(
-          left: 0,
-          right: 0,
-          bottom: kScreenEdgePadding,
-          child: IgnorePointer(
-            key: const ValueKey('portrait-chrome-bottom'),
-            ignoring: _chromeHidden,
-            child: AnimatedOpacity(
-              opacity: _chromeHidden ? 0 : 1,
-              duration: const Duration(milliseconds: 200),
-              child: AnimatedBuilder(
-                animation: controller,
-                builder: (context, _) => Stack(
-                  children: [
-                    Positioned.fill(
-                      child: GestureDetector(
-                        behavior: HitTestBehavior.opaque,
-                        // 空白吸收:点到空白不落到画面手势(不把对焦点钳
-                        // 到画面底缘)。浮层开 = 这一拍转为收浮层(同点
-                        // 画面空白,2026-10-12 「底区空白也收」口径 ——
-                        // 吸收层在其上,须自带收起,不能指望其下的垫层)。
-                        // 浮层关 = 纯吸收不放行:底区是控件区不是页面
-                        // 空白,禁用件的点按(录制中锁模式条)会落到这
-                        // 一层,不能让锁住的钮把 chrome 收掉(2026-10-17
-                        // 点空白纯净监看不覆盖底区;隐藏入口在取景画面
-                        // 信箱空白/横屏让位带)。
-                        onTap: _settingsOpen ? _dismissSettings : null,
-                      ),
-                    ),
-                    Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        CaptureControlRow(
+                        top: panelTop,
+                        left: 8,
+                        right: 8,
+                        child: CaptureSettingsPanel(
                           controller: controller,
+                          toggles: _toggles,
+                          activeParam: _activeParam,
+                          onEditParam: _editParam,
+                          onTogglesChanged: _updateToggles,
+                          onLiveViewToggle: _setLiveView,
+                          onLiveViewQualityChanged: _updateLiveViewQuality,
+                          onSdramCaptureChanged: _updateSdramCapture,
+                          onBleGpsInjectChanged: _updateBleGpsInject,
+                          onVolumeKeyShutterChanged: _updateVolumeKeyShutter,
+                          bleGpsInject: _settings.value.bleGpsInject,
+                          bleReady: _bleReady,
+                          volumeKeyShutter: _volumeKeyShutter,
+                          volumeKeyShutterAvailable: _volumeKeys != null,
+                          liveViewImageSize: _settings.value.liveViewImageSize,
+                          liveViewImageCompression:
+                              _settings.value.liveViewImageCompression,
+                          maxHeight: panelMax,
                           mode: _effMode,
-                          onOpenSettings: _toggleSettings,
+                          onModeChanged: _onStripMode,
+                          modeEnabled: !controller.recording &&
+                              !controller.switchingMode,
+                          switchableTo: _switchableTo,
+                          tab: _settingsTab,
+                          onTabChanged: _selectSettingsTab,
+                          sectionKeys: _settingsSectionKeys,
+                          onDismiss: _dismissSettings,
                         ),
-                        Padding(
-                          // 九轮:左右边距与屏底统一 20(kScreenEdgePadding,
-                          // 用户「左右两侧按钮离边的距离和离下方的距离
-                          // 保持一致」);底距由层锚的物理屏缘 20 承担。
-                          padding: const EdgeInsets.fromLTRB(
-                              kScreenEdgePadding, 2, kScreenEdgePadding, 0),
-                          child: Row(
-                            children: [
-                              AlbumThumbButton(
-                                controller: controller,
-                                onTap: _openAlbum,
-                              ),
-                              Expanded(
-                                child: Center(
-                                  child: CaptureModeStrip(
-                                    mode: _effMode,
-                                    enabled: !controller.recording &&
-                                        !controller.switchingMode,
-                                    onModeChanged: _onStripMode,
-                                    switchableTo: _switchableTo,
-                                  ),
-                                ),
-                              ),
-                              // 方向钮不包 Tooltip(长按抬起须等同点按,见
-                              // CaptureCircleButton 类注)
-                              CaptureCircleButton(
-                                icon: Icons.screen_rotation,
-                                onTap: _cycleOrientationLock,
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
+                      ),
+                    Positioned(
+                      left: 12,
+                      right: 12,
+                      bottom: exposureBottom,
+                      height: exposureH,
+                      child: CaptureExposureStrip(
+                        controller: controller,
+                        height: exposureH,
+                        activeCode: _activeParam,
+                        onTapParam: _editParam,
+                      ),
+                    ),
+                    if (controller.recording)
+                      Positioned(
+                        left: 0,
+                        right: 0,
+                        bottom: feedBottom,
+                        child: Center(child: _recChip(context)),
+                      ),
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: bottomSafe,
+                      child: CapturePortraitKeys(
+                        controller: controller,
+                        mode: _effMode,
+                        sideSize: side,
+                        shutterSize: shutter,
+                        horizontalPadding: sideX,
+                        onAlbum: _openAlbum,
+                        onTakeoverRequest: _confirmTakeover,
+                        onSettings: _toggleSettings,
+                      ),
                     ),
                   ],
                 ),
@@ -788,8 +738,6 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
             ),
           ),
         ),
-        // 纯净监看恢复:无独立恢复钮(2026-10-17 撤)—— 竖屏画面全幅
-        // 铺底,隐藏中任意点按落进取景手势层([_handleFeedTap] = 恢复)。
       ],
     );
   }
@@ -809,7 +757,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     );
   }
 
-  /// 纯净监看(竖横屏共用):隐去全部控制浮层,同步收起设置浮层
+  /// 纯净监看:隐去全部控制浮层,同步收起设置浮层
   /// (不留一个看不见却开着的面板态)。恢复 = 再点任意空白
   /// ([_showChrome];2026-10-17 用户定案「再点击出现」,恢复钮同日
   /// 撤除)。
@@ -821,258 +769,40 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   }
 
   /// 纯净监看恢复:任意点按(画面内/外)回 chrome —— 入口见
-  /// [_handleFeedTap] 与横屏取景盒外让位带垫层。
+  /// [_handleFeedTap] 与取景盒外让位带垫层。
   void _showChrome() {
     setState(() => _chromeHidden = false);
   }
 
-  /// 横屏监看(2026-10-12 三轮定案;六轮破安全区;八轮轴线对齐;九轮
-  /// 画面右移 + 胶囊定宽;十轮顶底镜像 + 柱共轴):取景盒**左缩 60 +
-  /// 右缩 118**(右让位快门柱,画面移出按钮;heightFill 恒满高 ——
-  /// 上下永无黑边,3:2 照片满高后左右黑边留在盒内;左缩 60 = 九轮
-  /// 「取景往右移一点」:画面右移 30);顶栏一条 = **信息胶囊定宽
-  /// [kLandscapePillWidth] 居中于取景盒**(八轮与贴底模式条同轴线;
-  /// 十轮顶距 6 + 栏高 38 + 胶囊高 38,与贴底条 6+38 上下镜像
-  /// 「和底部一致」;纯净监看钮入胶囊行尾);快门柱**距物理屏右缘
-  /// [kScreenEdgePadding]**(破侧边安全区;灵动岛在侧缘中点,岛侧
-  /// 快门右段入岛)全高中置五件竖排(**旋转 / 设置 / 快门 78 / 对焦 /
-  /// 相册** —— 方向钮自贴底条迁入柱顶,相册坠底;快门两向同 78 =
-  /// 用户定案「横屏按钮保持和竖屏大小一样」;十轮五件**共轴于快门心**
-  /// 「以拍照按钮居中对齐,而不是右边对齐」);贴底条 = 模式条独占
-  /// (居中于取景盒)。设置浮层让位快门柱(right: 118)。chrome 整体
-  /// (顶栏 + 快门柱 + 贴底条 + 浮层)经 IgnorePointer + AnimatedOpacity
-  /// 支持纯净监看淡出。
-  ///
-  /// 监听拆两层:feed 区照旧 merge(controller+frame+status)逐帧刷;
-  /// chrome 层只听 controller —— 帧到达只写 ValueNotifier 不
-  /// notifyListeners,快门柱/贴底条不必逐帧重建。
-  Widget _landscapeBody(BuildContext context) {
-    final panelMaxHeight = MediaQuery.sizeOf(context).height -
-        kLandscapeTopInset -
-        8 -
-        kLandscapeBottomInset -
-        8;
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        // 取景盒外的左右让位带(左 60/右 118)= 页面空白:点按切换
-        // chrome 显隐(2026-10-17 点空白纯净监看 —— 显示中隐藏、隐藏中
-        // 恢复)。垫在 feed 之下:盒内点按仍归取景手势(触控对焦/盒内
-        // 信箱空白由 [_handleFeedTap] 收口),只有让位带落到这里。
-        Positioned.fill(
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: _chromeHidden ? _showChrome : _hideChrome,
-          ),
-        ),
-        // feed 区不再监听 engine.frame(2026-10-22 帧沿收口,同竖屏):
-        // 逐帧更替与首帧存在沿都在 RemoteFeedArea 内部自理,外层只留
-        // controller/status 低频沿。取景盒**左缩 60
-        // + 右缩 118**(右 = 快门柱让位:柱右距物理屏缘 30
-        // ([kScreenEdgePadding] 手调值)、柱带宽 30+78=108 + 10 间隙;
-        // 左 = 九轮「把取景往右侧移动一点」:盒左缩 60 → heightFill 画面
-        // 右移 30):视频 heightFill 恒满高,上下永无黑边。盒内贴右叠层
-        // (录制读出/拉焦轮)的 rightInset 归零 —— 屏幕位置与旧全宽盒 +
-        // rightInset 全同。
-        Padding(
-          padding: const EdgeInsets.only(left: 60, right: 118),
-          child: AnimatedBuilder(
-            animation: Listenable.merge([
-              controller,
-              controller.engine.status,
-            ]),
-            builder: (context, _) => RemoteFeedArea(
-              controller: controller,
-              toggles: _toggles,
-              onTapFocus: _handleFeedTap,
-              topInset: kLandscapeTopInset,
-              bottomInset: kLandscapeBottomInset,
-              fit: FeedFit.heightFill,
-              settingsListenable: _settings,
-              hideChrome: _chromeHidden,
-              // 拉焦轮挪 bottomRight —— 右上角留给录制读出,右缘中带
-              // 让给快门柱(盒已右缩,rightInset 归零即屏幕原位)。
-              dialAlignment: Alignment.bottomRight,
+  Widget _recChip(BuildContext context) {
+    final live = LiveDesign.of(context);
+    return Container(
+      key: const ValueKey('remote-rec-chip'),
+      height: 26,
+      padding: const EdgeInsets.symmetric(horizontal: 10),
+      decoration: BoxDecoration(
+        color: live.bad,
+        borderRadius: BorderRadius.circular(7),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.circle, size: 7, color: Colors.white),
+          const SizedBox(width: 5),
+          Text(
+            '${context.t('remote.recPrefix')} '
+            '${recDurationLabel(controller.recordingSeconds)}',
+            style: const TextStyle(
+              fontSize: 10.5,
+              fontWeight: FontWeight.w700,
+              color: Colors.white,
+              fontFeatures: [FontFeature.tabularFigures()],
             ),
           ),
-        ),
-        Positioned.fill(
-          child: IgnorePointer(
-            // key 供测试定位:Navigator 转场页自己也包 IgnorePointer,
-            // 全树按类型找不到「chrome 这一层」。
-            key: const ValueKey('landscape-chrome'),
-            ignoring: _chromeHidden,
-            child: AnimatedOpacity(
-              opacity: _chromeHidden ? 0 : 1,
-              duration: const Duration(milliseconds: 200),
-              child: AnimatedBuilder(
-                animation: controller,
-                builder: (context, _) => Stack(
-                  children: [
-                    // 点空白处收设置浮层(同竖屏):满铺手势层垫在全部
-                    // chrome 之下、取景画面之上 —— 点空白即收且贪吃这一
-                    // 拍(不触发触控对焦);顶栏/快门柱/贴底条在其上,
-                    // 点按照常。
-                    if (_settingsOpen)
-                      Positioned.fill(
-                        child: GestureDetector(
-                          behavior: HitTestBehavior.opaque,
-                          onTap: _dismissSettings,
-                        ),
-                      ),
-                    // 顶栏:信息胶囊**居中于取景盒**(2026-10-12 用户定案
-                    // 「这一个按钮居中」;八轮定案与贴底模式条同轴线 ——
-                    // 顶栏与取景盒同缩(左 60/右 118),胶囊心随盒走;
-                    // 九轮定宽 [kLandscapePillWidth],内容不变、内部
-                    // Spacer 拉开、接管钮贴行尾;十轮顶距 6 + 栏高 38 +
-                    // 胶囊高 38,与贴底条 6+38 上下镜像「和底部一致」);
-                    // APP 接管钮入胶囊行尾(与竖屏同款单入口)。
-                    Positioned(
-                      top: 6,
-                      left: 60,
-                      right: 118,
-                      height: kLandscapeTopBarHeight,
-                      child: Padding(
-                        padding: const EdgeInsets.only(left: 10, right: 10),
-                        child: Center(
-                          child: RemoteInfoPill(
-                            controller: controller,
-                            margin: EdgeInsets.zero,
-                            compact: true,
-                            fixedWidth: kLandscapePillWidth,
-                            onTakeoverRequest: _confirmTakeover,
-                          ),
-                        ),
-                      ),
-                    ),
-                    // 快门柱贴右缘全高中置(2026-10-12 用户定案柱序
-                    // 自上而下:旋转 / 设置 / 快门 78 / 对焦 / 相册 ——
-                    // 方向钮自贴底条迁入柱顶,相册坠底;快门两向同 78
-                    // = 用户定案「横屏按钮保持和竖屏大小一样」,高度账
-                    // 54+8+54+8+78+8+54+8+54=326,402pt 级横屏可容,
-                    // 柱在取景盒外的右缩带内 —— 不压画面)。**十轮:五件
-                    // 共轴居中**(用户「以拍照按钮居中对齐,而不是右边
-                    // 对齐」—— 柱宽即快门 78,四枚 54 钮以快门心对中,
-                    // 废除六轮的右缘齐平/凸左)。柱右距**物理屏缘 30**
-                    // ([kScreenEdgePadding] 手调值,破侧边安全区)。
-                    // 灵动岛在侧缘中点,岛侧方向快门右段藏进岛里 ——
-                    // 已知代价,翻面即避。
-                    Positioned(
-                      top: 0,
-                      bottom: 0,
-                      right: kScreenEdgePadding,
-                      child: Align(
-                        alignment: Alignment.centerRight,
-                        child: CaptureShutterColumn(
-                          controller: controller,
-                          mode: _effMode,
-                          onOpenAlbum: _openAlbum,
-                          onOpenSettings: _toggleSettings,
-                          onRotate: _cycleOrientationLock,
-                        ),
-                      ),
-                    ),
-                    // 贴底条:模式条独占、居中于取景盒(旋转钮已迁快门
-                    // 柱顶;左右与盒同缩(60/118)让位柱带,贴底叠层让位
-                    // bottomInset)。
-                    Positioned(
-                      left: 60,
-                      right: 118,
-                      bottom: 0,
-                      child: Padding(
-                        padding: const EdgeInsets.only(
-                            left: 10, right: 10, bottom: 6),
-                        child: Center(
-                          child: CaptureModeStrip(
-                            mode: _effMode,
-                            enabled: !controller.recording &&
-                                !controller.switchingMode,
-                            onModeChanged: _onStripMode,
-                            switchableTo: _switchableTo,
-                          ),
-                        ),
-                      ),
-                    ),
-                    // 设置浮层:让位右缘快门柱(柱带宽 30+78=108 + 10 间隙)。
-                    if (_settingsOpen)
-                      Positioned(
-                        top: kLandscapeTopInset + 8,
-                        right: 118,
-                        width: kCapturePanelWidth,
-                        child: CaptureSettingsPanel(
-                          controller: controller,
-                          toggles: _toggles,
-                          activeParam: _activeParam,
-                          onEditParam: _editParam,
-                          onTogglesChanged: _updateToggles,
-                          onLiveViewToggle: _setLiveView,
-                          onLiveViewQualityChanged: _updateLiveViewQuality,
-                          onSdramCaptureChanged: _updateSdramCapture,
-                          onBleGpsInjectChanged: _updateBleGpsInject,
-                          onVolumeKeyShutterChanged: _updateVolumeKeyShutter,
-                          bleGpsInject: _settings.value.bleGpsInject,
-                          bleReady: _bleReady,
-                          volumeKeyShutter: _volumeKeyShutter,
-                          volumeKeyShutterAvailable: _volumeKeys != null,
-                          liveViewImageSize: _settings.value.liveViewImageSize,
-                          liveViewImageCompression:
-                              _settings.value.liveViewImageCompression,
-                          maxHeight: panelMaxHeight,
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
-        // 纯净监看恢复:无独立恢复钮(2026-10-17 撤)—— 盒内点按落取景
-        // 手势层、盒外让位带落垫层,任意点按 = [_showChrome]。
-      ],
+        ],
+      ),
     );
   }
-
-  // ── 方向锁定(应用内横竖屏切换)────────────────────────────────
-
-  /// 方向按钮点按 = 切到另一半:横锁↔竖锁直切;auto 态(仅初始)按当前
-  /// 屏向取反,首击必翻转、所见即所得。**永不发空表** —— 空表在 iOS 是
-  /// All mask,requestGeometryUpdate 会按手机物理姿态重选方向、再被弹回
-  /// (2026-10-08 真机日志定案:竖→横→竖双旋闪屏 + 白点一击),故按钮
-  /// 不设「回跟随系统」路径(2026-10-08 用户明示取消长按)。横锁离页由
-  /// [_exitOrientationReset] 还竖复位(锁态回 portrait,不发空表)。
-  void _cycleOrientationLock() {
-    final current = controller.orientationLock.value;
-    final screenLandscape =
-        MediaQuery.orientationOf(context) == Orientation.landscape;
-    final next = switch (current) {
-      OrientationLock.landscape => OrientationLock.portrait,
-      OrientationLock.portrait => OrientationLock.landscape,
-      OrientationLock.auto =>
-        screenLandscape ? OrientationLock.portrait : OrientationLock.landscape,
-    };
-    controller.orientationLock.value = next;
-    _applyOrientationLock(next);
-  }
-
-  /// 把方向锁定下发给系统。竖屏锁只发 portraitUp:Info.plist 本就未
-  /// 声明 UpsideDown,双值只留给系统自选余地。**auto 同发竖屏表**
-  /// (2026-10-26 禁止旋转契约):空列表在 iOS 是 All mask = 跟随传感
-  /// 器自转,契约下不再存在 —— auto 仅是控制器初始值(点按循环只在
-  /// 横/竖间切换),一旦下发即竖。OHOS fork 若未实现该 method 会
-  /// MissingPluginException —— 方向按钮不能因平台差异炸页,静默兜住。
-  void _applyOrientationLock(OrientationLock lock) {
-    final orientations = switch (lock) {
-      OrientationLock.auto => const <DeviceOrientation>[DeviceOrientation.portraitUp],
-      OrientationLock.landscape => const [
-          DeviceOrientation.landscapeLeft,
-          DeviceOrientation.landscapeRight,
-        ],
-      OrientationLock.portrait => const [DeviceOrientation.portraitUp],
-    };
-    unawaited(SystemChrome.setPreferredOrientations(orientations)
-        .catchError((Object _) {}));
-  }
-
   // ── 取景点按(触控对焦 + 纯净监看切换)────────────────────────
 
   /// 取景画面点按三分流(2026-10-17 纯净监看改制):
