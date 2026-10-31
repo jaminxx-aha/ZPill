@@ -6,6 +6,7 @@ library;
 import 'dart:convert';
 import 'dart:io';
 
+import 'atomic_json_file.dart';
 import '../core/remote/config_snapshot.dart';
 
 final class ConfigSnapshotStore {
@@ -50,9 +51,10 @@ final class ConfigSnapshotStore {
   Future<void> _write(Map<String, CameraConfigSnapshot> all) async {
     _cache = all;
     final file = File('${await _dataDir()}/config_snapshots.json');
-    await file.create(recursive: true);
-    await file.writeAsString(const JsonEncoder.withIndent('  ').convert({
-      for (final e in all.entries) e.key: e.value.toJson(),
-    }));
+    await writeJsonAtomic(
+        file,
+        const JsonEncoder.withIndent('  ').convert({
+          for (final e in all.entries) e.key: e.value.toJson(),
+        }));
   }
 }

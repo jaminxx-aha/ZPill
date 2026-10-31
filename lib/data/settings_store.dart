@@ -8,6 +8,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'atomic_json_file.dart';
 import '../core/browser/photo_group.dart';
 import '../core/media/watermark.dart';
 
@@ -603,8 +604,7 @@ final class FileSettingsStore implements SettingsStore {
   Future<void> update(AppSettings settings) async {
     _cache = settings;
     final file = File('${await _dataDir()}/settings.json');
-    await file.create(recursive: true);
-    await file.writeAsString(
+    await writeJsonAtomic(file,
         const JsonEncoder.withIndent('  ').convert(settings.toJson()));
     _ctrl.add(settings);
   }

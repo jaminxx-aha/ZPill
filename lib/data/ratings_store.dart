@@ -12,6 +12,8 @@
 library;
 
 import 'dart:convert';
+
+import 'atomic_json_file.dart';
 import 'dart:io';
 
 /// 图库文件条目的评分身份键:`文件名|字节数`。
@@ -66,8 +68,8 @@ final class FileRatingsStore implements RatingsStore {
     }
     _cache = all;
     final file = File('${await _dataDir()}/ratings.json');
-    await file.create(recursive: true);
-    await file.writeAsString(const JsonEncoder.withIndent('  ').convert(all));
+    await writeJsonAtomic(
+        file, const JsonEncoder.withIndent('  ').convert(all));
   }
 }
 

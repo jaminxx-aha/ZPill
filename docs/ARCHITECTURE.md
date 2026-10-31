@@ -169,8 +169,9 @@ channel 命名统一 `zpill/<service>`,完整契约表与三端落地进度见
   [file_size_budget.txt](../tools/file_size_budget.txt),既有预算只能下降
 - **真机**:协议常量一律探针先行、以真机响应为准回填 Dart 侧;功能就绪
   以「真实数据、端到端跑通」为准
-- 规模:截至 2026-10-29 为 114 个测试文件、1673 passed / 0 skipped
-  (`flutter test`)
+- 规模:截至 2026-10-31 为 115 个测试文件、1691 passed / 0 skipped
+  (`flutter test`;UI 取证 harness 标 `@Tags(['screenshot'])`,默认排除 —
+  `flutter test --tags screenshot` 显式执行)
 
 ## 6. 文档索引
 

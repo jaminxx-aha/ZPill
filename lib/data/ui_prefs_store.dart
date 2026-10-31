@@ -5,6 +5,8 @@
 library;
 
 import 'dart:convert';
+
+import 'atomic_json_file.dart';
 import 'dart:io';
 
 abstract interface class UiPrefsStore {
@@ -47,9 +49,8 @@ final class FileUiPrefsStore implements UiPrefsStore {
     all.addAll(value);
     _cache = all;
     final file = File('${await _dataDir()}/ui_prefs.json');
-    await file.create(recursive: true);
-    await file
-        .writeAsString(const JsonEncoder.withIndent('  ').convert(all));
+    await writeJsonAtomic(
+        file, const JsonEncoder.withIndent('  ').convert(all));
   }
 }
 

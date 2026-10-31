@@ -22,7 +22,7 @@ import '../../l10n/l10n.dart';
 import '../browser/storage_overview_controller.dart';
 import 'connection_widgets.dart';
 import '../remote/remote_controller.dart';
-import '../remote/remote_info_pill.dart';
+import '../remote/rec_labels.dart';
 
 /// 机型 → 各槽卡型短标(l10n 键,序 = 物理槽位-1)。协议无卡型字段
 /// (官方 Zf USB MTP 指令书:StorageInfo 的 StorageType 恒 Removable

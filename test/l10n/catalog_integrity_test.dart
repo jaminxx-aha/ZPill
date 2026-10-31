@@ -47,6 +47,38 @@ void main() {
             '${[for (final k in missingEn) '$k <- ${used[k]!.take(2).join(", ")}']}');
   });
 
+  // 死键闸(2026-10-31):词表里没有任何字面量引用的键 = 死键。
+  // 例外是动态拼装的键(过温徽章 'live.<档>$tail'),放白名单。
+  test('词表无未引用键(动态拼装键白名单)', () {
+    const dynamicKeys = <String>{
+      'live.tempRising',
+      'live.tempHigh',
+      'live.tempCritical',
+      'live.autoStop',
+    };
+    final sources = Directory('lib')
+        .listSync(recursive: true)
+        .whereType<File>()
+        .where((f) => f.path.endsWith('.dart'))
+        .where((f) => !f.path.startsWith('lib/l10n/'))
+        .toList();
+    final blob = StringBuffer();
+    for (final f in sources) {
+      blob.write(f.readAsStringSync());
+      blob.write('\n');
+    }
+    final src = blob.toString();
+    final unused = [
+      for (final k in zhCatalog.keys)
+        if (!dynamicKeys.contains(k) &&
+            !src.contains("'$k'") &&
+            !src.contains('"$k"'))
+          k,
+    ];
+    expect(unused, isEmpty,
+        reason: '词表里没有调用点的键(删掉或补调用点;动态拼装加白名单):$unused');
+  });
+
   test('zh/en 两表键集完全相等', () {
     final onlyZh = zhCatalog.keys.toSet().difference(enCatalog.keys.toSet());
     final onlyEn = enCatalog.keys.toSet().difference(zhCatalog.keys.toSet());

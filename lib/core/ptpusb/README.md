@@ -16,8 +16,11 @@
 
 ## 与 PTP-IP 的差异备忘
 
-1. **事件容器头是 10 字节、长度字段 u16**(bulk 容器是 12 字节头 + u32 长度)
-2. 事务 ID 是 u32(PTP-IP 是 u16)
+1. **事件容器头同为 12 字节、`dwLength` 为 u32**(2026-09-27 订正;旧记
+   「事件头 10B + u16 长度」是错的 —— 按旧文写解析器会静默错位,见
+   `containers.dart` 类注)
+2. 事务 ID 两链路都是 u32(2026-10-04 订正;旧记「PTP-IP 是 u16」作废,
+   见 `core/ptp/ptp_transport.dart`)
 3. 无 DataPhaseInfo 字段:有无数据相位由"是否跟发数据容器"隐式表达
 4. 流控不同:相机以 USB STALL 表达"忙",native 须 CLEAR_HALT 后重试
    (PTP-IP 用 Probe/Cancel 包)

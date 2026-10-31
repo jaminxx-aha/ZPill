@@ -9,6 +9,7 @@ library;
 import 'dart:convert';
 import 'dart:io';
 
+import 'atomic_json_file.dart';
 import '../core/camera/camera_info.dart';
 import '../core/camera/paired_cameras_store.dart';
 
@@ -71,8 +72,8 @@ final class FilePairedCamerasStore implements PairedCamerasStore {
   Future<void> _flush(List<CameraInfo> cameras) async {
     _cache = cameras;
     final file = await _file();
-    await file.create(recursive: true);
-    await file.writeAsString(
+    await writeJsonAtomic(
+        file,
         const JsonEncoder.withIndent('  ').convert(
             [for (final c in cameras) _toJson(c)]));
   }

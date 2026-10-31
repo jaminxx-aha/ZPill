@@ -28,7 +28,6 @@ import 'package:z_pill/features/remote/remote_banner.dart';
 import 'package:z_pill/features/remote/remote_controller.dart';
 import 'package:z_pill/features/remote/feed_transform.dart';
 import 'package:z_pill/features/remote/remote_feed_area.dart';
-import 'package:z_pill/features/remote/remote_info_pill.dart';
 import 'package:z_pill/features/remote/remote_page.dart';
 import 'package:z_pill/features/remote/remote_settings_panel.dart';
 import 'package:z_pill/platform/volume_keys.dart';
@@ -1587,7 +1586,6 @@ void main() {
 
     expect(_chipsRow, findsNothing);
     expect(find.text('模式'), findsNothing, reason: '参数 tile 不在浮层外');
-    expect(find.byType(RemoteInfoPill), findsNothing, reason: '顶栏状态条已撤');
     expect(find.text('照片'), findsNothing, reason: '模式条已迁入设置浮层');
 
     expect(tester.getSize(find.byType(RemoteFeedArea)), const Size(800, 2400),

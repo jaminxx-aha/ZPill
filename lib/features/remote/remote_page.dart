@@ -82,7 +82,7 @@ import 'remote_capture_keys.dart';
 import 'remote_controller.dart';
 import 'remote_exposure_strip.dart';
 import 'remote_feed_area.dart';
-import 'remote_info_pill.dart' show recDurationLabel;
+import 'rec_labels.dart' show recDurationLabel;
 import 'remote_mode_sheet.dart';
 import 'remote_param_sheet.dart';
 import 'remote_settings_panel.dart';
