@@ -1,6 +1,10 @@
 # Ceilings for Dart files at or above 2000 lines.
 # Existing entries may shrink or be split, but must not grow.
 # Raising a ceiling requires an explicit architecture review.
-3438 test/features/remote/remote_page_test.dart
-2556 test/features/library/local_library_page_test.dart
-2029 test/features/connection/connection_page_test.dart
+#
+# 2026-10-31:三处上限收紧到实测行数(原值留了 200–250 行死余量,
+# 「只能降」实际不生效 —— 文件可以悄悄长进余量里)。改法:上限 =
+# 当前行数,任何增长都触发闸红;拆分后按新行数继续收紧。
+3189 test/features/remote/remote_page_test.dart
+2460 test/features/library/local_library_page_test.dart
+2006 test/features/connection/connection_page_test.dart

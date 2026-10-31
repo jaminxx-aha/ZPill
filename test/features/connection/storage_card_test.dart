@@ -24,6 +24,8 @@ final class _StubConnection implements CameraConnection {
 
   @override
   L10nMessage? get error => null;
+  @override
+  Stream<L10nMessage?> get errorChanges => const Stream<L10nMessage?>.empty();
 
   @override
   String? get deviceName => null;

@@ -262,6 +262,7 @@ final class ObjectRepositoryImpl implements ObjectRepository {
         final info = await session.getObjectInfo(handle);
         if (gen != _generation) return; // reset 竞态:弃
         _byHandle[handle] = ObjectRepository.toEntry(info);
+        _groupIndexOf = null;
         // 枚举进行中不另发布(其分块广播读活缓存,新对象自然带上);
         // 日常拍照(枚举外)即时广播一次完整快照。
         if (_loaded && _loading == null) {
@@ -630,13 +631,33 @@ final class ObjectRepositoryImpl implements ObjectRepository {
 
   /// 句柄 → 所在组(XMP 注入/落盘评级快照按组取评级用);不在册返回
   /// null(仓库未加载也 null)。
+  ///
+  /// 组索引惰性建、随对象表变动失效(`_groupIndexOf = null` 的三个写
+  /// 缓存点 + reset/remove)。旧实现每次调用都重跑 `_buildAlbums()`
+  /// (3 趟分组 + 排序 + 目录投影),而落盘沿每张图调两次 → 批量下载
+  /// 是 O(N²)。索引命中即一次 HashMap 查。
   @override
   PhotoGroup? groupOf(int handle) {
     if (!_loaded) return null;
-    for (final group in _buildAlbums().first.items) {
-      if (group.members.any((m) => m.handle == handle)) return group;
+    final index = _groupIndex();
+    return index[handle];
+  }
+
+  Map<int, PhotoGroup>? _groupIndexOf;
+
+  Map<int, PhotoGroup> _groupIndex() {
+    final cached = _groupIndexOf;
+    if (cached != null) return cached;
+    final index = <int, PhotoGroup>{};
+    for (final album in _buildAlbums()) {
+      for (final group in album.items) {
+        for (final member in group.members) {
+          index[member.handle] = group;
+        }
+      }
     }
-    return null;
+    _groupIndexOf = index;
+    return index;
   }
 
   @override
@@ -660,6 +681,7 @@ final class ObjectRepositoryImpl implements ObjectRepository {
   void reset() {
     _generation++;
     _byHandle = <int, ObjectEntry>{};
+    _groupIndexOf = null;
     _ratings.clear();
     _videoDurations.clear();
     _videoDurationAttempts.clear();
@@ -691,6 +713,7 @@ final class ObjectRepositoryImpl implements ObjectRepository {
       }
     }
     if (removed) {
+      _groupIndexOf = null;
       final n = _byHandle.length;
       _publish(n, n, complete: true);
     }
@@ -836,6 +859,7 @@ final class ObjectRepositoryImpl implements ObjectRepository {
         consecutiveFailures = 0;
         if (generation != _generation) return; // 每个 await 后、写缓存前
         _byHandle[handle] = ObjectRepository.toEntry(info);
+        _groupIndexOf = null;
         loaded++;
       }
       if (generation != _generation) return;
@@ -1074,6 +1098,7 @@ final class ObjectRepositoryImpl implements ObjectRepository {
       final entry = ObjectRepository.toEntryFromProps(e.key, e.value);
       if (entry != null) {
         _byHandle[e.key] = entry;
+        _groupIndexOf = null;
         added.add(entry);
       }
     }

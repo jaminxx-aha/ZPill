@@ -186,6 +186,9 @@ class ThumbnailCache {
   /// 目录格式清空闸(见 [_dirFor]):每目录每实例只扫一次。
   final Map<String, Future<void>> _swept = {};
 
+  /// 跨会话建账闸(见 [_seedFromDisk]):每目录每实例一次,reset 清。
+  final Map<String, Future<void>> _seeded = {};
+
   String? _thumbsDir;
   String? _previewsDir;
 
@@ -398,6 +401,9 @@ class ThumbnailCache {
     _gridBytes = 0;
     _previewBytes = 0;
     _fhdPictureDegraded = false;
+    // 索引清空后盘上档又成无账档:下次访问重新建账(否则本会话内
+    // 跨会话泄漏原样复发)。
+    _seeded.clear();
   }
 
   static const _fmtMarker = '.fmt-v4'; // v4:清 v3 时代未裁黑边的 lt_/fhd_/grid 席位档(libv4_ 伴生族豁免)
@@ -626,7 +632,49 @@ class ThumbnailCache {
     // 内容键会互相命中 —— 一次性清空重建(标记档在,永不再扫)。每
     // 目录每实例只走一次([_swept] 合并并发)。
     await _swept.putIfAbsent(dir, () => _sweepOnce(dir));
+    // 跨会话建账:本会话索引从零起,盘上前会话留下的档不记账就永远
+    // 不会被 LRU 淘汰(账只约束本会话触碰过的文件)。
+    await _seeded.putIfAbsent(dir, () => _seedFromDisk(source, dir));
     return dir;
+  }
+
+  /// 盘上现存档建账(每目录每实例一次;reset 后下次访问重建)。
+  ///
+  /// 键 = 文件名去扩展名(写盘时就叫 `<槽前缀><内容键>.jpg`,与
+  /// [_remember] 的键同构);按 mtime 升序入表 = 最老在前,驱逐优先删
+  /// 最久未写的。`libv4_` 族是本地图库伴生档,不归本缓存记账(同清扫
+  /// 豁免)。索引里已有的键以本会话为准(不覆盖已刷新的访问序)。
+  Future<void> _seedFromDisk(ThumbSource source, String dir) async {
+    final lru = _lruFor(source);
+    final found = <(DateTime, String, String, int)>[];
+    try {
+      await for (final f in Directory(dir).list()) {
+        if (f is! File || !f.path.endsWith('.jpg')) continue;
+        if (f.path.contains('/libv4_')) continue;
+        try {
+          final stat = await f.stat();
+          final name = f.path.split(Platform.pathSeparator).last;
+          found.add((
+            stat.modified,
+            name.substring(0, name.length - 4),
+            f.path,
+            stat.size,
+          ));
+        } on FileSystemException {
+          // 单档消失(并发驱逐/系统回收):跳过
+        }
+      }
+    } on FileSystemException {
+      return; // 目录不可读:本次不建账(下次访问再试)
+    }
+    if (found.isEmpty) return;
+    found.sort((a, b) => a.$1.compareTo(b.$1));
+    for (final e in found) {
+      if (lru.containsKey(e.$2)) continue;
+      lru[e.$2] = (path: e.$3, bytes: e.$4);
+      _addBytes(source, e.$4);
+    }
+    await _evictIfNeeded(source);
   }
 
   Future<void> _sweepOnce(String dir) async {

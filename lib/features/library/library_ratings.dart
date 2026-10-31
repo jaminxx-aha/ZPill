@@ -24,9 +24,15 @@ final class LibraryRatings extends ChangeNotifier {
 
   /// 文件当前评分(0 = 未评/文件不可读;-1 删除候选档归零,星标不显,
   /// 删除候选走 [trashMarked])。
-  int ratingOf(File file) {
+  ///
+  /// [bytes] 可由调用方给(网格侧已有 stat 缓存):旧实现每次调用都
+  /// `lengthSync()`,筛选器对每个文件调两次、每次重建都调 —— 千张库
+  /// 每个重建周期两千次同步 stat。
+  int ratingOf(File file, {int? bytes}) {
     try {
-      final v = _values[fileRatingKey(_nameOf(file), file.lengthSync())] ?? 0;
+      final v =
+          _values[fileRatingKey(_nameOf(file), bytes ?? file.lengthSync())] ??
+              0;
       return v < 0 ? 0 : v;
     } on FileSystemException {
       return 0;
@@ -34,14 +40,19 @@ final class LibraryRatings extends ChangeNotifier {
   }
 
   /// 文件是否删除候选(下载沿随组记录,值 -1,机身垃圾桶同义)。
-  bool trashMarked(File file) {
+  bool trashMarked(File file, {int? bytes}) {
     try {
-      return (_values[fileRatingKey(_nameOf(file), file.lengthSync())] ?? 0) <
+      return (_values[
+                  fileRatingKey(_nameOf(file), bytes ?? file.lengthSync())] ??
+              0) <
           0;
     } on FileSystemException {
       return false;
     }
   }
+
+  /// 值表版本号:页面派生列表(排序/筛选结果)按它失效。
+  int revision = 0;
 
   /// 写文件评分([stars] 0 = 清除,-1 = 删除候选)并刷新(相册改评
   /// 传播沿/下载落盘沿)。
@@ -59,6 +70,7 @@ final class LibraryRatings extends ChangeNotifier {
       // 通道未就绪(测试环境):保持空表,界面照常只是无星
       return;
     }
+    revision++;
     notifyListeners();
   }
 

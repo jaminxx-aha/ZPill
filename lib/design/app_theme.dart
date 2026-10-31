@@ -12,20 +12,23 @@ import 'app_dimens.dart';
 const List<String> _cjkFallback = ['NotoSansSC'];
 
 abstract final class AppTheme {
-  static ThemeData get light => _build(
-        AppColors.lightScheme,
-        // 统一黄按钮:只换 FilledButton 实底/前景,primary 仍是墨色
-        // —— TextButton 文字、开关、spinner 不跟着变黄(黄字浅底
-        // 不可读)。深色 primary 本身就是黄,无需覆写。
-        filledButtonTheme: FilledButtonThemeData(
-          style: FilledButton.styleFrom(
-            backgroundColor: AppColors.accentYellow,
-            foregroundColor: AppColors.onBrandYellow,
-          ),
-        ),
-      );
+  /// 主题只随系统深浅切换,内容不随设置变 —— 构一次常驻(旧实现是
+  /// getter:设置页每 notify 一次(滑杆逐 tick)根 [MaterialApp] 就重建
+  /// 一份 ThemeData)。
+  static final ThemeData light = _build(
+    AppColors.lightScheme,
+    // 统一黄按钮:只换 FilledButton 实底/前景,primary 仍是墨色
+    // —— TextButton 文字、开关、spinner 不跟着变黄(黄字浅底
+    // 不可读)。深色 primary 本身就是黄,无需覆写。
+    filledButtonTheme: FilledButtonThemeData(
+      style: FilledButton.styleFrom(
+        backgroundColor: AppColors.accentYellow,
+        foregroundColor: AppColors.onBrandYellow,
+      ),
+    ),
+  );
 
-  static ThemeData get dark => _build(AppColors.darkScheme);
+  static final ThemeData dark = _build(AppColors.darkScheme);
 
   static ThemeData _build(ColorScheme scheme,
       {FilledButtonThemeData? filledButtonTheme}) {

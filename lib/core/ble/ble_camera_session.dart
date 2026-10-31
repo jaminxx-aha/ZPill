@@ -201,6 +201,13 @@ final class BleCameraSession {
   String lastMatchName = '';
 
   Completer<void>? _handshake;
+
+  /// 首写门开沿的延迟写(one-shot timer):旧实现是 `Future.delayed`,
+  /// 无法取消 —— 会话 dispose 后仍会拿已关的 host 写 TIME/GEO。
+  Timer? _deferredWriteTimer;
+
+  /// dispose 已过:迟到回调(通知/定时器/异步续体)据此自灭。
+  bool _disposed = false;
   PairingMessage? _stage1;
   bool _stage3Sent = false;
   bool _nameWritten = false;
@@ -289,10 +296,7 @@ final class BleCameraSession {
     }
     lastMatchName = device.name;
     _resuming = false;
-    _serial = null;
-    _stage2Frame = null;
-    _stage2SaltIndex = null;
-    _lssMaterial = null;
+    _resetAttemptState();
     final epoch = _cancelEpoch;
     _pairWaitActive = true;
     var attempt = 0;
@@ -300,7 +304,7 @@ final class BleCameraSession {
       while (_cancelEpoch == epoch) {
         attempt++;
         _setState(BleSessionState.pairing);
-        final done = _handshake = Completer<void>();
+        final done = _beginHandshake();
         try {
           AppLog.d(AppLog.ble, 'connect → channel(${device.uuid}) 第$attempt次');
           await _host.connectPaired(device.uuid).timeout(handshakeTimeout);
@@ -438,7 +442,7 @@ final class BleCameraSession {
     _stage2SaltIndex = null;
     _lssMaterial = null;
     _setState(BleSessionState.pairing);
-    final done = _handshake = Completer<void>();
+    final done = _beginHandshake();
     try {
       await _host.connectPaired(match.uuid).timeout(handshakeTimeout);
       await done.future.timeout(handshakeTimeout);
@@ -463,11 +467,35 @@ final class BleCameraSession {
   /// 握手态,拆链回 idle。
   void _abandonHandshake(Completer<void> done) {
     done.future.catchError((Object _) {});
-    _handshake = null;
-    _stage1 = null;
-    _stage3Sent = false;
+    if (identical(_handshake, done)) _handshake = null;
+    _resetAttemptState();
     unawaited(_host.disconnect());
     _setState(BleSessionState.idle);
+  }
+
+  /// 新一轮尝试前的状态清账。
+  ///
+  /// **必须清 [_nameWritten]**:它是 [ _completeIfReady ] 的唯一阀。旧
+  /// 实现弃局只清 stage1/stage3,名字位留着 —— 上一轮写过名、本轮还没
+  /// 写时,一条迟到的 stage4 通知就能把本轮的握手提前抬成 ready,并把
+  /// 当前(或下一次)的 completer 一并完成(僵尸 ready / 错完成)。
+  /// [identity] 不清:那是已配对档,跨尝试保留。
+  void _resetAttemptState() {
+    _stage1 = null;
+    _stage3Sent = false;
+    _nameWritten = false;
+    _serial = null;
+    _stage2Frame = null;
+    _stage2SaltIndex = null;
+    _lssMaterial = null;
+  }
+
+  /// 起一轮握手:清上一轮残留 + 挂唯一 completer。
+  Completer<void> _beginHandshake() {
+    _resetAttemptState();
+    final done = Completer<void>();
+    _handshake = done;
+    return done;
   }
 
   /// 直连重连:相机静默等待态无广播可扫,直接按本会话已知
@@ -491,7 +519,7 @@ final class BleCameraSession {
     _stage2SaltIndex = null;
     _lssMaterial = null;
     _setState(BleSessionState.pairing);
-    final done = _handshake = Completer<void>();
+    final done = _beginHandshake();
     var linked = false;
     try {
       await _host
@@ -557,7 +585,7 @@ final class BleCameraSession {
     _stage2SaltIndex = null;
     _lssMaterial = null;
     _setState(BleSessionState.pairing);
-    final done = _handshake = Completer<void>();
+    final done = _beginHandshake();
     var linked = false;
     try {
       await _host
@@ -689,6 +717,9 @@ final class BleCameraSession {
   }
 
   void dispose() {
+    _disposed = true;
+    _deferredWriteTimer?.cancel();
+    _deferredWriteTimer = null;
     _sub.cancel();
     _stateCtrl.close();
     _errorCtrl.close();
@@ -804,17 +835,22 @@ final class BleCameraSession {
 
   /// 首写门开沿自发写(不依赖驱动 tick —— 配对页挂起期驱动停摆,收口
   /// 校时不能只靠 tick 补发):过闸体与 tick 共用;断链/拆链/仍在闸内
-  /// 则弃(驱动下一拍兜底)。
-  Future<void> _deferredFirstWrite() async {
-    await Future<void>.delayed(writeGate);
-    if (_state != BleSessionState.ready) return;
-    final t = _now();
-    if (_gated(t)) return;
-    try {
-      await _flushDueWrites(t);
-    } on Exception catch (e) {
-      lastError = (key: 'ble.firstWriteFail', args: {'e': e.toString()});
-    }
+  /// 则弃(驱动下一拍兜底)。可取消(dispose/新一轮 ready 覆盖)。
+  void _deferredFirstWrite() {
+    _deferredWriteTimer?.cancel();
+    _deferredWriteTimer = Timer(writeGate, () {
+      _deferredWriteTimer = null;
+      if (_disposed || _state != BleSessionState.ready) return;
+      final t = _now();
+      if (_gated(t)) return;
+      unawaited(() async {
+        try {
+          await _flushDueWrites(t);
+        } on Exception catch (e) {
+          lastError = (key: 'ble.firstWriteFail', args: {'e': e.toString()});
+        }
+      }());
+    });
   }
 
   Future<void> _sendGeo(GeoFix fix, DateTime t) async {
@@ -1128,7 +1164,11 @@ final class BleCameraSession {
   /// 名字已写 → 收口(stage4 序列号 + 0x2002 名字落定 = 相机侧配对
   /// 实质完成;NOT1 非闸门 —— 真机 2026-10-13 实测 Zf 不主动回)。
   void _completeIfReady() {
+    if (_disposed) return;
     if (!_nameWritten) return;
+    // 没有在途握手 = 本次收口无人认领(弃局后的迟到通知),不推态。
+    final done = _handshake;
+    if (done == null) return;
     final stage1 = _stage1;
     if (stage1 == null) return;
     identity = BleIdentity(
@@ -1152,19 +1192,19 @@ final class BleCameraSession {
     _readyOneShotPending = true;
     _setState(BleSessionState.ready);
     _kickStreak = 0; // 连上即清连续拒绝计数
-    _handshake?.complete();
+    done.complete();
     _handshake = null;
     _trace('配对成功 ✓');
     // 收口校时(SnapBridge 语义:配对事务末环)保留,但改过首写门才发:
     // 一次性延迟自发([_deferredFirstWrite]),配对页挂起期驱动 tick 停摆
     // 也能落地;闸内到达的定位缓存同沿回补。
-    unawaited(_deferredFirstWrite());
+    _deferredFirstWrite();
   }
 
   void _failHandshake() {
-    _stage1 = null;
-    _stage3Sent = false;
-    _handshake?.completeError(BlePairingException(lastError?.key ?? '握手失败'));
+    final done = _handshake;
+    _resetAttemptState();
+    done?.completeError(BlePairingException(lastError?.key ?? '握手失败'));
     _handshake = null;
     // 退避不在此复位:kick 类瞬时失败由 handshakeStartFail 处按连续计
     // 数做 2s 快试;持续踢(相机楔死)让步进照常爬升停止锤击。

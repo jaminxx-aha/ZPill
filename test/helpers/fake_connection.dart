@@ -18,6 +18,12 @@ final class FakeConnection implements CameraConnection {
   @override
   L10nMessage? error;
 
+  /// 错误文案变化沿(生产实现由 CameraConnectionImpl 广播;桩侧显式推)。
+  final errorsCtrl = StreamController<L10nMessage?>.broadcast();
+
+  @override
+  Stream<L10nMessage?> get errorChanges => errorsCtrl.stream;
+
   @override
   String? deviceName;
 
