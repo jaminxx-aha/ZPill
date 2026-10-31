@@ -38,8 +38,10 @@ Future<FrameAnalysis?> analyzeInIsolate(
 final class FrameAnalyzer {
   FrameAnalyzer({this.everyNth = 5});
 
-  /// 抽帧间隔:基础 200ms 帧率下 = 每 ~1s 一算。分析虽已迁子 isolate
-  /// (不再卡 UI),全帧解码仍吃整核 CPU —— 抽帧控的是 CPU 占用预算。
+  /// 抽帧间隔(帧数)。分析虽已迁子 isolate(不再卡 UI),全帧解码仍吃
+  /// 整核 CPU —— 抽帧控的是 CPU 占用预算,**按拍数而非毫秒**定义,所以
+  /// 必须与实际引擎节拍对表:引擎 50ms 一拍 → 1s 一算 = 20。
+  /// (旧注释按「基础 200ms 帧率」写 5,实际成了 250ms 一算。)
   final int everyNth;
 
   /// 分析开关(斑马纹/直方图任一开启时置 true;false 时帧到达即返回)。

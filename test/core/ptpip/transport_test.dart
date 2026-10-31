@@ -380,6 +380,39 @@ void main() {
       expect(result.data, isNull);
     });
 
+    test('业务回调抛异常:只本事务失败,字节吸干,链路保留(不毒化)', () async {
+      final (t, command, _) = await connectTransport();
+      final future = t.execute(
+        const PtpRequest(opcode: PtpOperationCode.getObject, params: [42]),
+        onData: (_) => throw const FileSystemException('disk full'),
+      );
+      await pumpEventQueue();
+      final req = codec.decode(command.sent.last) as OperationRequestPacket;
+      final tid = req.transactionId;
+
+      command
+          .emit(frameOf(StartDataPacket(transactionId: tid, totalLength: 8)));
+      command.emit(frameOf(DataPacket(
+          transactionId: tid, payload: Uint8List.fromList([1, 2, 3, 4]))));
+      command.emit(frameOf(EndDataPacket(
+          transactionId: tid, payload: Uint8List.fromList([5, 6, 7, 8]))));
+      command.emit(frameOf(OperationResponsePacket(
+          responseCode: PtpResponseCode.ok, transactionId: tid)));
+
+      await expectLater(future, throwsA(isA<FileSystemException>()),
+          reason: '回调异常原样回给调用方,不当成功');
+
+      // 链路仍可用:下一笔事务照常收发(旧实现此处已毒化,execute 秒败)
+      final okFuture = t.execute(
+          const PtpRequest(opcode: PtpOperationCode.getDeviceInfo));
+      await pumpEventQueue();
+      final req2 = codec.decode(command.sent.last) as OperationRequestPacket;
+      command.emit(frameOf(OperationResponsePacket(
+          responseCode: PtpResponseCode.ok, transactionId: req2.transactionId)));
+      final ok = await okFuture;
+      expect(ok.responseCode, PtpResponseCode.ok);
+    });
+
     test('tid 方言:首事务 0、其后递增、OpenSession 重置(0x201E 自愈适配)', () async {
       final (t, command, _) = await connectTransport();
       final (req1, _) = await replyOk(command,

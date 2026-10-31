@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math' show min;
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -84,6 +85,31 @@ void main() {
       // 再喂一帧,内部缓冲重排 —— 已吐出的帧不得被污染
       s.feed(_hex('0C000000 03000000 CDAB0000'));
       expect(first.body, bodySnapshot);
+    });
+
+    test('大帧跨 64 块:定长预分配按偏移写入,内容/粘帧都对齐', () {
+      final s = PtpIpFrameSplitter();
+      const bodyLen = 64 * 1024;
+      final body = Uint8List.fromList([for (var i = 0; i < bodyLen; i++) i & 0xFF]);
+      final frame = Uint8List(8 + bodyLen);
+      final header = ByteData.sublistView(frame);
+      header.setUint32(0, 8 + bodyLen, Endian.little);
+      header.setUint32(4, PtpIpPacketType.data, Endian.little);
+      frame.setRange(8, 8 + bodyLen, body);
+
+      final out = <PtpIpFrame>[];
+      for (var off = 0; off < frame.length; off += 1024) {
+        out.addAll(s.feed(
+            Uint8List.sublistView(frame, off, min(off + 1024, frame.length))));
+      }
+      expect(out, hasLength(1));
+      expect(out[0].body.length, bodyLen);
+      expect(out[0].body, body, reason: '跨块拼接必须逐字节对齐');
+
+      // 粘在后面的下一帧照常吐出
+      out.addAll(s.feed(_endDataFrame));
+      expect(out, hasLength(2));
+      expect(out[1].body, [0x02, 0x00, 0x00, 0x00, 0x41, 0x42]);
     });
 
     test('空喂入无帧无异常', () {

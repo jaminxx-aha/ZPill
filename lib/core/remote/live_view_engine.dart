@@ -302,7 +302,7 @@ final class LiveViewEngine {
   /// (链路已死时它必然失败,吞掉)。
   Future<void> stop() async {
     _runId++;
-    _paused = false;
+    resume(); // 放行暂停闸:否则循环挂在 gate 上,stop 后不退出
     _recovering = false;
     _watchdog.reset();
     health.value = LiveViewHealth.ok;
@@ -319,13 +319,35 @@ final class LiveViewEngine {
   }
 
   /// 挂起轮询(在途事务自然完成);不影响 Start/EndLiveView 状态。
-  void pause() => _paused = true;
+  ///
+  /// 挂起期循环停在 [_resumeGate] 上,不再每 50ms 醒一次空转(旧实现
+  /// 离开拍摄页后整个连接期每秒 20 次 Timer 唤醒 —— 引擎寿命跟链路走,
+  /// 不是跟页面走)。
+  void pause() {
+    _paused = true;
+    _resumeGate ??= Completer<void>();
+  }
 
-  void resume() => _paused = false;
+  void resume() {
+    _paused = false;
+    final gate = _resumeGate;
+    _resumeGate = null;
+    if (gate != null && !gate.isCompleted) gate.complete();
+  }
+
+  /// 暂停闸:非空 = 循环正停在这上面(pause 建、resume/stop 放)。
+  Completer<void>? _resumeGate;
 
   Future<void> _loop(int run) async {
     while (status.value == LiveViewStatus.running && run == _runId) {
-      if (_paused || _recovering) {
+      if (_paused) {
+        // 暂停:停在闸上等 resume/stop,零唤醒。
+        final gate = _resumeGate;
+        if (gate != null && !gate.isCompleted) await gate.future;
+        continue;
+      }
+      if (_recovering) {
+        // 看门狗处置/重启取景的短窗:按拍复查(处置完自行恢复)。
         await _delay(_pausedTick);
         continue;
       }

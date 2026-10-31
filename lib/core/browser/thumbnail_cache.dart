@@ -83,6 +83,10 @@ final class _ThumbJob {
 
 /// 非 final + 依赖字段私有:widget 测试可 implements(仅 pathFor/promote/
 /// reset,注入假路径,避开平台目录/MethodChannel)。
+///
+/// 落盘一律不 fsync(2026-10-31):缩略/预览档是可再生数据,进程崩溃最
+/// 多重下一次;旧写法 `flush: true` 每张一次 fsync,冷缓存填格时把串行
+/// 泵钉在磁盘抖动上。
 class ThumbnailCache {
   ThumbnailCache({
     required PtpSession session,
@@ -228,7 +232,7 @@ class ThumbnailCache {
         // 解码产物已被原生 transform 转正,不再注入方向(防二次旋转)。
         final jpeg = await _rawDecoder!
             .decodeJpeg(dl.path, maxPixelSize: previewMaxPixelSize);
-        await File(path).writeAsBytes(jpeg, flush: true);
+        await File(path).writeAsBytes(jpeg);
         _remember(ThumbSource.preview, 'hq_$key', path, jpeg.length);
         await _evictIfNeeded(ThumbSource.preview);
         _upgradeCtrl.add(
@@ -266,6 +270,8 @@ class ThumbnailCache {
     // 命中即刷到 LRU 尾部(最新端);**盘档已无的命中当未命中**(LRU
     // 驱逐删档/系统回收后,死路径缓存不失效会让格子永远断图 —— 索引
     // 在而文件不在,2026-10-16 真机 440 张相册「回拉全部断图」根因)。
+    // 校验保持同步:pathFor 的 future 身份是上层去重契约(同键并发共享
+    // 同一个 future),改 async 会破坏 identical 语义。
     _CachedThumb? refresh(String k) {
       final c = lru[k];
       if (c == null) return null;
@@ -443,7 +449,7 @@ class ThumbnailCache {
             } else {
               final oriented = await _orientThumb(entry, raw);
               final data = await _trimLetterboxForEntry(entry, oriented);
-              await fhdFile.writeAsBytes(data, flush: true);
+              await fhdFile.writeAsBytes(data);
               _remember(source, 'fhd_$key', fhdPath, data.length);
               await _evictIfNeeded(source);
               return fhdPath;
@@ -487,7 +493,7 @@ class ThumbnailCache {
       _logFetchError(entry, source, e);
       rethrow;
     }
-    await file.writeAsBytes(data, flush: true);
+    await file.writeAsBytes(data);
     _remember(source, key, path, data.length);
     await _evictIfNeeded(source);
     return path;
@@ -527,7 +533,7 @@ class ThumbnailCache {
             entry, await _session.getLargeThumb(entry.handle, force: true));
         // JPG 静照无固定画布信箱边,不付整图解码扫描成本。
         final data = await _trimLetterboxForEntry(entry, oriented);
-        await ltFile.writeAsBytes(data, flush: true);
+        await ltFile.writeAsBytes(data);
         _remember(source, ltKey, ltPath, data.length);
         await _evictIfNeeded(source);
         // 高清档就位,同键旧小图档成了不进 LRU 账的孤儿档:顺手清掉
@@ -560,7 +566,7 @@ class ThumbnailCache {
     }
     final data =
         await _orientThumb(entry, await _session.getThumb(entry.handle));
-    await file.writeAsBytes(data, flush: true);
+    await file.writeAsBytes(data);
     _remember(source, key, path, data.length);
     await _evictIfNeeded(source);
     return path;

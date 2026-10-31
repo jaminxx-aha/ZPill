@@ -211,9 +211,29 @@ mixin _SessionCore {
 
   Future<void> _gate = Future<void>.value();
 
+  /// 排队告警阈值:取景帧(50ms 一拍)等过这么久基本就是被大事务占着
+  /// 锁(整档下载/页枚举)。日志里区分「排队慢」与「链路慢」。
+  static const Duration queueWarnThreshold = Duration(milliseconds: 200);
+  static DateTime _lastQueueWarnAt = DateTime.fromMillisecondsSinceEpoch(0);
+
   /// 把 [op] 排入全局串行队列;失败不断链(后续排队照常执行)。
+  ///
+  /// 排队时长在此计量(transport 的事务计时起点在锁内,看不出排队)——
+  /// 「取景卡顿」到底是等锁还是等相机,靠这条日志分辨。告警限频 1s。
   Future<T> _serialized<T>(Future<T> Function() op) {
-    final run = _gate.then((_) => op());
+    final queuedAt = DateTime.now();
+    final run = _gate.then((_) {
+      final waited = DateTime.now().difference(queuedAt);
+      if (waited >= queueWarnThreshold) {
+        final now = DateTime.now();
+        if (now.difference(_lastQueueWarnAt) >= const Duration(seconds: 1)) {
+          _lastQueueWarnAt = now;
+          AppLog.w(AppLog.protocol,
+              '排队 ${waited.inMilliseconds}ms 才上链(锁被长事务占着?)');
+        }
+      }
+      return op();
+    });
     _gate = run.then<void>((_) {}, onError: (_) {});
     return run;
   }

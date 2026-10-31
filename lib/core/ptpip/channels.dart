@@ -6,6 +6,7 @@ library;
 
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' show min;
 import 'dart:typed_data';
 
 import 'packet.dart';
@@ -43,62 +44,122 @@ abstract interface class PtpIpChannel {
 /// 取景帧流的常客),半包拼接才落内部缓冲;两类缓冲后续 feed 都不会
 /// 使其失效(只读拼接,不复用来块内存),但调用方不得原地修改来块。
 final class PtpIpFrameSplitter {
+  /// 上一轮剩下的不完整帧(只可能是「不足 8B 头」或「已定长在拼」两种
+  /// 形态之一,见下)。
   Uint8List _pending = Uint8List(0);
 
+  /// 已定长的半帧:一次按包头声明的长度预分配,后续块按偏移写入。
+  ///
+  /// 旧实现走「每来一块 = 重分配 + 全量拷贝累计部分」,一个大帧跨 N 块
+  /// 就要拷 ~N/2×帧长 字节(1MB 帧按 64KB 读块 ≈ 8× 冗余;整档 GetObject
+  /// 的 16MB 帧是数量级差)。改为定长即预分配后,累计拷贝回落到 1×帧长。
+  Uint8List? _frame;
+  int _frameFill = 0;
+  int _frameLength = 0;
+
   /// 喂入任意大小的字节块,返回其中完整的帧(可能为空)。
+  ///
+  /// 整帧落在来块内 = 零拷贝视图(取景帧常态);跨块 = 定长预分配后按
+  /// 偏移写入,返回的 body 是该预分配缓冲的视图。
   List<PtpIpFrame> feed(Uint8List bytes) {
-    if (bytes.isEmpty) {
-      return const [];
-    }
-    if (_pending.isEmpty) {
-      // 常态:直接在来块上切,帧为来块视图(原路每轮把来块并进新
-      // 缓冲 = 每帧一遍整帧拷贝喂 GC)。
-      final (frames, off) = _parse(bytes, 0);
-      if (off < bytes.length) {
-        _pending = Uint8List.sublistView(bytes, off); // 半包尾巴
+    if (bytes.isEmpty) return const [];
+    final frames = <PtpIpFrame>[];
+    var off = 0;
+    while (true) {
+      // ① 定长半帧:直接补满
+      final frame = _frame;
+      if (frame != null) {
+        final take = min(_frameLength - _frameFill, bytes.length - off);
+        frame.setRange(_frameFill, _frameFill + take, bytes, off);
+        _frameFill += take;
+        off += take;
+        if (_frameFill < _frameLength) return frames; // 等下一块
+        frames.add(_frameOf(frame, 0, _frameLength));
+        _frame = null;
+        _frameFill = 0;
+        _frameLength = 0;
+        continue;
       }
-      return frames;
+      // ② 有残留尾巴:先把包头凑齐(只在不足 8B 时发生,拷贝量 ≤8B)
+      if (_pending.isNotEmpty) {
+        if (_pending.length < kPtpIpHeaderLength) {
+          final need = kPtpIpHeaderLength - _pending.length;
+          final take = min(need, bytes.length - off);
+          final merged = Uint8List(_pending.length + take)
+            ..setAll(0, _pending)
+            ..setRange(_pending.length, _pending.length + take, bytes, off);
+          off += take;
+          _pending = merged;
+          if (merged.length < kPtpIpHeaderLength) return frames;
+        }
+        final length = _lengthOf(_pending, 0);
+        if (length <= _pending.length) {
+          frames.add(_frameOf(_pending, 0, length));
+          _pending = Uint8List.sublistView(_pending, length);
+          continue;
+        }
+        _beginFrame(_pending, 0, _pending.length);
+        _pending = Uint8List(0);
+        continue;
+      }
+      // ③ 无残留:直接切来块
+      final avail = bytes.length - off;
+      if (avail == 0) return frames;
+      if (avail < kPtpIpHeaderLength) {
+        _pending = Uint8List.sublistView(bytes, off); // 半包尾巴
+        return frames;
+      }
+      final length = _lengthOf(bytes, off);
+      if (length <= avail) {
+        frames.add(_frameOf(bytes, off, length));
+        off += length;
+        continue;
+      }
+      _beginFrame(bytes, off, avail);
+      off = bytes.length;
     }
-    final combined = Uint8List(_pending.length + bytes.length);
-    combined.setAll(0, _pending);
-    combined.setAll(_pending.length, bytes);
-    final (frames, off) = _parse(combined, 0);
-    _pending = Uint8List.sublistView(combined, off);
-    return frames;
   }
 
-  /// 自 [start] 起切分完整帧;返回(帧列表,消费截止偏移)。
-  static (List<PtpIpFrame>, int) _parse(Uint8List buf, int start) {
-    final frames = <PtpIpFrame>[];
-    var off = start;
-    while (buf.length - off >= kPtpIpHeaderLength) {
-      final header = ByteData.sublistView(buf, off, off + kPtpIpHeaderLength);
-      final length = header.getUint32(0, Endian.little);
-      final type = header.getUint32(4, Endian.little);
-      if (length < kPtpIpHeaderLength) {
-        throw FormatException('PTP-IP 帧长度 $length < 8(流错位?)');
-      }
-      if (length > kMaxPtpIpFrameLength) {
-        // 巨值保护:先校验再分配,拒绝按乱序长度预分配大缓冲。
-        throw FormatException('PTP-IP 帧长度 $length 超上限(流错位?)');
-      }
-      if (type != PtpIpPacketType.data &&
-          type != PtpIpPacketType.endData &&
-          length > kMaxPtpIpControlFrameLength) {
-        throw FormatException('PTP-IP 控制帧长度 $length 超上限(流错位?)');
-      }
-      if (buf.length - off < length) {
-        break; // 半包,留待下一轮
-      }
-      frames.add(PtpIpFrame(
-        type: type,
-        body:
-            Uint8List.sublistView(buf, off + kPtpIpHeaderLength, off + length),
-      ));
-      off += length;
+  /// 按包头定长,预分配整帧并把已有 [have] 字节拷进去。
+  void _beginFrame(Uint8List src, int start, int have) {
+    final length = _lengthOf(src, start);
+    final buf = Uint8List(length);
+    buf.setRange(0, have, src, start);
+    _frame = buf;
+    _frameFill = have;
+    _frameLength = length;
+    if (_frameFill >= _frameLength) {
+      _frameFill = _frameLength; // 恰好收齐(头 + 0 字节体)
     }
-    return (frames, off);
   }
+
+  /// 校验并读包头声明长度(错误语义与原实现逐字一致:调用方据此毒化)。
+  static int _lengthOf(Uint8List buf, int start) {
+    final header = ByteData.sublistView(buf, start, start + kPtpIpHeaderLength);
+    final length = header.getUint32(0, Endian.little);
+    final type = header.getUint32(4, Endian.little);
+    if (length < kPtpIpHeaderLength) {
+      throw FormatException('PTP-IP 帧长度 $length < 8(流错位?)');
+    }
+    if (length > kMaxPtpIpFrameLength) {
+      // 巨值保护:先校验再分配,拒绝按乱序长度预分配大缓冲。
+      throw FormatException('PTP-IP 帧长度 $length 超上限(流错位?)');
+    }
+    if (type != PtpIpPacketType.data &&
+        type != PtpIpPacketType.endData &&
+        length > kMaxPtpIpControlFrameLength) {
+      throw FormatException('PTP-IP 控制帧长度 $length 超上限(流错位?)');
+    }
+    return length;
+  }
+
+  static PtpIpFrame _frameOf(Uint8List buf, int start, int length) =>
+      PtpIpFrame(
+        type: ByteData.sublistView(buf, start, start + kPtpIpHeaderLength)
+            .getUint32(4, Endian.little),
+        body: Uint8List.sublistView(
+            buf, start + kPtpIpHeaderLength, start + length),
+      );
 }
 
 /// 基于 dart:io Socket 的默认实现(薄壳:连接、帧切分、收发、关断)。

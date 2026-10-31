@@ -530,7 +530,10 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
         final oriented =
             injectJpegOrientation(embedded.jpeg, embedded.orientation);
         final jpeg = await trimLetterboxJpeg(oriented) ?? oriented;
-        small.writeAsBytesSync(jpeg, flush: true);
+        // 同步写、**不 fsync**:缩略档可再生,flush:true 每次 fsync 是
+        // 冷缓存填格时的主要磁盘抖动;同步写保住 widget 测试的确定时钟
+        // (异步写要 runAsync 排水,既有用例按同步语义写)。
+        small.writeAsBytesSync(jpeg);
         _scheduleNefHi(file, key, dir);
         return small.path;
       }
@@ -621,7 +624,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
       final needsTrim =
           isVideoFilename(name) || isRawFilename(name) || isHeifFilename(name);
       final trimmed = needsTrim ? await trimLetterboxJpeg(jpeg) : null;
-      cache.writeAsBytesSync(trimmed ?? jpeg, flush: true);
+      cache.writeAsBytesSync(trimmed ?? jpeg); // 同上:可再生档不 fsync
       return cache.path;
     } on Object {
       return null; // 无解码器/抽帧/失败:原图源(吞掉,不毒化串行链)
