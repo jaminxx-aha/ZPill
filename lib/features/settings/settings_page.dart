@@ -29,6 +29,7 @@ class SettingsController extends ChangeNotifier
     implements ValueListenable<AppSettings> {
   SettingsController({required this.store}) {
     _sub = store.settings.listen((s) {
+      if (s == settings) return; // 自己写回的同值:不再二次通知
       settings = s;
       notifyListeners();
     });
@@ -99,8 +100,9 @@ class SettingsController extends ChangeNotifier
   Future<void> setTemporalDenoise(bool value) =>
       _update(settings.copyWith(temporalDenoise: value));
 
-  Future<void> setDeSqueeze(double value) =>
-      _update(settings.copyWith(deSqueeze: value.clamp(1.0, 2.0)));
+  Future<void> setDeSqueeze(double value, {bool persist = true}) =>
+      _update(settings.copyWith(deSqueeze: value.clamp(1.0, 2.0)),
+          persist: persist);
 
   /// 整对象落库(十二轮:拍摄页监看开关组/取景开关经 copyWith 拼好
   /// 后从这里走 —— 与散装 setter 同一条 _update 路,存储失败仅吞)。
@@ -115,9 +117,11 @@ class SettingsController extends ChangeNotifier
   Future<void> setConnectionMethod(String value) =>
       _update(settings.copyWith(connectionMethod: value));
 
-  Future<void> _update(AppSettings next) async {
+  Future<void> _update(AppSettings next, {bool persist = true}) async {
+    if (next == settings) return; // 同值:不通知、不落库
     settings = next;
     notifyListeners();
+    if (!persist) return;
     _pendingPersist = next;
     await _drainPersist();
   }
@@ -373,7 +377,9 @@ class _SettingsPageState extends State<SettingsPage> {
                 activeColor: AppColors.accentYellow,
                 inactiveColor:
                     Theme.of(context).colorScheme.surfaceContainerHighest,
-                onChanged: controller.setDeSqueeze,
+                onChanged: (v) =>
+                    controller.setDeSqueeze(v, persist: false),
+                onChangeEnd: controller.setDeSqueeze,
               ),
             ],
           ),

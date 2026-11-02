@@ -53,6 +53,13 @@ abstract interface class CameraConnection {
   /// 键集见 zh_catalog 的 conn.err*/conn.recover*/conn.pair* 段。
   L10nMessage? get error;
 
+  /// [error] 的变化沿(null = 清空)。
+  ///
+  /// [error] 是构建期快照,**不是**状态沿:恢复退避期的动态文案
+  /// (相机忙/等归位)只改 error 不转状态,不发这条流就永远上不了屏。
+  /// 广播流,订阅方自行补一次 [error] 当前值播种。
+  Stream<L10nMessage?> get errorChanges;
+
   /// 已连接设备的展示名(答「哪一台」):无线 = mDNS 实例名(型号_序列
   /// 号,如 Z_f_8014411),手动 IP/USB 无实例名退 GetDeviceInfo 型号;
   /// 未连接为 null。
@@ -228,6 +235,10 @@ final class CameraConnectionImpl implements CameraConnection {
   final StreamController<CameraLinkState> _statesCtrl =
       StreamController<CameraLinkState>.broadcast();
 
+  /// 错误文案变化沿(见接口注释):状态不变也要上屏的场景靠它。
+  final StreamController<L10nMessage?> _errorsCtrl =
+      StreamController<L10nMessage?>.broadcast();
+
   CameraLinkState _state = CameraLinkState.disconnected;
   L10nMessage? _error;
   String? _deviceName;
@@ -248,6 +259,15 @@ final class CameraConnectionImpl implements CameraConnection {
 
   @override
   L10nMessage? get error => _error;
+
+  @override
+  Stream<L10nMessage?> get errorChanges => _errorsCtrl.stream;
+
+  /// 唯一写 [error] 的口(赋值处一律走这里,保证变化沿不漏发)。
+  void _setError(L10nMessage? message) {
+    _error = message;
+    if (!_errorsCtrl.isClosed) _errorsCtrl.add(message);
+  }
 
   @override
   String? get deviceName => _deviceName;
@@ -272,6 +292,9 @@ final class CameraConnectionImpl implements CameraConnection {
     // 操作员动作:清风暴/DROP 账本(仅此处与 disconnect 清,重连成功
     // 绝不清 —— 「成功正是风暴最擅长伪装的东西」)。
     _reconnectPolicy.resetLedger();
+    // 上一轮清理还在收尾(disconnect 后立刻再点连接):先让它跑完,
+    // 否则新旧两轮会交错拆链。
+    await _awaitTeardown();
     _transition(CameraLinkState.connecting);
     if (ip == null) {
       await _connectUsb();
@@ -333,6 +356,7 @@ final class CameraConnectionImpl implements CameraConnection {
   }
 
   Future<void> _connectUsbOnce({bool silent = false}) async {
+    await _awaitTeardown();
     final cameras = await _usb.listCameras();
     if (cameras.isEmpty) {
       if (silent) throw const CameraNotPresentException();
@@ -341,6 +365,7 @@ final class CameraConnectionImpl implements CameraConnection {
     }
     await _usb.open(cameras.first);
     _link.attach(_usbTransport);
+    _linkGen++;
     _wireless = false;
     await _openSessionOrReject(silent: silent);
   }
@@ -350,6 +375,7 @@ final class CameraConnectionImpl implements CameraConnection {
   /// connecting 态安静重试,不闪失败横幅。
   Future<void> _connectWireless(String ip,
       {String? instanceName, bool silent = false}) async {
+    await _awaitTeardown();
     final transport = await _createIpTransport();
     // 先登记:握手/会话任一步失败,catch 里的 teardown 都能收尾实例
     _wirelessTransport = transport;
@@ -377,7 +403,7 @@ final class CameraConnectionImpl implements CameraConnection {
             // _postPairingRetryDelays;期间用户主动断开(disconnect 会
             // 转走 connecting 态)即止,耗尽才报失败并给按 OK 指引。
             await _teardown();
-            _error = null;
+            _setError(null);
             _transition(CameraLinkState.connecting);
             for (var attempt = 0;; attempt++) {
               try {
@@ -432,7 +458,7 @@ final class CameraConnectionImpl implements CameraConnection {
         return;
       }
       _lastGood = (ip: ip, instanceName: instanceName);
-      _error = null;
+      _setError(null);
       _transition(CameraLinkState.connected);
     } on Exception catch (e) {
       if (silent) {
@@ -460,6 +486,7 @@ final class CameraConnectionImpl implements CameraConnection {
       PtpIpTransport transport, String ip) async {
     await transport.connect(ip);
     _link.attach(transport);
+    _linkGen++;
     // 无线不做 USB 那道受限画像拦截(STA 的 9 op 小表是常态人设,见类注)
     final info = await _session.getDeviceInfo(force: true);
     await _session.open();
@@ -616,7 +643,7 @@ final class CameraConnectionImpl implements CameraConnection {
     _lastGood = (ip: null, instanceName: null);
     _deviceName = _deviceLabel(info, null);
     _deviceModel = info.model;
-    _error = null;
+    _setError(null);
     _transition(CameraLinkState.connected);
   }
 
@@ -629,7 +656,7 @@ final class CameraConnectionImpl implements CameraConnection {
         _state != CameraLinkState.pairing) {
       return;
     }
-    _error = message;
+    _setError(message);
     _transition(CameraLinkState.failed);
     await _teardown();
   }
@@ -685,7 +712,7 @@ final class CameraConnectionImpl implements CameraConnection {
     _pairingCode = null;
     gate?.complete(false);
     await _teardown();
-    _error = null;
+    _setError(null);
   }
 
   /// 取景看门狗升级入口:取景流多次重启仍未恢复时,由引擎回调请求整链
@@ -697,29 +724,85 @@ final class CameraConnectionImpl implements CameraConnection {
     _beginRecovery(reason);
   }
 
+  /// 清理单飞:同一时刻只跑一轮(并发进入共用同一 future)。
+  Future<void>? _tearingDown;
+
+  /// 链路世代:每次 attach 新链路自增。清理只对「自己那一代」的共享
+  /// 资源(_link router / session / usb)动手 —— disconnect() 先转态再
+  /// await 清理,此窗内用户再点连接装上的新链路不得被旧清理拆掉。
+  int _linkGen = 0;
+
   /// 链路与会话清理(尽力而为:链路已死时各步必然失败,不能互相吞)。
-  Future<void> _teardown() async {
+  ///
+  /// 2026-10-31 加固:①单飞 —— 并发 teardown 共用一轮;②每个 await 都
+  /// 兜住异常 —— 旧实现 `wireless?.close()` 裸 await,一抛错就跳过
+  /// session/usb 清理(USB 接口不释放、会话账不归零);③共享资源按世代
+  /// 守卫 —— 旧清理不得 detach/close 新链路。
+  Future<void> _teardown() {
+    final running = _tearingDown;
+    if (running != null) return running;
+    final gen = _linkGen;
+    final sub = _wirelessBreakageSub;
+    _wirelessBreakageSub = null;
+    final wireless = _wirelessTransport;
+    if (identical(_wirelessTransport, wireless)) _wirelessTransport = null;
+    final run = _teardownOnce(gen: gen, sub: sub, wireless: wireless);
+    _tearingDown = run;
+    return run.whenComplete(() {
+      if (identical(_tearingDown, run)) _tearingDown = null;
+    });
+  }
+
+  /// 等一轮在途清理收口(连接入口先让路:否则新拨号与旧清理交错)。
+  Future<void> _awaitTeardown() async {
+    final running = _tearingDown;
+    if (running == null) return;
+    try {
+      await running;
+    } on Object {
+      // 清理自身异常不上抛:它已尽力而为,失败由后续拨号如实暴露
+    }
+  }
+
+  Future<void> _teardownOnce({
+    required int gen,
+    required StreamSubscription<String>? sub,
+    required PtpIpTransport? wireless,
+  }) async {
     _deviceName = null;
     _deviceModel = null;
-    await _wirelessBreakageSub?.cancel();
-    _wirelessBreakageSub = null;
+    if (sub != null) {
+      try {
+        await sub.cancel();
+      } on Object {
+        // 取消失败:订阅源已随链路死,无害
+      }
+    }
     // remote 持有的镜像收尾:连接流的开闩括号(enableAppControl
     // 0x90C2(1)→(0))与取景自愈均已配对退出,这里兜的是用户「接管」
     // /括号退步被拒等仍持有的情形 —— 干净断开(用户点断开/连接失败
     // 回滚)先退 remote 再拆链,不退则机身停「已连接到计算机」屏
     // (2026-10-07 真机:remote 态跨拔插保持,半按快门才退)。链路已死
     // 时必然失败,尽力而为。
-    if (_session.remoteModeActive) {
+    if (gen == _linkGen && _session.remoteModeActive) {
       try {
         await _session.changeCameraMode(0);
       } on Object {
         // 尽力而为:本地持有态由 close() 收口
       }
     }
-    _link.detach(); // 1. 挡新请求(会话清理不再往链路发指令)
-    final wireless = _wirelessTransport;
-    _wirelessTransport = null;
-    await wireless?.close(); // 2. 无线毒化在途(串行门秒释放);USB 无此步
+    if (gen == _linkGen) {
+      _link.detach(); // 1. 挡新请求(会话清理不再往链路发指令)
+    }
+    if (wireless != null) {
+      try {
+        await wireless.close(); // 2. 无线毒化在途(串行门秒释放);USB 无此步
+      } on Object {
+        // 链路已死:关闭失败不挡后续清理
+      }
+    }
+    // 新链路已接管:router/session/usb 归它,旧清理到此为止。
+    if (gen != _linkGen) return;
     try {
       await _session.close();
     } on Object {
@@ -739,7 +822,7 @@ final class CameraConnectionImpl implements CameraConnection {
     if (_state == CameraLinkState.pairing && !_pairingCompleting) {
       // 先转 failed 再放行配对门:_runPairing 醒来见状态非 pairing,
       // 走 aborted 退出,不再收口。
-      _error = (key: 'conn.pairWaitBroken', args: {'e': reason});
+      _setError((key: 'conn.pairWaitBroken', args: {'e': reason}));
       _transition(CameraLinkState.failed);
       final gate = _pairingGate;
       _pairingCode = null;
@@ -766,9 +849,9 @@ final class CameraConnectionImpl implements CameraConnection {
     final profile = _lastGood;
     if (profile == null || _reconnectPolicy.stormPaused) {
       // 无档案(本次运行从未成功连上)或风暴保护触发:不自动重连。
-      _error = _reconnectPolicy.stormPaused
+      _setError(_reconnectPolicy.stormPaused
           ? (key: 'conn.errReconnectPaused', args: null)
-          : (key: reason, args: null); // 取证串直通(transport 层口径)
+          : (key: reason, args: null)); // 取证串直通(transport 层口径)
       _transition(CameraLinkState.failed);
       // 链路已毒化,teardown 各步快速失败,由其内部兜底吞掉。
       unawaited(_teardown());
@@ -776,7 +859,7 @@ final class CameraConnectionImpl implements CameraConnection {
     }
     // 断链原因作 {e} 参数进「正在自动重连」模板(与恢复循环退避期
     // 同一口径):headline 恒为抽象键,取证串不过直通。
-    _error = (key: 'conn.recoverStatus', args: {'e': reason});
+    _setError((key: 'conn.recoverStatus', args: {'e': reason}));
     _transition(CameraLinkState.reconnecting);
     unawaited(_recoverFromBreakage());
   }
@@ -826,7 +909,7 @@ final class CameraConnectionImpl implements CameraConnection {
           return;
         }
         // 退避等待期的动态文案(无状态沿伴随,不触发重建,尽力而为)。
-        _error = _recoveryStatusMessage(kind, e);
+        _setError(_recoveryStatusMessage(kind, e));
         await _delay(next);
       }
     }
@@ -863,7 +946,7 @@ final class CameraConnectionImpl implements CameraConnection {
   /// 不得覆盖 disconnected)+ failed + teardown(teardown 幂等)。
   Future<void> _failRecovery(L10nMessage message) async {
     if (_state != CameraLinkState.reconnecting) return;
-    _error = message;
+    _setError(message);
     _transition(CameraLinkState.failed);
     await _teardown();
   }

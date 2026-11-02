@@ -1,0 +1,7 @@
+# flutter test 运行配置。
+#
+# 取证 harness(UI 截图 / golden,产物落 build/)默认不进全量:
+#   flutter test                 → 常规单测(需 0 失败)
+#   flutter test --tags screenshot → 显式跑取证截图(会与 build/ 下旧图比对,
+#                                    UI 改版后应先 --update-goldens)
+exclude_tags: screenshot

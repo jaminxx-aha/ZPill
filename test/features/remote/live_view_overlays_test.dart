@@ -9,6 +9,7 @@ import 'package:z_pill/core/remote/live_view_header.dart';
 import 'package:z_pill/features/remote/live_design.dart';
 import 'package:z_pill/features/remote/live_view_overlays.dart';
 import 'package:z_pill/features/remote/monitor_toggles.dart';
+import 'package:z_pill/platform/motion_host.dart';
 
 LiveViewHeader _header({
   bool recording = false,
@@ -492,5 +493,64 @@ void main() {
             reason: 'angle=$angle 终点不够长');
       }
     });
+  });
+
+  group('levelLabelAnchor:读数位置随内容转(纯函数,2026-11-02)', () {
+    const area = Rect.fromLTWH(7, 0, 388, 690); // 中心 (201,345)
+    const label = Size(90, 12);
+
+    test('正向:左缘、水平线下沿 8px(原行为不变)', () {
+      expect(
+          levelLabelAnchor(
+              area: area, midY: 300, labelQuarter: 0, labelSize: label),
+          const Offset(15, 308));
+    });
+
+    test('侧躺:位置也随方向走 —— 同一点绕取景中心顺时针转 90°', () {
+      final q1 = levelLabelAnchor(
+          area: area, midY: 300, labelQuarter: 1, labelSize: label);
+      expect(q1.dx, closeTo(238, 1e-9));
+      expect(q1.dy, closeTo(159, 1e-9));
+      final q3 = levelLabelAnchor(
+          area: area, midY: 300, labelQuarter: 3, labelSize: label);
+      expect(q3.dx, closeTo(164, 1e-9));
+      expect(q3.dy, closeTo(531, 1e-9));
+    });
+
+    test('非方形取景:旋转后的文本盒钳回取景内(极端俯仰也不出框)', () {
+      for (final midY in [-100.0, 0.0, 345.0, 690.0, 800.0]) {
+        for (final q in [1, 2, 3]) {
+          final p = levelLabelAnchor(
+              area: area, midY: midY, labelQuarter: q, labelSize: label);
+          final box = switch (q) {
+            1 => Rect.fromLTWH(p.dx - label.height, p.dy, label.height,
+                label.width),
+            3 => Rect.fromLTWH(p.dx, p.dy - label.width, label.height,
+                label.width),
+            _ => Rect.fromLTWH(
+                p.dx - label.width, p.dy - label.height, label.width,
+                label.height),
+          };
+          expect(area.inflate(1e-6).contains(box.topLeft) &&
+                  area.inflate(1e-6).contains(box.bottomRight),
+              isTrue,
+              reason: 'midY=$midY q=$q box=$box');
+        }
+      }
+    });
+  });
+
+  testWidgets('LevelOverlay 读数随 labelQuarter 旋转上屏不炸(侧躺内容)',
+      (tester) async {
+    for (final q in [0, 1, 3]) {
+      await tester.pumpWidget(MaterialApp(
+          home: Scaffold(
+              body: LevelOverlay(
+        orientation: const MotionOrientation(pitchRad: 0.2, rollRad: -0.1),
+        quarterTurns: q,
+        labelQuarter: q,
+      ))));
+      expect(tester.takeException(), isNull, reason: 'labelQuarter=$q');
+    }
   });
 }

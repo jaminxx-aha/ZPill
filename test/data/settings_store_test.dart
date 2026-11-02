@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -41,6 +42,23 @@ void main() {
 
     final reread = FileSettingsStore(dataDir: () async => tmp.path);
     expect(await reread.current(), next);
+  });
+
+  test('原子落盘:残留 tmp 被覆盖,正式档完整且无 tmp 残留', () async {
+    final tmp = await Directory.systemTemp.createTemp('zpill_settings_atomic');
+    addTearDown(() => tmp.delete(recursive: true));
+    final atomicStore = FileSettingsStore(dataDir: () async => tmp.path);
+    final file = File('${tmp.path}/settings.json');
+    // 模拟上一次写到一半崩溃留下的半截 tmp
+    await File('${file.path}.tmp').writeAsString('{"themeMode":');
+
+    await atomicStore.update(const AppSettings(themeMode: AppThemeMode.dark));
+
+    expect(await file.exists(), isTrue);
+    expect(await File('${file.path}.tmp').exists(), isFalse,
+        reason: 'tmp 已 rename 成正式档');
+    final json = jsonDecode(await file.readAsString()) as Map<String, Object?>;
+    expect(json['themeMode'], 'dark', reason: '正式档是完整新内容');
   });
 
   test('损坏文件:按默认重建不抛', () async {

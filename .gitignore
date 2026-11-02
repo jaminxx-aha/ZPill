@@ -28,6 +28,10 @@ ohos/**/*.p12
 ohos/**/*.p7b
 ohos/**/signing/
 
+# golden/截图失败产物(flutter_test 默认输出;CJK 字体渲染色差下
+# 常整批落这里,勿入库)
+test/failures/
+
 # Python(tools/ptpip_probe)
 __pycache__/
 .venv/

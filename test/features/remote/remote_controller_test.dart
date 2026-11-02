@@ -77,6 +77,9 @@ final class _GatedDelay {
   }
 
   void release() => _gates.removeFirst().complete();
+
+  /// 还挂着的门数(断言「沉默期零唤醒」用)。
+  int get pending => _gates.length;
 }
 
 /// PropDesc 数据集(u16 code + u16 type + u8 getSet + 当前值 + 出厂

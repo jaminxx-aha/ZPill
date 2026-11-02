@@ -153,6 +153,14 @@ final class _Pending {
   /// 回落聚合(声明缺失或实收将超声明的病态流 —— 对账必断链)。
   final _chunks = <Uint8List>[];
 
+  /// 数据回调侧异常(盘满、超声明等业务错)。
+  ///
+  /// 回调属于**调用方**的业务,不该毒化共享链路:记下来,字节照吸
+  /// (保持帧同步),响应沿只让本事务失败。旧实现让它冒到 dispatcher
+  /// 的 catch → `_onBreakage` → 关双通道 + 整链重连(取景、连接一起
+  /// 打掉);USB 侧同错只中止当前事务,两链路语义对齐于此。
+  Object? callbackError;
+
   bool get isStreaming => onData != null;
 
   /// 数据相分块(流式回调透传 / 非流式预分配入槽)。
@@ -172,7 +180,13 @@ final class _Pending {
     }
     final sink = onData;
     if (sink != null) {
-      sink(chunk); // 回调抛异常(盘满等)由 dispatcher 兜住 → 毒化
+      if (callbackError != null) return; // 本事务已失败:只吸字节,不再回调
+      try {
+        sink(chunk);
+      } on Object catch (e) {
+        // 业务回调异常:本事务失败收口(见 [callbackError]),链路保留。
+        callbackError = e;
+      }
       return;
     }
     final buffer = _buffer;
@@ -613,6 +627,16 @@ final class PtpIpTransport implements PtpTransport, PtpCancelCapable {
                 '${pending.receivedLength} B'));
       }
       _onBreakage('数据相对账失败(tid=$tid)');
+      return;
+    }
+    final callbackError = pending.callbackError;
+    if (callbackError != null) {
+      // 数据相已按声明吸干(对账已过),帧同步无恙:只本事务失败。
+      if (!pending.completer.isCompleted) {
+        pending.completer.completeError(callbackError);
+      }
+      AppLog.w(AppLog.protocol,
+          '← $op tid=$tid 回调失败收口,链路保留:$callbackError');
       return;
     }
     if (pending.completer.isCompleted) {

@@ -97,10 +97,14 @@ class ConnectionController extends ChangeNotifier {
     this.settingsController,
     this.subnetScanner,
   }) {
-    connection?.states.listen(_onState);
+    // 先种一次当前态:构造前链路可能已 connected(页面晚建/热重生),
+    // 只跟沿会把 UI 压在 disconnected。
+    state = connection?.state ?? state;
+    bleState = bleSession?.state ?? bleState;
+    _stateSub = connection?.states.listen(_onState);
     // 常驻订阅:浏览期间增删相机,未浏览时静默无流。
-    scanner?.events.listen(_onNsdEvent, onError: (Object _) {});
-    bleSession?.states.listen((s) {
+    _nsdSub = scanner?.events.listen(_onNsdEvent, onError: (Object _) {});
+    _bleStateSub = bleSession?.states.listen((s) {
       bleState = s;
       // 会话离开 idle(连接/握手中/就绪)= 系统蓝牙配对环节已被越过或
       // 无需再做:iOS 首配红卡即时撤下。
@@ -110,8 +114,10 @@ class ConnectionController extends ChangeNotifier {
       notifyListeners();
     });
     // 错误沿实时上屏:失败/成功清空都即时刷新,不等无关状态跃迁
-    //(BLE 弹层 ListenableBuilder 直吃这里)。
+    //(BLE 弹层 ListenableBuilder 直吃这里)。连接层同款 —— 恢复退避期
+    // 的动态文案只改 error 不转状态(见 CameraConnection.errorChanges)。
     _bleErrorSub = bleSession?.errors.listen((_) => notifyListeners());
+    _errorSub = connection?.errorChanges.listen((_) => notifyListeners());
     unawaited(loadBleIdentity());
     // 上次选中的连接方式恢复:settingsController 异步装载,装载沿经
     // 监听回填(用户本会话已选过则不覆盖,见 _onSettingsChanged)。
@@ -123,6 +129,15 @@ class ConnectionController extends ChangeNotifier {
 
   /// BLE 错误沿订阅(lastError 实时刷新用),dispose 收。
   StreamSubscription<L10nMessage?>? _bleErrorSub;
+
+  /// 连接层错误沿订阅,dispose 收。
+  StreamSubscription<L10nMessage?>? _errorSub;
+
+  /// 状态沿三件(连接/NSD/BLE)同样 dispose 收:不裁的旧写法在控制器
+  /// 重建后仍往已销毁的 ChangeNotifier 发通知(flutter 直接报错)。
+  StreamSubscription<CameraLinkState>? _stateSub;
+  StreamSubscription<NsdEvent>? _nsdSub;
+  StreamSubscription<BleSessionState>? _bleStateSub;
   final PairedCamerasStore? pairedCameras;
 
   /// /24 网段扫描器(测试注入;null = 生产默认:真 socket 端口检查 +
@@ -728,6 +743,10 @@ class ConnectionController extends ChangeNotifier {
   void dispose() {
     settingsController?.removeListener(_onSettingsChanged);
     unawaited(_bleErrorSub?.cancel());
+    unawaited(_errorSub?.cancel());
+    unawaited(_stateSub?.cancel());
+    unawaited(_nsdSub?.cancel());
+    unawaited(_bleStateSub?.cancel());
     manualIpController.dispose();
     super.dispose();
   }

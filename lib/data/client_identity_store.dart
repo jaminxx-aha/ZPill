@@ -10,6 +10,8 @@
 library;
 
 import 'dart:convert';
+
+import 'atomic_json_file.dart';
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
@@ -63,13 +65,14 @@ final class ClientIdentityStore {
     uuid[4] = 0x61; // 智能设备模式码 0x1E61 小端(NiConn 约定,见库注)
     uuid[5] = 0x1E;
     final identity = ClientIdentity(name: 'ZPill', uuid: uuid);
-    await file.create(recursive: true);
-    await file.writeAsString(const JsonEncoder.withIndent('  ').convert({
-      'name': identity.name,
-      'uuid': identity.uuid
-          .map((b) => b.toRadixString(16).padLeft(2, '0'))
-          .join(),
-    }));
+    await writeJsonAtomic(
+        file,
+        const JsonEncoder.withIndent('  ').convert({
+          'name': identity.name,
+          'uuid': identity.uuid
+              .map((b) => b.toRadixString(16).padLeft(2, '0'))
+              .join(),
+        }));
     return _cached = identity;
   }
 

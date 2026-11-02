@@ -15,12 +15,13 @@ void _lvGroups() {
         // 不得再发任何请求(脚本无应答可耗,有请求即 StateError 炸出)。
         controller.setViewerVisible(false);
         final reqsAtHide = transport.requests.length;
-        for (var i = 0; i < 4; i++) {
-          // release 后轮询协程异步苏醒:逐把放行逐轮冲刷(AE 醒即退出,
-          // 引擎醒见挂起标志 → 再挂 tick;醒多少轮都不取帧)。
+        // 逐把放行已在排的 delay(AE 间隔 + 引擎 interval):苏醒后 AE
+        // 退出、引擎停在暂停闸(不再排 tick),放完即静默。
+        while (delay.pending > 0) {
           delay.release();
           await pumpEventQueue();
         }
+        expect(delay.pending, 0, reason: '暂停期不再排 tick(零唤醒)');
         expect(transport.requests.length, reqsAtHide, reason: '不可见零流量');
         expect(controller.liveViewActive, isTrue,
             reason: '相机侧取景保持(不发 0x9202)');
@@ -37,8 +38,7 @@ void _lvGroups() {
             PtpDevicePropCode.exposureIndex, PtpDataType.uint16, 200,
             enums: [100, 200, 400, 800]));
         transport.ok(data: _u32Bytes(200)); // AE:0xD0B5 有效 ISO
-        controller.setViewerVisible(true);
-        delay.release(); // 引擎挂起 tick 醒 → 取帧
+        controller.setViewerVisible(true); // 暂停闸放行 → 立即取帧
         await pumpEventQueue();
         delay.release(); // AE 间隔醒 → 三连读
         await pumpEventQueue();
@@ -60,12 +60,14 @@ void _lvGroups() {
         expect(transport.count(NikonOperationCode.endLiveView), 0,
             reason: '不可见只挂起轮询,不发 0x9202');
 
-        // 不可见:放行引擎 delay 不得再取帧(醒一轮挂一轮)。
+        // 不可见:引擎停在暂停闸,不排 tick、不取帧(零唤醒)。
         final frames = transport.count(NikonOperationCode.getLiveViewImageEx);
-        delay.release();
+        final pendingAtHide = delay.pending;
         await pumpEventQueue();
-        delay.release();
-        await pumpEventQueue();
+        expect(delay.pending, pendingAtHide,
+            reason: '暂停期不再新排 tick(旧实现每 50ms 一个,此断言必增)');
+        expect(transport.count(NikonOperationCode.getLiveViewImageEx), frames,
+            reason: '帧轮询挂起,零流量');
         expect(transport.count(NikonOperationCode.getLiveViewImageEx), frames,
             reason: '帧轮询挂起,零流量');
 

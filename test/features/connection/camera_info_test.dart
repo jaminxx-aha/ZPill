@@ -63,6 +63,8 @@ final class _FakeConnection implements CameraConnection {
   @override
   L10nMessage? get error => null;
   @override
+  Stream<L10nMessage?> get errorChanges => const Stream<L10nMessage?>.empty();
+  @override
   String? get deviceName => null;
   @override
   String? get deviceModel => null;

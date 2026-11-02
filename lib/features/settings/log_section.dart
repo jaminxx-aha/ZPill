@@ -24,7 +24,7 @@ Widget buildLogSection(BuildContext context) {
     leading: Icons.receipt_long,
     title: context.t('log.title'),
     subtitle: context.t('log.subtitle', {
-      'n': AppLog.entries.length,
+      'n': AppLog.count,
       'cap': AppLog.defaultCapacity,
     }),
     trailing: Icon(Icons.chevron_right, color: AppColors.muted(context)),
@@ -89,7 +89,7 @@ final class _LogViewerPageState extends State<LogViewerPage> {
   String _exportText() {
     return context.t('log.header', {
           'time': DateTime.now().toIso8601String(),
-          'n': AppLog.entries.length,
+          'n': AppLog.count,
         }) +
         _text;
   }
@@ -98,7 +98,7 @@ final class _LogViewerPageState extends State<LogViewerPage> {
     await Clipboard.setData(ClipboardData(text: _exportText()));
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(context.t('log.copied', {'n': AppLog.entries.length})),
+      content: Text(context.t('log.copied', {'n': AppLog.count})),
     ));
   }
 

@@ -108,9 +108,14 @@ final class AppLog {
     _buf[_head] = entry;
     _head = (_head + 1) % _buf.length;
     if (_count < _buf.length) _count++;
+    // 行格式化(release 也常跑):无消费者时零成本。ring 只存 entry,
+    // dump/查看页按需现成 —— 未注入 mirror 且非 error 的行不必拼串。
+    final wantsMirror = mirror != null;
+    final wantsTail = level == AppLogLevel.error && errorTail != null;
+    if (!wantsMirror && !wantsTail) return;
     final line = entry.line;
-    if (mirror != null) mirror!(line);
-    if (level == AppLogLevel.error && errorTail != null) errorTail!(line);
+    if (wantsMirror) mirror!(line);
+    if (wantsTail) errorTail!(line);
   }
 
   static void d(String domain, String message) =>
@@ -134,6 +139,9 @@ final class AppLog {
   }
 
   // ---- 读取 / 导出 ----
+  /// 当前条数(免物化整表的轻量读;界面「n/cap」一行用这个)。
+  static int get count => _count;
+
   /// 时间序快照(最老在前)。
   static List<AppLogEntry> get entries => [
         for (var i = 0; i < _count; i++)

@@ -257,14 +257,18 @@ class MediaSortState {
 }
 
 /// 通用比较:键取值;null 时刻恒排尾(两向同)。返回按方向排好序的副本。
+///
+/// 键**每项只取一次**(decorate-sort):旧实现把 `keyOf` 放进比较器,
+/// 一次排序要取 O(n log n) 次键(图库页的键含 stat/文件名规范化,
+/// 千张库每次重建都白跑几万次)。
 List<T> sortMedia<T>(
   List<T> items,
   MediaSortState sort,
   (DateTime?, String, int) Function(T item) keyOf,
 ) {
-  int cmp(T a, T b) {
-    final (ta, na, sa) = keyOf(a);
-    final (tb, nb, sb) = keyOf(b);
+  int cmp((DateTime?, String, int) a, (DateTime?, String, int) b) {
+    final (ta, na, sa) = a;
+    final (tb, nb, sb) = b;
     final r = switch (sort.key) {
       MediaSortKey.time => switch ((ta, tb)) {
           (null, null) => 0,
@@ -279,10 +283,12 @@ List<T> sortMedia<T>(
   }
 
   // List.sort 不稳定:同键(如同时刻双格式组)按输入序保序。
-  final tagged = [for (var i = 0; i < items.length; i++) (items[i], i)];
+  final tagged = [
+    for (var i = 0; i < items.length; i++) (items[i], keyOf(items[i]), i),
+  ];
   tagged.sort((a, b) {
-    final r = cmp(a.$1, b.$1);
-    return r != 0 ? r : a.$2 - b.$2;
+    final r = cmp(a.$2, b.$2);
+    return r != 0 ? r : a.$3 - b.$3;
   });
   return [for (final t in tagged) t.$1];
 }

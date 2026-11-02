@@ -283,8 +283,12 @@ final class RemoteController extends ChangeNotifier
   final TransferEngine? transferEngine;
 
   /// 监看辅助帧分析(直方图/斑马纹)。
+  ///
+  /// 抽帧 1s 一算:引擎节拍 50ms(20fps),everyNth=20。旧缺省 5 是按
+  /// 「基础 200ms 帧率」估的,实际引擎 50ms → 每 250ms 就整帧解一次
+  /// (每次起一个 isolate + 全帧纯 Dart 解码),CPU 预算是设计值的 4 倍。
   @override
-  final FrameAnalyzer analyzer = FrameAnalyzer();
+  final FrameAnalyzer analyzer = FrameAnalyzer(everyNth: 20);
   @override
   final Future<void> Function(Duration) _delay;
 

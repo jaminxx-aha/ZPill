@@ -4,6 +4,8 @@
 library;
 
 import 'dart:convert';
+
+import 'atomic_json_file.dart';
 import 'dart:io';
 
 /// 已配对相机身份(与 BleCameraSession.identity 同构的落盘形态)。
@@ -103,9 +105,8 @@ final class BleIdentityStore {
   }
 
   Future<void> _write(File file, BlePairedIdentity identity) async {
-    await file.create(recursive: true);
-    await file.writeAsString(
-        const JsonEncoder.withIndent('  ').convert(identity.toJson()));
+    await writeJsonAtomic(
+        file, const JsonEncoder.withIndent('  ').convert(identity.toJson()));
   }
 
   /// 旧版本曾把热点密码明文写进身份档。启动加载时立即清掉；若档本身

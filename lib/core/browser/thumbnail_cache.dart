@@ -83,6 +83,10 @@ final class _ThumbJob {
 
 /// 非 final + 依赖字段私有:widget 测试可 implements(仅 pathFor/promote/
 /// reset,注入假路径,避开平台目录/MethodChannel)。
+///
+/// 落盘一律不 fsync(2026-10-31):缩略/预览档是可再生数据,进程崩溃最
+/// 多重下一次;旧写法 `flush: true` 每张一次 fsync,冷缓存填格时把串行
+/// 泵钉在磁盘抖动上。
 class ThumbnailCache {
   ThumbnailCache({
     required PtpSession session,
@@ -186,6 +190,9 @@ class ThumbnailCache {
   /// 目录格式清空闸(见 [_dirFor]):每目录每实例只扫一次。
   final Map<String, Future<void>> _swept = {};
 
+  /// 跨会话建账闸(见 [_seedFromDisk]):每目录每实例一次,reset 清。
+  final Map<String, Future<void>> _seeded = {};
+
   String? _thumbsDir;
   String? _previewsDir;
 
@@ -225,7 +232,7 @@ class ThumbnailCache {
         // 解码产物已被原生 transform 转正,不再注入方向(防二次旋转)。
         final jpeg = await _rawDecoder!
             .decodeJpeg(dl.path, maxPixelSize: previewMaxPixelSize);
-        await File(path).writeAsBytes(jpeg, flush: true);
+        await File(path).writeAsBytes(jpeg);
         _remember(ThumbSource.preview, 'hq_$key', path, jpeg.length);
         await _evictIfNeeded(ThumbSource.preview);
         _upgradeCtrl.add(
@@ -263,6 +270,8 @@ class ThumbnailCache {
     // 命中即刷到 LRU 尾部(最新端);**盘档已无的命中当未命中**(LRU
     // 驱逐删档/系统回收后,死路径缓存不失效会让格子永远断图 —— 索引
     // 在而文件不在,2026-10-16 真机 440 张相册「回拉全部断图」根因)。
+    // 校验保持同步:pathFor 的 future 身份是上层去重契约(同键并发共享
+    // 同一个 future),改 async 会破坏 identical 语义。
     _CachedThumb? refresh(String k) {
       final c = lru[k];
       if (c == null) return null;
@@ -398,6 +407,9 @@ class ThumbnailCache {
     _gridBytes = 0;
     _previewBytes = 0;
     _fhdPictureDegraded = false;
+    // 索引清空后盘上档又成无账档:下次访问重新建账(否则本会话内
+    // 跨会话泄漏原样复发)。
+    _seeded.clear();
   }
 
   static const _fmtMarker = '.fmt-v4'; // v4:清 v3 时代未裁黑边的 lt_/fhd_/grid 席位档(libv4_ 伴生族豁免)
@@ -437,7 +449,7 @@ class ThumbnailCache {
             } else {
               final oriented = await _orientThumb(entry, raw);
               final data = await _trimLetterboxForEntry(entry, oriented);
-              await fhdFile.writeAsBytes(data, flush: true);
+              await fhdFile.writeAsBytes(data);
               _remember(source, 'fhd_$key', fhdPath, data.length);
               await _evictIfNeeded(source);
               return fhdPath;
@@ -481,7 +493,7 @@ class ThumbnailCache {
       _logFetchError(entry, source, e);
       rethrow;
     }
-    await file.writeAsBytes(data, flush: true);
+    await file.writeAsBytes(data);
     _remember(source, key, path, data.length);
     await _evictIfNeeded(source);
     return path;
@@ -521,7 +533,7 @@ class ThumbnailCache {
             entry, await _session.getLargeThumb(entry.handle, force: true));
         // JPG 静照无固定画布信箱边,不付整图解码扫描成本。
         final data = await _trimLetterboxForEntry(entry, oriented);
-        await ltFile.writeAsBytes(data, flush: true);
+        await ltFile.writeAsBytes(data);
         _remember(source, ltKey, ltPath, data.length);
         await _evictIfNeeded(source);
         // 高清档就位,同键旧小图档成了不进 LRU 账的孤儿档:顺手清掉
@@ -554,7 +566,7 @@ class ThumbnailCache {
     }
     final data =
         await _orientThumb(entry, await _session.getThumb(entry.handle));
-    await file.writeAsBytes(data, flush: true);
+    await file.writeAsBytes(data);
     _remember(source, key, path, data.length);
     await _evictIfNeeded(source);
     return path;
@@ -626,7 +638,49 @@ class ThumbnailCache {
     // 内容键会互相命中 —— 一次性清空重建(标记档在,永不再扫)。每
     // 目录每实例只走一次([_swept] 合并并发)。
     await _swept.putIfAbsent(dir, () => _sweepOnce(dir));
+    // 跨会话建账:本会话索引从零起,盘上前会话留下的档不记账就永远
+    // 不会被 LRU 淘汰(账只约束本会话触碰过的文件)。
+    await _seeded.putIfAbsent(dir, () => _seedFromDisk(source, dir));
     return dir;
+  }
+
+  /// 盘上现存档建账(每目录每实例一次;reset 后下次访问重建)。
+  ///
+  /// 键 = 文件名去扩展名(写盘时就叫 `<槽前缀><内容键>.jpg`,与
+  /// [_remember] 的键同构);按 mtime 升序入表 = 最老在前,驱逐优先删
+  /// 最久未写的。`libv4_` 族是本地图库伴生档,不归本缓存记账(同清扫
+  /// 豁免)。索引里已有的键以本会话为准(不覆盖已刷新的访问序)。
+  Future<void> _seedFromDisk(ThumbSource source, String dir) async {
+    final lru = _lruFor(source);
+    final found = <(DateTime, String, String, int)>[];
+    try {
+      await for (final f in Directory(dir).list()) {
+        if (f is! File || !f.path.endsWith('.jpg')) continue;
+        if (f.path.contains('/libv4_')) continue;
+        try {
+          final stat = await f.stat();
+          final name = f.path.split(Platform.pathSeparator).last;
+          found.add((
+            stat.modified,
+            name.substring(0, name.length - 4),
+            f.path,
+            stat.size,
+          ));
+        } on FileSystemException {
+          // 单档消失(并发驱逐/系统回收):跳过
+        }
+      }
+    } on FileSystemException {
+      return; // 目录不可读:本次不建账(下次访问再试)
+    }
+    if (found.isEmpty) return;
+    found.sort((a, b) => a.$1.compareTo(b.$1));
+    for (final e in found) {
+      if (lru.containsKey(e.$2)) continue;
+      lru[e.$2] = (path: e.$3, bytes: e.$4);
+      _addBytes(source, e.$4);
+    }
+    await _evictIfNeeded(source);
   }
 
   Future<void> _sweepOnce(String dir) async {

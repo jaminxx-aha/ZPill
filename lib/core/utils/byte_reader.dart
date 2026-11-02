@@ -50,6 +50,16 @@ final class ByteReader {
     return v;
   }
 
+  /// 跳过 [length] 字节(不分配、不拷贝)。
+  ///
+  /// 数组/保留域等「读到即弃」的位置用它:`raw(n)` 会为丢弃的字节复制
+  /// 一份(0x9805 的 RepresentativeSampleData 数组、0x9434 每元素的
+  /// 保留 8B 都在热路径上)。
+  void skip(int length) {
+    _need(length);
+    offset += length;
+  }
+
   /// 读 [length] 字节(返回副本,不与源共享缓冲)。
   Uint8List raw(int length) {
     _need(length);

@@ -541,7 +541,10 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
         final oriented =
             injectJpegOrientation(embedded.jpeg, embedded.orientation);
         final jpeg = await trimLetterboxJpeg(oriented) ?? oriented;
-        small.writeAsBytesSync(jpeg, flush: true);
+        // 同步写、**不 fsync**:缩略档可再生,flush:true 每次 fsync 是
+        // 冷缓存填格时的主要磁盘抖动;同步写保住 widget 测试的确定时钟
+        // (异步写要 runAsync 排水,既有用例按同步语义写)。
+        small.writeAsBytesSync(jpeg);
         _scheduleNefHi(file, key, dir);
         return small.path;
       }
@@ -632,7 +635,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
       final needsTrim =
           isVideoFilename(name) || isRawFilename(name) || isHeifFilename(name);
       final trimmed = needsTrim ? await trimLetterboxJpeg(jpeg) : null;
-      cache.writeAsBytesSync(trimmed ?? jpeg, flush: true);
+      cache.writeAsBytesSync(trimmed ?? jpeg); // 同上:可再生档不 fsync
       return cache.path;
     } on Object {
       return null; // 无解码器/抽帧/失败:原图源(吞掉,不毒化串行链)
@@ -656,11 +659,11 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
     return ListenableBuilder(
       listenable: Listenable.merge([_controller, _ratings, _thumbUpgrades]),
       builder: (context, _) {
-        // 排序(共享件):时间/文件名/文件大小 × 双向;默认新在前。
-        // stat 走缓存(见 _statOf),进度事件高频重建不逐文件摸盘。
-        final files = sortMedia(List<File>.of(_controller.appFiles), _sort,
-            (f) => (_statOf(f).$1, _nameOf(f), _statOf(f).$2));
-        final filtered = _filtered(files);
+        // 排序/筛选结果按（源表 + 排序 + 选集 + 评级版本）缓存:传输期
+        // 本页 10Hz 重建,而 appFiles 与筛选条件往往几秒才变一次 ——
+        // 旧实现每个 tick 都整表重排 + 重筛。stat 走 _statOf 缓存。
+        final files = _derivedFiles();
+        final filtered = _derivedFiltered(files);
         return Scaffold(
           appBar: AppBar(
             // 二十轮:标题左对齐(iOS 默认居中)——与相机页左上「相机」
@@ -726,15 +729,60 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
 
   // 格式筛子(共享选集,扩展名映射)+ 评级滤网(快照未装载恒放行,
   // 防「没读到」被「无评级」筛空;空选集 = 全部,非空 = 各分类并集)。
+  // 评级查表用 _statOf 已缓存的字节数(免每文件每次重建两次同步 stat)。
   List<File> _filtered(List<File> files) => files
-      .where((f) =>
-          _formatSelection.allows(mediaFormatOfFilename(_nameOf(f))) &&
-          _ratingSelection.allows(
-            rating: _ratings.ratingOf(f),
-            trashStar: _ratings.trashMarked(f),
-            available: _ratings.loaded,
-          ))
+      .where((f) {
+        if (!_formatSelection
+            .allows(mediaFormatOfFilename(_nameOf(f)))) {
+          return false;
+        }
+        final bytes = _statOf(f).$2;
+        return _ratingSelection.allows(
+          rating: _ratings.ratingOf(f, bytes: bytes),
+          trashStar: _ratings.trashMarked(f, bytes: bytes),
+          available: _ratings.loaded,
+        );
+      })
       .toList(growable: false);
+
+  // ── 派生列表缓存(源表 identity + 排序 + 选集 + 评级版本)──
+  List<File>? _derivedFilesCache;
+  List<File>? _derivedFilteredCache;
+  Object? _derivedKey;
+
+  /// 当前派生键(轻量:选集只拼几个短串)。
+  Object _deriveKey(List<File> source) => (
+        identityHashCode(source),
+        _sort.key,
+        _sort.desc,
+        _formatSelection.values.map((f) => f.name).join(','),
+        _ratingSelection.values.map((r) => r.index).join(','),
+        _ratings.revision,
+        _ratings.loaded,
+      );
+
+  List<File> _derivedFiles() {
+    final source = _controller.appFiles;
+    final key = _deriveKey(source);
+    final cached = _derivedFilesCache;
+    if (cached != null && _derivedKey == key) return cached;
+    final sorted = sortMedia(List<File>.of(source), _sort,
+        (f) => (_statOf(f).$1, _nameOf(f), _statOf(f).$2));
+    _derivedKey = key;
+    _derivedFilesCache = sorted;
+    _derivedFilteredCache = _filtered(sorted);
+    return sorted;
+  }
+
+  List<File> _derivedFiltered(List<File> files) {
+    final cached = _derivedFilteredCache;
+    if (cached != null && identical(files, _derivedFilesCache)) {
+      return cached;
+    }
+    final filtered = _filtered(files);
+    _derivedFilteredCache = filtered;
+    return filtered;
+  }
 
   /// 网格主体:平铺(现状)或连拍聚合。「连拍」开时条目 =
   /// [groupLocalBurstRuns] 的段 —— 成段合为一格(封面 + ×N 角标),

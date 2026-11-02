@@ -1114,4 +1114,36 @@ void main() {
     expect(again, path);
     expect(fake2.requests, isEmpty);
   });
+
+  // ── 跨会话建账(2026-10-31)──
+
+  test('跨会话建账:前会话留下的档入账并参与 LRU 驱逐', () async {
+    final gallery = FakeGallerySaver();
+    final bytes =
+        Uint8List.fromList([0xFF, 0xD8, ...List.generate(58, (i) => i)]);
+    final thumbsDir = await gallery.thumbsDir();
+    // 格式标记在:跳过旧档清扫,只走建账
+    File('$thumbsDir/.fmt-v4').writeAsStringSync('cleared');
+    // 前会话遗留两档(各 60B):文件名字去 `.jpg` 即内容键
+    final old1 = File('$thumbsDir/OLD_A.JPG_60.jpg')..writeAsBytesSync(bytes);
+    final old2 = File('$thumbsDir/OLD_B.JPG_60.jpg')..writeAsBytesSync(bytes);
+    old1.setLastModifiedSync(DateTime(2020, 1, 1));
+    old2.setLastModifiedSync(DateTime(2021, 1, 1));
+
+    final fake = FakePtpTransport()
+      ..reply(_okData(bytes)) // 新档缩略
+      ..reply(_okData(_jpgHead(1))); // 头读(横拍)
+    final cache = ThumbnailCache(
+      session: PtpSession(transport: fake),
+      gallery: gallery,
+      gridLimitBytes: 130, // 两张 60B 恰好;第 3 张进来必须驱逐最老
+    );
+
+    final p = await cache.pathFor(
+        _entry(0x12, name: 'NEW.JPG', size: 60), ThumbSource.grid);
+    expect(File(p).existsSync(), isTrue);
+    expect(old1.existsSync(), isFalse,
+        reason: '前会话最老档被建账后按 LRU 淘汰(旧实现账里没有它,永不删)');
+    expect(old2.existsSync(), isTrue, reason: '较新档保留');
+  });
 }

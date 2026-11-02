@@ -11,6 +11,7 @@ import 'package:z_pill/core/ptp/operation_codes.dart';
 import 'package:z_pill/core/ptp/ptp_link_router.dart';
 import 'package:z_pill/core/ptp/ptp_session.dart';
 import 'package:z_pill/core/ptp/ptp_transport.dart';
+import 'package:z_pill/l10n/message.dart';
 import 'package:z_pill/core/ptpip/channels.dart';
 import 'package:z_pill/core/ptpip/codec.dart';
 import 'package:z_pill/core/ptpip/packet.dart';
@@ -1529,6 +1530,71 @@ void main() {
       }
       expect(conn.state, CameraLinkState.disconnected,
           reason: '迟到续体不得把已收口的 disconnected 覆盖成 connected');
+    });
+  });
+
+  group('清理单飞与错误文案变化沿(2026-10-31)', () {
+    test('connect 失败:errorChanges 发非空文案,成功后清空沿也发 null', () async {
+      final usb = FakeUsbHostChannel(const []); // 无相机 → failed
+      final fake = FakePtpTransport();
+      final (conn, _, _) = wireUsb(usb, fake);
+      final seen = <L10nMessage?>[];
+      conn.errorChanges.listen(seen.add);
+
+      await conn.connect();
+      await pumpEventQueue();
+      expect(conn.state, CameraLinkState.failed);
+      expect(seen, isNotEmpty, reason: '失败文案必须可观察(旧实现只有构建期快照)');
+      expect(seen.last?.key, 'conn.errNoUsbCamera');
+    });
+
+    test('恢复退避期动态文案经 errorChanges 实时上屏(不依赖状态沿)', () async {
+      final usb = FakeUsbHostChannel(const []);
+      var beat = 0;
+      final park = Completer<void>();
+      final (conn, _, _, command, event) = wireRecovery(usb,
+          reconnectPolicy: ReconnectPolicy(jitterRatio: 0),
+          delay: (d) async {
+            beat++;
+            if (beat >= 2) await park.future;
+          },
+          connects: 1);
+      final seen = <L10nMessage?>[];
+      conn.errorChanges.listen(seen.add);
+
+      await scriptWirelessConnect(
+          command[0], event[0], conn.connect(ip: '192.168.1.1'));
+      expect(conn.state, CameraLinkState.connected);
+
+      command[0].emitClosed();
+      await pumpEventQueue();
+      expect(conn.state, CameraLinkState.reconnecting);
+      expect(conn.error?.key, 'conn.recoverStatus');
+      expect(
+        [for (final m in seen) m?.key],
+        contains('conn.recoverStatus'),
+        reason: '退避文案不发状态沿,必须经 errorChanges 发出才能上屏',
+      );
+      await conn.disconnect();
+      park.complete();
+      await pumpEventQueue();
+    });
+
+    test('并发 disconnect:清理单飞(usb.close 只走一轮)', () async {
+      final usb = FakeUsbHostChannel(const [_zf]);
+      final fake = FakePtpTransport();
+      final (conn, _, _) = wireUsb(usb, fake);
+      fake.reply(_ok(data: buildDeviceInfoDataset()));
+      fake.reply(_ok());
+      await conn.connect();
+      expect(conn.state, CameraLinkState.connected);
+
+      final closesBefore = usb.closeCalls;
+      await Future.wait([conn.disconnect(), conn.disconnect()]);
+      await pumpEventQueue();
+      expect(usb.closeCalls - closesBefore, 1,
+          reason: '同一轮清理被并发进入,只允许跑一次');
+      expect(conn.state, CameraLinkState.disconnected);
     });
   });
 }

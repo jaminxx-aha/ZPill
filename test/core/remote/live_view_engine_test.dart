@@ -215,14 +215,15 @@ void main() {
     expect(engine.frame.value![2], 1);
 
     engine.pause();
-    delay.release(); // 放行 interval 门 → 循环进入 paused 等待
+    delay.release(); // 放行 interval 门 → 循环停在暂停闸上
     await pumpEventQueue();
-    delay.release(); // 放行 pausedTick → 仍挂起,不取帧
+    final delaysWhilePaused = delay.durations.length;
     await pumpEventQueue();
+    expect(delay.durations.length, delaysWhilePaused,
+        reason: '暂停期零唤醒:旧实现每 50ms 排一个 pausedTick 空转');
     expect(transport.liveViewFetches, 1, reason: 'pause 期间不得取帧');
 
-    engine.resume();
-    delay.release(); // 放行下一个 pausedTick → 恢复取帧
+    engine.resume(); // 闸放行即恢复,不再需要等 tick
     await pumpEventQueue();
     expect(transport.liveViewFetches, 2);
     expect(engine.frame.value![2], 2);
@@ -892,7 +893,7 @@ void main() {
       expect(engine.frame.value![2], 1);
 
       engine.pause();
-      delay.release(); // 放行门 1 → 循环进 paused tick(50ms 门 2)
+      delay.release(); // 放行门 1 → 循环停在暂停闸(无 tick 唤醒)
       await pumpEventQueue();
 
       // 挂起期时钟流逝 10 分钟:看门狗无帧输入,不发探测/重启
@@ -909,8 +910,7 @@ void main() {
       expect(engine.status.value, LiveViewStatus.running);
       expect(engine.frame.value![2], 1, reason: '末帧保留不闪黑');
 
-      engine.resume();
-      delay.release(); // 放行 paused tick 门 2 → 恢复取帧 2(新签名)
+      engine.resume(); // 暂停闸放行即恢复(不再有 paused tick 门)
       await pumpEventQueue();
       expect(engine.frame.value![2], 2);
       expect(engine.health.value, LiveViewHealth.ok,

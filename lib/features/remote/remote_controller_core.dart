@@ -469,7 +469,14 @@ mixin _RemoteCore on ChangeNotifier {
     // notify(每帧都到,倒计时秒级游走,不能逐帧 notify)。
     final remain = h.videoRemainingMs;
     final valid = remain != null && remain > 0 ? remain : null;
-    if (valid != videoRemainingMs) {
+    // 按**秒**判定变化:帧头 @816 是 ms 级、每帧都在游走,逐帧 notify
+    // 会让本控制器全体监听者(拍摄页 + 下方常驻的连接页)20Hz 重建。
+    // 展示侧只到秒;REC 秒表靠这条 1Hz 沿跳动,粒度不变。
+    final changed = (valid == null) != (videoRemainingMs == null) ||
+        (valid != null &&
+            videoRemainingMs != null &&
+            valid ~/ 1000 != videoRemainingMs! ~/ 1000);
+    if (changed) {
       videoRemainingMs = valid;
       notifyListeners();
     }

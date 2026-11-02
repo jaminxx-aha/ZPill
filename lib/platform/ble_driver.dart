@@ -187,14 +187,15 @@ final class BleDriver {
         _session.identity != null &&
         !_bleManualOff;
     final wantInject = wantLink && _gpsInjectEnabled();
-    // 三层门判定落盘(运营必需:冷启链/挂起链断点全靠它定位,每次调
-    // 用一行,频率=设置/身份/生命周期变更)。
-    AppLog.e(AppLog.ble,
+    if (wantLink == _bleRunning && wantInject == _bleInjecting) return;
+    // 门判定落盘(运营必需:冷启链/挂起链断点全靠它定位)。**只在真翻面
+    // 时记一行**:设置滑杆拖动会逐 tick 走 _update,旧写法放在幂等短路
+    // 之前且用 error 级,一次拖动 = 上百行日志 + 上百次 error 尾巴落盘。
+    AppLog.i(AppLog.ble,
         'inj gate: wantLink=$wantLink wantInject=$wantInject running=$_bleRunning '
         'inj=$_bleInjecting susp=$_bleSuspended manualOff=$_bleManualOff '
         'id=${_session.identity != null} gps=${_gpsInjectEnabled()} '
         'state=${_session.state.name}');
-    if (wantLink == _bleRunning && wantInject == _bleInjecting) return;
     final wasRunning = _bleRunning;
     _bleRunning = wantLink;
     _bleInjecting = wantInject;

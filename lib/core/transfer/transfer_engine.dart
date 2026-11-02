@@ -473,9 +473,7 @@ final class TransferEngineImpl implements TransferEngine, TransferRetry {
   /// 的误伤。
   Future<void> _runPostproc(_Job job, ObjectDownload dl) async {
     try {
-      await _splitMotionPhoto(job, dl); // 先拆(水印重编码会毁内嵌视频段)
-      await _applyWatermark(job, dl.path); // 先水印(重编码丢段,XMP 后补)
-      await _injectMetadata(job, dl.path);
+      await _postprocJpeg(job, dl); // 单趟内存链,末尾一次落盘
       // 全部落盘链路(拆分/水印/XMP)收尾后,把 mtime 回写为拍摄时刻
       //(仅 app 目的地):mtime 原为落盘时刻(下载序 ≠ 拍摄序),回写后
       // 本地图库排序/连拍聚合/信息底单都以拍摄时刻为准;gallery 目的地
@@ -509,66 +507,77 @@ final class TransferEngineImpl implements TransferEngine, TransferRetry {
     _finishBatchIfDone(job.batch);
   }
 
-  /// 运动照片拆分(实况照片导出):尼康运动照片是 JPG 尾部
-  /// 内嵌 MP4 的单文件(Google Motion Photo 字节格式,标记语义待真机
-  /// 核对)。gallery 目的地才拆 —— 静帧照常走水印/XMP,视频段记到批次
-  /// 收尾配对导出;app 目的地保留相机原始单文件不动。拆不出(普通
-  /// JPG)不碰文件。
-  Future<void> _splitMotionPhoto(_Job job, ObjectDownload dl) async {
-    if (job.task.destination != TransferDestination.gallery) return;
-    try {
-      if (!isJpgFile(_entryOf(job))) return;
-      final file = File(dl.path);
-      final src = await file.readAsBytes();
-      final split = splitMotionPhoto(src);
-      if (split == null) return;
-      await file.writeAsBytes(split.image);
-      final videoPath = '${dl.path}_live.mp4';
-      await File(videoPath).writeAsBytes(split.video);
-      job.batch.liveVideos[job.task.id] = videoPath;
-    } on Exception {
-      // 读盘/写盘/拆分异常:按普通照片走,不挡传输
-    }
-  }
-
-  /// 下载成功后按需合成水印(见 [watermarkFor])。只对 JPG;失败静默跳过。
-  Future<void> _applyWatermark(_Job job, String path) async {
+  /// JPG 后处理单趟:拆分运动照片 → 水印 → XMP,全在内存里串完再一次
+  /// 落盘。
+  ///
+  /// 旧实现三步各自 `readAsBytes`/`writeAsBytes`,同一张图最多 3 读 3 写
+  /// (25MB 档峰值同时驻留 2-3 份)。步骤顺序有硬约束:**先拆**(水印重
+  /// 编码会毁内嵌视频段)→ **再水印**(重编码会丢 XMP)→ **XMP 最后补**。
+  /// 每步独立 try:任一步失败只丢这一步,其余照旧落盘(best-effort 语义
+  /// 与旧实现一致)。开关全关时零 IO(旧实现仍读一遍文件)。
+  Future<void> _postprocJpeg(_Job job, ObjectDownload dl) async {
+    final entry = _entryOf(job);
+    final isJpg = isJpgFile(entry);
+    final needSplit =
+        job.task.destination == TransferDestination.gallery && isJpg;
+    WatermarkOptions? options;
     final watermarkFor = this.watermarkFor;
-    if (watermarkFor == null) return;
-    try {
-      final entry = _entryOf(job);
-      if (!isJpgFile(entry)) return;
-      final options = await watermarkFor(entry);
-      if (options == null || options.style == WatermarkStyle.off) return;
-      final file = File(path);
-      final src = await file.readAsBytes();
-      final out = await applyWatermark(src, options,
-          raster: watermarkRaster ?? defaultTextRaster);
-      if (identical(src, out)) return;
-      await file.writeAsBytes(out);
-    } on Exception {
-      // 水印失败不掩盖传输结果
+    if (isJpg && watermarkFor != null) {
+      try {
+        options = await watermarkFor(entry);
+      } on Exception {
+        options = null; // 水印失败不掩盖传输结果
+      }
+      if (options != null && options.style == WatermarkStyle.off) {
+        options = null;
+      }
     }
-  }
-
-  /// 下载成功后按需注入 XMP(见 [metadataFor])。只对 JPG;失败静默跳过
-  ///(元数据是锦上添花,不能把传输拖成失败)。
-  Future<void> _injectMetadata(_Job job, String path) async {
+    XmpMetadata? meta;
     final metadataFor = this.metadataFor;
-    if (metadataFor == null) return;
-    try {
-      final entry = _entryOf(job);
-      if (!isJpgFile(entry)) return; // RAW/视频不走 XMP APP1 路径
-      final meta = await metadataFor(entry);
-      if (meta == null || meta.isEmpty) return;
-      final file = File(path);
-      final src = await file.readAsBytes();
-      final out = injectXmpIntoJpeg(src, meta);
-      if (identical(src, out)) return; // 非 JPEG(字节级复核)等免写
-      await file.writeAsBytes(out);
-    } on Exception {
-      // 读盘/写盘/提供器异常:任务照常按已下载完成落定
+    if (isJpg && metadataFor != null) {
+      try {
+        meta = await metadataFor(entry);
+      } on Exception {
+        meta = null;
+      }
+      if (meta != null && meta.isEmpty) meta = null;
     }
+    if (!needSplit && options == null && meta == null) return;
+
+    final file = File(dl.path);
+    final src = await file.readAsBytes();
+    var out = src;
+    if (needSplit) {
+      try {
+        final split = splitMotionPhoto(src);
+        if (split != null) {
+          out = split.image;
+          final videoPath = '${dl.path}_live.mp4';
+          await File(videoPath).writeAsBytes(split.video);
+          job.batch.liveVideos[job.task.id] = videoPath;
+        }
+      } on Exception {
+        // 读盘/写盘/拆分异常:按普通照片走,不挡传输
+      }
+    }
+    if (options != null) {
+      try {
+        final marked = await applyWatermark(out, options,
+            raster: watermarkRaster ?? defaultTextRaster);
+        if (!identical(marked, out)) out = marked;
+      } on Exception {
+        // 水印失败不掩盖传输结果
+      }
+    }
+    if (meta != null) {
+      try {
+        final injected = injectXmpIntoJpeg(out, meta);
+        if (!identical(injected, out)) out = injected;
+      } on Exception {
+        // 非 JPEG(字节级复核)等免写
+      }
+    }
+    if (!identical(out, src)) await file.writeAsBytes(out);
   }
 
   /// 批次全员落定后收尾:gallery 批次发起一次导入、回填 galleryUri、
