@@ -271,98 +271,143 @@ Widget _shutterButton(
       : controller.linkUp &&
           (controller.recording || controller.liveViewActive);
   final rec = controller.recording;
-  return GestureDetector(
-    behavior: HitTestBehavior.opaque,
-    onTapDown: photo
-        ? (_) {
-            if (controller.linkUp &&
-                !controller.capturing &&
-                !controller.intervalActive) {
-              AppHaptics.shutter(); // 按下即震(本地确认沿,不等相机应答)
-              unawaited(controller.capturePressed());
-            }
-          }
-        : null,
-    onTapUp: photo ? (_) => unawaited(controller.captureReleased()) : null,
-    // 手指滑出/系统取消/来电等会让 TapGestureRecognizer 走取消沿而不
-    // 是 onTapUp:不补这一路,B 门会停在开曝光、连拍会跑到上限。
-    onTapCancel: photo ? () => unawaited(controller.captureReleased()) : null,
-    onTap: photo
+  final manualBulb = controller.bulbOpenSeconds;
+  final timedBulb = controller.bulbExposureCountdown;
+  final semanticsLabel = photo
+      ? context.t('remote.shutterTakePhoto')
+      : rec
+          ? context.t('remote.shutterStopVideo')
+          : context.t('remote.shutterStartVideo');
+  final semanticsValue = photo
+      ? (manualBulb != null
+          ? '${context.t('remote.countdownExposure')} $manualBulb'
+          : timedBulb != null
+              ? '${context.t('remote.countdownExposure')} $timedBulb'
+              : null)
+      : rec
+          ? context.t('remote.shutterRecording')
+          : null;
+  return Semantics(
+    button: true,
+    enabled: usable || rec,
+    label: semanticsLabel,
+    value: semanticsValue,
+    excludeSemantics: true,
+    // 读屏激活:照片档等价一次点按(按下 + 短延迟抬起;B 门为短曝光),
+    // 录像档等价起/停。
+    onTap: !(usable || rec)
         ? null
         : () {
-            if (controller.linkUp &&
-                (controller.recording || controller.liveViewActive) &&
-                !controller.capturing) {
-              AppHaptics.recordToggle(); // 起/停录确认沿
+            if (photo) {
+              AppHaptics.shutter();
+              unawaited(controller.capturePressed());
+              unawaited(Future<void>.delayed(const Duration(milliseconds: 120),
+                  controller.captureReleased));
+            } else {
+              AppHaptics.recordToggle();
               unawaited(controller.toggleRecord());
             }
           },
-    child: Opacity(
-      // 录制中不降透明:停录入口要够醒目。
-      opacity: usable || rec ? 1 : 0.35,
-      child: SizedBox(
-        width: size,
-        height: size,
-        child: Stack(
-          alignment: Alignment.center,
-          children: [
-            Container(
-              width: size,
-              height: size,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                border: Border.all(
-                    color: live.shutterRing.withValues(alpha: 0.92), width: 4),
+    child: GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTapDown: photo
+          ? (_) {
+              if (controller.linkUp &&
+                  !controller.capturing &&
+                  !controller.intervalActive) {
+                AppHaptics.shutter(); // 按下即震(本地确认沿,不等相机应答)
+                unawaited(controller.capturePressed());
+              }
+            }
+          : null,
+      onTapUp: photo ? (_) => unawaited(controller.captureReleased()) : null,
+      // 手指滑出/系统取消/来电等会让 TapGestureRecognizer 走取消沿而不
+      // 是 onTapUp:不补这一路,B 门会停在开曝光、连拍会跑到上限。
+      onTapCancel: photo ? () => unawaited(controller.captureReleased()) : null,
+      onTap: photo
+          ? null
+          : () {
+              if (controller.linkUp &&
+                  (controller.recording || controller.liveViewActive) &&
+                  !controller.capturing) {
+                AppHaptics.recordToggle(); // 起/停录确认沿
+                unawaited(controller.toggleRecord());
+              }
+            },
+      child: Opacity(
+        // 录制中不降透明:停录入口要够醒目。
+        opacity: usable || rec ? 1 : 0.35,
+        child: SizedBox(
+          width: size,
+          height: size,
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              Container(
+                width: size,
+                height: size,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                      color: live.shutterRing.withValues(alpha: 0.92),
+                      width: 4),
+                ),
               ),
-            ),
-            Container(
-              width: size - 18,
-              height: size - 18,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: !photo
-                    ? live.bad
-                    : controller.bulbExposureCountdown != null
-                        ? live.bad
-                        : controller.capturing
-                            ? live.shutterCoreBusy
-                            : live.shutterCore,
+              Container(
+                width: size - 18,
+                height: size - 18,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: !photo
+                      ? live.bad
+                      : (controller.bulbExposureCountdown != null ||
+                              manualBulb != null)
+                          ? live.bad
+                          : controller.capturing
+                              ? live.shutterCoreBusy
+                              : live.shutterCore,
+                ),
+                child: Center(
+                  child: photo
+                      ? (controller.selfTimerCountdown != null
+                          ? _shutterCountdown(
+                              context,
+                              '${controller.selfTimerCountdown}',
+                              'remote.countdownDelay',
+                              color: live.onAccent)
+                          : controller.bulbExposureCountdown != null
+                              ? _shutterCountdown(
+                                  context,
+                                  '${controller.bulbExposureCountdown}',
+                                  'remote.countdownExposure',
+                                  color: Colors.white)
+                              : manualBulb != null
+                                  ? _shutterCountdown(context, '$manualBulb',
+                                      'remote.countdownExposure',
+                                      color: Colors.white)
+                                  : controller.capturing
+                                      ? SizedBox(
+                                          width: 22,
+                                          height: 22,
+                                          child: CircularProgressIndicator(
+                                              strokeWidth: 2.4,
+                                              color: live.onAccent),
+                                        )
+                                      : null)
+                      : (rec
+                          ? Container(
+                              width: 20,
+                              height: 20,
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                            )
+                          : null),
+                ),
               ),
-              child: Center(
-                child: photo
-                    ? (controller.selfTimerCountdown != null
-                        ? _shutterCountdown(
-                            context,
-                            '${controller.selfTimerCountdown}',
-                            'remote.countdownDelay',
-                            color: live.onAccent)
-                        : controller.bulbExposureCountdown != null
-                            ? _shutterCountdown(
-                                context,
-                                '${controller.bulbExposureCountdown}',
-                                'remote.countdownExposure',
-                                color: Colors.white)
-                            : controller.capturing
-                                ? SizedBox(
-                                    width: 22,
-                                    height: 22,
-                                    child: CircularProgressIndicator(
-                                        strokeWidth: 2.4, color: live.onAccent),
-                                  )
-                                : null)
-                    : (rec
-                        ? Container(
-                            width: 20,
-                            height: 20,
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                          )
-                        : null),
-              ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     ),

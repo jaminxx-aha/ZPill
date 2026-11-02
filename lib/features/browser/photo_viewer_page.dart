@@ -49,6 +49,7 @@ import '../common/widgets/hero_zoom.dart';
 import '../common/widgets/loading_overlay.dart';
 import '../common/widgets/photo_info_sheet.dart';
 import '../common/widgets/pull_away.dart';
+import '../common/widgets/zoomable_page.dart';
 import '../edit/edit_page.dart';
 import 'album_ratings_controller.dart';
 
@@ -257,6 +258,13 @@ class _PhotoViewerPageState extends State<PhotoViewerPage>
   }
 
   // ── 下拉跟手返回(图片页)──
+
+  /// 查看器单页真实缩放态:放大期间禁掉 PageView 翻页与下拉返回,
+  /// 手势全部交给 InteractiveViewer。
+  void _onPageZoomChanged(bool zoomed) {
+    if (_ivZoomed == zoomed || !mounted) return;
+    setState(() => _ivZoomed = zoomed);
+  }
 
   void _onPullStart(DragStartDetails details) {
     if (_fullscreen || _ivZoomed) return;
@@ -623,17 +631,23 @@ class _PhotoViewerPageState extends State<PhotoViewerPage>
           body: GestureDetector(
             // 下拉跟手返回(闸见 _onPullStart)。垂直识别器只认
             // 纵向,水平翻页归 PageView;缩放态归 InteractiveViewer。
-            onVerticalDragStart: _onPullStart,
-            onVerticalDragUpdate: _onPullUpdate,
-            onVerticalDragEnd: _onPullEnd,
+            onVerticalDragStart: _ivZoomed ? null : _onPullStart,
+            onVerticalDragUpdate: _ivZoomed ? null : _onPullUpdate,
+            onVerticalDragEnd: _ivZoomed ? null : _onPullEnd,
             child: PullAwayTransform(
               controller: _pull,
               child: PageView.builder(
                 controller: _controller,
+                // 放大态禁翻页:横向拖拽留给缩放后的平移,不再被外层
+                // PageView 抢走。
+                physics: _ivZoomed
+                    ? const NeverScrollableScrollPhysics()
+                    : null,
                 itemCount: widget.items.length,
                 onPageChanged: (i) {
                   setState(() {
                     _index = i;
+                    _ivZoomed = false; // 翻页复位缩放闸
                     _revealDownload = false; // 翻页复位两段式下载
                   });
                   _warmCurrent();
@@ -678,11 +692,9 @@ class _PhotoViewerPageState extends State<PhotoViewerPage>
     // hero 盒 = 图片 contain 显示位 —— 框架航班终点追踪 toHero 盒原点,
     // 盒必须是显示位本身,落点才不错位);其余页照旧 Center + 预览管线。
     // 视频页包的是海报(播放钮不随航班)。
-    final body = InteractiveViewer(
-      maxScale: 8,
-      // 缩放态闸:缩放中纵向平移归 IV(跟手返回闸关,见 _onPullStart)。
-      onInteractionStart: (_) => _ivZoomed = true,
-      onInteractionEnd: (_) => _ivZoomed = false,
+    final body = ZoomablePage(
+      active: active,
+      onZoomChanged: _onPageZoomChanged,
       child: Center(
         child: heroPage
             ? HeroZoom(

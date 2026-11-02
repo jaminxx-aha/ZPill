@@ -76,6 +76,12 @@ class _LibraryViewerState extends State<_LibraryViewer>
 
   // ── 下拉跟手返回(图片页)──
 
+  /// 单页真实缩放态:放大期间禁翻页/下拉,手势全交给缩放层。
+  void _onPageZoomChanged(bool zoomed) {
+    if (_ivZoomed == zoomed || !mounted) return;
+    setState(() => _ivZoomed = zoomed);
+  }
+
   void _onPullStart(DragStartDetails details) {
     if (_fullscreen || _ivZoomed) return;
     _pull.beginDrag();
@@ -312,16 +318,22 @@ class _LibraryViewerState extends State<_LibraryViewer>
       body: GestureDetector(
         // 下拉跟手返回(闸见 _onPullStart)。垂直识别器只认
         // 纵向,水平翻页归 PageView;缩放态归 InteractiveViewer。
-        onVerticalDragStart: _onPullStart,
-        onVerticalDragUpdate: _onPullUpdate,
-        onVerticalDragEnd: _onPullEnd,
+        onVerticalDragStart: _ivZoomed ? null : _onPullStart,
+        onVerticalDragUpdate: _ivZoomed ? null : _onPullUpdate,
+        onVerticalDragEnd: _ivZoomed ? null : _onPullEnd,
         child: PullAwayTransform(
           controller: _pull,
           child: PageView.builder(
             controller: _pageController,
+            physics: _ivZoomed
+                ? const NeverScrollableScrollPhysics()
+                : null,
             itemCount: _files.length,
             onPageChanged: (i) {
-              setState(() => _index = i);
+              setState(() {
+                _index = i;
+                _ivZoomed = false; // 翻页复位缩放闸
+              });
               _warmNeighbors(); // 新当前页的两侧邻居提前解码(翻页不黑闪)
               // 全屏是视频语境:滑到非视频页自动退出(还原方向与顶栏)
               if (_fullscreen && !isVideoFilename(_nameOf(_files[i]))) {
@@ -397,10 +409,9 @@ class _LibraryViewerState extends State<_LibraryViewer>
     if (isRawFilename(name) || isHeifFilename(name)) {
       // HIF 与 NEF 同走原生解码通道(≤2560,会话缓存):iOS ImageIO /
       // ohos image kit 都不吃引擎直解 HEIF 的兜底,统一走 decodeJpeg。
-      return InteractiveViewer(
-        maxScale: 8,
-        onInteractionStart: (_) => _ivZoomed = true,
-        onInteractionEnd: (_) => _ivZoomed = false,
+      return ZoomablePage(
+        active: active,
+        onZoomChanged: _onPageZoomChanged,
         child: Center(
           child: zoomHero(
             // 300px 档垫底(缓存命中即显):航班收梭子沿原生大图解码未
@@ -427,10 +438,9 @@ class _LibraryViewerState extends State<_LibraryViewer>
       );
     }
     if (_isViewableName(name)) {
-      return InteractiveViewer(
-        maxScale: 8,
-        onInteractionStart: (_) => _ivZoomed = true,
-        onInteractionEnd: (_) => _ivZoomed = false,
+      return ZoomablePage(
+        active: active,
+        onZoomChanged: _onPageZoomChanged,
         child: Center(
           child: zoomHero(
             // 缩略垫底:全幅解码完成前顶黑底(航班落点即同图不闪白),

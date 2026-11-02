@@ -105,10 +105,10 @@ mixin _RemotePropOps on _RemoteCore {
           e.responseCode == PtpResponseCode.accessDenied) {
         error = (
           key: 'remote.autoIsoFailDial',
-          args: {'e': e.toString()},
+          args: {'e': userFacingError(e)},
         );
       } else {
-        error = (key: 'remote.autoIsoFail', args: {'e': e.toString()});
+        error = (key: 'remote.autoIsoFail', args: {'e': userFacingError(e)});
       }
     } finally {
       writing = false;
@@ -137,12 +137,12 @@ mixin _RemotePropOps on _RemoteCore {
     } on PtpResponseException catch (e) {
       error = (
         key: 'remote.takeoverFail',
-        args: {'e': _nikonHint(e.responseCode)?.key ?? e.toString()},
+        args: {'e': _nikonHint(e.responseCode)?.key ?? userFacingError(e)},
       );
       notifyListeners();
       return false;
     } on Exception catch (e) {
-      error = (key: 'remote.takeoverFail', args: {'e': e.toString()});
+      error = (key: 'remote.takeoverFail', args: {'e': userFacingError(e)});
       notifyListeners();
       return false;
     }
@@ -207,12 +207,12 @@ mixin _RemotePropOps on _RemoteCore {
     } on PtpResponseException catch (e) {
       error = (
         key: 'remote.errAeLockFail',
-        args: {'e': _nikonHint(e.responseCode)?.key ?? e.toString()},
+        args: {'e': _nikonHint(e.responseCode)?.key ?? userFacingError(e)},
       );
       notifyListeners();
       return;
     } on Exception catch (e) {
-      error = (key: 'remote.errAeLockFail', args: {'e': e.toString()});
+      error = (key: 'remote.errAeLockFail', args: {'e': userFacingError(e)});
       notifyListeners();
       return;
     }
@@ -250,12 +250,12 @@ mixin _RemotePropOps on _RemoteCore {
     } on PtpResponseException catch (e) {
       error = (
         key: 'remote.errMonitorOffFail',
-        args: {'e': _nikonHint(e.responseCode)?.key ?? e.toString()},
+        args: {'e': _nikonHint(e.responseCode)?.key ?? userFacingError(e)},
       );
       notifyListeners();
       return;
     } on Exception catch (e) {
-      error = (key: 'remote.errMonitorOffFail', args: {'e': e.toString()});
+      error = (key: 'remote.errMonitorOffFail', args: {'e': userFacingError(e)});
       notifyListeners();
       return;
     }
@@ -624,7 +624,7 @@ mixin _RemotePropOps on _RemoteCore {
         error = (
           key: 'remote.errPropWriteDial',
           args: {
-            'e': _nikonHint(e.responseCode)?.key ?? e.toString(),
+            'e': _nikonHint(e.responseCode)?.key ?? userFacingError(e),
             'tail': _takeoverActive
                 ? 'remote.errPropWriteDialTakeover'
                 : 'remote.errPropWriteDialLatch',
@@ -634,7 +634,7 @@ mixin _RemotePropOps on _RemoteCore {
         error = (
           key: 'remote.errPropWrite',
           args: {
-            'e': _nikonHint(e.responseCode)?.key ?? e.toString(),
+            'e': _nikonHint(e.responseCode)?.key ?? userFacingError(e),
             'tail': e.responseCode == PtpResponseCode.accessDenied
                 ? 'remote.errPropWriteLatch'
                 : '',
@@ -643,7 +643,7 @@ mixin _RemotePropOps on _RemoteCore {
       } else {
         error = (
           key: 'remote.errPropWrite',
-          args: {'e': e.toString(), 'tail': ''},
+          args: {'e': userFacingError(e), 'tail': ''},
         );
       }
     } finally {

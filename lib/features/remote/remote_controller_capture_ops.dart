@@ -377,7 +377,7 @@ mixin _RemoteCaptureOps on _RemoteCore {
         if (!ready) break; // 就绪超时:停链(用户可再按)
       }
     } on Exception catch (e) {
-      error = (key: 'remote.errShutterFail', args: {'e': e.toString()});
+      error = (key: 'remote.errShutterFail', args: {'e': userFacingError(e)});
     } finally {
       await _endBurstBracket();
       _burstLatched = false;
@@ -442,13 +442,20 @@ mixin _RemoteCaptureOps on _RemoteCore {
           await _closeBulbExposure(autoClose: true);
         }
       } else {
-        // 按住中:等抬起(不轮询 settle —— 曝光开着,DeviceReady 恒忙)
+        // 按住中:等抬起(不轮询 settle —— 曝光开着,DeviceReady 恒忙)。
+        // 每秒递增曝光秒数,快门芯给红底计时;不能只剩一个转圈让用户
+        // 怀疑「到底开没开」。
+        _bulbOpenSeconds = 0;
+        notifyListeners();
         while (_openShutterHeld) {
           await _delay(const Duration(seconds: 1));
+          if (!_openShutterHeld) break;
+          _bulbOpenSeconds = (_bulbOpenSeconds ?? 0) + 1;
+          notifyListeners();
         }
       }
     } on Exception catch (e) {
-      error = (key: 'remote.errShutterFail', args: {'e': e.toString()});
+      error = (key: 'remote.errShutterFail', args: {'e': userFacingError(e)});
     } finally {
       // 开拍失败也解锁:原实现失败路径漏置 false,后续按下被静默吞
       //(2026-10-15 收门鲁棒性收口)。
@@ -456,6 +463,7 @@ mixin _RemoteCaptureOps on _RemoteCore {
       _bulbOpening = false;
       _bulbClosePending = false;
       _bulbExposureLeft = null;
+      _bulbOpenSeconds = null;
       if (wasLive && _viewerVisible) engine.resume();
       capturing = false;
       notifyListeners();
@@ -470,6 +478,7 @@ mixin _RemoteCaptureOps on _RemoteCore {
     if (_openShutterHeld) {
       _openShutterHeld = false; // 等待环/倒计时环收口
       _bulbExposureLeft = null;
+      _bulbOpenSeconds = null;
       notifyListeners();
       if (_bulbOpening) {
         // 开拍(0x9207)尚未落地:立刻 0x920C 会扑空 —— 记收门请求,
@@ -617,11 +626,11 @@ mixin _RemoteCaptureOps on _RemoteCore {
       } else {
         error = (
           key: 'remote.errRecFail',
-          args: {'e': _nikonHint(e.responseCode)?.key ?? e.toString()},
+          args: {'e': _nikonHint(e.responseCode)?.key ?? userFacingError(e)},
         );
       }
     } on Exception catch (e) {
-      error = (key: 'remote.errRecFail', args: {'e': e.toString()});
+      error = (key: 'remote.errRecFail', args: {'e': userFacingError(e)});
     }
     notifyListeners();
   }
@@ -667,7 +676,7 @@ mixin _RemoteCaptureOps on _RemoteCore {
         _modeWriteRejected = true;
         error = (
           key: 'remote.errModeSwitchFail',
-          args: {'e': _nikonHint(e.responseCode)?.key ?? e.toString()},
+          args: {'e': _nikonHint(e.responseCode)?.key ?? userFacingError(e)},
         );
         unawaited(_recoverLiveViewAfterFailedSwitch());
         notifyListeners();
@@ -756,7 +765,7 @@ mixin _RemoteCaptureOps on _RemoteCore {
       } on Exception catch (e) {
         return (
           false,
-          (key: 'remote.errShutterFail', args: {'e': e.toString()})
+          (key: 'remote.errShutterFail', args: {'e': userFacingError(e)})
         );
       }
       _captureDone = Completer<void>();
@@ -802,7 +811,7 @@ mixin _RemoteCaptureOps on _RemoteCore {
     // Bit0 序列错误自愈指引(键,渲染端 arg-t 落地;正常为空串)。
     final hint = _nikonHint(e.responseCode);
     var msg = hint == null
-        ? (key: 'remote.errShutterFail', args: {'e': e.toString(), 'seq': ''})
+        ? (key: 'remote.errShutterFail', args: {'e': userFacingError(e), 'seq': ''})
         : (
             key: 'remote.errShutterFailCode',
             args: {
@@ -895,7 +904,7 @@ mixin _RemoteCaptureOps on _RemoteCore {
       notifyListeners();
     } on Exception catch (e) {
       if (!_linkUp) return;
-      notice = (key: 'remote.errSaveFail', args: {'e': e.toString()});
+      notice = (key: 'remote.errSaveFail', args: {'e': userFacingError(e)});
       notifyListeners();
     }
   }

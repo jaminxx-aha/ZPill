@@ -61,8 +61,8 @@ class RemoteInfoPill extends StatelessWidget {
       margin: margin ?? const EdgeInsets.fromLTRB(12, 8, 12, 4),
       // 十轮:横屏(compact)竖直 padding 7→4 → 胶囊高 38,与贴底
       // 模式条同高(用户「改成一致,和底部一致」);竖屏照旧 44。
-      padding: EdgeInsets.symmetric(
-          horizontal: 12, vertical: compact ? 4 : 7),
+      // 44 触达钮吃满行高,纵向内衬归零,胶囊总高仍 44。
+      padding: const EdgeInsets.symmetric(horizontal: 12),
       decoration: BoxDecoration(
         color: live.glass,
         borderRadius: BorderRadius.circular(999),
@@ -161,15 +161,15 @@ class RemoteInfoPill extends StatelessWidget {
   }
 
   /// 返回钮(行首,路由态):pop 回相机页。与接管钮同款胶囊内嵌
-  /// InkWell(34×30 触达、9 圆角)。
+  /// InkWell(44×44 最小触达、9 圆角)。
   Widget _backButton(BuildContext context, LivePalette live) {
     return InkWell(
       onTap: () => Navigator.of(context).maybePop(),
       customBorder:
           RoundedRectangleBorder(borderRadius: BorderRadius.circular(9)),
       child: SizedBox(
-        width: 34,
-        height: 30,
+        width: 44,
+        height: 44,
         child: Icon(Icons.arrow_back, size: 18, color: live.muted),
       ),
     );
@@ -178,7 +178,7 @@ class RemoteInfoPill extends StatelessWidget {
   /// APP 接管钮(行尾,原纯净监看隐藏钮位,2026-10-17 用户定案):
   /// 未接管 = lock_open 灰,点按弹 [onTakeoverRequest] 确认启用;已接管
   /// = lock 金,点按解除(0x90C2 [0])。链路不在时禁点(同原设置浮层
-  /// 接管芯片的门);与返回钮同款胶囊内嵌 InkWell(34×30 触达、9 圆角)。
+  /// 接管芯片的门);与返回钮同款胶囊内嵌 InkWell(44×44 触达、9 圆角)。
   Widget _takeoverButton(BuildContext context, LivePalette live) {
     final active = controller.takeoverActive;
     return Tooltip(
@@ -192,8 +192,8 @@ class RemoteInfoPill extends StatelessWidget {
         customBorder:
             RoundedRectangleBorder(borderRadius: BorderRadius.circular(9)),
         child: SizedBox(
-          width: 34,
-          height: 30,
+          width: 44,
+          height: 44,
           child: Icon(
               active ? Icons.lock : Icons.lock_open,
               size: 18,

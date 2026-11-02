@@ -303,7 +303,7 @@ mixin _RemoteAfOps on _RemoteCore {
             DateTime.now().isAfter(busyDeadline)) {
           error = (
             key: 'remote.errAfAreaFail',
-            args: {'e': _nikonHint(e.responseCode)?.key ?? e.toString()},
+            args: {'e': _nikonHint(e.responseCode)?.key ?? userFacingError(e)},
           );
           notifyListeners();
           return;
@@ -311,7 +311,7 @@ mixin _RemoteAfOps on _RemoteCore {
         await _delay(_afBusyBackoff);
       } on Exception catch (e) {
         if (!_linkUp) return; // 断连收口已清状态,迟到异常不横幅
-        error = (key: 'remote.errAfAreaFail', args: {'e': e.toString()});
+        error = (key: 'remote.errAfAreaFail', args: {'e': userFacingError(e)});
         notifyListeners();
         return;
       }
@@ -382,11 +382,11 @@ mixin _RemoteAfOps on _RemoteCore {
       focused = e.responseCode == NikonResponseCode.outOfFocus ? false : null;
       error = (
         key: 'remote.errAfFail',
-        args: {'e': _nikonHint(e.responseCode)?.key ?? e.toString()},
+        args: {'e': _nikonHint(e.responseCode)?.key ?? userFacingError(e)},
       );
     } on Exception catch (e) {
       focused = null; // 链路/超时类失败:合焦与否未知,不冒充结论
-      error = (key: 'remote.errAfFail', args: {'e': e.toString()});
+      error = (key: 'remote.errAfFail', args: {'e': userFacingError(e)});
     } finally {
       final b = afBox;
       if (b != null && focused != null) {
@@ -474,10 +474,10 @@ mixin _RemoteAfOps on _RemoteCore {
     } on PtpResponseException catch (e) {
       error = (
         key: 'remote.errTrackingFail',
-        args: {'e': _nikonHint(e.responseCode)?.key ?? e.toString()},
+        args: {'e': _nikonHint(e.responseCode)?.key ?? userFacingError(e)},
       );
     } on Exception catch (e) {
-      error = (key: 'remote.errTrackingFail', args: {'e': e.toString()});
+      error = (key: 'remote.errTrackingFail', args: {'e': userFacingError(e)});
     }
     if (_linkUp) notifyListeners();
   }

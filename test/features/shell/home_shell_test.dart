@@ -683,6 +683,28 @@ void main() {
         reason: '进行中 1 + 失败 1;已完成不计');
   });
 
+  testWidgets('非相机 tab 按返回:先回相机 tab,不直接退 App', (tester) async {
+    tester.view
+      ..physicalSize = const Size(800, 2400)
+      ..devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    final f = _fakes();
+    addTearDown(f.connCtrl.dispose);
+    addTearDown(f.remote.dispose);
+    await pumpShell(
+        tester,
+        MaterialApp(
+            home: HomeShell(
+                connectionController: f.connCtrl, remoteController: f.remote)));
+    await tester.tap(_navTab('图库'));
+    await tester.pumpAndSettle();
+    expect(_selectedIndex(tester), 1);
+
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(_selectedIndex(tester), 0, reason: '返回先回相机 tab');
+  });
+
   testWidgets('竖屏底栏样式闸:胶囊撤除、选中直充 secondary', (tester) async {
     tester.view
       ..physicalSize = const Size(800, 2400)

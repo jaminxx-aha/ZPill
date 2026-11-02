@@ -11,6 +11,7 @@ import '../../core/browser/object_repository.dart';
 import '../../core/browser/thumbnail_cache.dart';
 import '../../core/camera/camera_connection.dart';
 import '../../l10n/message.dart';
+import '../common/format.dart';
 
 final class BrowserController extends ChangeNotifier {
   BrowserController({
@@ -87,8 +88,8 @@ final class BrowserController extends ChangeNotifier {
     } on Exception catch (e) {
       if (!_linkUp) return; // 断连引发的失败:_invalidate 已清态,不报错
       error = albums.isEmpty
-          ? (key: 'browser.loadFail', args: {'e': e.toString()})
-          : (key: 'browser.syncPartial', args: {'e': e.toString()});
+          ? (key: 'browser.loadFail', args: {'e': userFacingError(e)})
+          : (key: 'browser.syncPartial', args: {'e': userFacingError(e)});
     } finally {
       syncing = false;
       notifyListeners();
@@ -100,6 +101,9 @@ final class BrowserController extends ChangeNotifier {
     repository.reset();
     await load();
   }
+
+  /// 链路是否在(断连后页面仍展示快照,但下载/删除/刷新必须禁用)。
+  bool get linkUp => _linkUp;
 
   /// 断连/失败:相册清空(仓库缓存由 AppServices 的连接监听负责 reset)。
   void _invalidate() {

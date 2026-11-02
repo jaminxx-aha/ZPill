@@ -241,18 +241,24 @@ class SettingsSwitchRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return SettingsRow(
-      leading: leading,
-      title: title,
-      subtitle: subtitle,
-      trailing: Switch(
-        value: value,
-        onChanged: onChanged,
-        activeThumbColor: AppColors.onBrandYellow,
-        activeTrackColor: AppColors.accentYellow,
-        inactiveThumbColor: scheme.outline,
-        inactiveTrackColor: scheme.surfaceContainerHighest,
-        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    return MergeSemantics(
+      child: SettingsRow(
+        leading: leading,
+        title: title,
+        subtitle: subtitle,
+        // 整行可点:标题/副标题区域也切换,不再只认右侧 48dp 开关。
+        onTap: onChanged == null ? null : () => onChanged!(!value),
+        trailing: IgnorePointer(
+          child: Switch(
+            value: value,
+            onChanged: onChanged,
+            activeThumbColor: AppColors.onBrandYellow,
+            activeTrackColor: AppColors.accentYellow,
+            inactiveThumbColor: scheme.outline,
+            inactiveTrackColor: scheme.surfaceContainerHighest,
+            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          ),
+        ),
       ),
     );
   }

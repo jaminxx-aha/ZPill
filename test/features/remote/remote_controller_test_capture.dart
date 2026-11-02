@@ -620,6 +620,32 @@ void _captureGroups() {
         expect(controller.error, isNull);
       });
 
+      test('手动 B 门曝光计时:每秒递增,抬起清零', () async {
+        bulbController();
+        _scriptParams(transport);
+        _emitConnected(transport, conn);
+        await pumpEventQueue();
+        controller.paramProps[PtpDevicePropCode.exposureTime] =
+            const PropState(value: 0xFFFFFFFF);
+
+        transport.ok(); // 0x9207 开门
+        final press = controller.capturePressed();
+        await pumpEventQueue();
+        expect(controller.bulbOpenSeconds, 0);
+        delay.release();
+        await pumpEventQueue();
+        expect(controller.bulbOpenSeconds, 1);
+        delay.release();
+        await pumpEventQueue();
+        expect(controller.bulbOpenSeconds, 2);
+
+        transport.ok(); // 0x920C 收门
+        await controller.captureReleased();
+        delay.release(); // 等开门循环退出
+        await press;
+        expect(controller.bulbOpenSeconds, isNull);
+      });
+
       test('收门链:面板写过 Bulb 哨兵 → 抬起先恢复原快门值再 0x920C', () async {
         bulbController();
         _scriptParams(transport); // 快门读回 1/100s 打包(1<<16|100)

@@ -3,6 +3,22 @@ library;
 
 import '../../l10n/message.dart';
 
+/// 用户可见错误文本:剥掉 Dart 异常类名前缀("Exception: "),保留
+/// 原始细节。协议错误码映射仍由各控制器先行处理;这里只做兜底展示。
+String userFacingError(Object error) {
+  var text = error.toString();
+  for (final prefix in const [
+    'Exception: ',
+    'Bad state: ',
+  ]) {
+    if (text.startsWith(prefix)) {
+      text = text.substring(prefix.length);
+      break;
+    }
+  }
+  return text;
+}
+
 String formatBytes(int bytes) {
   if (bytes < 1024) {
     return '${bytes}B';

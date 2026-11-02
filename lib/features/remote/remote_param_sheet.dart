@@ -212,27 +212,17 @@ Widget _valueSection({
       rangeMax != null &&
       rangeMax > rangeMin &&
       current is int) {
-    return Padding(
+    return _ParamRangeEditor(
       key: key,
-      padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
-      child: Column(
-        children: [
-          Text(sheetContext.tm(controller.displayParamValue(p.code, current)),
-              style: TextStyle(
-                  fontSize: 30, fontWeight: FontWeight.w500, color: live.text)),
-          Slider(
-            value: (current.clamp(rangeMin, rangeMax)).toDouble(),
-            min: rangeMin.toDouble(),
-            max: rangeMax.toDouble(),
-            divisions: ((rangeMax - rangeMin) ~/ rangeStep).clamp(1, 1 << 20),
-            label:
-                sheetContext.tm(controller.displayParamValue(p.code, current)),
-            activeColor: live.accent,
-            onChanged: writing ? null : (_) {},
-            onChangeEnd: (v) => controller.setParam(p.code, v.round()),
-          ),
-        ],
-      ),
+      sheetContext: sheetContext,
+      controller: controller,
+      param: p,
+      current: current,
+      rangeMin: rangeMin,
+      rangeMax: rangeMax,
+      rangeStep: rangeStep,
+      writing: writing,
+      live: live,
     );
   }
   return Padding(
@@ -326,4 +316,91 @@ Future<bool> confirmTakeover(
   );
   if (!confirmed) return false;
   return controller.enableTakeover();
+}
+
+/// 范围参数编辑器(ISO/EV/色温等):拖动时本地值实时回显,松手才写相机。
+/// 旧实现 `onChanged` 空回调,滑块全程钉在旧值上,看起来像拖不动。
+class _ParamRangeEditor extends StatefulWidget {
+  const _ParamRangeEditor({
+    super.key,
+    required this.sheetContext,
+    required this.controller,
+    required this.param,
+    required this.current,
+    required this.rangeMin,
+    required this.rangeMax,
+    required this.rangeStep,
+    required this.writing,
+    required this.live,
+  });
+
+  final BuildContext sheetContext;
+  final RemoteController controller;
+  final ShootingParam param;
+  final int current;
+  final int rangeMin;
+  final int rangeMax;
+  final int rangeStep;
+  final bool writing;
+  final LivePalette live;
+
+  @override
+  State<_ParamRangeEditor> createState() => _ParamRangeEditorState();
+}
+
+class _ParamRangeEditorState extends State<_ParamRangeEditor> {
+  /// 拖动中的本地值;写回成功(控制器 current 变化)后交还控制器。
+  double? _dragValue;
+
+  int get _shown => (_dragValue ?? widget.current.toDouble())
+      .round()
+      .clamp(widget.rangeMin, widget.rangeMax)
+      .toInt();
+
+  @override
+  void didUpdateWidget(covariant _ParamRangeEditor oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.current != widget.current) _dragValue = null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final value = (_dragValue ??
+            widget.current
+                .toDouble()
+                .clamp(widget.rangeMin.toDouble(), widget.rangeMax.toDouble()))
+        .toDouble();
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+      child: Column(
+        children: [
+          Text(
+              widget.sheetContext
+                  .tm(widget.controller.displayParamValue(widget.param.code, _shown)),
+              style: TextStyle(
+                  fontSize: 30,
+                  fontWeight: FontWeight.w500,
+                  color: widget.live.text)),
+          Slider(
+            value: value,
+            min: widget.rangeMin.toDouble(),
+            max: widget.rangeMax.toDouble(),
+            divisions: ((widget.rangeMax - widget.rangeMin) ~/
+                    widget.rangeStep)
+                .clamp(1, 1 << 20),
+            label: widget.sheetContext.tm(
+                widget.controller.displayParamValue(widget.param.code, _shown)),
+            activeColor: widget.live.accent,
+            onChanged: widget.writing
+                ? null
+                : (v) => setState(() => _dragValue = v),
+            onChangeEnd: (v) {
+              setState(() => _dragValue = v);
+              widget.controller.setParam(widget.param.code, v.round());
+            },
+          ),
+        ],
+      ),
+    );
+  }
 }

@@ -797,7 +797,10 @@ void main() {
         '不挂满 15s 后带毒转 connected', () async {
       final usb = FakeUsbHostChannel(const []);
       final (conn, _, session, command, event, _) = wireWireless(usb,
-          connectBudget: const Duration(milliseconds: 30));
+          // 300ms:脚本化握手本身要走若干轮真实事件循环,30ms 在慢机
+          // 上会在握手期就超时(误判为半哑相机);仍远小于分步 500ms
+          // 与 15s 总窗,验证点不变。
+          connectBudget: const Duration(milliseconds: 300));
 
       final connecting = conn.connect(ip: '192.168.1.1');
       // 握手 + GetDeviceInfo + OpenSession 全应答(相机收得下会话),

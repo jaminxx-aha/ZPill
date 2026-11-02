@@ -160,7 +160,14 @@ class _HomeShellState extends State<HomeShell> {
   @override
   Widget build(BuildContext context) {
     final wide = MediaQuery.orientationOf(context) == Orientation.landscape;
-    return Scaffold(
+    return PopScope(
+      // 非相机 tab 的系统返回先回相机 tab,再按一次才退 App(安卓
+      // 常见导航预期);相机 tab 本身不拦。
+      canPop: _index == 0,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _select(0);
+      },
+      child: Scaffold(
       // 内容槽挂 key:横竖切换时 Row 头部增删 rail,无 key 会按
       // 位置+类型失配从断点起整树重建 —— PageView 里的页面 State
       // (拍摄页网格开关/面板状态等)全丢;挂 key 走 key 配对保状态。
@@ -240,6 +247,7 @@ class _HomeShellState extends State<HomeShell> {
                   ),
               ],
             ),
+      ),
     );
   }
 }

@@ -502,6 +502,15 @@ void main() {
     expect(find.byKey(ValueKey('1:jpg')), findsOneWidget);
     expect(find.byKey(ValueKey('2:jpg')), findsOneWidget);
     expect(find.text('全部照片'), findsOneWidget);
+    expect(find.textContaining('相机已断开'), findsOneWidget,
+        reason: '缓存网格必须标明不是实时');
+    expect(
+        tester
+            .widget<IconButton>(
+                find.widgetWithIcon(IconButton, Icons.refresh))
+            .onPressed,
+        isNull,
+        reason: '离线态刷新不可用');
 
     repo.completeLoad([album]);
     await loading;

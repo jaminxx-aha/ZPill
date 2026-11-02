@@ -522,6 +522,10 @@ const Map<String, String> enCatalog = {
   'remote.settingsTooltip':
       'Shooting Settings (params / grids & zebra / assist)',
   'remote.autofocus': 'Autofocus',
+  'remote.shutterTakePhoto': 'Take photo',
+  'remote.shutterStartVideo': 'Start recording',
+  'remote.shutterStopVideo': 'Stop recording',
+  'remote.shutterRecording': 'Recording',
   'common.autoSuffix': '(auto)',
   'remote.notConnected': 'Camera not connected',
   // REC prefix: universal recording mark, same as zh on purpose.
@@ -852,6 +856,9 @@ const Map<String, String> enCatalog = {
   'grid.readingObjects': 'Reading camera objects {a}/{b}…',
   'grid.emptyNotConnected':
       'No photos on the camera yet\n(Connect from the "Camera" page first if not connected)',
+  'grid.filterEmpty': 'No photos match the current filters',
+  'grid.offlineCache':
+      'The camera is disconnected. Showing the cached grid; download and delete are unavailable.',
   'grid.downloadToAlbum': 'Download to Album',
   'grid.downloadToApp': 'Download to App',
   'grid.download': 'Download',

@@ -318,7 +318,8 @@ class _StaScanBodyState extends State<_StaScanBody> {
                   ConnTileGroup(
                     children: [
                       if (_othersIpCameras(controller).isEmpty)
-                        const _EmptyGroupRow(text: 'conn.noOtherDevices')
+                        const _EmptyGroupRow(
+                          text: 'conn.noOtherDevices', hint: 'conn.staHint')
                       else
                         for (final camera in _othersIpCameras(controller))
                           ListTile(
@@ -346,9 +347,12 @@ class _StaScanBodyState extends State<_StaScanBody> {
 
 /// 列表组空态行(组容器内居中次级小字;text 即 t() 键)。
 class _EmptyGroupRow extends StatelessWidget {
-  const _EmptyGroupRow({required this.text});
+  const _EmptyGroupRow({required this.text, this.hint});
 
   final String text;
+
+  /// 空态第二行(相机该停在哪、同网要求),首连引导不再只藏在 ⓘ。
+  final String? hint;
 
   @override
   Widget build(BuildContext context) {
@@ -356,12 +360,24 @@ class _EmptyGroupRow extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(
           horizontal: AppSpacing.lg, vertical: AppSpacing.lg),
-      child: Center(
-        child: Text(
-          context.t(text),
-          style: theme.textTheme.bodySmall
-              ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-        ),
+      child: Column(
+        children: [
+          Text(
+            context.t(text),
+            textAlign: TextAlign.center,
+            style: theme.textTheme.bodySmall
+                ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+          ),
+          if (hint != null) ...[
+            const SizedBox(height: AppSpacing.xs),
+            Text(
+              context.t(hint!),
+              textAlign: TextAlign.center,
+              style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.outline, height: 1.4),
+            ),
+          ],
+        ],
       ),
     );
   }

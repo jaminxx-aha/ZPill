@@ -186,6 +186,11 @@ mixin _RemoteCore on ChangeNotifier {
   int _burstFrames = 0;
   bool _openShutterHeld = false;
 
+  /// 手动按住 B 门已曝光秒数(null = 未在手动曝光)。定时 B 门走
+  /// [bulbExposureCountdown],两者互斥。
+  int? _bulbOpenSeconds;
+  int? get bulbOpenSeconds => _bulbOpenSeconds;
+
   /// 开拍(0x9207)在途:抬起若先于开拍落地,立即 0x920C 会扑空 ——
   /// 记 [_bulbClosePending],开拍任务落地后自行收门。
   bool _bulbOpening = false;
@@ -644,6 +649,7 @@ mixin _RemoteCore on ChangeNotifier {
     _bulbCloseFailed = false;
     _bulbShutterRestore = null;
     _bulbExposureLeft = null;
+    _bulbOpenSeconds = null;
     _cancelSelfTimer();
     // 间隔拍摄随链路消亡:调度等待即时取消(在途单拍事务被门闩挡在
     // 收尾,快门命运如实交给相机侧)。停止摘要 notice 被下方清空,

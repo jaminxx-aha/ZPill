@@ -27,6 +27,7 @@ import '../../core/transfer/transfer_engine.dart';
 import '../../core/transfer/transfer_task.dart';
 import '../../debug/ptp_diagnostics.dart';
 import '../../l10n/message.dart';
+import '../common/format.dart';
 import 'bulb_close_policy.dart';
 import 'shooting_param_catalog.dart';
 

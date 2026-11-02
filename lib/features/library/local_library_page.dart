@@ -73,6 +73,7 @@ import '../common/widgets/hero_zoom.dart';
 import '../common/widgets/pull_away.dart';
 import '../common/widgets/photo_info_sheet.dart';
 import '../common/widgets/states.dart';
+import '../common/widgets/zoomable_page.dart';
 import 'library_ratings.dart';
 import '../transfers/transfers_page.dart';
 import 'lut_export_sheet.dart';
@@ -145,6 +146,7 @@ void _showSaveCard(BuildContext context, String text) {
     return;
   }
   BuildContext? dialogCtx;
+  final scheme = Theme.of(context).colorScheme;
   showDialog<void>(
     context: context,
     barrierColor: Colors.transparent,
@@ -155,7 +157,7 @@ void _showSaveCard(BuildContext context, String text) {
       // Dialog:其 minWidth 280 硬约束会架空自定义宽(真机实证)。
       return Center(
         child: Material(
-          color: Colors.white,
+          color: scheme.surfaceContainerHigh,
           borderRadius: BorderRadius.circular(14),
           child: SizedBox(
             width: 142,
@@ -165,15 +167,16 @@ void _showSaveCard(BuildContext context, String text) {
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(Icons.check_rounded, size: 46, color: Colors.black87),
+                  Icon(Icons.check_rounded,
+                      size: 46, color: scheme.onSurface),
                   const SizedBox(height: 10),
                   Text(
                     text,
                     textAlign: TextAlign.center,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 13,
                       height: 1.25,
-                      color: Colors.black87,
+                      color: scheme.onSurface,
                       fontWeight: FontWeight.w500,
                     ),
                   ),
@@ -268,6 +271,14 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
 
   /// 评级筛选(共享选集件:空集 = 全部,非空 = 各分类并集)。
   final RatingFilterSelection _ratingSelection = RatingFilterSelection();
+
+  /// 筛选是否偏离默认。
+  bool get _hasActiveFilters =>
+      !_formatSelection.isAll || !_ratingSelection.isAll;
+
+  /// 筛选或排序任一偏离默认(筛选锚钮圆点)。
+  bool get _hasActiveViewOptions =>
+      _hasActiveFilters || _sort.key != MediaSortKey.time || !_sort.desc;
 
   /// 连拍聚合开关(内存级,不落 AppSettings —— 与筛选弹层各档同
   /// 先例):开时网格条目 = [groupLocalBurstRuns] 的段,成段合为一格。
@@ -987,7 +998,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
   /// 换筛选清选中同规矩)。
   Widget _filterMenuAnchor(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return FilterMenu(children: [
+    return FilterMenu(active: _hasActiveViewOptions, children: [
       // 排序区(共享,头行可折叠):时间/文件名/文件大小三行直切。
       ...sortMenuSection(
           context, _sort, _sections, () => setState(() {}), _onSort),

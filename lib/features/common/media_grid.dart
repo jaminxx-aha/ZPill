@@ -564,9 +564,12 @@ final class FolderFilterSelection {
 /// 筛选弹层锚(AppBar 右上 tune 钮弹出,iPhone 图库式分区卡片):卡片
 /// 风格与锚钮两页同款;[children] = 页面自组的分区序列。
 class FilterMenu extends StatelessWidget {
-  const FilterMenu({super.key, required this.children});
+  const FilterMenu({super.key, required this.children, this.active = false});
 
   final List<Widget> children;
+
+  /// 任一筛选/排序偏离默认:锚钮出小圆点,弹层收起后也能看出「不是全部」。
+  final bool active;
 
   @override
   Widget build(BuildContext context) {
@@ -606,7 +609,13 @@ class FilterMenu extends StatelessWidget {
             box.size.height - 2,
           ));
         },
-        icon: const Icon(Icons.tune),
+        icon: active
+            ? Badge(
+                smallSize: 8,
+                backgroundColor: scheme.primary,
+                child: const Icon(Icons.tune),
+              )
+            : const Icon(Icons.tune),
       ),
     );
   }

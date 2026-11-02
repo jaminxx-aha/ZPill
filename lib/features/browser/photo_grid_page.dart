@@ -296,6 +296,28 @@ class _PhotoGridPageState extends State<PhotoGridPage>
         available: _ratings.available,
       );
 
+  /// 是否有筛选偏离默认(空态分流判据;排序变化不算筛选)。
+  bool get _hasActiveFilters =>
+      !_folderSelection.isAll ||
+      !_formatSelection.isAll ||
+      !_ratingSelection.isAll;
+
+  /// 筛选或排序任一偏离默认(筛选锚钮圆点)。
+  bool get _hasActiveViewOptions =>
+      _hasActiveFilters || _sort.key != MediaSortKey.time || !_sort.desc;
+
+  /// 「筛选无结果」的清除入口:只清筛选,排序保持用户选择。
+  void _clearFilters() {
+    setState(() {
+      _folderSelection.clear();
+      _formatSelection.clear();
+      _ratingSelection.clear();
+      _selected.clear();
+      _revealDownload = false;
+    });
+    unawaited(_savePrefs());
+  }
+
   /// 底栏两段式下载:「下载」钮点按后换出「到相册/到应用」双目的地;
   /// 选择集一变(改选/整日/全选/切相册/清空)即复位,重新从「下载」
   /// 第一段起(2026-10-17 真机:展开态残留,全选后直显双目的地)。
@@ -539,6 +561,9 @@ class _PhotoGridPageState extends State<PhotoGridPage>
   /// 两格都选 = 两格式都要);子集恒非空,无跳过计数。全程不弹格式面板。
   Future<void> _downloadSelected(
       List<_GridItem> cells, TransferDestination destination) async {
+    if (!widget.controller.linkUp) {
+      return; // 离线缓存态:下载必须回连接页恢复链路
+    }
     final selected =
         cells.where((c) => _selected.contains(c.key)).toList(growable: false);
     if (selected.isEmpty) {
@@ -591,6 +616,9 @@ class _PhotoGridPageState extends State<PhotoGridPage>
   /// 0x100B,单文件失败只计数不拖死整批,成功句柄出仓库缓存(相册
   /// 立即收缩,无需全量重枚举)。部分失败给出计数提示。
   Future<void> _deleteSelected(List<_GridItem> cells) async {
+    if (!widget.controller.linkUp) {
+      return; // 离线缓存态:相机侧删除不可达
+    }
     final selected =
         cells.where((c) => _selected.contains(c.key)).toList(growable: false);
     if (selected.isEmpty) {
@@ -764,7 +792,9 @@ class _PhotoGridPageState extends State<PhotoGridPage>
               ] else ...[
                 IconButton(
                   tooltip: context.t('common.refresh'),
-                  onPressed: controller.syncing ? null : controller.reload,
+                  onPressed: controller.syncing || !controller.linkUp
+                      ? null
+                      : controller.reload,
                   icon: const Icon(Icons.refresh),
                 ),
                 _filterMenuAnchor(context, filterAlbums),
@@ -810,14 +840,35 @@ class _PhotoGridPageState extends State<PhotoGridPage>
                 ? context.t('grid.connectingObjects')
                 : context.t('grid.readingObjects', {'a': p.$1, 'b': p.$2}));
       }
+      // 空相册 vs 筛选无结果:后者必须能看见「为什么空」并一键清除,
+      // 否则用户会以为相机里真的没照片。
+      if (controller.linkUp && _hasActiveFilters) {
+        return Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.filter_alt_off_outlined,
+                  size: 44, color: Theme.of(context).colorScheme.outline),
+              const SizedBox(height: AppSpacing.sm),
+              Text(context.t('grid.filterEmpty')),
+              const SizedBox(height: AppSpacing.xs),
+              TextButton(
+                onPressed: _clearFilters,
+                child: Text(context.t('libpage.clearFilter')),
+              ),
+            ],
+          ),
+        );
+      }
       return EmptyState(message: context.t('grid.emptyNotConnected'));
     }
     return Column(
       children: [
+        if (!controller.linkUp) _offlineBanner(context),
         if (controller.error != null) _syncErrorBanner(controller),
         Expanded(
           child: RefreshIndicator(
-            onRefresh: controller.reload,
+            onRefresh: controller.linkUp ? controller.reload : () async {},
             child: CustomScrollView(
               // 常可滚动:内容不足一屏时下拉刷新仍可用。
               physics: const AlwaysScrollableScrollPhysics(),
@@ -891,6 +942,17 @@ class _PhotoGridPageState extends State<PhotoGridPage>
     );
   }
 
+  /// 断连缓存横幅:网格保留最后快照,但明确「不是实时」并给回连接页
+  /// 的出口(下载/删除/刷新在离线态已禁用)。
+  Widget _offlineBanner(BuildContext context) {
+    return InlineHint(
+      message: const (key: 'grid.offlineCache', args: null),
+      icon: Icons.cloud_off,
+      actionLabel: context.t('common.back'),
+      onAction: () => Navigator.of(context).maybePop(),
+    );
+  }
+
   /// 同步中断横幅:内容已显示,重试只补缺失对象(断点续传)。
   Widget _syncErrorBanner(BrowserController controller) {
     return InlineHint(
@@ -904,7 +966,7 @@ class _PhotoGridPageState extends State<PhotoGridPage>
   /// 筛选区(共享格式/评级两级联子面板)。相册切换沿用旧 chips 规矩
   /// 清空选择(跨相册选择无意义)。
   Widget _filterMenuAnchor(BuildContext context, List<CameraAlbum> albums) {
-    return FilterMenu(children: [
+    return FilterMenu(active: _hasActiveViewOptions, children: [
       // 排序区(共享,头行可折叠):时间/文件名/文件大小三行直切。
       ...sortMenuSection(context, _sort, _sections,
           () => setState(() {}), _onSort),
@@ -1144,7 +1206,9 @@ class _PhotoGridPageState extends State<PhotoGridPage>
             if (!_revealDownload)
               Expanded(
                 child: FilledButton.tonalIcon(
-                  onPressed: () => setState(() => _revealDownload = true),
+                  onPressed: widget.controller.linkUp
+                      ? () => setState(() => _revealDownload = true)
+                      : null,
                   icon: const Icon(Icons.download_outlined),
                   label: Text(context.t('grid.download')),
                 ),
@@ -1152,8 +1216,10 @@ class _PhotoGridPageState extends State<PhotoGridPage>
             else ...[
               Expanded(
                 child: FilledButton.tonalIcon(
-                  onPressed: () =>
-                      _downloadSelected(cells, TransferDestination.gallery),
+                  onPressed: widget.controller.linkUp
+                      ? () => _downloadSelected(
+                          cells, TransferDestination.gallery)
+                      : null,
                   icon: const Icon(Icons.photo_library_outlined),
                   label: Text(context.t('grid.downloadToAlbum')),
                 ),
@@ -1161,8 +1227,10 @@ class _PhotoGridPageState extends State<PhotoGridPage>
               const SizedBox(width: 8),
               Expanded(
                 child: FilledButton.tonalIcon(
-                  onPressed: () =>
-                      _downloadSelected(cells, TransferDestination.app),
+                  onPressed: widget.controller.linkUp
+                      ? () => _downloadSelected(
+                          cells, TransferDestination.app)
+                      : null,
                   icon: const Icon(Icons.folder_outlined),
                   label: Text(context.t('grid.downloadToApp')),
                 ),
@@ -1171,7 +1239,9 @@ class _PhotoGridPageState extends State<PhotoGridPage>
             const SizedBox(width: 8),
             IconButton(
               tooltip: context.t('common.delete'),
-              onPressed: () => _deleteSelected(cells),
+              onPressed: widget.controller.linkUp
+                  ? () => _deleteSelected(cells)
+                  : null,
               icon: const Icon(Icons.delete_outline),
             ),
           ],
