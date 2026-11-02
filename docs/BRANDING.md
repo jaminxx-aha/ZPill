@@ -27,6 +27,22 @@ flutter build apk --release \
   --dart-define=APP_BRAND_DESCRIPTION="Camera remote control and media transfer"
 ```
 
+## 本地应用名覆盖（不改 git）
+
+新建 `branding/local/app_name.xcconfig`（`branding/local/` 已忽略）：
+
+```text
+BRAND_DISPLAY_NAME = My Camera
+```
+
+构建时动态读取，文件缺失回退默认 `ZPill`：
+
+- iOS：`ios/Flutter/Brand.xcconfig` 直接 include；
+- Android：Gradle 读取为 properties；
+- HarmonyOS：`branding/local/build_ohos_nikon_pill.sh` 读取并临时替换 strings。
+
+修改该文件不会产生任何 git 修改，也不需要 `git add` / `skip-worktree`。
+
 ## 自定义品牌
 
 复制示例配置到本地目录：

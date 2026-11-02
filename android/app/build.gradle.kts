@@ -45,6 +45,16 @@ if (brandPropertiesFile.exists()) {
     brandPropertiesFile.reader(Charsets.UTF_8).use(brandProperties::load)
 }
 
+// 单一本地应用名覆盖：branding/local/app_name.xcconfig（gitignored）。
+// 文件内容：BRAND_DISPLAY_NAME = <本地名称>；缺失时回退 ZPill。
+val localAppNameProperties = Properties()
+// rootProject 是 android/ 目录；应用名单文件在仓库根 branding/local/ 下。
+val localAppNameFile = rootProject.projectDir.parentFile
+    .resolve("branding/local/app_name.xcconfig")
+if (localAppNameFile.exists()) {
+    localAppNameFile.reader(Charsets.UTF_8).use(localAppNameProperties::load)
+}
+
 fun brandValue(
     environmentName: String,
     propertyName: String,
@@ -57,7 +67,11 @@ fun brandValue(
 val brandApplicationId =
     brandValue("BRAND_APPLICATION_ID", "applicationId", "com.jaminxx.zpill")
 val brandApplicationName =
-    brandValue("BRAND_APP_NAME", "appName", "ZPill")
+    System.getenv("BRAND_APP_NAME")?.takeIf { it.isNotEmpty() }
+        ?: localAppNameProperties
+            .getProperty("BRAND_DISPLAY_NAME")
+            ?.takeIf { it.isNotEmpty() }
+        ?: brandValue("BRAND_APP_NAME", "appName", "ZPill")
 
 android {
     namespace = "com.jaminxx.zpill"
