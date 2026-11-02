@@ -947,24 +947,6 @@ void main() {
       expect(conn.disconnectCalls, 1, reason: '在途点图标 = 取消连接');
     });
 
-    testWidgets('failed 态给可见的「重试/换方式」:重试重放上次连接入口,不再让用户找无文字图标', (tester) async {
-      final conn = FakeConnection();
-      final controller = ConnectionController(connection: conn);
-      await controller.connect(); // 落 _lastAttempt(1 次)
-      await tester.pumpWidget(
-          MaterialApp(home: ConnectionPage(controller: controller)));
-
-      conn.statesCtrl.add(CameraLinkState.failed);
-      await tester.pump();
-
-      expect(find.text('重试'), findsOneWidget, reason: '失败态显式重试钮');
-      expect(find.text('换方式'), findsOneWidget, reason: '失败态换方式入口');
-
-      await tester.tap(find.byKey(const ValueKey('conn_retry_failed')));
-      await tester.pump();
-      expect(conn.connectCalls, 2, reason: '重试重放上次 connect 入口');
-    });
-
     testWidgets(
         'reconnecting 态:状态行「正在重连…」+ 错误位动态文案 + '
         '点图标取消', (tester) async {
@@ -1179,8 +1161,8 @@ void main() {
       conn.statesCtrl.add(CameraLinkState.connected);
       await tester.pumpAndSettle();
 
-      // 状态行:绿点 + 已连接 + 电池壳(电量数字嵌壳内);设备名/链路串收进弹层,pill 只留图标。
-      expect(find.text('已连接'), findsOneWidget);
+      // 状态行:绿点 + 已连接(提示可点断开)+ 电池壳;设备名/链路串收进弹层,pill 只留图标。
+      expect(find.text('已连接，点击断开'), findsOneWidget);
       expect(find.text('80'), findsOneWidget, reason: '电池壳内嵌电量数字,无百分号(v26)');
       expect(find.text('USB 数据线'), findsNothing, reason: '链路 pill 只留图标,详情在弹层');
       expect(find.text('NIKON ZF'), findsNothing, reason: '设备名移入弹层');
@@ -1234,7 +1216,7 @@ void main() {
       expect(find.text('设备名'), findsNothing, reason: '屏障点按收层');
 
       // 行尾电池壳/链路 pill 点空不响应(不弹层不断开)—— 只有
-      // 「已连接」状态词可点(2026-10-23 定稿)。
+      // 「已连接，点击断开」状态词可点(2026-10-23 定稿,2026-11-02 加提示)。
       await tester.tap(find.text('80'));
       await tester.pumpAndSettle();
       await tester.tap(find.byIcon(Icons.usb));
@@ -1242,9 +1224,9 @@ void main() {
       expect(conn.disconnectCalls, 0);
       expect(find.text('设备名'), findsNothing, reason: '行尾点按不开弹层');
 
-      // 点「已连接」状态词 → 确认弹框;取消 = 不断开(2026-10-23
+      // 点「已连接，点击断开」状态词 → 确认弹框;取消 = 不断开(2026-10-23
       // 裁定:直断补确认)。
-      await tester.tap(find.text('已连接'));
+      await tester.tap(find.text('已连接，点击断开'));
       await tester.pumpAndSettle();
       expect(find.text('断开连接?'), findsOneWidget);
       expect(find.text('断开连接'), findsOneWidget, reason: '确认钮红底 = 旧弹层红色断开的视觉');
@@ -1254,7 +1236,7 @@ void main() {
       expect(find.text('断开连接?'), findsNothing, reason: '取消即收框');
 
       // 再点状态词 → 确认「断开连接」= 断开。
-      await tester.tap(find.text('已连接'));
+      await tester.tap(find.text('已连接，点击断开'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('断开连接'));
       await tester.pumpAndSettle();

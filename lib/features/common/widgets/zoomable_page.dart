@@ -29,12 +29,30 @@ class ZoomablePage extends StatefulWidget {
   State<ZoomablePage> createState() => _ZoomablePageState();
 }
 
-class _ZoomablePageState extends State<ZoomablePage> {
+class _ZoomablePageState extends State<ZoomablePage>
+    with SingleTickerProviderStateMixin {
   final TransformationController _controller = TransformationController();
+  late final AnimationController _animation;
+  Animation<Matrix4>? _tween;
   bool _zoomed = false;
   Offset _doubleTapAt = Offset.zero;
 
   double get _scale => _controller.value.getMaxScaleOnAxis();
+
+  @override
+  void initState() {
+    super.initState();
+    _animation = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 200),
+    )..addListener(() {
+        final value = _tween?.value;
+        if (value != null) _controller.value = value;
+      });
+    _animation.addStatusListener((status) {
+      if (status == AnimationStatus.completed) _notifyZoomed(_scale > 1.01);
+    });
+  }
 
   @override
   void didUpdateWidget(covariant ZoomablePage oldWidget) {
@@ -44,6 +62,7 @@ class _ZoomablePageState extends State<ZoomablePage> {
 
   @override
   void dispose() {
+    _animation.dispose();
     _controller.dispose();
     super.dispose();
   }
@@ -55,6 +74,8 @@ class _ZoomablePageState extends State<ZoomablePage> {
   }
 
   void _resetZoom() {
+    _animation.stop();
+    _tween = null;
     _controller.value = Matrix4.identity();
     if (!_zoomed) return;
     _zoomed = false;
@@ -65,6 +86,10 @@ class _ZoomablePageState extends State<ZoomablePage> {
     WidgetsBinding.instance.addPostFrameCallback((_) => callback(false));
   }
 
+  void _stopAnimationForGesture() {
+    if (_animation.isAnimating) _animation.stop();
+  }
+
   void _onInteractionUpdate(ScaleUpdateDetails details) {
     _notifyZoomed(_scale > 1.01);
   }
@@ -73,18 +98,32 @@ class _ZoomablePageState extends State<ZoomablePage> {
     _notifyZoomed(_scale > 1.01);
   }
 
+  /// 1x↔2x 用补间过渡,不再瞬间跳变。动画在途时忽略双击,避免动画
+  /// 起止与新手势叠加。
   void _toggleDoubleTap() {
+    if (_animation.isAnimating) return;
     if (_scale > 1.01) {
-      _resetZoom();
+      _animateTo(Matrix4.identity(), zoomedAtEnd: false);
       return;
     }
     const target = 2.0;
     final p = _doubleTapAt;
-    // 以双击点为中心放大:先把点移到原点,再缩放。
-    _controller.value = Matrix4.identity()
+    final matrix = Matrix4.identity()
       ..translateByDouble(-p.dx * (target - 1), -p.dy * (target - 1), 0, 1)
       ..scaleByDouble(target, target, target, 1);
-    _notifyZoomed(true);
+    _animateTo(matrix, zoomedAtEnd: true);
+  }
+
+  void _animateTo(Matrix4 target, {required bool zoomedAtEnd}) {
+    _animation.stop();
+    _tween = Matrix4Tween(
+      begin: _controller.value.clone(),
+      end: target,
+    ).animate(CurvedAnimation(parent: _animation, curve: Curves.easeOutCubic));
+    // 放大档从动画起点就禁翻页/下拉;缩小时保持禁用直到收尾,避免
+    // 动画途中被 PageView 抢走手势。
+    if (zoomedAtEnd) _notifyZoomed(true);
+    _animation.forward(from: 0);
   }
 
   @override
@@ -95,6 +134,7 @@ class _ZoomablePageState extends State<ZoomablePage> {
       child: InteractiveViewer(
         transformationController: _controller,
         maxScale: widget.maxScale,
+        onInteractionStart: (_) => _stopAnimationForGesture(),
         onInteractionUpdate: _onInteractionUpdate,
         onInteractionEnd: _onInteractionEnd,
         child: widget.child,

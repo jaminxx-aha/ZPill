@@ -698,18 +698,15 @@ class ConnectionController extends ChangeNotifier {
   /// 自带 connected/connecting/pairing 态护栏,重入安全。
   void Function()? _lastAttempt;
 
-  /// 重试上次失败的连接(仅 failed 态有意义,UI 只在该态出重试钮;
-  /// 无记录时静默 —— 如启动即 failed 从未尝试过)。
+  /// 重试上次失败的连接(仅 failed 态有意义;当前 UI 走 hero 图标
+  /// 点按发起,不设显式重试钮;无记录时静默 —— 如启动即 failed 从未
+  /// 尝试过)。
   void retry() {
     if (state != CameraLinkState.failed) {
       return;
     }
     _lastAttempt?.call();
   }
-
-  /// 是否已有可重放的上次尝试(failed 态「重试」钮据此决定走
-  /// [retry] 还是回到 hero 的首次连接路径)。
-  bool get canRetry => _lastAttempt != null;
 
   Future<void> confirmPairing() async {
     await connection?.confirmPairing();

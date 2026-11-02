@@ -1206,8 +1206,7 @@ class BlePairPanelState extends State<BlePairPanel>
               // 2026-10-21:已配对相机不再进「其它设备」(它在上面有自己的
               // 行 + 状态点;用户定稿「其它设备中不再出现已配对的设备」)。
               child: _othersDevices().isEmpty
-                  ? const _GroupEmpty(
-                      text: 'conn.noOtherDevices', hint: 'ble.scanHint')
+                  ? const _GroupEmpty(text: 'conn.noOtherDevices')
                   // ListTile 在最近 Material 祖先上画底/墨效:透明
                   // Material 垫在 DecoratedBox 与子项之间(ConnTileGroup
                   // 同款)。
@@ -1234,12 +1233,9 @@ class BlePairPanelState extends State<BlePairPanel>
 
 /// 列表组空态行(组容器内居中次级小字;text 即 t() 键)。
 class _GroupEmpty extends StatelessWidget {
-  const _GroupEmpty({required this.text, this.hint});
+  const _GroupEmpty({required this.text});
 
   final String text;
-
-  /// 空态第二行(怎么让相机出现),首连引导不再只藏在 ⓘ 弹层里。
-  final String? hint;
 
   @override
   Widget build(BuildContext context) {
@@ -1247,24 +1243,12 @@ class _GroupEmpty extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(
           horizontal: AppSpacing.lg, vertical: AppSpacing.lg),
-      child: Column(
-        children: [
-          Text(
-            context.t(text),
-            textAlign: TextAlign.center,
-            style: theme.textTheme.bodySmall
-                ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-          ),
-          if (hint != null) ...[
-            const SizedBox(height: AppSpacing.xs),
-            Text(
-              context.t(hint!),
-              textAlign: TextAlign.center,
-              style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.outline, height: 1.4),
-            ),
-          ],
-        ],
+      child: Center(
+        child: Text(
+          context.t(text),
+          style: theme.textTheme.bodySmall
+              ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+        ),
       ),
     );
   }

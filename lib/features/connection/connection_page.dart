@@ -681,47 +681,6 @@ class _ConnectionPageState extends State<ConnectionPage>
   /// kConnStatusRowHeight 26,+9),170-9=161 回收,图标坐标不动。
   static const double _heroTopGap = 161;
 
-  /// 失败态恢复动作行占位(重试/换方式)。动作行在 hero 下方,hero
-  /// 上移同高,保持页面固定内容总高不变(320 小屏 + AP 凭据卡不溢出)。
-  static const double _recoveryRowReserve = 64;
-
-  /// 失败态的显式恢复动作(2026-11-02):错误位只给原因、hero 又是
-  /// 无文字图标,用户找不到「重试」—— 这里把重试/换方式做成可见按钮。
-  /// 重试优先重放上次入口(保留手填 IP 等上下文);无记录时回落到
-  /// hero 的首次连接路径。连接在途的取消仍按既有定案走 hero 再点,
-  /// 不恢复已退役的底部取消钮。
-  Widget? _ptpRecoveryActions(
-      BuildContext context, ConnectionController controller) {
-    if (controller.state != CameraLinkState.failed) {
-      return null;
-    }
-    return Wrap(
-      alignment: WrapAlignment.center,
-      spacing: AppSpacing.sm,
-      runSpacing: AppSpacing.sm,
-      children: [
-        FilledButton.icon(
-          key: const ValueKey('conn_retry_failed'),
-          onPressed: () {
-            if (controller.canRetry) {
-              controller.retry();
-            } else {
-              _heroPressed(controller);
-            }
-          },
-          icon: const Icon(Icons.refresh, size: 18),
-          label: Text(context.t('common.retry')),
-        ),
-        OutlinedButton.icon(
-          key: const ValueKey('conn_change_method_failed'),
-          onPressed: () => _showModePickerSheet(context, controller),
-          icon: const Icon(Icons.swap_horiz, size: 18),
-          label: Text(context.t('conn.changeMethod')),
-        ),
-      ],
-    );
-  }
-
   /// USB/AP 主视图:状态行 + 固定错误位 + 方式 hero(**点按即连接、
   /// 在途点按取消**,五轮中央连接钮退役)+ AP 凭据卡(沉底)。失败态
   /// 错误行落在固定错误位,重试 = 再点图标;当前方式在 AppBar 方式位
@@ -730,7 +689,6 @@ class _ConnectionPageState extends State<ConnectionPage>
     final busy = _busyState(controller);
     final (label, dot, busySpin) = _ptpStatusPresentation(controller, context);
     final isAp = controller.method == ConnectionMethod.ap;
-    final recovery = _ptpRecoveryActions(context, controller);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -748,12 +706,8 @@ class _ConnectionPageState extends State<ConnectionPage>
           ),
         ),
         // 图标坐标恒定(见 _heroTopGap):凭据卡出现/消失、busy 与否
-        // 都不影响图标位置。失败态动作行占用的高度从这段空隙里让出,
-        // 页面固定内容总高不变。
-        SizedBox(
-            height: recovery == null
-                ? _heroTopGap
-                : _heroTopGap - _recoveryRowReserve),
+        // 都不影响图标位置。
+        const SizedBox(height: _heroTopGap),
         Center(
           child: _MethodHero(
             method: controller.method,
@@ -762,15 +716,6 @@ class _ConnectionPageState extends State<ConnectionPage>
             onTap: () => _heroPressed(controller),
           ),
         ),
-        // 失败态的可见出路(重试/换方式),紧贴 hero 下方;长错误文案
-        // 在固定错误位里向下延展绘制,不会与这组动作打架。
-        if (recovery != null) ...[
-          const SizedBox(height: AppSpacing.md),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
-            child: recovery,
-          ),
-        ],
         // 弹性空档:凭据卡沉底。
         const Expanded(child: SizedBox.shrink()),
         // AP 方式的热点凭据卡(蓝牙通道解出才显示):SSID/密码/安全 +

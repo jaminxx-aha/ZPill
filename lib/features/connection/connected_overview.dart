@@ -152,17 +152,21 @@ class ConnectedHeader extends StatelessWidget {
             // 只有状态词可点(断开):命中区沿词盒上下撑满行高、横向
             // 即词盒 —— 视觉位置与未连接侧状态词严格同位,行内其余
             // 件(电池壳/链路 pill)点空不响应(2026-10-23 定稿)。
-            InkWell(
-              onTap: onDisconnect,
-              borderRadius: BorderRadius.circular(AppRadius.sm),
-              child: SizedBox(
-                height: double.infinity,
-                child: Align(
-                  alignment: AlignmentDirectional.centerStart,
-                  child: Text(
-                    context.t('conn.connected'),
-                    style: theme.textTheme.titleMedium
-                        ?.copyWith(fontWeight: FontWeight.w700),
+            Flexible(
+              child: InkWell(
+                onTap: onDisconnect,
+                borderRadius: BorderRadius.circular(AppRadius.sm),
+                child: SizedBox(
+                  height: double.infinity,
+                  child: Align(
+                    alignment: AlignmentDirectional.centerStart,
+                    child: Text(
+                      context.t('conn.connectedTapDisconnect'),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.titleMedium
+                          ?.copyWith(fontWeight: FontWeight.w700),
+                    ),
                   ),
                 ),
               ),

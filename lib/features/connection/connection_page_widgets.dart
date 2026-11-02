@@ -217,7 +217,6 @@ class _StaScanBodyState extends State<_StaScanBody> {
         final busy = _ConnectionPageState._busyState(controller);
         final (label, dot, busySpin) =
             _ConnectionPageState._ptpStatusPresentation(controller, context);
-        final recovery = widget.page._ptpRecoveryActions(context, controller);
         // 图标坐标恒定(见 _ConnectionPageState._heroTopGap,四方式
         // 同位);四轮裁定「配对信息往上移」:两段列表紧随图标之下,
         // 剩余空间全在底部(内容短则留白,长则区内滚动)。
@@ -237,11 +236,7 @@ class _StaScanBodyState extends State<_StaScanBody> {
                 error: controller.state == CameraLinkState.failed,
               ),
             ),
-            SizedBox(
-                height: recovery == null
-                    ? _ConnectionPageState._heroTopGap
-                    : _ConnectionPageState._heroTopGap -
-                        _ConnectionPageState._recoveryRowReserve),
+            const SizedBox(height: _ConnectionPageState._heroTopGap),
             Center(
               child: _MethodHero(
                 method: ConnectionMethod.sta,
@@ -251,13 +246,6 @@ class _StaScanBodyState extends State<_StaScanBody> {
                 onTap: () => widget.page._heroPressed(controller),
               ),
             ),
-            if (recovery != null) ...[
-              const SizedBox(height: AppSpacing.md),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
-                child: recovery,
-              ),
-            ],
             Flexible(
               child: ListView(
                 shrinkWrap: true,
@@ -318,8 +306,7 @@ class _StaScanBodyState extends State<_StaScanBody> {
                   ConnTileGroup(
                     children: [
                       if (_othersIpCameras(controller).isEmpty)
-                        const _EmptyGroupRow(
-                          text: 'conn.noOtherDevices', hint: 'conn.staHint')
+                        const _EmptyGroupRow(text: 'conn.noOtherDevices')
                       else
                         for (final camera in _othersIpCameras(controller))
                           ListTile(
@@ -347,12 +334,9 @@ class _StaScanBodyState extends State<_StaScanBody> {
 
 /// 列表组空态行(组容器内居中次级小字;text 即 t() 键)。
 class _EmptyGroupRow extends StatelessWidget {
-  const _EmptyGroupRow({required this.text, this.hint});
+  const _EmptyGroupRow({required this.text});
 
   final String text;
-
-  /// 空态第二行(相机该停在哪、同网要求),首连引导不再只藏在 ⓘ。
-  final String? hint;
 
   @override
   Widget build(BuildContext context) {
@@ -360,24 +344,12 @@ class _EmptyGroupRow extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(
           horizontal: AppSpacing.lg, vertical: AppSpacing.lg),
-      child: Column(
-        children: [
-          Text(
-            context.t(text),
-            textAlign: TextAlign.center,
-            style: theme.textTheme.bodySmall
-                ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-          ),
-          if (hint != null) ...[
-            const SizedBox(height: AppSpacing.xs),
-            Text(
-              context.t(hint!),
-              textAlign: TextAlign.center,
-              style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.outline, height: 1.4),
-            ),
-          ],
-        ],
+      child: Center(
+        child: Text(
+          context.t(text),
+          style: theme.textTheme.bodySmall
+              ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+        ),
       ),
     );
   }

@@ -256,6 +256,7 @@ const Map<String, String> enCatalog = {
   'conn.connecting': 'Connecting…',
   'conn.waitingPairing': 'Waiting for pairing confirmation…',
   'conn.connected': 'Connected',
+  'conn.connectedTapDisconnect': 'Connected · Tap to disconnect',
   'conn.reconnecting': 'Reconnecting…',
   'conn.failed': 'Connection Failed',
   'conn.capacityUnknown': 'Capacity Unknown',
@@ -1014,9 +1015,9 @@ const Map<String, String> enCatalog = {
   'conn.errInitRejected':
       'The camera rejected the connection (InitFail reason=0x{r}): the camera allows one client at a time and may be held by a paired app such as SnapBridge; disconnect or quit SnapBridge on that device, then retry',
   'conn.errUnreachable':
-      'Cannot reach {ip}: no camera responded at this address. In Same Wi-Fi mode, tap "Change method" to rescan and pick the camera (a manual IP must match it exactly); in AP Hotspot mode, join the camera hotspot in system Wi-Fi settings first; on the first connect, allow Local Network access in the system prompt, then retry',
+      'Cannot reach {ip}: no camera responded at this address. In Same Wi-Fi mode, tap the connect icon in the top-right to switch methods and rescan (a manual IP must match it exactly); in AP Hotspot mode, join the camera hotspot in system Wi-Fi settings first; on the first connect, allow Local Network access in the system prompt, then retry',
   'conn.errTimeout':
-      'Timed out connecting to {ip}: the camera is offline or the IP is wrong — tap "Change method" to rescan',
+      'Timed out connecting to {ip}: the camera is offline or the IP is wrong — tap the connect icon in the top-right to switch methods and rescan',
   'conn.errWireless': 'Wireless connection failed: {e}',
   'conn.pairWaitBroken':
       'Connection dropped while waiting for pairing confirmation: {e}',
@@ -1024,11 +1025,11 @@ const Map<String, String> enCatalog = {
       'Pairing info was sent, but the camera has not accepted the reconnect: press "OK" on the camera screen to finish pairing, then connect again (last error: {e})',
   'conn.recoverStatus': 'Reconnecting ({e})',
   'conn.recoverGiveUpUsb':
-      'The camera did not come back: replug the USB cable (and unlock the camera), then tap "Retry" (last error: {e})',
+      'The camera did not come back: replug the USB cable (and unlock the camera), then tap the connect icon to retry (last error: {e})',
   'conn.recoverGiveUpBusy':
-      'The camera stayed busy and auto-reconnect failed (last error: {e}): disconnect it in the app that holds it (such as SnapBridge), then tap "Retry"',
+      'The camera stayed busy and auto-reconnect failed (last error: {e}): disconnect it in the app that holds it (such as SnapBridge), then tap the connect icon to retry',
   'conn.recoverGiveUpNormal':
-      'Auto-reconnect failed ({n} attempts, last error: {e}): make sure the camera is on and reachable, then tap "Retry"',
+      'Auto-reconnect failed ({n} attempts, last error: {e}): make sure the camera is on and reachable, then tap the connect icon to retry',
   'interval.title': 'Interval Shooting',
   'interval.setupTitle': 'Interval Shooting Setup',
   'interval.progress': 'Interval {a}/{b}',
