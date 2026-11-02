@@ -3118,6 +3118,9 @@ void main() {
     expect(
         tester.widget<LevelOverlay>(find.byType(LevelOverlay)).quarterTurns, 1,
         reason: '水平仪叠加画面总 quarter(raw0 + 额外 90°)');
+    expect(
+        tester.widget<LevelOverlay>(find.byType(LevelOverlay)).labelQuarter, 1,
+        reason: '读数随内容转 90°(与直方图/示波器同向)');
     final hist = tester.getCenter(find.byType(HistogramView));
     final scope = tester.getCenter(find.byType(WaveformView));
     expect(hist.dx, lessThan(400), reason: '内容右下转到屏幕左下(直方图)');
@@ -3138,6 +3141,9 @@ void main() {
     expect(
         tester.widget<LevelOverlay>(find.byType(LevelOverlay)).quarterTurns, 3,
         reason: '竖持水平仪叠加自动转正 quarter');
+    expect(
+        tester.widget<LevelOverlay>(find.byType(LevelOverlay)).labelQuarter, 0,
+        reason: '竖持读数保持正向');
     expect(tester.getCenter(find.byType(HistogramView)).dx, greaterThan(400),
         reason: '竖持:直方图回内容右下');
     expect(tester.getCenter(find.byType(WaveformView)).dx, lessThan(400),
@@ -3151,6 +3157,9 @@ void main() {
     expect(
         tester.widget<LevelOverlay>(find.byType(LevelOverlay)).quarterTurns, 3,
         reason: '横持倒置:自动 180° + 额外 90° = quarter 3');
+    expect(
+        tester.widget<LevelOverlay>(find.byType(LevelOverlay)).labelQuarter, 1,
+        reason: '横持倒置读数同 B 随内容转');
     expect(
         tester
             .widgetList<RotatedBox>(find.byType(RotatedBox))

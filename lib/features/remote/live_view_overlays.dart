@@ -1005,12 +1005,18 @@ class LevelOverlay extends StatelessWidget {
       {super.key,
       required this.orientation,
       this.quarterTurns = 0,
+      this.labelQuarter = 0,
       this.bounds});
 
   final MotionOrientation orientation;
 
   /// 跟随画面旋转的顺时针四分之一圈数(相机横持额外转 90° 时 = 1)。
   final int quarterTurns;
+
+  /// 读数(俯仰/横滚数字)随内容转的顺时针四分之一圈数:与直方图/
+  /// 示波器同向 —— 方向与位置一起绕取景中心转(内容侧躺时读数跟着
+  /// 走到内容自己的左缘,2026-11-02 用户定案);0 = 正向。
+  final int labelQuarter;
 
   /// 取景画面显示矩形(屏幕坐标):水平仪只画在这个范围内,不越出
   /// 取景屏幕(2026-10-30 用户定案)。null = 整屏。
@@ -1020,7 +1026,8 @@ class LevelOverlay extends StatelessWidget {
   Widget build(BuildContext context) {
     return RepaintBoundary(
       child: CustomPaint(
-        foregroundPainter: _LevelPainter(orientation, quarterTurns, bounds),
+        foregroundPainter:
+            _LevelPainter(orientation, quarterTurns, bounds, labelQuarter),
         size: Size.infinite,
       ),
     );
@@ -1078,12 +1085,57 @@ double wrapHalfTurn(double rad) {
   );
 }
 
+/// 水平仪读数锚点(纯函数,测试直取):未旋转时在取景左缘、水平线
+/// 下方 8px;侧躺([labelQuarter] 非 0)时同一点绕取景中心转
+/// labelQuarter×90° —— 位置与朝向一起跟随内容(2026-11-02 用户定案:
+/// 只转字不动位会被看成「位置没有变」)。非方形取景下转过去的点可能
+/// 越出边界,按 [labelSize] 折算旋转后的文本盒再钳回取景内。
+Offset levelLabelAnchor({
+  required Rect area,
+  required double midY,
+  required int labelQuarter,
+  Size labelSize = Size.zero,
+}) {
+  final base = Offset(area.left + 8,
+      (midY + 8).clamp(area.top + 4, area.bottom - 16).toDouble());
+  final q = labelQuarter % 4;
+  if (q == 0) return base;
+  final c = area.center;
+  final a = q * math.pi / 2;
+  final dx = base.dx - c.dx;
+  final dy = base.dy - c.dy;
+  final p = Offset(
+    c.dx + dx * math.cos(a) - dy * math.sin(a),
+    c.dy + dx * math.sin(a) + dy * math.cos(a),
+  );
+  // 旋转后文本盒在屏幕上的占位(局部 +x = 阅读方向、+y = 行距方向)。
+  final w = labelSize.width;
+  final h = labelSize.height;
+  final box = switch (q) {
+    1 => Rect.fromLTWH(p.dx - h, p.dy, h, w), // 阅读向下、行距向左
+    3 => Rect.fromLTWH(p.dx, p.dy - w, h, w), // 阅读向上、行距向右
+    _ => Rect.fromLTWH(p.dx - w, p.dy - h, w, h), // 倒置
+  };
+  // 平移盒到取景内(盒比取景还大时居中)。
+  double fit(double start, double length, double lo, double hi) {
+    final maxStart = hi - length;
+    return (maxStart < lo ? (lo + hi - length) / 2 : start.clamp(lo, maxStart)) -
+        start;
+  }
+
+  final ddx = fit(box.left, box.width, area.left + 4, area.right - 4);
+  final ddy = fit(box.top, box.height, area.top + 4, area.bottom - 4);
+  return Offset(p.dx + ddx, p.dy + ddy);
+}
+
 final class _LevelPainter extends CustomPainter {
-  const _LevelPainter(this.orientation, [this.quarterTurns = 0, this.bounds]);
+  const _LevelPainter(this.orientation,
+      [this.quarterTurns = 0, this.bounds, this.labelQuarter = 0]);
 
   final MotionOrientation orientation;
   final int quarterTurns;
   final Rect? bounds;
+  final int labelQuarter;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -1112,18 +1164,24 @@ final class _LevelPainter extends CustomPainter {
       color: Colors.green.withValues(alpha: 0.9),
       fontSize: 10,
     );
-    // 读数保持正向(不随画布转),放在画面左侧、水平线下沿附近。
-    TextPainter(
+    final tp = TextPainter(
       text: TextSpan(
           text: '${orientation.pitchText} / ${orientation.rollText}',
           style: textStyle),
       textDirection: TextDirection.ltr,
-    )
-      ..layout()
-      ..paint(
-          canvas,
-          Offset(area.left + 8,
-              (seg.midY + 8).clamp(area.top + 4, area.bottom - 16).toDouble()));
+    )..layout();
+    final anchor = levelLabelAnchor(
+        area: area,
+        midY: seg.midY,
+        labelQuarter: labelQuarter,
+        labelSize: tp.size);
+    // 读数跟着内容走:方向与位置一起绕取景中心转(与画面变换同一
+    // 中心;矩形绕自身中心转 90° 仍映回自身,不会出框)。
+    canvas.save();
+    canvas.translate(anchor.dx, anchor.dy);
+    canvas.rotate(labelQuarter % 4 * math.pi / 2);
+    tp.paint(canvas, Offset.zero);
+    canvas.restore();
   }
 
   @override
@@ -1131,6 +1189,7 @@ final class _LevelPainter extends CustomPainter {
       old.orientation.pitchRad != orientation.pitchRad ||
       old.orientation.rollRad != orientation.rollRad ||
       old.quarterTurns != quarterTurns ||
+      old.labelQuarter != labelQuarter ||
       old.bounds != bounds;
 }
 

@@ -724,6 +724,9 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea>
                     // (自动转正 + 额外 90°)才落到屏幕方向(真机数据:
                     // 竖持 roll≈±90°,总 quarter 归零后才是横线)。
                     quarterTurns: quarter,
+                    // 读数方向跟内容(同直方图/示波器):只有横持那
+                    // 90° 才转,自动转正不跟(2026-11-02 用户定案)。
+                    labelQuarter: overlayQuarter,
                     bounds: t.displayRect,
                   );
                 },
