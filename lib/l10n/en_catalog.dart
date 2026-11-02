@@ -192,6 +192,17 @@ const Map<String, String> enCatalog = {
   'ble.reconnectRejected':
       'Camera repeatedly refused the connection — restart the camera and retry; if it persists, re-pair',
   'ble.handshakeDisconnected': 'Disconnected during handshake',
+  'ble.permissionDenied':
+      'Bluetooth permission is not granted. Allow it in system settings and retry',
+  'ble.bluetoothOff':
+      'Bluetooth is off. Turn it on in system settings and retry',
+  'ble.hostOffTitle': 'Bluetooth is off',
+  'ble.hostOffBody':
+      'Turn on Bluetooth, then come back — scanning resumes automatically.',
+  'ble.permissionTitle': 'Bluetooth permission is off',
+  'ble.permissionBody':
+      'Allow this app to use Bluetooth/Nearby devices in system settings, then tap "Retry permission".',
+  'ble.retryPermission': 'Retry permission',
   'ble.pairFrameLength': 'PAIR frame length abnormal ({n})',
   'ble.stage2NoSalt': 'No salt match in stage2 — handshake failed',
   'ble.stage3WriteFail': 'Stage-3 write failed: {e}',
@@ -970,7 +981,7 @@ const Map<String, String> enCatalog = {
   'conn.errReconnectPaused':
       'The connection dropped repeatedly within a short time; auto-reconnect is paused: check the camera (battery / overheating) and the Wi-Fi link, then reconnect manually later',
   'conn.errBusy':
-      'The camera is busy (possibly held by SnapBridge); retrying slowly every 5 s — tap "Cancel"',
+      'The camera is busy (possibly held by SnapBridge); retrying slowly every 5 s — tap the connect icon to cancel',
   'conn.waitingUsb':
       'Waiting for the camera to come back over USB (plug the cable in again to resume automatically)',
   'conn.errStreamRestart':
@@ -979,9 +990,9 @@ const Map<String, String> enCatalog = {
   'conn.errInitRejected':
       'The camera rejected the connection (InitFail reason=0x{r}): the camera allows one client at a time and may be held by a paired app such as SnapBridge; disconnect or quit SnapBridge on that device, then retry',
   'conn.errUnreachable':
-      'Cannot reach {ip}: no camera responded at this address. In Same Wi-Fi mode, tap "Scan Cameras" to confirm the camera address (a manual IP must match it exactly); in AP Hotspot mode, join the camera hotspot in system Wi-Fi settings first; on the first connect, allow Local Network access in the system prompt, then retry',
+      'Cannot reach {ip}: no camera responded at this address. In Same Wi-Fi mode, tap "Change method" to rescan and pick the camera (a manual IP must match it exactly); in AP Hotspot mode, join the camera hotspot in system Wi-Fi settings first; on the first connect, allow Local Network access in the system prompt, then retry',
   'conn.errTimeout':
-      'Timed out connecting to {ip}: the camera is offline or the IP is wrong — use "Scan Cameras" to confirm',
+      'Timed out connecting to {ip}: the camera is offline or the IP is wrong — tap "Change method" to rescan',
   'conn.errWireless': 'Wireless connection failed: {e}',
   'conn.pairWaitBroken':
       'Connection dropped while waiting for pairing confirmation: {e}',

@@ -77,6 +77,7 @@ void main() {
     WidgetTester tester, {
     required List<Map<String, Object?>> scanResult,
     BlePairedIdentity? saved,
+    Object? scanError,
   }) async {
     tester.view
       ..physicalSize = const Size(800, 2400)
@@ -85,8 +86,13 @@ void main() {
     final messenger = tester.binding.defaultBinaryMessenger;
     messenger.setMockMethodCallHandler(bleEvents, (call) async => null);
     addTearDown(() => messenger.setMockMethodCallHandler(bleEvents, null));
-    messenger.setMockMethodCallHandler(
-        ble, (call) async => call.method == 'scan' ? scanResult : null);
+    messenger.setMockMethodCallHandler(ble, (call) async {
+      if (call.method == 'scan') {
+        if (scanError != null) throw scanError;
+        return scanResult;
+      }
+      return null;
+    });
     addTearDown(() => messenger.setMockMethodCallHandler(ble, null));
 
     // 面板自身无 Scaffold(嵌入连接页蓝牙视图):测试桩补 Material 祖先。
@@ -107,6 +113,48 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     await tester.pump(drain);
   }
+
+  test('宿主不可用态映射:poweredOff/unauthorized 与原生错误码', () {
+    expect(bleHostIssueOfState('poweredOff'), BleHostIssue.adapterOff);
+    expect(bleHostIssueOfState('unauthorized'), BleHostIssue.permissionDenied);
+    expect(bleHostIssueOfState('poweredOn'), isNull);
+    expect(
+        bleHostIssueOfError(
+            PlatformException(code: 'permissionDenied', message: 'x')),
+        BleHostIssue.permissionDenied);
+    expect(bleHostIssueOfError(PlatformException(code: 'bluetoothOff')),
+        BleHostIssue.adapterOff);
+    expect(bleHostIssueOfError(Exception('other')), isNull);
+  });
+
+  testWidgets('扫描权限被拒:出引导卡而不是把空列表当「未发现设备」',
+      (tester) async {
+    await boot(
+      tester,
+      scanResult: const [],
+      scanError:
+          PlatformException(code: 'permissionDenied', message: '蓝牙权限未授权'),
+    );
+
+    expect(find.text('蓝牙权限未开启'), findsOneWidget);
+    expect(find.text('重新授权'), findsOneWidget);
+    expect(find.text('暂无已配对设备'), findsOneWidget,
+        reason: '列表本体仍在,只是上方多了可操作引导');
+    await disposePage(tester);
+  });
+
+  testWidgets('扫描返回蓝牙关闭:出「蓝牙未开启」+ 可操作入口', (tester) async {
+    await boot(
+      tester,
+      scanResult: const [],
+      scanError: PlatformException(code: 'bluetoothOff', message: '蓝牙未开启'),
+    );
+
+    expect(find.text('蓝牙未开启'), findsOneWidget);
+    expect(find.byKey(const ValueKey('ble_host_issue_action')), findsOneWidget,
+        reason: '宿主不可用必须给可操作入口(落平台支持的设置深链/重试)');
+    await disposePage(tester);
+  });
 
   testWidgets('无注册身份:打开即自动扫描填列表(静默,无扫描钮/指示)',
       (tester) async {

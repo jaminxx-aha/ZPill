@@ -984,8 +984,12 @@ final class BleCameraSession {
           _setState(BleSessionState.reconnecting);
         }
       case BleError(:final code, :final message):
-        // 裸平台错误码非键,走直通(原样透出)。
-        lastError = (key: '$code:$message', args: null);
+        // 权限/蓝牙开关错误给可操作文案;其余裸平台错误码仍直通(诊断用)。
+        lastError = switch (code) {
+          'permissionDenied' => (key: 'ble.permissionDenied', args: null),
+          'bluetoothOff' => (key: 'ble.bluetoothOff', args: null),
+          _ => (key: '$code:$message', args: null),
+        };
       case BleStateChanged() || BleDeviceFound():
         break;
     }

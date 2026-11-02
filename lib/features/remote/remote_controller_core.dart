@@ -175,6 +175,11 @@ mixin _RemoteCore on ChangeNotifier {
   /// 按住中(释放档为连续):期间随就绪链发,抬起 [captureReleased] 终止。
   bool _burstLatched = false;
 
+  /// 屏上快门是否仍处于「按住」态(B 门曝光中/连拍括持中)。
+  /// 页面退后台或离场时必须主动 [captureReleased] —— 指针取消沿不保证
+  /// 送达,漏掉收口会把相机留在开曝光状态。
+  bool get shutterHoldActive => _openShutterHeld || _burstLatched;
+
   /// 连拍括持已开(0x90C2 remote + burstNumber 65535)。
   bool _burstBracketHeld = false;
   int _burstRun = 0;

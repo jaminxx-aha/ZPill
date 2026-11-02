@@ -104,6 +104,7 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private var pendingPermission: (() -> Unit)? = null
+    private var pendingPermissionResult: MethodChannel.Result? = null
     private var permissionListener: PluginRegistry.RequestPermissionsResultListener? = null
 
     // 扫描
@@ -386,7 +387,9 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
                 } else {
                     permissionListener = null
                     val pending = pendingPermission
+                    val pendingResult = pendingPermissionResult
                     pendingPermission = null
+                    pendingPermissionResult = null
                     if (pending != null) {
                         val granted = blePermissions().all {
                             context?.checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED
@@ -400,6 +403,11 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
                                     "type" to "error", "code" to "permissionDenied",
                                     "message" to "蓝牙权限未授权", "uuid" to "",
                                 )
+                            )
+                            // 必须把等待中的 MethodChannel 调用收口:只发事件
+                            // 会让 scan 的 Future 永久悬挂、面板 _scanning 卡死。
+                            pendingResult?.error(
+                                "permissionDenied", "蓝牙权限未授权", null
                             )
                         }
                     }
@@ -419,6 +427,11 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
     override fun onDetachedFromActivity() {
         activity = null
         permissionListener = null
+        // Activity 分离时若还有权限请求在等:收口 MethodChannel,别让
+        // Dart 侧 scan Future 永久悬挂。
+        pendingPermission = null
+        pendingPermissionResult?.error("permissionDenied", "Activity 已分离", null)
+        pendingPermissionResult = null
     }
 
     // ------------------------------------------------------------------
@@ -443,8 +456,10 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
             // Android APK 的通道由本 Android 插件应答,宿主平台面却可能
             // 不同;iOS/ohos 原生面不实现此方法(探针落 null)。
             "platformTag" -> result.success("android")
-            "scan" -> ensurePermissions { startScan(call.argument<Int>("seconds") ?: 10, null, result) }
-            "scanForDeviceId" -> ensurePermissions {
+            "scan" -> ensurePermissions(result) {
+                startScan(call.argument<Int>("seconds") ?: 10, null, result)
+            }
+            "scanForDeviceId" -> ensurePermissions(result) {
                 startScan(
                     call.argument<Int>("seconds") ?: 10,
                     call.argument<Int>("deviceId"),
@@ -460,7 +475,7 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
                 if (uuid.isEmpty()) {
                     result.error("badArgs", "connectPaired 须传设备标识", null)
                 } else {
-                    ensurePermissions { connectPaired(uuid, result) }
+                    ensurePermissions(result) { connectPaired(uuid, result) }
                 }
             }
             "setNotify" -> setNotify(call.arguments as? String ?: "", result)
@@ -475,7 +490,7 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
                 teardownGatt()
                 result.success(null)
             }
-            "bondDevice" -> ensurePermissions {
+            "bondDevice" -> ensurePermissions(result) {
                 bondDevice(
                     call.argument<String>("deviceId") ?: "",
                     call.argument<String>("name") ?: "",
@@ -497,7 +512,10 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
             listOf(Manifest.permission.ACCESS_FINE_LOCATION)
         }
 
-    private fun ensurePermissions(onReady: () -> Unit) {
+    private fun ensurePermissions(
+        result: MethodChannel.Result,
+        onReady: () -> Unit,
+    ) {
         val missing = blePermissions().filter {
             context?.checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED
         }
@@ -514,9 +532,11 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
                     "message" to "蓝牙权限未授权(无 Activity 或请求在途)", "uuid" to "",
                 )
             )
+            result.error("permissionDenied", "蓝牙权限未授权", null)
             return
         }
         pendingPermission = onReady
+        pendingPermissionResult = result
         act.requestPermissions(missing.toTypedArray(), REQUEST_CODE)
     }
 

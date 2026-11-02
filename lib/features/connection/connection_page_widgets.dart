@@ -217,6 +217,7 @@ class _StaScanBodyState extends State<_StaScanBody> {
         final busy = _ConnectionPageState._busyState(controller);
         final (label, dot, busySpin) =
             _ConnectionPageState._ptpStatusPresentation(controller, context);
+        final recovery = widget.page._ptpRecoveryActions(context, controller);
         // 图标坐标恒定(见 _ConnectionPageState._heroTopGap,四方式
         // 同位);四轮裁定「配对信息往上移」:两段列表紧随图标之下,
         // 剩余空间全在底部(内容短则留白,长则区内滚动)。
@@ -236,7 +237,11 @@ class _StaScanBodyState extends State<_StaScanBody> {
                 error: controller.state == CameraLinkState.failed,
               ),
             ),
-            const SizedBox(height: _ConnectionPageState._heroTopGap),
+            SizedBox(
+                height: recovery == null
+                    ? _ConnectionPageState._heroTopGap
+                    : _ConnectionPageState._heroTopGap -
+                        _ConnectionPageState._recoveryRowReserve),
             Center(
               child: _MethodHero(
                 method: ConnectionMethod.sta,
@@ -246,6 +251,13 @@ class _StaScanBodyState extends State<_StaScanBody> {
                 onTap: () => widget.page._heroPressed(controller),
               ),
             ),
+            if (recovery != null) ...[
+              const SizedBox(height: AppSpacing.md),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
+                child: recovery,
+              ),
+            ],
             Flexible(
               child: ListView(
                 shrinkWrap: true,

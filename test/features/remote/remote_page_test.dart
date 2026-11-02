@@ -25,6 +25,7 @@ import 'package:z_pill/features/remote/live_design.dart';
 import 'package:z_pill/features/remote/live_view_overlays.dart';
 import 'package:z_pill/features/remote/monitor_toggles.dart';
 import 'package:z_pill/features/remote/remote_banner.dart';
+import 'package:z_pill/features/remote/remote_action_row.dart';
 import 'package:z_pill/features/remote/remote_controller.dart';
 import 'package:z_pill/features/remote/feed_transform.dart';
 import 'package:z_pill/features/remote/remote_feed_area.dart';
@@ -71,6 +72,8 @@ final class _ScriptTransport implements PtpTransport {
 
   @override
   Stream<PtpEvent> get events => eventCtrl.stream;
+
+  int count(int opcode) => requests.where((r) => r.opcode == opcode).length;
 
   @override
   Future<void> close() async {}
@@ -2871,6 +2874,48 @@ void main() {
         transport.requests
             .where((r) => r.opcode == NikonOperationCode.terminateCapture),
         hasLength(1));
+  });
+
+  testWidgets('B 门按住后指针取消:立即收门,不把相机留在开曝光状态', (tester) async {
+    _portrait(tester);
+    final transport = _ScriptTransport();
+    final conn = FakeConnection();
+    // delay 用真定时器:收门后开门等待环活到下一拍退出,测试可排水。
+    final controller = RemoteController(
+        session: PtpSession(transport: transport),
+        connection: conn,
+        engine: LiveViewEngine(
+            session: PtpSession(transport: transport), delay: _parkedDelay),
+        delay: Future<void>.delayed,
+        aeDelay: _parkedDelay);
+    addTearDown(controller.dispose);
+    _scriptAutoStart(transport);
+    await tester
+        .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
+    await tester.pumpAndSettle();
+
+    controller.paramProps[PtpDevicePropCode.exposureTime] =
+        const PropState(value: 0xFFFFFFFF); // Bulb 哨兵:按住 = 开曝光
+    transport
+      ..ok() // 0x9207 开门
+      ..ok(); // 0x920C 收门
+    final gesture = await tester
+        .startGesture(tester.getCenter(find.byType(CaptureShutterButton)));
+    await tester.pump(const Duration(milliseconds: 150)); // onTapDown 落定
+    expect(transport.count(NikonOperationCode.initiateCaptureRecInMedia), 1,
+        reason: '按下已开门');
+    expect(controller.shutterHoldActive, isTrue);
+
+    // 手指滑出按钮再抬起:TapGestureRecognizer 走 onTapCancel,
+    // 不走 onTapUp —— 这条沿必须同样收门。
+    await gesture.moveBy(const Offset(0, 200));
+    await gesture.up();
+    await tester.pump();
+    expect(transport.count(NikonOperationCode.terminateCapture), 1,
+        reason: '取消沿收门');
+    expect(controller.shutterHoldActive, isFalse);
+    await tester.pump(const Duration(seconds: 1)); // 开门等待环退出
+    await tester.pumpAndSettle();
   });
 
   testWidgets('间隔拍摄:设置面板入口 → 参数底单开始 → 状态行/互锁灰化 → 停止', (tester) async {

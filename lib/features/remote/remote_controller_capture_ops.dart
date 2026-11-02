@@ -583,17 +583,20 @@ mixin _RemoteCaptureOps on _RemoteCore {
       notifyListeners();
       return;
     }
-    if (!liveViewActive) {
+    // 停录不受取景门约束:取景异常时快门是唯一停录入入口,若仍要求
+    // liveViewActive,用户会失去停录手段(只能等取景恢复/断链)。
+    final stopping = recording;
+    if (!stopping && !liveViewActive) {
       error = (key: 'remote.errRecordNeedsViewfinder', args: null);
       notifyListeners();
       return;
     }
-    if (intervalActive) {
+    if (!stopping && intervalActive) {
       notice = (key: 'remote.ivRecYield', args: null);
       notifyListeners();
       return;
     }
-    if (capturing) return;
+    if (!stopping && capturing) return;
     error = null;
     notifyListeners();
     try {

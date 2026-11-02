@@ -141,7 +141,7 @@ export class BlePlugin implements FlutterPlugin, AbilityAware {
     Log.i(TAG, `method=${call.method}`);
     switch (call.method) {
       case 'isAvailable':
-        this.ensureBluetoothPermission(() => {
+        this.ensureBluetoothPermission(result, () => {
           let on = false;
           try {
             on = (bluetooth.getState() as number) === 2; // STATE_ON
@@ -159,12 +159,12 @@ export class BlePlugin implements FlutterPlugin, AbilityAware {
           ? deviceInfo.marketName : deviceInfo.productModel);
         break;
       case 'scan':
-        this.ensureBluetoothPermission(() => {
+        this.ensureBluetoothPermission(result, () => {
           this.startScan(this.argNumber(call, 'seconds') ?? 10, null, result);
         });
         break;
       case 'scanForDeviceId':
-        this.ensureBluetoothPermission(() => {
+        this.ensureBluetoothPermission(result, () => {
           this.startScan(this.argNumber(call, 'seconds') ?? 10,
             this.argNumber(call, 'deviceId'), result);
         });
@@ -174,7 +174,7 @@ export class BlePlugin implements FlutterPlugin, AbilityAware {
         result.success(null);
         break;
       case 'connectPaired':
-        this.ensureBluetoothPermission(() => {
+        this.ensureBluetoothPermission(result, () => {
           this.connectPaired(call.args as string, result);
         });
         break;
@@ -197,7 +197,7 @@ export class BlePlugin implements FlutterPlugin, AbilityAware {
         result.success(null);
         break;
       case 'bondDevice': {
-        this.ensureBluetoothPermission(() => {
+        this.ensureBluetoothPermission(result, () => {
           this.bondDevice(call.argument('deviceId') as string ?? '',
             call.argument('name') as string ?? '',
             call.argument('serial') as string ?? '', result);
@@ -215,7 +215,8 @@ export class BlePlugin implements FlutterPlugin, AbilityAware {
   }
 
   /** ACCESS_BLUETOOTH 为 user_grant:首次扫描/连接/绑定时向系统要一次。 */
-  private ensureBluetoothPermission(onReady: () => void): void {
+  private ensureBluetoothPermission(result: MethodResult,
+    onReady: () => void): void {
     const ctx = this.ability?.context ?? null;
     if (ctx === null) {
       onReady();
@@ -230,6 +231,9 @@ export class BlePlugin implements FlutterPlugin, AbilityAware {
               'type': 'error', 'code': 'permissionDenied',
               'message': '蓝牙权限未授权', 'uuid': '',
             });
+            // 与 Android 同款:必须收口 MethodChannel,否则 scan 的 Future
+            // 永久悬挂,面板扫描态卡死。
+            result.error('permissionDenied', '蓝牙权限未授权', null);
             return;
           }
         }

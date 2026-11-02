@@ -267,7 +267,9 @@ Widget _shutterButton(
   // 按下/按住会被控制器拒并提示)。
   final usable = photo
       ? controller.linkUp && !controller.intervalActive
-      : controller.linkUp && controller.liveViewActive;
+      // 停录永远可用:取景掉线时也要能停(起录门在控制器里单独判)。
+      : controller.linkUp &&
+          (controller.recording || controller.liveViewActive);
   final rec = controller.recording;
   return GestureDetector(
     behavior: HitTestBehavior.opaque,
@@ -282,11 +284,14 @@ Widget _shutterButton(
           }
         : null,
     onTapUp: photo ? (_) => unawaited(controller.captureReleased()) : null,
+    // 手指滑出/系统取消/来电等会让 TapGestureRecognizer 走取消沿而不
+    // 是 onTapUp:不补这一路,B 门会停在开曝光、连拍会跑到上限。
+    onTapCancel: photo ? () => unawaited(controller.captureReleased()) : null,
     onTap: photo
         ? null
         : () {
             if (controller.linkUp &&
-                controller.liveViewActive &&
+                (controller.recording || controller.liveViewActive) &&
                 !controller.capturing) {
               AppHaptics.recordToggle(); // 起/停录确认沿
               unawaited(controller.toggleRecord());

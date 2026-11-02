@@ -60,6 +60,26 @@ class ScanRow {
   DateTime seenAt;
 }
 
+/// 蓝牙宿主不可用态(面板顶部引导卡的数据源):
+/// - [adapterOff]:系统蓝牙关闭;
+/// - [permissionDenied]:未授权蓝牙/附近设备。
+enum BleHostIssue { adapterOff, permissionDenied }
+
+/// 原生 state 事件 → 宿主不可用态(poweredOn 返回 null = 恢复正常)。
+BleHostIssue? bleHostIssueOfState(String state) => switch (state) {
+      'poweredOff' => BleHostIssue.adapterOff,
+      'unauthorized' => BleHostIssue.permissionDenied,
+      _ => null,
+    };
+
+/// 扫描/连接异常 → 宿主不可用态(权限拒绝/蓝牙关闭由原生稳定码给出)。
+BleHostIssue? bleHostIssueOfError(Object error) =>
+    switch (bleErrorCode(error)) {
+      'permissionDenied' => BleHostIssue.permissionDenied,
+      'bluetoothOff' => BleHostIssue.adapterOff,
+      _ => null,
+    };
+
 /// 扫描合并键:广播名归一化(去空格/下划线、小写)。广播名自身不可靠:
 /// ①写法漂移(正常态/配对态空格/下划线不同);②**缩短名截断** —— BLE
 /// 广播包 31B,mfg 数据挤占时名字用缩短名,`Z_f_8014411` 变 `Z_f_`
@@ -114,8 +134,8 @@ List<ScanRow> mergeScanRow(
   }
   final devId = expectedControllerDeviceId(device.mfgData);
   if (devId != null) {
-    final j = current
-        .indexWhere((r) => expectedControllerDeviceId(r.device.mfgData) == devId);
+    final j = current.indexWhere(
+        (r) => expectedControllerDeviceId(r.device.mfgData) == devId);
     if (j >= 0) {
       current[j] = mergedRow(current[j]);
       return current;
@@ -188,6 +208,14 @@ class BlePairPanelState extends State<BlePairPanel>
   BleSessionState _sessionState = BleSessionState.idle;
   BlePairedIdentity? _saved;
 
+  /// 宿主不可用态(蓝牙关闭/权限拒绝):面板顶部出引导卡并暂停自动
+  /// 扫描循环,避免在无权限时每 2s 反复请求系统弹窗。
+  BleHostIssue? _hostIssue;
+
+  /// 宿主不可用沿序号:扫描起飞后若状态又变过一次,本轮正常返回不得
+  /// 清掉新出的引导卡(如 adapterOff 沿恰好落在停止扫描的收口窗内)。
+  int _hostIssueEpoch = 0;
+
   /// 本次配对设备的 BLE 广播名(鸿蒙经典绑定按名匹配用)。
   String _pairedName = '';
   bool _binding = false;
@@ -217,7 +245,13 @@ class BlePairPanelState extends State<BlePairPanel>
     AppServices.instance.suspendBleDriver();
     _sessionState = _session.state;
     _stateSub = _session.states.listen((s) {
-      if (mounted) setState(() => _sessionState = s);
+      if (mounted) {
+        setState(() {
+          _sessionState = s;
+          // 会话已就绪 = 权限/开关问题实际已解决,撤掉引导卡。
+          if (s == BleSessionState.ready) _hostIssue = null;
+        });
+      }
       _syncScanOwnership(); // 态变即重算扫描权(idle 面板持有,余态让位)
       // ready 沿驱动接管(2026-10-21 实证:面板在非 ready 态打开 = 挂
       // 起,会话其后连上时挂起无人解除 → 注入层冻死、GPS 零写入;
@@ -367,6 +401,12 @@ class BlePairPanelState extends State<BlePairPanel>
         _sessionState == BleSessionState.pairing) {
       return;
     }
+    // 回前台/宿主恢复:即便扫描权已持有也重探一轮 —— 用户可能刚去
+    // 系统设置开了蓝牙/权限,面板不能停在引导卡上不动。
+    if (_hostIssue != null && _panelScanHeld && !_scanning) {
+      unawaited(_startScan());
+      return;
+    }
     _syncScanOwnership();
   }
 
@@ -374,6 +414,20 @@ class BlePairPanelState extends State<BlePairPanel>
     switch (event) {
       case BleStateChanged(:final state):
         _log('蓝牙态:$state');
+        if (!mounted) break;
+        if (state == 'poweredOn') {
+          if (_hostIssue != null) setState(() => _hostIssue = null);
+          // 从设置页开蓝牙回来后:原来的停止扫描可能还在收口,finally
+          // 会按 _hostIssue == null 续上下一个扫描窗;已停稳则直接起扫。
+          if (_panelScanHeld && !_scanning) {
+            unawaited(_startScan());
+          } else {
+            _syncScanOwnership();
+          }
+        } else {
+          final issue = bleHostIssueOfState(state);
+          if (issue != null) _setHostIssue(issue);
+        }
       case BleDeviceFound(:final device):
         // 实时列示:原生每发现一台就推,不等扫描窗收口(30s 全窗太久,
         // 用户对着空列表干等)。原生侧已过尼康过滤,事件即有效命中。
@@ -399,12 +453,18 @@ class BlePairPanelState extends State<BlePairPanel>
       case BleNotified(:final uuid, :final data):
         // iOS 对 SIG 采纳 16 位 UUID 回 4 字符短串,裸 substring(4,8) 会
         // RangeError 炸断事件链(2026-10-19 真机实证)。
-        AppLog.d(AppLog.ble,
+        AppLog.d(
+            AppLog.ble,
             '← ${uuid.length <= 8 ? uuid : uuid.substring(4, 8)} '
             '${bleNotificationLogPayload(uuid, data)}');
       case BleError(:final code, :final message, :final uuid):
-        AppLog.w(AppLog.ble,
-            '错误 $code${uuid == null ? '' : ' @$uuid'}:$message');
+        AppLog.w(
+            AppLog.ble, '错误 $code${uuid == null ? '' : ' @$uuid'}:$message');
+        // 驱动侧重连也会撞权限/蓝牙开关错:事件沿同样出引导卡,不能
+        // 只在面板自己的扫描异常里处理。
+        final issue = bleHostIssueOfError(
+            PlatformException(code: code, message: message));
+        if (issue != null) _setHostIssue(issue);
     }
   }
 
@@ -429,6 +489,71 @@ class BlePairPanelState extends State<BlePairPanel>
       ..addAll(alive));
   }
 
+  /// 宿主不可用引导卡。Android/iOS 的蓝牙关闭态可深链系统设置;ohos
+  /// 无此通道,按钮退化为「重新检测」,不摆一个点了没反应的入口。
+  Widget _hostIssueCard(BuildContext context) {
+    final issue = _hostIssue!;
+    final adapterOff = issue == BleHostIssue.adapterOff;
+    final canOpenSettings =
+        adapterOff && (Platform.isAndroid || Platform.isIOS);
+    final actionKey = !adapterOff
+        ? 'ble.retryPermission'
+        : canOpenSettings
+            ? 'ble.openSystemBluetooth'
+            : 'common.retry';
+    return ConnGuideCard(
+      title: context.t(adapterOff ? 'ble.hostOffTitle' : 'ble.permissionTitle'),
+      steps: [
+        context.t(adapterOff ? 'ble.hostOffBody' : 'ble.permissionBody'),
+      ],
+      children: [
+        const SizedBox(height: AppSpacing.sm),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: FilledButton.tonalIcon(
+            key: const ValueKey('ble_host_issue_action'),
+            onPressed: canOpenSettings
+                ? () => unawaited(_openBluetoothSettings())
+                : _retryHostIssue,
+            icon: Icon(
+                canOpenSettings ? Icons.settings_bluetooth : Icons.refresh,
+                size: 18),
+            label: Text(context.t(actionKey)),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// 宿主不可用:出引导卡 + 停掉扫描循环(不再定时重试,避免反复
+  /// 触发系统权限弹窗;恢复由用户点按或 state=poweredOn 沿驱动)。
+  void _setHostIssue(BleHostIssue issue) {
+    if (!mounted) return;
+    _hostIssueEpoch++;
+    if (_hostIssue != issue) setState(() => _hostIssue = issue);
+    _scanCycleTimer?.cancel();
+    if (_scanning) unawaited(_session.stopScan());
+  }
+
+  /// 权限被拒后用户点「重新授权」:清卡再走一次扫描(原生会重新请求;
+  /// 若已被永久拒绝,系统不再弹窗,原错误会让卡重新出现)。
+  void _retryHostIssue() {
+    if (!mounted) return;
+    setState(() => _hostIssue = null);
+    // 正在跑的扫描会自行收口;失败会重新置卡,不在这里并发起第二窗。
+    if (_panelScanHeld && !_scanning) unawaited(_startScan());
+  }
+
+  /// 蓝牙关闭引导卡的「打开系统蓝牙设置」(Android/iOS 深链;ohos 无
+  /// 此方法时静默,用户按文案手动进设置)。
+  Future<void> _openBluetoothSettings() async {
+    try {
+      await _bleChannel.invokeMethod<bool>('openBluetoothSettings');
+    } on Exception {
+      // 深链失败静默:文案已给出系统设置路径
+    }
+  }
+
   Future<void> _startScan() async {
     if (_scanning ||
         _sessionState == BleSessionState.pairing ||
@@ -443,6 +568,8 @@ class BlePairPanelState extends State<BlePairPanel>
     // _panelScanActive,驱动让位,收口沿归还并续跑。
     _cancelRetry();
     AppServices.instance.setPanelScanActive(true);
+    final issueAtStart = _hostIssue;
+    final issueEpochAtStart = _hostIssueEpoch;
     setState(() {
       _scanning = true;
       // 不清列表(2026-10-21):每窗清空 = 窗切换闪烁(设备出现-消失-
@@ -452,6 +579,13 @@ class BlePairPanelState extends State<BlePairPanel>
       final devices = await _session.scanForPairing();
       _log('扫描结束:${devices.length} 台');
       if (!mounted) return;
+      // 本轮期间被判定宿主不可用(适配器关闭/权限拒绝)时,停止扫描
+      // 的正常返回不能把刚出的引导卡清掉。
+      if (issueAtStart != null &&
+          _hostIssue == issueAtStart &&
+          _hostIssueEpoch == issueEpochAtStart) {
+        setState(() => _hostIssue = null);
+      }
       // 收口表同样过行合并:原生按地址收集,相机一轮配对换一次 RPA,窗
       // 内多轮配对(用户实测:配对→返回→再配对)会让收口表自身带重复,
       // 直接替换会把实时侧合并好的列表整个覆盖回去(2026-10-21 二次实
@@ -465,12 +599,16 @@ class BlePairPanelState extends State<BlePairPanel>
       });
     } on Exception catch (e) {
       _log('扫描失败:$e');
+      final issue = bleHostIssueOfError(e);
+      if (issue != null) _setHostIssue(issue);
     } finally {
       if (mounted) setState(() => _scanning = false);
       // 持续扫描循环:面板持有期间窗与窗之间留 2s 空隙(<5s TTL,行不
       // 会因窗间静默被剪)。_panelScanActive 横跨整段持有期恒真(驱动
       // 让位),释放只在所有权变更(_syncScanOwnership !want)与 dispose。
-      if (mounted && _panelScanHeld) {
+      // 宿主不可用期间不续扫:等用户点按或 poweredOn 沿,免得每 2s
+      // 反复触发系统权限弹窗。
+      if (mounted && _panelScanHeld && _hostIssue == null) {
         _scanCycleTimer?.cancel();
         _scanCycleTimer = Timer(const Duration(seconds: 2), () {
           if (mounted && _panelScanHeld) unawaited(_startScan());
@@ -529,8 +667,7 @@ class BlePairPanelState extends State<BlePairPanel>
       await _session.disconnect();
       String? outcome;
       try {
-        outcome = await _bleChannel.invokeMethod<String>(
-            'showAccessoryPicker');
+        outcome = await _bleChannel.invokeMethod<String>('showAccessoryPicker');
       } on Exception catch (e) {
         _log('配件选择器调用失败:$e');
       }
@@ -642,7 +779,8 @@ class BlePairPanelState extends State<BlePairPanel>
     await done.future;
   }
 
-  Future<void> _resume({bool gateStandby = true, bool autoRearm = false}) async {
+  Future<void> _resume(
+      {bool gateStandby = true, bool autoRearm = false}) async {
     if (_retryActive) return;
     _retryActive = true;
     final gen = _retryGen;
@@ -846,15 +984,13 @@ class BlePairPanelState extends State<BlePairPanel>
   ScanRow? _pairedScanRow() {
     final own = _ownDeviceId;
     for (final r in _scanRows) {
-      if (own != null &&
-          expectedControllerDeviceId(r.device.mfgData) == own) {
+      if (own != null && expectedControllerDeviceId(r.device.mfgData) == own) {
         return r;
       }
     }
     final name = _saved?.cameraName;
     if (name == null || name.isEmpty) return null;
-    final key =
-        'n:${name.replaceAll(RegExp(r'[\s_]+'), '').toLowerCase()}';
+    final key = 'n:${name.replaceAll(RegExp(r'[\s_]+'), '').toLowerCase()}';
     for (final r in _scanRows) {
       if (_scanMergeKey(r.device) == key) return r;
     }
@@ -901,8 +1037,7 @@ class BlePairPanelState extends State<BlePairPanel>
       width: 8,
       height: 8,
       decoration: BoxDecoration(
-        color:
-            standby ? AppColors.accentYellow : AppColors.success(context),
+        color: standby ? AppColors.accentYellow : AppColors.success(context),
         shape: BoxShape.circle,
       ),
     );
@@ -917,9 +1052,7 @@ class BlePairPanelState extends State<BlePairPanel>
       enabled: _sessionState == BleSessionState.idle ||
           _sessionState == BleSessionState.reconnecting,
       leading: const Icon(Icons.camera_alt_outlined),
-      title: Text(device.name.isEmpty
-          ? context.t('ble.unnamed')
-          : device.name),
+      title: Text(device.name.isEmpty ? context.t('ble.unnamed') : device.name),
       trailing: _powerStateDot(context, device),
       onTap: () => unawaited(_pair(device)),
     );
@@ -936,6 +1069,12 @@ class BlePairPanelState extends State<BlePairPanel>
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        // 宿主不可用(蓝牙关闭/权限拒绝):空列表不是「没找到相机」,
+        // 先给能操作的出路,再谈扫描。
+        if (_hostIssue != null) ...[
+          _hostIssueCard(context),
+          const SizedBox(height: AppSpacing.md),
+        ],
         // 已配对组:未就绪 = 档案行(解除配对/连接);就绪 = 档案行 +
         // 断开(显式断开 = 用户意图保持断开:置 manualOff 压制一切自动
         // 回链,显式「连接」/重新配对沿解除);无档 = 空态。十二轮:
@@ -1015,8 +1154,7 @@ class BlePairPanelState extends State<BlePairPanel>
                         icon: const Icon(Icons.link_off, size: 20),
                         tooltip: context.t('ble.unpair'),
                         color: theme.colorScheme.onSurfaceVariant,
-                        onPressed: () =>
-                            unawaited(_confirmUnpair(context)),
+                        onPressed: () => unawaited(_confirmUnpair(context)),
                       ),
                     if (_sessionState == BleSessionState.pairing ||
                         _sessionState == BleSessionState.reconnecting)
@@ -1029,12 +1167,11 @@ class BlePairPanelState extends State<BlePairPanel>
                           padding: const EdgeInsets.symmetric(
                               horizontal: AppSpacing.sm),
                           child: Text(
-                            context.t(
-                                _sessionState == BleSessionState.pairing
-                                    ? 'ble.handshaking'
-                                    : 'ble.reconnecting'),
-                            style: theme.textTheme.labelLarge?.copyWith(
-                                color: theme.colorScheme.primary),
+                            context.t(_sessionState == BleSessionState.pairing
+                                ? 'ble.handshaking'
+                                : 'ble.reconnecting'),
+                            style: theme.textTheme.labelLarge
+                                ?.copyWith(color: theme.colorScheme.primary),
                           ),
                         ),
                       )

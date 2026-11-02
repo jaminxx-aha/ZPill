@@ -947,6 +947,24 @@ void main() {
       expect(conn.disconnectCalls, 1, reason: '在途点图标 = 取消连接');
     });
 
+    testWidgets('failed 态给可见的「重试/换方式」:重试重放上次连接入口,不再让用户找无文字图标', (tester) async {
+      final conn = FakeConnection();
+      final controller = ConnectionController(connection: conn);
+      await controller.connect(); // 落 _lastAttempt(1 次)
+      await tester.pumpWidget(
+          MaterialApp(home: ConnectionPage(controller: controller)));
+
+      conn.statesCtrl.add(CameraLinkState.failed);
+      await tester.pump();
+
+      expect(find.text('重试'), findsOneWidget, reason: '失败态显式重试钮');
+      expect(find.text('换方式'), findsOneWidget, reason: '失败态换方式入口');
+
+      await tester.tap(find.byKey(const ValueKey('conn_retry_failed')));
+      await tester.pump();
+      expect(conn.connectCalls, 2, reason: '重试重放上次 connect 入口');
+    });
+
     testWidgets(
         'reconnecting 态:状态行「正在重连…」+ 错误位动态文案 + '
         '点图标取消', (tester) async {

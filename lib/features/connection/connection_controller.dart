@@ -707,6 +707,10 @@ class ConnectionController extends ChangeNotifier {
     _lastAttempt?.call();
   }
 
+  /// 是否已有可重放的上次尝试(failed 态「重试」钮据此决定走
+  /// [retry] 还是回到 hero 的首次连接路径)。
+  bool get canRetry => _lastAttempt != null;
+
   Future<void> confirmPairing() async {
     await connection?.confirmPairing();
   }

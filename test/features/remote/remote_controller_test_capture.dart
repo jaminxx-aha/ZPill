@@ -862,6 +862,27 @@ void _captureGroups() {
             isEmpty);
       });
 
+      test('取景掉线时停录仍允许:停录不受 liveViewActive 门约束', () async {
+        // 先经事件进入录制态(等价机身自启/取景正常时起录),再模拟取景
+        // 已停:停录是唯一逃生口,不能要求 liveViewActive。
+        transport.eventCtrl.add(const PtpEvent(
+            code: NikonEventCode.movieRecordStarted,
+            transactionId: 0xFFFFFFFF));
+        await pumpEventQueue();
+        expect(controller.recording, isTrue);
+        expect(controller.liveViewActive, isFalse);
+
+        transport.ok(); // 0x920B
+        await controller.toggleRecord();
+        expect(controller.recording, isFalse);
+        expect(
+            transport.requests
+                .where((r) => r.opcode == NikonOperationCode.endMovieRec),
+            hasLength(1),
+            reason: '取景不在跑也必须能停录');
+        expect(controller.error, isNull);
+      });
+
       test('帧头录制态同步(@828):机身自启录制对齐;停止帧复位', () async {
         controller.engine.header.value =
             parseLiveViewHeader(_minimalHeaderFrame(recording: true));

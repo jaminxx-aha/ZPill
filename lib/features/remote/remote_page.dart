@@ -272,6 +272,11 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     }
     // 离页只挂起轮询(取景生命周期跟连接走,不因拆页发 0x9202)。
     // 方向收口走 PopScope(pop 起点即发,不等 dispose);此处不动锁。
+    // 按住快门离场(返回/被系统拆页):指针取消沿不保证送达,主动收门
+    // —— B 门不能停在开曝光、连拍不能跑满上限。
+    if (controller.shutterHoldActive) {
+      unawaited(controller.captureReleased());
+    }
     controller.setViewerVisible(false);
     super.dispose();
   }
@@ -513,6 +518,11 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     // 退后台/回前台:挂起/恢复帧轮询(相机侧取景保持 —— 取景生命周期
     // 跟连接走;后台不保活的是 iOS/ohos 的传输面,不再给相机发 0x9202)。
     if (state == AppLifecycleState.paused) {
+      // 退后台先收口屏上快门(B 门/连拍按住态):系统可能直接掐掉
+      // 指针事件,只停轮询会留下开曝光或跑满上限。
+      if (controller.shutterHoldActive) {
+        unawaited(controller.captureReleased());
+      }
       controller.setViewerVisible(false);
     }
     if (state == AppLifecycleState.resumed) {
