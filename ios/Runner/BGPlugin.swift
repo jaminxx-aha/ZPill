@@ -36,6 +36,11 @@ public final class BGPlugin: NSObject, FlutterPlugin {
     case "stop":
       end()
       result(nil)
+    case "setScreenAwake":
+      let args = call.arguments as? [String: Any]
+      let enabled = args?["enabled"] as? Bool ?? false
+      UIApplication.shared.isIdleTimerDisabled = enabled
+      result(nil)
     default:
       result(FlutterMethodNotImplemented)
     }

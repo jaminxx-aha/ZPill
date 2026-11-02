@@ -32,6 +32,8 @@ const Map<String, String> enCatalog = {
   'settings.theme': 'Theme',
   'settings.fontSize': 'Text size',
   'settings.fontSizeSubtitle': 'Follow system · capture params cap 1.3x',
+  'settings.persistFailed':
+      'Settings could not be saved on this device and may revert after restart. Tap Retry.',
   'settings.monitorDefaults': 'Monitor defaults',
   'settings.monitorDefaultsSubtitle': 'Live view / grid / histogram / peaking',
   'settings.backgroundTransfer': 'Background transfer',
@@ -754,6 +756,10 @@ const Map<String, String> enCatalog = {
   'remote.ivStopped': 'Interval shooting stopped: {n} succeeded, {f} failed',
   'remote.ivShutterYield':
       'Interval shooting is running and the shutter is disabled; stop interval shooting to shoot manually',
+  'remote.leaveBusyTitle': 'Shooting is still running',
+  'remote.leaveBusyBody':
+      'Recording or interval shooting is still running. Stop it before leaving the shooting page?',
+  'remote.leaveBusyConfirm': 'Stop and Leave',
   'remote.ivRecYield':
       'Cannot start recording while interval shooting is running; stop interval shooting first',
   'remote.autoIsoFailDial':
@@ -925,6 +931,17 @@ const Map<String, String> enCatalog = {
   'libpage.savedToAlbum': 'Saved to the system album',
   'libpage.decodeFailed': 'Decode failed (this platform may not support it)',
   'transfers.clearHistory': 'Clear History',
+  'transfers.clearHistoryConfirmTitle': 'Clear transfer history?',
+  'transfers.clearHistoryConfirmBody':
+      'Only history records are deleted; downloaded files are not affected.',
+  'transfers.cancelAll': 'Cancel All',
+  'transfers.cancelAllConfirmTitle': 'Cancel all transfers?',
+  'transfers.cancelAllConfirmBody':
+      'All queued and running downloads will be cancelled; completed files are not affected.',
+  'transfers.needsAttention': 'Needs Attention',
+  'transfers.redownload': 'Download Again',
+  'transfers.retryUnavailable':
+      'This history entry has no camera object to re-download; select it again in the camera album.',
   'transfers.empty':
       'No transfer tasks yet\n(select multiple in the camera album, or download single items from the photo viewer)',
   'transfers.queued': 'Queued',

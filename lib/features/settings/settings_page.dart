@@ -11,12 +11,14 @@ import 'package:flutter/material.dart';
 
 import '../../app_services.dart';
 import '../../core/browser/photo_group.dart';
+import '../../core/log/app_log.dart';
 import '../../core/media/watermark.dart';
 import '../../data/settings_store.dart';
 import '../../design/app_colors.dart';
 import '../../design/app_dimens.dart';
 import '../../l10n/l10n.dart';
 import '../../platform/services.dart';
+import '../common/widgets/states.dart' show InlineHint;
 import 'log_section.dart' show buildLogSection;
 import 'settings_widgets.dart';
 import 'snapshot_controller.dart' show buildSnapshotSection;
@@ -40,6 +42,16 @@ class SettingsController extends ChangeNotifier
   AppSettings get value => settings;
 
   StreamSubscription<AppSettings>? _sub;
+
+  /// 待落盘快照(单槽latest-wins):滑杆连续拖动只保留最后一版,
+  /// 写盘串行,旧值晚到不会覆盖新值。
+  AppSettings? _pendingPersist;
+  bool _persistWriting = false;
+  bool _persistFailed = false;
+  bool _disposed = false;
+
+  /// 最近一次写盘是否失败(设置页顶部出可重试提示)。
+  bool get persistFailed => _persistFailed;
 
   Future<void> _load() async {
     try {
@@ -106,15 +118,47 @@ class SettingsController extends ChangeNotifier
   Future<void> _update(AppSettings next) async {
     settings = next;
     notifyListeners();
+    _pendingPersist = next;
+    await _drainPersist();
+  }
+
+  /// 写盘串行 + 单槽合并:同一时刻只有一个 store.update 在途,期间
+  /// 新的设置只覆盖待写快照;失败置 [persistFailed],由设置页顶部
+  /// 提示重试(不再静默吞掉)。
+  Future<void> _drainPersist() async {
+    if (_persistWriting) return;
+    _persistWriting = true;
     try {
-      await store.update(next);
-    } on Object {
-      // 持久化失败:本次会话内设置仍生效
+      while (_pendingPersist != null) {
+        final next = _pendingPersist!;
+        _pendingPersist = null;
+        try {
+          await store.update(next);
+          if (_persistFailed) {
+            _persistFailed = false;
+            if (!_disposed) notifyListeners();
+          }
+        } on Object catch (e) {
+          _persistFailed = true;
+          AppLog.e(AppLog.system, '设置持久化失败:$e');
+          if (!_disposed) notifyListeners();
+        }
+      }
+    } finally {
+      _persistWriting = false;
     }
+  }
+
+  /// 用户点「重试」:把当前设置重新排队落盘。
+  Future<void> retryPersist() async {
+    if (!_persistFailed) return;
+    _pendingPersist = settings;
+    await _drainPersist();
   }
 
   @override
   void dispose() {
+    _disposed = true;
     unawaited(_sub?.cancel());
     super.dispose();
   }
@@ -246,6 +290,12 @@ class _SettingsPageState extends State<SettingsPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                if (controller.persistFailed)
+                  InlineHint(
+                    message: const (key: 'settings.persistFailed', args: null),
+                    actionLabel: context.t('common.retry'),
+                    onAction: () => unawaited(controller.retryPersist()),
+                  ),
                 _captureSection(context, controller),
                 _transferSection(context, controller),
                 _appearanceSection(context, controller),

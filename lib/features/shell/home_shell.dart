@@ -26,6 +26,7 @@ library;
 import 'package:flutter/material.dart';
 
 import '../../app_services.dart';
+import '../../design/app_colors.dart';
 import '../../l10n/l10n.dart';
 import '../connection/connection_controller.dart';
 import '../connection/connection_page.dart';
@@ -62,11 +63,15 @@ const _tabs = <({IconData icon, IconData selectedIcon, String label})>[
 
 class HomeShell extends StatefulWidget {
   const HomeShell(
-      {super.key, this.connectionController, this.remoteController});
+      {super.key,
+      this.connectionController,
+      this.remoteController,
+      this.transfersController});
 
   /// 注入覆盖(测试);缺省取 AppServices 单例。
   final ConnectionController? connectionController;
   final RemoteController? remoteController;
+  final TransfersController? transfersController;
 
   @override
   State<HomeShell> createState() => _HomeShellState();
@@ -78,11 +83,19 @@ class _HomeShellState extends State<HomeShell> {
   final PageController _pages = PageController();
 
   RemoteController? _remote;
+  late final TransfersController _transfers;
+
+  /// 传输徽标缓存:进度沿 100ms 一条,只数字变化才重建外壳。
+  (int, bool) _transferBadge = (0, false);
 
   @override
   void initState() {
     super.initState();
     _remote = widget.remoteController ?? AppServices.instance.remoteController;
+    _transfers =
+        widget.transfersController ?? AppServices.instance.transfersController;
+    _transferBadge = _computeTransferPending();
+    _transfers.addListener(_onTransfersChanged);
     // 拍摄页不再常驻 tab:未 push 挂载即不可见(原 tab 模式由
     // RemotePage(active:false) initState 汇报)。push 进页/返回由页面
     // 自身翻转;本句管住「停在相机页期间不流 USB 帧」(相机侧取景照
@@ -93,8 +106,47 @@ class _HomeShellState extends State<HomeShell> {
 
   @override
   void dispose() {
+    _transfers.removeListener(_onTransfersChanged);
     _pages.dispose();
     super.dispose();
+  }
+
+  void _onTransfersChanged() {
+    final next = _computeTransferPending();
+    if (next == _transferBadge) return; // 进度沿不重建外壳
+    _transferBadge = next;
+    if (mounted) setState(() {});
+  }
+
+  /// 传输 tab 徽标数:进行中 + 需处理(失败/未导入)。没有任务时不出
+  /// 徽标 —— 进度不打扰,但有活/有错必须让用户看见。
+  (int, bool) _computeTransferPending() {
+    var active = 0;
+    var issues = 0;
+    for (final t in _transfers.tasks) {
+      if (!t.isTerminal) {
+        active++;
+      } else if (t.needsAttention) {
+        issues++;
+      }
+    }
+    return (active + issues, issues > 0);
+  }
+
+  Widget _tabIcon(BuildContext context,
+      ({IconData icon, IconData selectedIcon, String label}) t,
+      int index, bool selected) {
+    final icon = Icon(selected ? t.selectedIcon : t.icon);
+    if (index != 2) return icon;
+    final (count, hasIssue) = _transferBadge;
+    final scheme = Theme.of(context).colorScheme;
+    return Badge(
+      isLabelVisible: count > 0,
+      backgroundColor: hasIssue ? scheme.error : AppColors.accentYellow,
+      textColor: hasIssue ? scheme.onError : AppColors.onBrandYellow,
+      label: Text('$count'),
+      child: icon,
+    );
   }
 
   /// 底栏/侧栏点选:高亮即时,内容 jump 即切(IndexedStack 时代手感;
@@ -132,10 +184,10 @@ class _HomeShellState extends State<HomeShell> {
                   onDestinationSelected: _select,
                   labelType: NavigationRailLabelType.all,
                   destinations: [
-                    for (final t in _tabs)
+                    for (final (i, t) in _tabs.indexed)
                       NavigationRailDestination(
-                        icon: Icon(t.icon),
-                        selectedIcon: Icon(t.selectedIcon),
+                        icon: _tabIcon(context, t, i, false),
+                        selectedIcon: _tabIcon(context, t, i, true),
                         label: Text(context.t(t.label)),
                       ),
                   ],
@@ -180,10 +232,10 @@ class _HomeShellState extends State<HomeShell> {
               selectedIndex: _index,
               onDestinationSelected: _select,
               destinations: [
-                for (final t in _tabs)
+                for (final (i, t) in _tabs.indexed)
                   NavigationDestination(
-                    icon: Icon(t.icon),
-                    selectedIcon: Icon(t.selectedIcon),
+                    icon: _tabIcon(context, t, i, false),
+                    selectedIcon: _tabIcon(context, t, i, true),
                     label: context.t(t.label),
                   ),
               ],

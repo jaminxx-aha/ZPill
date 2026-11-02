@@ -8,12 +8,15 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 
 import 'package:z_pill/app_services.dart';
+import 'package:z_pill/core/browser/object_entry.dart';
 import 'package:z_pill/core/camera/camera_connection.dart';
 import 'package:z_pill/core/ptp/device_prop.dart';
 import 'package:z_pill/core/ptp/operation_codes.dart';
 import 'package:z_pill/core/ptp/ptp_session.dart';
 import 'package:z_pill/core/ptp/ptp_transport.dart';
 import 'package:z_pill/core/remote/live_view_engine.dart';
+import 'package:z_pill/core/transfer/transfer_engine.dart';
+import 'package:z_pill/core/transfer/transfer_task.dart';
 import 'package:z_pill/core/utils/byte_writer.dart';
 import 'package:z_pill/design/app_theme.dart';
 import 'package:z_pill/features/connection/connection_controller.dart';
@@ -22,6 +25,7 @@ import 'package:z_pill/features/remote/remote_page.dart';
 import 'package:z_pill/features/remote/shooting_param_catalog.dart';
 import 'package:z_pill/features/settings/settings_page.dart';
 import 'package:z_pill/features/shell/home_shell.dart';
+import 'package:z_pill/features/transfers/transfers_page.dart';
 import 'package:z_pill/platform/gallery_saver.dart';
 import '../../helpers/fake_connection.dart';
 
@@ -305,6 +309,27 @@ _Fakes _fakes() {
     connCtrl: connCtrl,
     remote: remote,
   );
+}
+
+/// 徽标用伪传输引擎:任务快照由测试推。
+final class _BadgeEngine implements TransferEngine {
+  final ctrl = StreamController<List<TransferTask>>.broadcast(sync: true);
+
+  @override
+  Stream<List<TransferTask>> get tasks => ctrl.stream;
+
+  @override
+  Future<void> enqueue(Iterable<ObjectEntry> entries,
+      {required TransferDestination destination}) async {}
+
+  @override
+  Future<void> cancel(String taskId) async {}
+
+  @override
+  Future<void> clearHistory() async {}
+
+  @override
+  Future<void> removeRecord(String taskId) async {}
 }
 
 void main() {
@@ -609,6 +634,53 @@ void main() {
             .selectedIndex,
         1,
         reason: 'rail 切台照常');
+  });
+
+  testWidgets('传输 tab 徽标:进行中 + 需处理计数,空表不显示', (tester) async {
+    tester.view
+      ..physicalSize = const Size(800, 2400)
+      ..devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    final engine = _BadgeEngine();
+    final controller = TransfersController(
+        engine: engine, gallery: AppServices.instance.transfersController.gallery);
+    addTearDown(controller.dispose);
+
+    await pumpShell(tester,
+        MaterialApp(home: HomeShell(transfersController: controller)));
+    expect(tester.widget<Badge>(find.byType(Badge)).isLabelVisible, isFalse,
+        reason: '空任务不出徽标');
+
+    engine.ctrl.add([
+      TransferTask(
+          id: 't1',
+          handle: 1,
+          filename: 'RUN.JPG',
+          totalBytes: 100,
+          destination: TransferDestination.app,
+          state: TransferState.running,
+          receivedBytes: 10),
+      TransferTask(
+          id: 't2',
+          handle: 2,
+          filename: 'FAIL.JPG',
+          totalBytes: 100,
+          destination: TransferDestination.app,
+          state: TransferState.failed),
+      TransferTask(
+          id: 't3',
+          handle: 3,
+          filename: 'DONE.JPG',
+          totalBytes: 100,
+          destination: TransferDestination.app,
+          state: TransferState.completed),
+    ]);
+    await tester.pump();
+    expect(
+        find.descendant(
+            of: find.byType(NavigationBar), matching: find.text('2')),
+        findsOneWidget,
+        reason: '进行中 1 + 失败 1;已完成不计');
   });
 
   testWidgets('竖屏底栏样式闸:胶囊撤除、选中直充 secondary', (tester) async {

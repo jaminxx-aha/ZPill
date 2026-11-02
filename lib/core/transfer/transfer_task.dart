@@ -75,6 +75,14 @@ final class TransferTask {
       state == TransferState.failed ||
       state == TransferState.cancelled;
 
+  /// 需要用户处理:下载失败,或已下载但未导入系统相册(绿色对勾会让
+  /// 人误以为已入库,必须单独标成问题态)。
+  bool get needsAttention =>
+      state == TransferState.failed ||
+      (state == TransferState.completed &&
+          destination == TransferDestination.gallery &&
+          galleryUri == null);
+
   double? get progress =>
       totalBytes <= 0 ? null : (receivedBytes / totalBytes).clamp(0.0, 1.0);
 

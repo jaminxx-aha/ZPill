@@ -21,6 +21,7 @@ import '../../design/app_dimens.dart';
 import '../../l10n/l10n.dart';
 import '../../platform/gallery_saver.dart';
 import '../common/format.dart';
+import '../common/widgets/confirm_dialog.dart';
 import '../common/widgets/states.dart';
 
 final class TransfersController extends ChangeNotifier {
@@ -58,6 +59,28 @@ final class TransfersController extends ChangeNotifier {
       _speeds[task.id]?.etaFor(task.totalBytes - task.receivedBytes);
 
   Future<void> cancel(String taskId) => engine.cancel(taskId);
+
+  /// 失败/未导入任务能否重下(进程内批次仍持有原始对象;历史恢复的
+  /// 任务为 false)。
+  bool canRetry(String taskId) {
+    final e = engine;
+    if (e is! TransferRetry) return false;
+    return (e as TransferRetry).canRetry(taskId);
+  }
+
+  /// 重下并重新走目的地流程(失败重试 / 未导入重新下载导入)。
+  Future<bool> retry(String taskId) async {
+    final e = engine;
+    if (e is! TransferRetry) return false;
+    return (e as TransferRetry).retry(taskId);
+  }
+
+  /// 取消全部进行中任务(队列/下载/后处理旗标;后处理不可中断)。
+  Future<void> cancelAll() async {
+    for (final task in tasks) {
+      if (!task.isTerminal) await engine.cancel(task.id);
+    }
+  }
 
   /// 左滑单独删除一条历史记录(引擎侧仅终态响应)。
   Future<void> removeRecord(String taskId) => engine.removeRecord(taskId);
@@ -155,15 +178,8 @@ String _filterLabel(BuildContext context, _TransferFilter filter) =>
       _TransferFilter.active =>
         context.t('transfers.processing').replaceAll('…', '').trim(),
       _TransferFilter.completed => context.t('common.done'),
-      _TransferFilter.failed =>
-        _statusWord(context.t('transfers.failedRetries', {'e': '', 'n': ''})),
+      _TransferFilter.failed => context.t('transfers.needsAttention'),
     };
-
-/// 从「失败:{e}(重试 {n} 次)」类模板裁出冒号前的状态词(中英同构)。
-String _statusWord(String text) {
-  final index = text.indexOf(RegExp('[:：]'));
-  return index > 0 ? text.substring(0, index) : text;
-}
 
 /// 视频件(行图标按类型区分;MOV/MP4 为相机视频容器)。
 bool _isVideoFile(String filename) {
@@ -205,9 +221,17 @@ class _TransfersPageState extends State<TransfersPage> {
           title: Text(context.t('transfers.title'),
               style: Theme.of(context).textTheme.titleLarge),
           actions: [
+            if (_controller.tasks.any((t) => !t.isTerminal))
+              IconButton(
+                tooltip: context.t('transfers.cancelAll'),
+                onPressed: () => unawaited(_confirmCancelAll(context)),
+                icon: const Icon(Icons.stop_circle_outlined),
+              ),
             IconButton(
               tooltip: context.t('transfers.clearHistory'),
-              onPressed: _controller.clearHistory,
+              onPressed: _controller.tasks.isEmpty
+                  ? null
+                  : () => unawaited(_confirmClearHistory(context)),
               icon: const Icon(Icons.delete_sweep_outlined),
             ),
             const SizedBox(width: AppSpacing.sm),
@@ -216,6 +240,28 @@ class _TransfersPageState extends State<TransfersPage> {
         body: _body(),
       ),
     );
+  }
+
+  Future<void> _confirmCancelAll(BuildContext context) async {
+    final confirmed = await showConfirmDialog(
+      context,
+      title: context.t('transfers.cancelAllConfirmTitle'),
+      content: context.t('transfers.cancelAllConfirmBody'),
+      confirmLabel: context.t('transfers.cancelAll'),
+      destructive: true,
+    );
+    if (confirmed) await _controller.cancelAll();
+  }
+
+  Future<void> _confirmClearHistory(BuildContext context) async {
+    final confirmed = await showConfirmDialog(
+      context,
+      title: context.t('transfers.clearHistoryConfirmTitle'),
+      content: context.t('transfers.clearHistoryConfirmBody'),
+      confirmLabel: context.t('transfers.clearHistory'),
+      destructive: true,
+    );
+    if (confirmed) await _controller.clearHistory();
   }
 
   Widget _body() {
@@ -378,14 +424,37 @@ class _TaskTile extends StatelessWidget {
         {'n': (d.inMilliseconds / 1000).toStringAsFixed(1)});
   }
 
+  Future<void> _retry(BuildContext context) async {
+    final ok = await controller.retry(task.id);
+    if (ok || !context.mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+          content: Text(context.t('transfers.retryUnavailable'))));
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final speed = controller.speedOf(task.id);
     final eta = controller.etaOf(task);
 
+    final notImported = task.state == TransferState.completed &&
+        task.destination == TransferDestination.gallery &&
+        task.galleryUri == null;
     final Widget trailing;
-    if (task.state == TransferState.queued ||
+    if (task.needsAttention) {
+      // 失败/未导入:能重下就给行内重试(进程内批次仍持有原始对象);
+      // 历史恢复的任务没有条目,只给警告标,点重试会如实提示重新入队。
+      trailing = controller.canRetry(task.id)
+          ? IconButton(
+              tooltip: context
+                  .t(notImported ? 'transfers.redownload' : 'common.retry'),
+              onPressed: () => unawaited(_retry(context)),
+              icon: Icon(Icons.refresh, size: 22, color: scheme.error),
+            )
+          : Icon(Icons.warning_amber_rounded, size: 22, color: scheme.error);
+    } else if (task.state == TransferState.queued ||
         task.state == TransferState.running) {
       trailing = IconButton(
         tooltip: context.t('common.cancel'),
@@ -551,7 +620,9 @@ extension on _TransferFilter {
   bool allows(TransferTask task) => switch (this) {
         _TransferFilter.all => true,
         _TransferFilter.active => !task.isTerminal,
-        _TransferFilter.completed => task.state == TransferState.completed,
-        _TransferFilter.failed => task.state == TransferState.failed,
+        // 「已完成」只算真正落定(含已导入相册);未导入归「需处理」。
+        _TransferFilter.completed =>
+          task.state == TransferState.completed && !task.needsAttention,
+        _TransferFilter.failed => task.needsAttention,
       };
 }

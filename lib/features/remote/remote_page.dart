@@ -72,8 +72,10 @@ import '../../core/remote/peaking_engines.dart';
 import '../../data/settings_store.dart';
 import '../../design/app_haptics.dart';
 import '../../l10n/l10n.dart';
+import '../../platform/services.dart';
 import '../../platform/volume_keys.dart';
 import '../browser/photo_grid_page.dart';
+import '../common/widgets/confirm_dialog.dart';
 import '../settings/settings_page.dart' show SettingsController;
 import 'feed_transform.dart';
 import 'live_design.dart';
@@ -161,6 +163,13 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   /// 风暴暂停)才弹,回根页拿重试入口。
   bool _wasRecovering = false;
 
+  /// 断链强制退页:绕过「录制/间隔中退出确认」(链路已没了,任务状态
+  /// 由控制器 `_invalidate` 清)。设置后下一帧 PopScope 放行。
+  bool _forceExit = false;
+
+  /// 退出确认框在途:防连点/连按返回叠框。
+  bool _leaveDialogOpen = false;
+
   /// BLE GPS 注入芯片就绪态(未配对禁点;页面只读,起停全在
   /// AppServices 注入驱动)。
   bool _bleReady = false;
@@ -228,6 +237,10 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         await controller.refreshParams(joinInFlight: true);
       }());
     }
+    if (widget.active) {
+      // 取景/间隔拍摄页默认常看屏:不锁屏,方便等长曝光与间隔节奏。
+      unawaited(PlatformServices.screenAwake.setAwake(true));
+    }
   }
 
   @override
@@ -237,6 +250,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     // 保持,不发 0x9202)。push 路由每次进入都是新建页面,不走此沿。
     if (widget.active != oldWidget.active) {
       controller.setViewerVisible(widget.active);
+      unawaited(PlatformServices.screenAwake.setAwake(widget.active));
     }
     // 回台沿:先自动起景(0x9201 + 首帧入队)再对表(模式先行、参数
     // 随后)—— 串成一条链而非并发 unawaited(引擎帧请求会穿插进刷参
@@ -277,6 +291,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     if (controller.shutterHoldActive) {
       unawaited(controller.captureReleased());
     }
+    unawaited(PlatformServices.screenAwake.setAwake(false));
     controller.setViewerVisible(false);
     super.dispose();
   }
@@ -295,7 +310,12 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     _wasLinkUp = up;
     _wasRecovering = recovering;
     if (!dropped || !mounted) return;
-    Navigator.of(context).popUntil((r) => r.isFirst);
+    // 断链退页:录制/间隔状态已由控制器 _invalidate 清掉,强制放行
+    // PopScope,下一帧再 pop(让 canPop 重建生效)。
+    setState(() => _forceExit = true);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) Navigator.of(context).popUntil((r) => r.isFirst);
+    });
   }
 
   /// 斑马纹/直方图/伪色/峰值/示波器族共享同一份帧分析:任一开启即启用
@@ -523,10 +543,14 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       if (controller.shutterHoldActive) {
         unawaited(controller.captureReleased());
       }
+      unawaited(PlatformServices.screenAwake.setAwake(false));
       controller.setViewerVisible(false);
     }
     if (state == AppLifecycleState.resumed) {
-      if (widget.active) controller.setViewerVisible(true);
+      if (widget.active) {
+        controller.setViewerVisible(true);
+        unawaited(PlatformServices.screenAwake.setAwake(true));
+      }
       // 回前台:对表兜底(模式先行 + 参数;后台期间机身侧改动的事件
       // 不一定送达,同切回 tab)。
       if (controller.linkUp) {
@@ -543,21 +567,65 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     // 拍摄页只保留竖屏(2026-10-30 用户定案去掉横屏模式):全局方向
     // 契约本就是钉竖屏,旋转钮与横屏监看布局一并移除。
     final body = _portraitBody(context);
-    return PopScope(
-      canPop: true,
-      child: Scaffold(
-        backgroundColor: LiveDesign.of(context).background,
-        // 破安全区(2026-10-12 六轮用户定案,参照 iOS 相机底部按钮距屏底
-        // 的距离):页面用**物理屏坐标**铺满,底区贴物理屏缘
-        // 20([kScreenEdgePadding])。顶部 notch(竖屏胶囊/恢复钮/取景
-        // 盒 topInset)经 MediaQuery.padding 手动补偿;九轮:竖屏左右
-        // 边距亦统一 20 (四缘一致)。
-        body: MediaQuery.withClampedTextScaling(
-          maxScaleFactor: 1.3,
-          child: body,
-        ),
-      ),
+    return AnimatedBuilder(
+      animation: controller,
+      builder: (context, _) {
+        final busy = controller.recording || controller.intervalActive;
+        return PopScope(
+          // 录像/间隔拍摄在跑时拦下返回:不弹确认就退页,相机会继续
+          // 录/拍,页外又没有停录入入口 —— 用户会误以为已经停了。
+          canPop: _forceExit || !busy,
+          onPopInvokedWithResult: (didPop, _) {
+            if (!didPop) unawaited(_confirmLeaveBusy());
+          },
+          child: Scaffold(
+            backgroundColor: LiveDesign.of(context).background,
+            // 破安全区(2026-10-12 六轮用户定案,参照 iOS 相机底部按钮
+            // 距屏底的距离):页面用**物理屏坐标**铺满,底区贴物理屏缘
+            // 20([kScreenEdgePadding])。顶部 notch(竖屏胶囊/恢复钮/取景
+            // 盒 topInset)经 MediaQuery.padding 手动补偿;九轮:竖屏左右
+            // 边距亦统一 20 (四缘一致)。
+            body: MediaQuery.withClampedTextScaling(
+              maxScaleFactor: 1.3,
+              child: body,
+            ),
+          ),
+        );
+      },
     );
+  }
+
+  /// 退出前的任务刹车:录像/间隔拍摄仍在跑 → 弹确认。确认后先停,
+  /// 停录失败(相机拒/链路问题)就留在页面看错误横幅,不把相机留在
+  /// 录制态。
+  Future<void> _confirmLeaveBusy() async {
+    if (_leaveDialogOpen) return;
+    if (!controller.recording && !controller.intervalActive) {
+      if (mounted) Navigator.of(context).maybePop();
+      return;
+    }
+    _leaveDialogOpen = true;
+    try {
+      final confirmed = await showConfirmDialog(
+        context,
+        title: context.t('remote.leaveBusyTitle'),
+        content: context.t('remote.leaveBusyBody'),
+        confirmLabel: context.t('remote.leaveBusyConfirm'),
+      );
+      if (!confirmed || !mounted) return;
+      if (controller.recording) {
+        await controller.toggleRecord();
+        if (controller.recording) return; // 停录失败:留在页内看错误
+      }
+      controller.stopInterval();
+      if (!mounted) return;
+      setState(() => _forceExit = true);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) Navigator.of(context).pop();
+      });
+    } finally {
+      _leaveDialogOpen = false;
+    }
   }
 
   /// 竖屏 iPhone 相机式排版(2026-10-10 重排;九轮:四缘统一 20):

@@ -11,9 +11,12 @@ import 'package:z_pill/platform/gallery_saver.dart';
 
 /// 快照流由测试驱动的伪引擎(sync 广播:add 时刻同步送达;removeRecord
 /// 出快照,模拟引擎真实单删回放)。
-final class _PageEngine implements TransferEngine {
+final class _PageEngine implements TransferEngine, TransferRetry {
   final tasksCtrl = StreamController<List<TransferTask>>.broadcast(sync: true);
   final removed = <String>[];
+  final retried = <String>[];
+  final cancelled = <String>[];
+  var clearCalls = 0;
   var snapshot = const <TransferTask>[];
 
   void emit(List<TransferTask> tasks) {
@@ -29,7 +32,7 @@ final class _PageEngine implements TransferEngine {
       {required TransferDestination destination}) async {}
 
   @override
-  Future<void> cancel(String taskId) async {}
+  Future<void> cancel(String taskId) async => cancelled.add(taskId);
 
   @override
   Future<void> removeRecord(String taskId) async {
@@ -41,7 +44,16 @@ final class _PageEngine implements TransferEngine {
   }
 
   @override
-  Future<void> clearHistory() async {}
+  Future<void> clearHistory() async => clearCalls++;
+
+  @override
+  bool canRetry(String taskId) => true;
+
+  @override
+  Future<bool> retry(String taskId) async {
+    retried.add(taskId);
+    return true;
+  }
 }
 
 /// 全兜底假相册(refreshAppFiles 的目录通道;真 IO 在假异步里悬置无害)。
@@ -162,7 +174,7 @@ void main() {
     expect(engine.removed, ['t1']);
   });
 
-  testWidgets('过滤档:计数与真实筛选(全部/处理中/完成/失败)', (tester) async {
+  testWidgets('过滤档:计数与真实筛选(全部/处理中/完成/需处理)', (tester) async {
     final engine = _PageEngine();
     final controller =
         TransfersController(engine: engine, gallery: _FakeGallery());
@@ -199,7 +211,7 @@ void main() {
     expect(find.text('全部 4'), findsOneWidget);
     expect(find.text('处理中 1'), findsOneWidget);
     expect(find.text('完成 2'), findsOneWidget);
-    expect(find.text('失败 1'), findsOneWidget);
+    expect(find.text('需处理 1'), findsOneWidget);
 
     await tester.tap(find.byKey(const ValueKey('transfer-filter-failed')));
     await tester.pumpAndSettle();
@@ -222,6 +234,88 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('FAIL.MOV'), findsOneWidget);
     expect(find.text('RUN.JPG'), findsOneWidget);
+  });
+
+  testWidgets('失败/未导入行:需处理计数 + 行内重试,未导入不再出绿勾', (tester) async {
+    final engine = _PageEngine();
+    final controller =
+        TransfersController(engine: engine, gallery: _FakeGallery());
+    addTearDown(controller.dispose);
+
+    await tester
+        .pumpWidget(MaterialApp(home: TransfersPage(controller: controller)));
+    engine.emit([
+      _completed('t1', DateTime(2026, 10, 24, 9, 0, 10)),
+      TransferTask(
+        id: 't2',
+        handle: 2,
+        filename: 'FAIL.JPG',
+        totalBytes: 100,
+        destination: TransferDestination.gallery,
+        state: TransferState.failed,
+        attempts: 2,
+        finishedAt: DateTime(2026, 10, 24, 10, 0),
+      ),
+      TransferTask(
+        id: 't3',
+        handle: 3,
+        filename: 'NOIMPORT.JPG',
+        totalBytes: 100,
+        destination: TransferDestination.gallery,
+        state: TransferState.completed,
+        receivedBytes: 100,
+        finishedAt: DateTime(2026, 10, 24, 11, 0),
+      ),
+    ]);
+    await tester.pump();
+
+    expect(find.text('需处理 2'), findsOneWidget);
+    expect(find.text('完成 1'), findsOneWidget,
+        reason: '未导入不算完成档');
+    expect(find.byIcon(Icons.check_circle), findsOneWidget,
+        reason: '只有真正落定的 t1 出绿勾');
+    expect(find.byTooltip('重试'), findsOneWidget);
+    expect(find.byTooltip('重新下载'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('重新下载'));
+    await tester.pump();
+    expect(engine.retried, ['t3']);
+  });
+
+  testWidgets('清空历史/取消全部:先确认,取消则零动作,确认才执行', (tester) async {
+    final engine = _PageEngine();
+    final controller =
+        TransfersController(engine: engine, gallery: _FakeGallery());
+    addTearDown(controller.dispose);
+    await tester
+        .pumpWidget(MaterialApp(home: TransfersPage(controller: controller)));
+
+    engine.emit([
+      TransferTask(
+          id: 't1',
+          handle: 1,
+          filename: 'RUN.JPG',
+          totalBytes: 100,
+          destination: TransferDestination.app,
+          state: TransferState.running,
+          receivedBytes: 10),
+      _completed('t2', DateTime(2026, 10, 24, 9, 0, 10)),
+    ]);
+    await tester.pump();
+
+    await tester.tap(find.byTooltip('清空历史'));
+    await tester.pumpAndSettle();
+    expect(find.text('清空传输历史?'), findsOneWidget);
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+    expect(engine.clearCalls, 0);
+
+    await tester.tap(find.byTooltip('取消全部'));
+    await tester.pumpAndSettle();
+    expect(find.text('取消全部传输?'), findsOneWidget);
+    await tester.tap(find.text('取消全部'));
+    await tester.pumpAndSettle();
+    expect(engine.cancelled, ['t1']);
   });
 
   testWidgets('空表:空态文案仍在(持久化清空后同口径)', (tester) async {

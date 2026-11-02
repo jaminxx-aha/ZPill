@@ -53,6 +53,17 @@ abstract interface class TransferEngine {
   Future<void> removeRecord(String taskId);
 }
 
+/// 可重试传输引擎(进程内批次仍持有 ObjectEntry 时才有意义;历史恢复
+/// 的任务没有原条目,不能凭空重下)。
+abstract interface class TransferRetry {
+  /// [taskId] 是否为可重试的终态任务。
+  bool canRetry(String taskId);
+
+  /// 重新入队该任务的原始对象(失败重下 / 未导入重新下载导入)。
+  /// 返回 false = 无权重重试条目(历史恢复任务/未知 id)。
+  Future<bool> retry(String taskId);
+}
+
 /// 一次 enqueue 对应一个批次:gallery 批次共享同一次导入对话框。
 final class _Batch {
   _Batch(this.destination);
@@ -85,7 +96,7 @@ final class _Job {
 Duration _defaultBackoff(int retry) =>
     Duration(milliseconds: 200 * (1 << (retry - 1)));
 
-final class TransferEngineImpl implements TransferEngine {
+final class TransferEngineImpl implements TransferEngine, TransferRetry {
   TransferEngineImpl({
     required this.downloader,
     required this.gallery,
@@ -239,6 +250,26 @@ final class TransferEngineImpl implements TransferEngine {
     _jobs.remove(taskId);
     _notify();
     await history?.remove(taskId);
+  }
+
+  @override
+  bool canRetry(String taskId) {
+    final job = _jobs[taskId];
+    return job != null &&
+        job.task.isTerminal &&
+        job.batch.members.any((m) => m.id == taskId);
+  }
+
+  @override
+  Future<bool> retry(String taskId) async {
+    if (!canRetry(taskId)) return false;
+    final job = _jobs[taskId]!;
+    final member = job.batch.members.firstWhere((m) => m.id == taskId);
+    await enqueue([member.entry], destination: job.task.destination);
+    // 旧失败/未导入记录让位给新任务,避免同一次下载在列表里出现两行、
+    // 徽标重复计数。
+    await removeRecord(taskId);
+    return true;
   }
 
   /// 持久化历史恢复:终态记录拼回任务表(批次用已完结的哑批次,导入

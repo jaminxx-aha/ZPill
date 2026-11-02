@@ -38,6 +38,7 @@ import UIAbility from '@ohos.app.ability.UIAbility';
 import Want from '@ohos.app.ability.Want';
 import wantAgent, { WantAgent } from '@ohos.app.ability.wantAgent';
 import backgroundTaskManager from '@ohos.resourceschedule.backgroundTaskManager';
+import window from '@ohos.window';
 import { BusinessError } from '@kit.BasicServicesKit';
 import {
   FlutterPlugin,
@@ -135,10 +136,29 @@ export class BgPlugin implements FlutterPlugin, AbilityAware {
       case 'stop':
         this.requestStop(result);
         break;
+      case 'setScreenAwake':
+        this.setScreenAwake(call.argument('enabled') as boolean ?? false);
+        result.success(null);
+        break;
       default:
         result.notImplemented();
         break;
     }
+  }
+
+  /// 取景/间隔拍摄期屏幕常亮(失败静默:按系统默认休眠)。
+  private setScreenAwake(enabled: boolean): void {
+    const ability = this.ability;
+    if (ability === null) return;
+    window.getLastWindow(ability.context)
+      .then((win: window.Window): void => {
+        win.setWindowKeepScreenOn(enabled).catch((e: BusinessError): void => {
+          Log.w(TAG, `setWindowKeepScreenOn(${enabled}): ${e.code} ${e.message}`);
+        });
+      })
+      .catch((e: BusinessError): void => {
+        Log.w(TAG, `getLastWindow: ${e.code} ${e.message}`);
+      });
   }
 
   /// modes 参数解析:白名单过滤 + 去重排序(与 cacheModes 可比);

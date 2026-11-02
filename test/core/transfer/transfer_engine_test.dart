@@ -269,6 +269,31 @@ void main() {
     }
   });
 
+  test('失败任务可重试:retry 重新入队原始对象并完成;未知/历史任务不可重试', () async {
+    final (engine, fake, gallery) = _engine();
+    // 四轮短读(首跑 + 3 次退避)后落 failed。
+    for (var i = 0; i < 4; i++) {
+      fake.reply(_okBytes(5));
+    }
+    final failed = waitUntil(engine,
+        (ts) => ts.length == 1 && ts.single.state == TransferState.failed);
+    await engine.enqueue([_entry(1, 'DSC_1.JPG', 10)],
+        destination: TransferDestination.app);
+    final failedTask = (await failed).single;
+    expect(engine.canRetry(failedTask.id), isTrue);
+    expect(engine.canRetry('t-restored'), isFalse);
+
+    fake.reply(_okBytes(10));
+    final done = waitUntil(engine,
+        (ts) => ts.length == 1 && ts.single.state == TransferState.completed);
+    expect(await engine.retry(failedTask.id), isTrue);
+    await done;
+    expect(engine.canRetry(failedTask.id), isFalse,
+        reason: '旧失败记录已让位给新任务');
+    final file = File('${gallery.root.path}/downloads/DSC_1.JPG');
+    expect(await file.readAsBytes(), List.generate(10, (i) => i & 0xFF));
+  });
+
   test('app 目的地:暂存直写、完成沿改名进 downloadsDir(半成品不进扫描面)', () async {
     final (engine, fake, gallery) = _engine();
     fake.reply(_okBytes(12));

@@ -33,6 +33,7 @@ import 'motion_host.dart';
 import 'network_monitor.dart';
 import 'nsd_scanner.dart';
 import 'raw_decoder.dart';
+import 'screen_awake.dart';
 import 'usb/usb_host.dart';
 import 'video_player.dart';
 
@@ -47,6 +48,8 @@ final class PlatformServices {
   static late final WifiJoiner wifiJoiner;
   static late final GallerySaver gallery;
   static late final BackgroundTransferScheduler background;
+  /// 屏幕常亮(取景/间隔拍摄期;走 zpill/bg 通道的 setScreenAwake)。
+  static late final ScreenAwakeHost screenAwake;
   /// BLE 宿主(`zpill/ble`:扫描/GATT 读写订阅;三端已有实现,
   /// 真机状态见 platform/README.md)。
   /// 协议层(配对/GEO/TIME)在 lib/core/ble/,本层零方言知识。
@@ -90,6 +93,7 @@ final class PlatformServices {
     wifiJoiner = MethodChannelWifiJoiner();
     gallery = MethodChannelGallerySaver();
     background = MethodChannelBackgroundScheduler();
+    screenAwake = MethodChannelScreenAwake();
     ble = MethodChannelBleHost();
     usb = MethodChannelUsbHost();
     nsd = MethodChannelNsdScanner();

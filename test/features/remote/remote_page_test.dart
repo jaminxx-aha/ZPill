@@ -2918,6 +2918,78 @@ void main() {
     await tester.pumpAndSettle();
   });
 
+  testWidgets('录制中返回:先确认,「停止并退出」发 0x920B 后回根页', (tester) async {
+    _portrait(tester);
+    final transport = _ScriptTransport();
+    final conn = FakeConnection();
+    final controller = _directRemoteController(transport, conn: conn);
+    addTearDown(controller.dispose);
+    _scriptAutoStart(transport);
+    transport.ok(); // 0x920B 停录
+
+    await tester.pumpWidget(MaterialApp(
+        home: Builder(
+            builder: (context) => Scaffold(
+                body: Center(
+                    child: TextButton(
+                        onPressed: () => Navigator.of(context).push(
+                            MaterialPageRoute(
+                                builder: (_) =>
+                                    RemotePage(controller: controller))),
+                        child: const Text('根页')))))));
+    await tester.tap(find.text('根页'));
+    await tester.pumpAndSettle();
+
+    transport.eventCtrl.add(const PtpEvent(
+        code: NikonEventCode.movieRecordStarted,
+        transactionId: 0xFFFFFFFF));
+    await tester.pumpAndSettle();
+    expect(controller.recording, isTrue);
+
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.text('拍摄仍在进行'), findsOneWidget, reason: '不静默退页');
+    expect(find.text('停止并退出'), findsOneWidget);
+
+    await tester.tap(find.text('停止并退出'));
+    await tester.pumpAndSettle();
+    expect(controller.recording, isFalse);
+    expect(
+        transport.count(NikonOperationCode.endMovieRec), 1,
+        reason: '停止后才退页');
+    expect(find.text('根页'), findsOneWidget, reason: '已退回根页');
+  });
+
+  testWidgets('取景页常亮:进页开、离页还系统默认', (tester) async {
+    const channel = MethodChannel('zpill/bg');
+    final calls = <bool>[];
+    tester.binding.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      if (call.method == 'setScreenAwake') {
+        calls.add((call.arguments as Map<Object?, Object?>)['enabled'] == true);
+      }
+      return null;
+    });
+    addTearDown(() =>
+        tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+            channel, null));
+
+    _portrait(tester);
+    final transport = _ScriptTransport();
+    final conn = FakeConnection();
+    final controller = _directRemoteController(transport, conn: conn);
+    addTearDown(controller.dispose);
+    _scriptAutoStart(transport);
+    await tester
+        .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
+    await tester.pumpAndSettle();
+    expect(calls, contains(true), reason: '取景页持有屏幕常亮');
+
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump();
+    expect(calls.last, isFalse, reason: '离页还系统默认休眠');
+  });
+
   testWidgets('间隔拍摄:设置面板入口 → 参数底单开始 → 状态行/互锁灰化 → 停止', (tester) async {
     _portrait(tester);
     final transport = _ScriptTransport();
