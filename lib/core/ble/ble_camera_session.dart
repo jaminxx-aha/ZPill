@@ -51,6 +51,7 @@ class BleIdentity {
     required this.nonce,
     required this.serial,
     required this.name,
+    this.cameraName = '',
   });
 
   /// 系统 BLE 设备标识(iOS peripheral.identifier / Android MAC)。
@@ -61,6 +62,10 @@ class BleIdentity {
   /// 相机 BLE 侧序列号(stage4 帧,独立于 USB 序列)。
   final String serial;
   final String name;
+
+  /// 相机 BLE 广播名(如 `Z_f_8014411`)。等待页广播不带 0x0399,
+  /// 过滤扫描不可见,重连兜底按归一化广播名认机(2026-11-03)。
+  final String cameraName;
 }
 
 /// 握手失败(配对/重连共用)。
@@ -76,6 +81,7 @@ final class BleCameraSession {
     required BleHost host,
     this.controllerName = 'ZPill',
     this.handshakeTimeout = const Duration(seconds: 15),
+    this.connectTimeout = const Duration(seconds: 50),
     this.writeGate = const Duration(milliseconds: 2500),
     DateTime Function()? now,
   })  : _host = host,
@@ -112,6 +118,12 @@ final class BleCameraSession {
   /// 握手/连接总闸(15s):连上非相机(扫描全量列表误点)或相机已退出
   /// 配对菜单时,stage1 无应答 —— 没有超时 pair() 会永久挂在 pairing。
   final Duration handshakeTimeout;
+
+  /// 建链(含服务发现)超时。深睡相机唤醒建链 ~7-12s(2026-11-03 真机
+  /// 实证:connectGatt 后 7s 才回 CONNECTED、再 ~8s 才完成发现),旧
+  /// 15/20s 会把发现窗口挤没 → 直连/扫描回连双双超时。握手帧交换仍
+  /// 走 [handshakeTimeout]。
+  final Duration connectTimeout;
 
   /// 写闸:Ready 后首笔 GEO/TIME 与 GEO 失败回补共用的静默窗(相机
   /// GPS 会话未醒拒收 0x2007 的减灾前置;2900099 瞬态同类)。
@@ -194,6 +206,12 @@ final class BleCameraSession {
   /// 上层配对页日志据此区分「无命中」与「被闸」)。
   bool lastRetryGated = false;
 
+  /// 深睡暂停(2026-11-03 用户定稿,三端统一):自动重连扫到待机广播
+  /// 即置位并立即停止重连(状态回 idle),**只有手动连接
+  /// (gateStandby:false)才清除并尝试唤醒**。驱动/面板的重试排程
+  /// 都必须尊重该标志,不再自动发起连接。
+  bool autoReconnectPaused = false;
+
   /// 最近一次命中设备的广播名([pair]/[retryReconnect] 命中沿更新;
   /// iOS 系统缓存 GAP 名基本恒有,Android 重连广播可能无名 = 空)——
   /// ready 沿旧档相机名回填(ConnectionController.healCameraName)消费,
@@ -211,6 +229,8 @@ final class BleCameraSession {
   PairingMessage? _stage1;
   bool _stage3Sent = false;
   bool _nameWritten = false;
+  /// stage2 未回时的 stage1 重发定时器(深睡相机唤醒,2026-11-04)。
+  Timer? _stage1RetryTimer;
   String? _connectedUuid;
   bool _resuming = false;
   String? _serial;
@@ -384,10 +404,11 @@ final class BleCameraSession {
             _state != BleSessionState.idle)) {
       return false;
     }
-    // 断链首轮直连优先:刚收线的相机处于静默等待态(零广播)或醒着可
-    // 连,直连两态通吃且 ~1-2s;失败落回扫描(未注册相机 RPA 轮换必须
-    // 重扫;深睡闸门随扫描生效)。
-    final directFirst = directFirstPending;
+    // 手动连接(gateStandby:false)= 显式唤醒意图:清除深睡暂停。
+    if (!gateStandby) autoReconnectPaused = false;
+    // 断链首轮直连优先:仅手动路生效(自动路一律走扫描 —— 直连会
+    // 绕过深睡闸门把待机相机叫醒,2026-11-03 用户定稿:自动不唤醒)。
+    final directFirst = directFirstPending && !gateStandby;
     directFirstPending = false;
     if (directFirst) {
       final direct = await _reconnectDirect();
@@ -414,7 +435,11 @@ final class BleCameraSession {
       return false;
     }
     lastRetryGated = false;
-    final match = devices.isEmpty ? null : devices.first;
+    var match = devices.isEmpty ? null : devices.first;
+    // 等待页广播不带 0x0399(2026-10-27 实锤):过滤扫描必然空。
+    // 退一步做无过滤扫描,按归一化广播名认机(与面板配对行同一判
+    // 据),拿到当前广播地址再直连 —— 等待页的自动回链由此接住。
+    match ??= await _scanByName();
     lastMatchName = match?.name ?? '';
     if (match == null) {
       _backoffStep = min(_backoffStep + 1, _backoffSeconds.length - 1);
@@ -424,11 +449,16 @@ final class BleCameraSession {
         advertisedPowerState(match.mfgData) == NikonAdvPowerState.standby) {
       // 首闸落一行日志(episode 级限频,防待机数小时刷屏)。
       if (_standbySkips == 0) {
-        AppLog.i(AppLog.ble, '深睡闸门:相机广播待机位,暂缓连接等唤醒');
+        AppLog.i(AppLog.ble,
+            '深睡闸门:相机广播待机位,停止自动重连,等手动连接唤醒');
       }
       _standbySkips++;
       lastRetryGated = true;
-      _backoffStep = min(1, _backoffSeconds.length - 1);
+      // 2026-11-03 用户定稿:检测到待机立即停自动重连,状态回 idle
+      // (UI 回到「已配对,未连接」+「连接」按钮),只有手动连接才
+      // 清除暂停并尝试唤醒。
+      autoReconnectPaused = true;
+      _setState(BleSessionState.idle);
       return false;
     }
     if (epoch != _cancelEpoch) {
@@ -436,6 +466,7 @@ final class BleCameraSession {
       // 内时本尝试照旧入 pairing,僵尸态把后续尝试全挡在门外(十四轮)。
     }
     _standbySkips = 0;
+    autoReconnectPaused = false; // 非待机命中:解除深睡暂停
     _resuming = true;
     _serial = null;
     _stage2Frame = null;
@@ -444,7 +475,7 @@ final class BleCameraSession {
     _setState(BleSessionState.pairing);
     final done = _beginHandshake();
     try {
-      await _host.connectPaired(match.uuid).timeout(handshakeTimeout);
+      await _host.connectPaired(match.uuid).timeout(connectTimeout);
       await done.future.timeout(handshakeTimeout);
       return true;
     } on TimeoutException {
@@ -481,6 +512,8 @@ final class BleCameraSession {
   /// 当前(或下一次)的 completer 一并完成(僵尸 ready / 错完成)。
   /// [identity] 不清:那是已配对档,跨尝试保留。
   void _resetAttemptState() {
+    _stage1RetryTimer?.cancel();
+    _stage1RetryTimer = null;
     _stage1 = null;
     _stage3Sent = false;
     _nameWritten = false;
@@ -506,6 +539,31 @@ final class BleCameraSession {
   /// (60s):等用户确认弹窗。
   Future<bool> reconnectDirect() => _reconnectDirect();
 
+  /// 无过滤扫描按归一化广播名认机(等待页广播无 0x0399 的兜底)。
+  /// 名字口径与面板配对行一致:去空白/下划线/控制字符(NUL 填充)后
+  /// 小写比对;认到即返回当前广播地址。扫描失败/占用按未命中处理,
+  /// 下一轮退避再试(不反噬重连循环)。
+  Future<BleDevice?> _scanByName() async {
+    final target = _normalizeBleName(identity?.cameraName ?? '');
+    if (target.isEmpty) return null;
+    try {
+      final devices = await _host.scan(timeout: const Duration(seconds: 3));
+      final own = identity?.deviceId;
+      for (final d in devices) {
+        // 已被别的控制器占用(广播期望 deviceId 非我方)不抢连:
+        // 相机此时不会接受我们(2026-11-03 三端同配对实证)。
+        if (cameraWaitsForOtherController(d.mfgData, own)) continue;
+        if (_normalizeBleName(d.name) == target) return d;
+      }
+    } on Exception {
+      // 扫描被占/失败:按未命中处理。
+    }
+    return null;
+  }
+
+  static String _normalizeBleName(String s) =>
+      s.replaceAll(RegExp(r'[\s_\x00-\x1F\x7F]+'), '').toLowerCase();
+
   Future<bool> _reconnectDirect() async {
     if (identity == null ||
         (_state != BleSessionState.idle &&
@@ -513,6 +571,8 @@ final class BleCameraSession {
       return false;
     }
     final epoch = _cancelEpoch; // 十三轮:取消沿迟到收口不推态。
+    final target = reconnectDirectUuid ?? identity!.peripheralUuid;
+    reconnectDirectUuid = null;
     _resuming = true;
     _serial = null;
     _stage2Frame = null;
@@ -522,9 +582,10 @@ final class BleCameraSession {
     final done = _beginHandshake();
     var linked = false;
     try {
-      await _host
-          .connectPaired(identity!.peripheralUuid)
-          .timeout(const Duration(seconds: 20));
+      // 深睡相机:直接寻呼实测优于挂起式(华为上 autoConnect 30s 无
+      // 回调,直接寻呼 13.5s 建链,2026-11-03 真机对比);挂起式管
+      // 道保留作配置项(host.connectPaired(autoConnect:true))。
+      await _host.connectPaired(target).timeout(connectTimeout);
       linked = true;
       await done.future.timeout(const Duration(seconds: 60));
       return true;
@@ -720,6 +781,8 @@ final class BleCameraSession {
     _disposed = true;
     _deferredWriteTimer?.cancel();
     _deferredWriteTimer = null;
+    _stage1RetryTimer?.cancel();
+    _stage1RetryTimer = null;
     _sub.cancel();
     _stateCtrl.close();
     _errorCtrl.close();
@@ -749,6 +812,11 @@ final class BleCameraSession {
   /// 连 ~1-2s 对醒着/静默两态都成立,失败才落回扫描(深睡闸门随扫描
   /// 生效)。
   bool directFirstPending = false;
+
+  /// 手动连接时面板注入的「当前广播地址」(配对行扫描行命中沿)。
+  /// Android 的 BLE 地址是轮换 RPA:存档地址直连在待机/等待页可能已
+  /// 过期,而扫描行里的是此刻广播地址,直连才打得中。消费即清。
+  String? reconnectDirectUuid;
 
   /// 握手起始连续被踢计数(成功 ready 清零;瞬时踢 2s 快试,持续踢换
   /// 引导文案,见 handshakeStartFail 处)。
@@ -903,6 +971,17 @@ final class BleCameraSession {
       case BleConnected(:final uuid, :final characteristics):
         if (_state != BleSessionState.pairing) return;
         _connectedUuid = uuid;
+        // 深睡唤醒 poke(2026-11-04 鸿蒙真机:链路连上但相机半睡时
+        // GATT 服务器不回 stage2,约 12s 后监督断链):先做一笔带响应
+        // 的读(电池 0x2a19)把服务器叫醒再进握手;失败忽略,不挡流程。
+        try {
+          await _host
+              .read(kNikonCharBattery)
+              .timeout(const Duration(seconds: 2));
+          _trace('唤醒 poke:0x2a19 已读回');
+        } on Exception {
+          _trace('唤醒 poke 未回,继续握手');
+        }
         // 写闸不在此设:握手期无注入写,Ready 沿统一起闸(_completeIfReady)。
         try {
           _trace('握手起始:setNotify → 2000');
@@ -953,6 +1032,7 @@ final class BleCameraSession {
           // stage1 device/nonce 是 LSS key2/nonce 的原始输入，只记流程
           // 形态，值本身不落 trace。
           _trace('stage1 → 已发送${_resuming ? '(复用)' : '(全新)'}');
+          _armStage1Retry();
         } on Exception catch (e) {
           // 失败落盘(AppLog.e → errorTail/tail.log):握手起始失败的
           // 原生异常串上盘,真机排障唯一持久面(2026-10-21 夜教训)。
@@ -1145,6 +1225,33 @@ final class BleCameraSession {
 
   /// 写 0x2002 控制器名(32B ASCII 零填充)。真机方言(2026-10-13
   /// Zf):stage4 沿即发;名字落定即收口 —— NOT1 非闸门,实测不回。
+  /// stage2 迟迟不回时的 stage1 重发(深睡相机唤醒):每 2s 重发一次
+  /// stage1,直到 stage2 到达(stage3 已发)/握手收口/弃局。重复
+  /// stage1 是安全的握手起点帧,同时给相机 GATT 服务器持续唤醒刺激
+  /// (2026-11-04 鸿蒙深睡真机:只发一次时相机半睡不回、12s 被踢)。
+  void _armStage1Retry() {
+    _stage1RetryTimer?.cancel();
+    _stage1RetryTimer = Timer.periodic(const Duration(seconds: 2), (t) async {
+      if (_stage3Sent ||
+          _handshake == null ||
+          _state != BleSessionState.pairing) {
+        t.cancel();
+        return;
+      }
+      final stage1 = _stage1;
+      if (stage1 == null) {
+        t.cancel();
+        return;
+      }
+      _trace('stage2 未回,重发 stage1(唤醒)');
+      try {
+        await _host.write(kNikonCharPairing, stage1.encode());
+      } on Exception catch (e) {
+        _trace('stage1 重发失败:$e');
+      }
+    });
+  }
+
   Future<void> _writeName() async {
     final stage1 = _stage1;
     if (stage1 == null) return;
@@ -1175,12 +1282,18 @@ final class BleCameraSession {
     if (done == null) return;
     final stage1 = _stage1;
     if (stage1 == null) return;
+    _stage1RetryTimer?.cancel();
+    _stage1RetryTimer = null;
     identity = BleIdentity(
       peripheralUuid: _connectedUuid ?? '',
       deviceId: stage1.device,
       nonce: stage1.nonce,
       serial: _serial ?? identity?.serial ?? '',
       name: controllerName,
+      // 相机广播名只在扫描时见过(握手帧没有):本拍 lastMatchName 为
+      // 扫描命中名,直连复用沿沿用旧身份。
+      cameraName:
+          lastMatchName.isNotEmpty ? lastMatchName : (identity?.cameraName ?? ''),
     );
     _backoffStep = 0;
     // 成功沿清陈旧错误(重连几轮失败后终成,错误行不残留)。

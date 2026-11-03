@@ -29,7 +29,9 @@ bool bleRetryRearm({
   required bool running,
   required BleSessionState state,
   required bool hasIdentity,
+  bool paused = false,
 }) =>
+    !paused &&
     !ok &&
     running &&
     (state == BleSessionState.reconnecting ||
@@ -286,21 +288,20 @@ final class BleDriver {
     _bleRetry?.cancel();
     if (!_bleRunning) return;
     if (_panelScanActive) return; // 面板扫描占台:驱动让位(收口沿归还)
+    if (_session.autoReconnectPaused) return; // 深睡暂停:只有手动连接能解除
     _bleRetry = Timer(_session.nextRetryDelay, () async {
       if (!_bleRunning) return;
       if (_panelScanActive) return; // 在途尝试结束后不再续棒(面板扫描期)
-      // 无参调用 = 深睡闸门开:扫到待机广播不连,被动扫描等唤醒沿
-      // 快连(手动重连路一律显式绕闸);此循环无人值守常跑数小时。
+      if (_session.autoReconnectPaused) return; // 暂停沿(定时器在途)
+      // 无参调用 = 深睡闸门开:扫到待机广播即停止自动重连(会话置
+      // autoReconnectPaused 并回 idle),只有手动连接才尝试唤醒。
       var ok = await _session.retryReconnect();
-      // (2026-10-21 撤无命中直连兜底:菜单窗配对后的静默期相机不接受
-      // 直连,20s 超时白 hang 还盖住相机自己的重连广播窗;扫描接广播
-      // 才是正路。直连保留在会话 directFirstPending —— 重连握手收线
-      // 场景武装,see BleCameraSession。)
       if (bleRetryRearm(
           ok: ok,
           running: _bleRunning,
           state: _session.state,
-          hasIdentity: _session.identity != null)) {
+          hasIdentity: _session.identity != null,
+          paused: _session.autoReconnectPaused)) {
         _scheduleBleRetry();
       }
     });

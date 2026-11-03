@@ -227,9 +227,6 @@ const Map<String, String> enCatalog = {
   'conn.openWifiSettings': 'Open System Wi-Fi Settings',
   'conn.wakeFailed': 'Wake failed: {e}',
   'common.unknown': 'Unknown',
-  'conn.joiningHotspot': 'Bluetooth released; joining camera hotspot "{ssid}"…',
-  'conn.joinedHotspot':
-      'Joined camera hotspot "{ssid}"; connecting to the camera…',
   'conn.scanningHotspot': 'Searching for the camera hotspot…',
   'conn.noCameraAp':
       'Camera hotspot not found — make sure the camera Wi-Fi is on',

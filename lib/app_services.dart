@@ -420,6 +420,7 @@ final class AppServices {
           nonce: saved.nonce,
           serial: saved.serial,
           name: saved.controllerName,
+          cameraName: saved.cameraName,
         );
       }
       bleDriver.refresh();

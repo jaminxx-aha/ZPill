@@ -55,4 +55,15 @@ void main() {
             hasIdentity: true),
         isFalse);
   });
+
+  test('深睡暂停(paused=true)→ 收(只有手动连接能解除)', () {
+    expect(
+        bleRetryRearm(
+            ok: false,
+            running: true,
+            state: BleSessionState.idle,
+            hasIdentity: true,
+            paused: true),
+        isFalse);
+  });
 }

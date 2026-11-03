@@ -85,9 +85,15 @@ BleHostIssue? bleHostIssueOfError(Object error) =>
 /// 广播包 31B,mfg 数据挤占时名字用缩短名,`Z_f_8014411` 变 `Z_f_`
 /// (2026-10-21 截图实证,两行并不上);空名无可信稳定键,退回 uuid
 /// 专属键。
+/// 广播名归一:去空白/下划线/**控制字符(NUL 填充)**、小写。
+/// 相机广播名与配对档案里的名字都可能带尾部 \0 填充,只去空白会匹配
+/// 不上(Dart 的 \s 不含 NUL)——2026-11-03 真机实证。
+String _normalizeScanName(String s) =>
+    sanitizeDeviceName(s).replaceAll(RegExp(r'[\s_]+'), '').toLowerCase();
+
 String _scanMergeKey(BleDevice d) => d.name.isEmpty
     ? 'uuid:${d.uuid}'
-    : 'n:${d.name.replaceAll(RegExp(r'[\s_]+'), '').toLowerCase()}';
+    : 'n:${_normalizeScanName(d.name)}';
 
 /// 行合并(纯函数,原地改行返回同表),四级键从严到宽:
 /// ①归一化名键命中 → 整条换新;②**同配对关系(deviceId 相等)即同
@@ -310,14 +316,13 @@ class BlePairPanelState extends State<BlePairPanel>
   /// _panelScanActive 随持有态同步(驱动扫描让位/归还)。
   void _syncScanOwnership() {
     // manualOff 只压制回链,不压制发现扫描(看设备列表是面板本职能)。
-    // **有身份即不持扫描权**(2026-10-21 定稿:回链优先,已配对相机也
-    // 不进其它设备 —— 面板发现扫描此时无意义,无线电让给驱动回链)。
-    // 无身份(真首配)才由面板持有,持续扫描配对菜单相机。
-    final want = mounted &&
-        _scanWanted &&
-        _sessionState == BleSessionState.idle &&
-        _session.identity == null &&
-        _saved == null;
+    // 2026-11-03 用户定稿:未连接(idle)时即使已有配对身份,面板也持有
+    // 扫描权 —— 相机在「连接至智能设备」等待页的广播不带 0x0399,驱动
+    // 的 deviceId 过滤扫描看不见它,状态点只能灰;面板无过滤扫描才拿
+    // 得到名字/电源态,配对行才能如实显示 等待绿 / 待机黄 / 离线灰。
+    // ready/reconnecting 仍让位驱动(连接/重连扫描 scanForDeviceId)。
+    final want =
+        mounted && _scanWanted && _sessionState == BleSessionState.idle && !_retryActive;
     if (want && !_panelScanHeld) {
       _panelScanHeld = true;
       AppServices.instance.setPanelScanActive(true);
@@ -470,15 +475,31 @@ class BlePairPanelState extends State<BlePairPanel>
 
   /// 「其它设备」列示源:扫描行滤掉已配对相机(它在上面有自己的行 +
   /// 状态点;2026-10-21 用户定稿「其它设备中不再出现已配对的设备」)。
+  /// 过滤用**双键**(2026-11-03 用户定稿):deviceId 关系 id 或归一化
+  /// 广播名任一命中即视为已配对相机 —— 只按行实例过滤时,同一机身的
+  /// 不同广播(RPA 换址/次要载荷)会另起一行漏进「其它设备」。
   List<ScanRow> _othersDevices() {
-    final paired = _pairedScanRow();
-    if (paired == null) return _scanRows;
-    return _scanRows.where((r) => !identical(r, paired)).toList();
+    final own = _ownDeviceId;
+    final name = _saved?.cameraName;
+    final nameKey = (name == null || name.trim().isEmpty)
+        ? null
+        : 'n:${_normalizeScanName(name)}';
+    return _scanRows.where((r) {
+      if (own != null && expectedControllerDeviceId(r.device.mfgData) == own) {
+        return false;
+      }
+      if (nameKey != null && _scanMergeKey(r.device) == nameKey) return false;
+      return true;
+    }).toList();
   }
 
   /// 过期修剪:行 5s 未再见到即摘除 —— 相机退菜单/睡眠 = 停广播 = 行
   /// 消失(2026-10-21 用户定稿「扫描不到就不该存在」+「20s 太久,5s」)。
+  /// **扫描未持有期不修剪**(2026-11-03 用户实证):握手中/重连中面板
+  /// 让出扫描权,这时的「没再见到」是扫描停摆而非相机消失;照剪会把
+  /// 配对行状态点打灰(点连接后黄/绿变灰)。恢复扫描后再按 TTL 淘汰。
   void _pruneStaleDevices() {
+    if (!_panelScanHeld) return;
     final now = DateTime.now();
     final alive =
         _scanRows.where((r) => now.difference(r.seenAt) <= _scanEntryTtl);
@@ -598,9 +619,13 @@ class BlePairPanelState extends State<BlePairPanel>
         }
       });
     } on Exception catch (e) {
-      _log('扫描失败:$e');
-      final issue = bleHostIssueOfError(e);
-      if (issue != null) _setHostIssue(issue);
+      // superseded = 新扫描顶掉了本窗(正常让位),不是故障,不落错误日志。
+      final superseded = e is PlatformException && e.code == 'superseded';
+      if (!superseded) {
+        _log('扫描失败:$e');
+        final issue = bleHostIssueOfError(e);
+        if (issue != null) _setHostIssue(issue);
+      }
     } finally {
       if (mounted) setState(() => _scanning = false);
       // 持续扫描循环:面板持有期间窗与窗之间留 2s 空隙(<5s TTL,行不
@@ -639,8 +664,9 @@ class BlePairPanelState extends State<BlePairPanel>
       serial: id.serial,
       controllerName: id.name,
       // 相机广播名只在扫描时见过,握手帧里没有 —— 此刻不存就没地方
-      // 再拿(设备行展示名,见 BlePairedIdentity.cameraName)。
-      cameraName: device.name,
+      // 再拿(设备行展示名,见 BlePairedIdentity.cameraName)。广播名
+      // 尾部带 NUL 填充,存档前清洗(展示/匹配都不再被不可见宽撑开)。
+      cameraName: sanitizeDeviceName(device.name),
       pairedAt: DateTime.now(),
     ));
     // 配对成功即驱动接管(2026-10-21:用户定稿「配对成功后直接连接」
@@ -766,6 +792,9 @@ class BlePairPanelState extends State<BlePairPanel>
       _retryActive = false;
       widget.onRetryingChanged?.call(false);
       if (notify && mounted) setState(() {});
+      // dispose 沿(notify:false)不归还扫描权:面板马上销毁,此刻起扫
+      // 会 setState 到已 defunct 的 Element(2026-11-03 测试实证)。
+      if (notify) _syncScanOwnership();
     }
   }
 
@@ -786,9 +815,17 @@ class BlePairPanelState extends State<BlePairPanel>
     final gen = _retryGen;
     widget.onRetryingChanged?.call(true);
     if (mounted) setState(() {});
+    // 重连在途:面板让出扫描权(会话要起 scanForDeviceId —— 两路扫描
+    // 互踩 = 全程无命中,见 2026-10-21 实证)。
+    _syncScanOwnership();
     _log('重连(复用已存身份)…');
+    // 手动连接(gateStandby:false)= 显式唤醒意图:与 iOS 挂起式连接
+    // 对齐 —— 不退避、固定 2s 一轮,直到连上或手动取消。相机随时可能
+    // 被打开,长退避会让它出现后最长干等 60s(2026-11-04 用户实证);
+    // 每轮扫描的发现事件会实时更新状态点,不再一直灰。
+    final manual = !gateStandby;
     var hintedForeign = false;
-    for (var attempt = 1; attempt <= 6; attempt++) {
+    for (var attempt = 1; manual || attempt <= 6; attempt++) {
       if (gen != _retryGen || !mounted) break;
       if (_session.state == BleSessionState.ready) {
         _log('已就绪 ✓');
@@ -800,12 +837,24 @@ class BlePairPanelState extends State<BlePairPanel>
         _log('重连成功 ✓');
         break;
       }
+      // 深睡暂停:扫到待机广播即停自动重连(会话回 idle),不再空转
+      // 下一轮 —— 只有手动「连接」能唤醒(2026-11-03 用户定稿)。
+      if (_session.autoReconnectPaused) {
+        _log('相机待机:停止自动重连,等手动连接唤醒');
+        break;
+      }
       final err = _session.lastError;
+      final delay =
+          manual ? const Duration(seconds: 2) : _session.nextRetryDelay;
       if (_session.lastRetryGated) {
         _log('第 $attempt 轮:相机待机(深睡闸门拦下),等唤醒…');
       } else {
-        _log('第 $attempt 轮无命中${err == null ? '' : '(${err.key})'},'
-            '${_session.nextRetryDelay.inSeconds}s 后再试(相机须停在'
+        // 扫描异常(如 busy/superseded)时把原因带出来,否则只剩错误键
+        // 无法定位(2026-11-04 真机:每轮 reconnectScanFail 无原文)。
+        final e = err?.args?['e'];
+        _log('第 $attempt 轮无命中(${err?.key ?? '-'}'
+            '${e == null ? '' : ':$e'}),'
+            '${delay.inSeconds}s 后再试(相机须停在'
             '「连接至智能设备」页或可重连待机)');
       }
       // 重连未命中 + 本页扫描结果里有「在等别的手机」的相机 → 复用同一条
@@ -819,7 +868,7 @@ class BlePairPanelState extends State<BlePairPanel>
           _log('检测到相机在等待其它控制器');
         }
       }
-      await _retryDelayWait(_session.nextRetryDelay);
+      await _retryDelayWait(delay);
     }
     // 十五轮:自动重连**常驻**(autoRearm)—— 六轮未中且会话仍停在
     // reconnecting:退避后续跑新六轮。页面开着时驱动被挂起,面板就是
@@ -845,6 +894,7 @@ class BlePairPanelState extends State<BlePairPanel>
       _retryActive = false;
       widget.onRetryingChanged?.call(false);
       if (mounted) setState(() {});
+      _syncScanOwnership(); // 重连收口:空闲态归还面板扫描权
     }
   }
 
@@ -866,12 +916,25 @@ class BlePairPanelState extends State<BlePairPanel>
     _cancelRetry();
     if (_scanning) {
       setState(() => _scanning = false);
-      unawaited(_session.stopScan());
+      // 必须等扫描真正停下再建链:Android 上扫描与连接并行会拖慢/阻塞
+      // 建链(2026-11-04 真机实证:GATT 50s 无回调,面板 30s 扫描仍在跑)。
+      await _session.stopScan();
     }
     if (_session.state != BleSessionState.idle) {
       // 接管:清在途(会话 disconnect 弃局握手 + 纪元闸,在途尝试的
       // 迟到收口不再翻状态)。
       await _session.disconnect();
+    }
+    // 手动连接 = 用「此刻广播地址」直连优先(配对行扫描行命中时):
+    // Android BLE 地址是轮换 RPA,存档地址在待机/等待页可能已失效;
+    // 等待页广播不带 0x0399,过滤扫描也扫不到,只有面板无过滤扫描
+    // 拿到的当前地址才打得中。扫不到当前广播则走会话扫描(会话另有
+    // 无过滤按名认机的兜底,见 BleCameraSession._scanByName)。
+    final row = _pairedScanRow();
+    if (row != null &&
+        !cameraWaitsForOtherController(row.device.mfgData, _ownDeviceId)) {
+      _session.reconnectDirectUuid = row.device.uuid;
+      _session.directFirstPending = true;
     }
     await _resume(gateStandby: false);
   }
@@ -990,7 +1053,7 @@ class BlePairPanelState extends State<BlePairPanel>
     }
     final name = _saved?.cameraName;
     if (name == null || name.isEmpty) return null;
-    final key = 'n:${name.replaceAll(RegExp(r'[\s_]+'), '').toLowerCase()}';
+    final key = 'n:${_normalizeScanName(name)}';
     for (final r in _scanRows) {
       if (_scanMergeKey(r.device) == key) return r;
     }
@@ -998,9 +1061,11 @@ class BlePairPanelState extends State<BlePairPanel>
   }
 
   /// 已配对行状态点(2026-10-21 用户定稿:状态值进配对行、设备名后):
-  /// 连接中 = 绿;未连接但广播可见 = 电源态色(绿/待机黄,配对菜单态
-  /// 广播无状态字节,能扫到即在播,按绿);完全不在线(扫描行里都没
-  /// 有)= 灰。
+  /// 已连上我们 = 绿;未连接但广播可见 = 电源态色(绿/待机黄,配对
+  /// 菜单态广播无状态字节,能扫到即在播,按绿);**相机已被别的控制
+  /// 器占用**(广播期望 deviceId 非我方,如 iOS/鸿蒙已连)= 灰,
+  /// 不能给绿 —— 绿只表示「在等我们/已连我们」(2026-11-03 用户实证:
+  /// 其它端连接时 Android 误显绿);完全不在线 = 灰。
   Widget _pairedStatusDot(BuildContext context) {
     final theme = Theme.of(context);
     Color color;
@@ -1008,7 +1073,8 @@ class BlePairPanelState extends State<BlePairPanel>
       color = AppColors.success(context);
     } else {
       final row = _pairedScanRow();
-      if (row == null) {
+      if (row == null ||
+          cameraWaitsForOtherController(row.device.mfgData, _ownDeviceId)) {
         color = theme.disabledColor;
       } else {
         color = advertisedPowerState(row.device.mfgData) ==
@@ -1028,32 +1094,18 @@ class BlePairPanelState extends State<BlePairPanel>
   /// (accentYellow)/ 就绪绿点(success);无状态字节(mfg 不足 7B:
   /// 配对菜单态/异厂商)不出点。待机点是「点连接为何唤不醒」的答案
   /// 面:深睡广播稀,闸门等物理唤醒。
-  Widget? _powerStateDot(BuildContext context, BleDevice device) {
-    final status = advertisedStatusByte(device.mfgData);
-    if (status == null) return null;
-    final standby =
-        advertisedPowerState(device.mfgData) == NikonAdvPowerState.standby;
-    return Container(
-      width: 8,
-      height: 8,
-      decoration: BoxDecoration(
-        color: standby ? AppColors.accentYellow : AppColors.success(context),
-        shape: BoxShape.circle,
-      ),
-    );
-  }
-
-  /// 扫描行:设备名 + 电源态色点(尾槽);deviceId/冲突指引不显
-  /// (冲突指引在重连日志 AppLog)。点行 = 发起配对(待机机也是显式
-  /// 意图,允许点醒,裁定⑤)。
+  /// 扫描行:设备名(不加电源态点 —— 2026-11-03 用户定稿「其它设备
+  /// 不显示状态点」:绿/黄点只属于已配对行,扫描行出点会被误读成
+  /// 连接状态)。点行 = 发起配对(待机机也是显式意图,允许点醒,裁定⑤)。
   Widget _scanRow(BuildContext context, BleDevice device) {
+    final name = sanitizeDeviceName(device.name);
     return ListTile(
       dense: true,
       enabled: _sessionState == BleSessionState.idle ||
           _sessionState == BleSessionState.reconnecting,
       leading: const Icon(Icons.camera_alt_outlined),
-      title: Text(device.name.isEmpty ? context.t('ble.unnamed') : device.name),
-      trailing: _powerStateDot(context, device),
+      title: Text(name.isEmpty ? context.t('ble.unnamed') : name,
+          maxLines: 1, overflow: TextOverflow.ellipsis),
       onTap: () => unawaited(_pair(device)),
     );
   }
@@ -1101,7 +1153,9 @@ class BlePairPanelState extends State<BlePairPanel>
                 title: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Flexible(child: Text(_saved!.displayName)),
+                    Flexible(
+                        child: Text(_saved!.displayName,
+                            maxLines: 1, overflow: TextOverflow.ellipsis)),
                     const SizedBox(width: AppSpacing.sm),
                     _pairedStatusDot(context),
                   ],
@@ -1125,7 +1179,9 @@ class BlePairPanelState extends State<BlePairPanel>
                 title: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Flexible(child: Text(_saved!.displayName)),
+                    Flexible(
+                        child: Text(_saved!.displayName,
+                            maxLines: 1, overflow: TextOverflow.ellipsis)),
                     const SizedBox(width: AppSpacing.sm),
                     // 2026-10-21:名后状态点(绿=广播在线/待机黄/离线灰)。
                     _pairedStatusDot(context),

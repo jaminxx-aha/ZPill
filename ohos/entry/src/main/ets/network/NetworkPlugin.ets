@@ -24,9 +24,10 @@
  *   192.168.1.1 存 0x0101A8C0),0/负 = 无租约;相机 AP 的网关即相机
  *   本机 IP,Dart 侧候选序消费(缺省回落 192.168.1.1)。
  *
- * 0x2004 安全字节(Android NetworkPlugin 同映射):0x01 开放 / 0x02
- * WPA2 / 0x03 WPA3 / 0x04 WPA2+WPA3 / 0x00 未定义;密码空一律开放,
- * 0x03 → SAE(WPA3),其余有密码 → PSK(兼容侧)。
+ * 0x2004 安全字节(Android NetworkPlugin 同映射):0x00/0x01 开放
+ * (Zf 开放热点也会解出展示用密码,必须按字节判,不能只看密码非空)
+ * / 0x02 WPA2 / 0x03 WPA3 / 0x04 WPA2+WPA3;密码空亦按开放,0x03 →
+ * SAE(WPA3),其余有密码 → PSK(兼容侧)。
  */
 import wifi from '@ohos.wifiManager';
 import { BusinessError } from '@kit.BasicServicesKit';
@@ -168,10 +169,15 @@ export class NetworkPlugin implements FlutterPlugin {
     this.dropOwnedConfig();
     this.pendingJoin = result;
     try {
+      // 开放判定按 0x2004 安全字节,不能只看密码非空 —— Zf 开放热点
+      // 也会解出展示用密码(FY666666);据此配 WPA2 会关联失败,表现
+      // 为系统「信任并连接」弹窗点信任后仍连不上(2026-11-04 真机)。
+      const securityType = this.secType(security, password);
       const cfg: wifi.WifiDeviceConfig = {
         ssid: ssid,
-        preSharedKey: password,
-        securityType: this.secType(security, password),
+        preSharedKey: securityType === wifi.WifiSecurityType.WIFI_SEC_TYPE_OPEN
+          ? '' : password,
+        securityType: securityType,
       };
       wifi.addCandidateConfig(cfg).then((networkId: number): void => {
         if (this.pendingJoin === null) {
@@ -203,9 +209,10 @@ export class NetworkPlugin implements FlutterPlugin {
     }
   }
 
-  /** 0x2004 安全字节 → ohos 枚举(映射见类注)。 */
+  /** 0x2004 安全字节 → ohos 枚举(映射见类注)。0x00/0x01 = 开放;
+   * 只有真有密码的 0x03 走 SAE,其余加密走 PSK。 */
   private secType(security: number, password: string): wifi.WifiSecurityType {
-    if (password === '') {
+    if (security === 0x00 || security === 0x01 || password === '') {
       return wifi.WifiSecurityType.WIFI_SEC_TYPE_OPEN;
     }
     if (security === 0x03) {

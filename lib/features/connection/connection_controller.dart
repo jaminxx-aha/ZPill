@@ -237,13 +237,25 @@ class ConnectionController extends ChangeNotifier {
 
   /// 唤起 Wi-Fi 成功但本平台无程序化入热能力(iOS):蓝牙页红卡
   /// 等用户手动入网(2026-10-19 用户裁定③④:红卡只限无法直连的情形,
-  /// Android/ohos joiner 直达不动)。显式「已加入热点,开始连接」或
-  /// 切离蓝牙方式即清。
+  /// Android/ohos joiner 直达不动)。显式「已加入热点,开始连接」、
+  /// 切离蓝牙方式或 join 成功沿即清。
   bool wifiAwakePending = false;
 
-  /// 唤醒成功沿置红卡(无 joiner 才走此路,见 [_wakeWifiWithCredentials])。
+  /// 唤醒成功沿置手动入网红卡(无 joiner/凭据未定才走此路,见
+  /// [_wakeWifiWithCredentials])。
   void markWifiAwakePending() {
     wifiAwakePending = true;
+    notifyListeners();
+  }
+
+  /// 发起新一次连接/唤醒时先撤旧的手动入网待办:失败的引导不该在
+  /// 重试途中继续挂着(否则成功沿才清,肉眼看到红字/卡片闪一下)。
+  /// 本次若再失败,失败分支会重新置位。
+  void clearWifiAwakePending() {
+    if (!wifiAwakePending) {
+      return;
+    }
+    wifiAwakePending = false;
     notifyListeners();
   }
 
@@ -389,7 +401,12 @@ class ConnectionController extends ChangeNotifier {
     }
     // join 定局沿的网关落账(候选序见 connectWireless;失败保留上次)
     apGateway = r.gateway;
-    selectMethod(ConnectionMethod.ap);
+    // 热点已加入:撤手动入网待办,否则旧标记会把引导卡和红字一直
+    // 顶在已连上的页面上(2026-11-04 真机)。
+    wifiAwakePending = false;
+    notifyListeners();
+    // 不切 AP 视图:交接在入口视图(蓝牙页)内静默完成,用户不需要
+    // 知道蓝牙与 AP 的关系(2026-11-04 用户定稿)。
     unawaited(connectWireless());
     return ApJoinOutcome.joined;
   }
@@ -460,6 +477,13 @@ class ConnectionController extends ChangeNotifier {
       }
     } else {
       awaitingCameraConfirm = false;
+    }
+    // 任何路径连上相机都视为「已成功」:撤手动入网待办。单靠 join
+    // 成功沿清不够 —— 用户可能绕过程序化入热(系统里手动入网后重连
+    // BLE/AP),旧待办会在退出拍摄回到蓝牙页时把引导卡顶出来
+    // (2026-11-04 真机截图复现)。
+    if (s == CameraLinkState.connected) {
+      wifiAwakePending = false;
     }
     state = s;
     // 无线链路收尾沿释放进程网络绑定:join 相机热点沿 native 把路由

@@ -190,8 +190,6 @@ const Map<String, String> zhCatalog = {
   'conn.openWifiSettings': '打开系统 Wi-Fi 设置',
   'conn.wakeFailed': '唤醒失败:{e}',
   'common.unknown': '未知',
-  'conn.joiningHotspot': '已断开蓝牙,正在加入相机热点「{ssid}」…',
-  'conn.joinedHotspot': '已加入相机热点「{ssid}」,正在连接相机…',
   'conn.scanningHotspot': '正在搜索相机热点…',
   'conn.noCameraAp': '未发现相机热点 —— 请确认相机 Wi-Fi 已开启',
   'conn.wifiPasswordTitle': '输入相机热点密码',

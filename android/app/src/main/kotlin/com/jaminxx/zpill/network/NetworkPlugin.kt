@@ -10,6 +10,7 @@ import android.net.wifi.WifiNetworkSpecifier
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
@@ -44,6 +45,9 @@ class NetworkPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private var boundNetwork: Network? = null
     private var watchdog: Runnable? = null
+
+    /// join 纪元:release/新 join 自增,热点轮询等迟到续体据此自灭。
+    private var joinEpoch = 0
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         channel = MethodChannel(binding.binaryMessenger, CHANNEL).also {
@@ -85,12 +89,71 @@ class NetworkPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
         // 重复 join:旧请求放掉(pending 以 superseded 收场),新的顶上。
         releaseNetwork()
         pendingJoin = result
+        val epoch = joinEpoch
+        // 先等相机热点出现在扫描结果里再发请求:0x2005 唤醒后热点要几秒
+        // 才起,太早 requestNetwork 会让系统确认框列表为空、只能取消
+        // (2026-11-04 真机);定位权限缺失时读不到扫描结果,直接请求,
+        // 交给系统确认框兜底。
+        waitForSsid(cm, ssid, password, security, 0, epoch)
+    }
 
+    /** 热点可见性轮询:最多 ~30s;要求最近 8s 内真实扫到(时间戳新鲜)。 */
+    private fun waitForSsid(
+        cm: ConnectivityManager,
+        ssid: String,
+        password: String,
+        security: Int,
+        attempt: Int,
+        epoch: Int,
+    ) {
+        if (epoch != joinEpoch || pendingJoin == null) return
+        val wm = appContext?.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+        val nowUs = SystemClock.elapsedRealtimeNanos() / 1000
+        val visible = try {
+            wm?.scanResults?.any { r ->
+                r.SSID == ssid &&
+                    r.timestamp > 0 &&
+                    nowUs - r.timestamp <= 8_000_000 // 8s 内新鲜
+            } == true
+        } catch (_: SecurityException) {
+            true // 无定位权限:交给系统确认框兜底
+        } catch (_: Exception) {
+            false
+        }
+        if (!visible) {
+            if (attempt >= 15) { // ~30s
+                settleJoin(mapOf("ok" to false, "reason" to "hotspot not found"))
+                return
+            }
+            try {
+                wm?.startScan()
+            } catch (_: Exception) {
+                // 扫描被限频/无权限:下一轮再看缓存结果
+            }
+            mainHandler.postDelayed({
+                waitForSsid(cm, ssid, password, security, attempt + 1, epoch)
+            }, 2000)
+            return
+        }
+        requestNetworkNow(cm, ssid, password, security, epoch)
+    }
+
+    private fun requestNetworkNow(
+        cm: ConnectivityManager,
+        ssid: String,
+        password: String,
+        security: Int,
+        epoch: Int,
+    ) {
+        if (epoch != joinEpoch || pendingJoin == null) return
         val spec = WifiNetworkSpecifier.Builder().setSsid(ssid)
-        // 0x2004 安全字节:0x01 开放 / 0x02 WPA2 / 0x03 WPA3 / 0x04
-        // WPA2+WPA3 / 0x00 未定义。密码空一律按开放;0x03 走 WPA3,
-        // 其余有密码走 WPA2(0x04 取兼容侧)。
-        if (password.isNotEmpty()) {
+        // 0x2004 安全字节:LSS 口径 0x00 = 开放(smali 旧口径 0x01 也按
+        // 开放兼容)/ 0x02 WPA2 / 0x03 WPA3 / 0x04 WPA2+WPA3。
+        // **必须按安全字节判定,不能只看密码非空** —— Zf 开放热点也会
+        // 解出一个展示用密码(FY666666),旧实现据此给开放热点配 WPA2
+        // 口令,关联必失败、表现为 join 30s timeout(2026-11-04 真机)。
+        val open = security == 0x00 || security == 0x01 || password.isEmpty()
+        if (!open) {
             if (security == 0x03) spec.setWpa3Passphrase(password)
             else spec.setWpa2Passphrase(password)
         }
@@ -197,6 +260,7 @@ class NetworkPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
     /// 解绑进程路由 + 注销请求;幂等,未持有无操作。引擎脱离时 pending
     /// 以 released 收场(防 Dart 侧 Future 悬挂)。
     private fun releaseNetwork() {
+        joinEpoch++
         watchdog?.let { mainHandler.removeCallbacks(it) }
         watchdog = null
         networkCallback?.let { cb ->

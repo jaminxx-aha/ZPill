@@ -20,6 +20,7 @@
 library;
 
 import 'dart:async';
+import 'dart:io' show Platform;
 
 import 'package:flutter/services.dart';
 
@@ -123,7 +124,7 @@ abstract interface class BleHost {
 
   /// 连接已配对/已发现设备(peripheralUuid = [BleDevice.uuid])。
   /// 就绪以 BleConnected 事件为准(服务发现完成后发出)。
-  Future<void> connectPaired(String peripheralUuid);
+  Future<void> connectPaired(String peripheralUuid, {bool autoConnect = false});
 
   /// 订阅 indicate/notify(indicate 同走此路)。
   Future<void> setNotify(String characteristicUuid);
@@ -193,8 +194,17 @@ final class MethodChannelBleHost implements BleHost {
       _invokeScan('scanForDeviceId', deviceId, timeout);
 
   @override
-  Future<void> connectPaired(String peripheralUuid) =>
-      _methods.invokeMethod<void>('connectPaired', peripheralUuid);
+  Future<void> connectPaired(String peripheralUuid, {bool autoConnect = false}) {
+    // 仅 Android 原生认 autoConnect(挂起式建链);其它端沿用字符串参
+    // 数,避免给 iOS/ohos 通道塞未知载荷(它们的栈本身已是挂起语义)。
+    if (autoConnect && Platform.isAndroid) {
+      return _methods.invokeMethod<void>('connectPaired', {
+        'uuid': peripheralUuid,
+        'autoConnect': true,
+      });
+    }
+    return _methods.invokeMethod<void>('connectPaired', peripheralUuid);
+  }
 
   @override
   Future<void> setNotify(String characteristicUuid) =>

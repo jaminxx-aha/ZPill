@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# 版本化 git 钩子:git worktree add / 分支检出后,把主 worktree 的本地
+# (gitignored)资产补给当前工作区。只处理两件事:
+#   1) 签名配置 ohos/signing/local-signing.json —— 缺了 hvigor 报
+#      「No signingConfig found」,编出 unsigned HAP 装不上;
+#   2) 应用名 branding/local/app_name.xcconfig —— 三端构建的名字源,
+#      用软链指向主 worktree,主仓改名后所有工作区立即生效。
+# 附带复制鸿蒙本地构建脚本与品牌生成物(dart-defines.json),缺了同样
+# 编不了按本地名字的包。
+#
+# 约定:git 在检出后调用本脚本,cwd = 当前 worktree 根,参数
+# $1=旧 HEAD / $2=新 HEAD / $3=1 分支检出。所有缺失判断都是幂等的,
+# 任意失败都不影响检出。
+set -u
+
+root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+main=$(git worktree list --porcelain | awk 'NR==1{sub(/^worktree /,""); print; exit}')
+[ -z "$main" ] && exit 0
+[ "$root" = "$main" ] && exit 0   # 主 worktree 自己跳过
+
+# 复制:静态本地资产(各工作区独立,互不影响)
+copy_if_missing() {
+  local rel=$1
+  if [ -e "$root/$rel" ] || [ -L "$root/$rel" ]; then return 0; fi
+  [ -f "$main/$rel" ] || return 0
+  mkdir -p "$root/$(dirname "$rel")"
+  cp -p "$main/$rel" "$root/$rel" && echo "post-checkout: copied $rel" >&2
+}
+
+# 软链:需要在所有工作区保持同步的资产(当前只有应用名)
+link_if_missing() {
+  local rel=$1
+  if [ -e "$root/$rel" ] || [ -L "$root/$rel" ]; then return 0; fi
+  [ -f "$main/$rel" ] || return 0
+  mkdir -p "$root/$(dirname "$rel")"
+  ln -s "$main/$rel" "$root/$rel" && echo "post-checkout: linked $rel" >&2
+}
+
+# 应用名:主仓改名字 → 所有工作区生效(branding/local 被 gitignore)
+link_if_missing branding/local/app_name.xcconfig
+# 鸿蒙本地构建脚本 + 品牌生成物(本地名字的构建入口)
+copy_if_missing branding/local/build_ohos_nikon_pill.sh
+copy_if_missing branding/local/generated/dart-defines.json
+# 签名配置:缺它编出来的是 unsigned HAP(hdc install 报 no signature file)
+copy_if_missing ohos/signing/local-signing.json
+
+exit 0

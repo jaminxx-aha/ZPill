@@ -9,6 +9,7 @@ import 'package:z_pill/core/ble/ble_camera_session.dart';
 import 'package:z_pill/core/ble/gatt_uuids.dart';
 import 'package:z_pill/core/log/app_log.dart';
 import 'package:z_pill/data/ble_identity_store.dart';
+import 'package:z_pill/design/app_colors.dart';
 import 'package:z_pill/features/connection/ble_pair_panel.dart';
 import 'package:z_pill/platform/ble_scanner.dart';
 
@@ -200,7 +201,7 @@ void main() {
     await disposePage(tester);
   });
 
-  testWidgets('广播带状态字节:行尾出电源态色点(待机黄),设备ID/文字副文不显',
+  testWidgets('广播带状态字节:扫描行不再出电源态色点(2026-11-03 定稿)',
       (tester) async {
     await boot(tester,
         scanResult: [deviceMap(mfgOf(0x56781234, status: 0x1F))]);
@@ -208,18 +209,20 @@ void main() {
     expect(find.text('Z f_8014411'), findsOneWidget);
     expect(find.textContaining('待机'), findsNothing,
         reason: '电源态文字退役(2026-10-19 换色点)');
+    // 2026-11-03 用户定稿:状态点只属于「已配对」行;「其它设备」扫描
+    // 行不再出点(绿/黄点会被误读成连接状态)。
     expect(
         find.byWidgetPredicate((w) =>
             w is Container &&
             w.decoration is BoxDecoration &&
             (w.decoration as BoxDecoration).shape == BoxShape.circle),
-        findsOneWidget,
-        reason: '待机黄点(深睡行 = 点连接唤不醒的答案面)');
+        findsNothing,
+        reason: '扫描行状态点已撤(点只画在配对行)');
     expect(find.textContaining('设备ID'), findsNothing);
     await disposePage(tester);
   });
 
-  testWidgets('有身份:打开不自动回链(重连钮在场待点),面板不持扫描权',
+  testWidgets('有身份:打开不自动回链(重连钮在场待点),面板持扫描显状态',
       (tester) async {
     await boot(tester,
         scanResult: [deviceMap(mfgOf(0x56781234))],
@@ -230,11 +233,11 @@ void main() {
     expect(find.text('连接'), findsOneWidget, reason: '连接钮在场,显式点按才发起');
     expect(find.text('最近'), findsOneWidget,
         reason: '配对档案行 = 最近连接条目,名后绿底「最近」徽(八轮)');
-    // 2026-10-21:有身份面板不持扫描权(无线电让给驱动回链),已配对
-    // 相机也不进其它设备 → 扫描结果不列示,列表空。
-    expect(find.text('Z f_8014411'), findsNothing);
-    expect(find.textContaining('此相机在等别的手机'), findsNothing,
-        reason: '扫描行只显设备名,冲突指引不再上墙');
+    // 2026-11-03 用户定稿:未连接(idle)时即使有身份,面板也持扫描权 ——
+    // 相机「连接至智能设备」等待页广播不带 0x0399,只有无过滤扫描才拿
+    // 得到名字/电源态,配对行状态点才能显示 等待绿 / 待机黄 / 离线灰。
+    // 本例档案 deviceId 与广播不同,广播相机列进「其它设备」。
+    expect(find.text('Z f_8014411'), findsOneWidget);
     await disposePage(tester);
   });
 
@@ -251,17 +254,35 @@ void main() {
     await disposePage(tester);
   });
 
-  testWidgets('有身份:面板不持扫描权(回链优先),别家相机不列示无指引',
-      (tester) async {
-    // 会话身份一并注入:2026-10-21 定稿有身份面板不扫描(无线电让给
-    // 驱动回链,已配对相机也不进其它设备)—— 别家相机列示与「在等别
-    // 的手机」指引随发现扫描一并退场。
+  testWidgets('相机被别的控制器占用:配对行状态点不给绿(2026-11-03 实证)', (tester) async {
+    // 相机同时配了 iOS/鸿蒙/Android:别的端连上时,广播里的期望
+    // deviceId 变成那台手机的;本端按名字仍能匹配到扫描行,但不该
+    // 显示绿点(绿 = 在等我们/已连我们)。
+    await boot(tester,
+        scanResult: [deviceMap(mfgOf(0x56781234))],
+        saved: identityOf(0x11223301, cameraName: 'Z f_8014411'));
+
+    final ctx = tester.element(find.byType(BlePairPanel));
+    final success = AppColors.success(ctx);
+    expect(
+        find.byWidgetPredicate((w) =>
+            w is Container &&
+            w.decoration is BoxDecoration &&
+            (w.decoration as BoxDecoration).shape == BoxShape.circle &&
+            (w.decoration as BoxDecoration).color == success),
+        findsNothing,
+        reason: '期望 deviceId 非我方 = 被别的控制器占用,不能给绿点');
+    await disposePage(tester);
+  });
+
+  testWidgets('有身份:面板持扫描(状态显示优先),别家相机列示', (tester) async {
+    // 2026-11-03 用户定稿:未连接态有身份也扫描(状态点/发现扫描是面板
+    // 本职能);回链仍由驱动在 reconnecting 态接管,面板届时让位。
     await boot(tester,
         scanResult: [deviceMap(mfgOf(0x56781234))],
         saved: identityOf(0x11223301));
 
-    expect(find.textContaining('Z f'), findsNothing);
-    expect(find.textContaining('此相机在等别的手机'), findsNothing);
+    expect(find.text('Z f_8014411'), findsOneWidget);
     await disposePage(tester);
   });
 

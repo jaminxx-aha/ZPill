@@ -84,7 +84,8 @@ final class FakeBleHost implements BleHost {
   }
 
   @override
-  Future<void> connectPaired(String peripheralUuid) async {
+  Future<void> connectPaired(String peripheralUuid,
+      {bool autoConnect = false}) async {
     connects.add(peripheralUuid);
     if (connectFailures > 0) {
       connectFailures--;
@@ -669,15 +670,15 @@ void main() {
     host.writeError = null;
   });
 
-  test('断链首轮直连优先:静默态不空转扫描,直连失败才落回扫描', () async {
+  test('手动重连直连优先:静默态不空转扫描,直连失败才落回扫描', () async {
     await runHandshake();
     host.emit(const BleDisconnected('P1'));
     await pump();
     session.directFirstPending = false; // (replace_all 注入的扫描路径复位)
-    // 本用例专属:重新武装直连优先 —— 静默态不空转扫描,直连先发
+    // 本用例专属:手动路武装直连优先 —— 静默态不空转扫描,直连先发
     session.directFirstPending = true;
     host.reconnectDeviceId = null; // 扫描必空(静默态)
-    final fut = session.retryReconnect();
+    final fut = session.retryReconnect(gateStandby: false); // 手动路才直连
     await pump();
     expect(host.connects.length, 2); // 配对握手 1 + 直连 1(先发)
     expect(host.connects.last, 'P1');
@@ -737,7 +738,10 @@ void main() {
     host.reconnectDeviceId = session.identity!.deviceId;
     await runHandshake(resume: true, characteristics: const {readable: 'read'});
     await pump();
-    expect(host.readCalls.length, readsAfterPair);
+    // 复用重连不做整表读;只保留一笔深睡唤醒 poke(电池 0x2a19)。
+    expect(host.readCalls.length, readsAfterPair + 1,
+        reason: '复用重连只多一笔唤醒 poke,不重复整表读');
+    expect(host.readCalls.last, kNikonCharBattery);
   });
 
   test('ready 断连 → reconnecting;重连复用身份(deviceId/nonce 不变)', () async {
@@ -771,23 +775,41 @@ void main() {
     }
   });
 
-  test('深睡闸门:自动重连扫到待机广播(bit0=1)不连,退避冻结 2s', () async {
+  test('深睡暂停:自动重连扫到待机广播即停止(回 idle),不发起连接', () async {
     await runHandshake();
     host.emit(const BleDisconnected('P1'));
     await pump();
-    session.directFirstPending = false; // 扫描路径用例:直连优先不适用
+    session.directFirstPending = false; // 扫描路径用例:自动路不直连
     host.reconnectDeviceId = session.identity!.deviceId;
     // Zf 真机 2026-10-17:待机 0x1F(bit0=1;字节布局 99 03 + deviceId + 状态)。
     host.reconnectMfg =
         Uint8List.fromList([0x99, 0x03, 0x44, 0x5d, 0x4b, 0x24, 0x1f]);
     host.connects.clear(); // 首配的连接记账清掉,只看闸门期
-    for (var i = 0; i < 3; i++) {
-      expect(await session.retryReconnect(), isFalse);
-    }
-    expect(session.state, BleSessionState.reconnecting);
-    expect(session.nextRetryDelay, const Duration(seconds: 2)); // 冻结不推进
+    expect(await session.retryReconnect(), isFalse);
+    // 2026-11-03 用户定稿:检测到待机立即停自动重连,状态回 idle
+    expect(session.state, BleSessionState.idle);
+    expect(session.autoReconnectPaused, isTrue);
     expect(session.lastRetryGated, isTrue); // 上层日志据此区分「被闸/无命中」
     expect(host.connects, isEmpty); // 一次连接都没发起
+    // 驱动/面板即便再调,也不得发起连接(只有手动连接能解除暂停)
+    expect(await session.retryReconnect(), isFalse);
+    expect(host.connects, isEmpty);
+  });
+
+  test('自动重连忽略直连优先:待机相机不会被直连唤醒', () async {
+    await runHandshake();
+    host.emit(const BleDisconnected('P1'));
+    await pump();
+    // 会话在收线沿武装了直连优先;自动路必须忽略它,只走扫描。
+    session.directFirstPending = true;
+    host.reconnectDeviceId = session.identity!.deviceId;
+    host.reconnectMfg =
+        Uint8List.fromList([0x99, 0x03, 0x44, 0x5d, 0x4b, 0x24, 0x1f]);
+    host.connects.clear();
+    expect(await session.retryReconnect(), isFalse); // 默认 gateStandby:true
+    expect(host.connects, isEmpty, reason: '自动路不得直连唤醒待机相机');
+    expect(session.autoReconnectPaused, isTrue);
+    expect(session.directFirstPending, isFalse); // 旗标已消费
   });
 
   test('深睡闸门放行:广播转就绪(bit0=0)即连,复用握手到 ready', () async {
@@ -805,11 +827,12 @@ void main() {
     expect(host.connects, ['P1']);
   });
 
-  test('手动重连绕闸:待机广播 + gateStandby:false 照连', () async {
+  test('手动重连绕闸:待机广播 + gateStandby:false 照连,并解除深睡暂停', () async {
     await runHandshake();
     host.emit(const BleDisconnected('P1'));
     await pump();
     session.directFirstPending = false; // 扫描路径用例:直连优先不适用
+    session.autoReconnectPaused = true; // 自动路已被待机暂停
     host.reconnectDeviceId = session.identity!.deviceId;
     host.reconnectMfg =
         Uint8List.fromList([0x99, 0x03, 0x44, 0x5d, 0x4b, 0x24, 0x1f]);
@@ -817,6 +840,8 @@ void main() {
     await runHandshake(resume: true, gateStandby: false);
     expect(session.state, BleSessionState.ready);
     expect(host.connects, ['P1']);
+    expect(session.autoReconnectPaused, isFalse,
+        reason: '手动连接 = 显式唤醒意图,解除深睡暂停');
     expect(session.lastMatchName, 'Z f_x',
         reason: '重连命中沿记录广播名(ready 沿旧档相机名回填消费)');
   });

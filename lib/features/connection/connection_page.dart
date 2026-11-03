@@ -16,7 +16,8 @@
 /// 只承载 GPS 注入与唤醒相机 WiFi(2026-10-14);iOS 首配经典配对与
 /// 唤起 Wi-Fi 手动入网均以页内红色引导卡承接(App 不主动跳系统设置,
 /// 手动按钮不点不跳 —— 2026-10-19 裁定;能程序化直连的平台直达:
-/// ohos 绑定、Android 入热)。已连接(2026-10-17 bento 卡片风 v24
+/// ohos 绑定、Android 入热;加入热点成功沿撤卡,2026-11-04)。已连接
+/// (2026-10-17 bento 卡片风 v24
 /// 交付稿定样):状态行(绿点 + 电池 + 链路纯图标 pill)+ 机身整行
 /// 卡(竖线居中:型号 pill | 固件/序列号裸值)+ 镜头信息|存储双列
 /// 卡 + 底部双钮(左相册灰右进入拍摄黄;「进入拍摄」全屏 push 遥控
@@ -682,13 +683,13 @@ class _ConnectionPageState extends State<ConnectionPage>
   static const double _heroTopGap = 161;
 
   /// USB/AP 主视图:状态行 + 固定错误位 + 方式 hero(**点按即连接、
-  /// 在途点按取消**,五轮中央连接钮退役)+ AP 凭据卡(沉底)。失败态
-  /// 错误行落在固定错误位,重试 = 再点图标;当前方式在 AppBar 方式位
-  /// (六轮,[_modeChip])。
+  /// 在途点按取消**,五轮中央连接钮退役)。失败态错误行落在固定错误位,
+  /// 重试 = 再点图标;当前方式在 AppBar 方式位(六轮,[_modeChip])。
+  /// AP 页热点凭据卡已撤(2026-11-04),与蓝牙入口保持一致:交接凭据
+  /// 不在 AP 页复述。
   Widget _heroView(BuildContext context, ConnectionController controller) {
     final busy = _busyState(controller);
     final (label, dot, busySpin) = _ptpStatusPresentation(controller, context);
-    final isAp = controller.method == ConnectionMethod.ap;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -716,23 +717,11 @@ class _ConnectionPageState extends State<ConnectionPage>
             onTap: () => _heroPressed(controller),
           ),
         ),
-        // 弹性空档:凭据卡沉底。
+        // 弹性空档:页尾留白。
         const Expanded(child: SizedBox.shrink()),
-        // AP 方式的热点凭据卡(蓝牙通道解出才显示):SSID/密码/安全 +
-        // 复制 —— 系统设置加入热点用。
-        if (isAp && controller.cameraApCredentials != null)
-          Padding(
-            padding: AppSpacing.screenPadding.copyWith(top: 0),
-            child: Card(
-              child: Padding(
-                padding: const EdgeInsets.all(AppSpacing.lg),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: _apCredentialBlock(context, controller),
-                ),
-              ),
-            ),
-          ),
+        // AP 页热点凭据卡已撤(2026-11-04 用户定稿):蓝牙解出的凭据
+        // 是交接用的,不再在 AP 页展示;确需手动入网时由蓝牙页引导卡/
+        // 加入失败弹层直呈。
       ],
     );
   }
@@ -742,17 +731,21 @@ class _ConnectionPageState extends State<ConnectionPage>
   /// 可点 = 连最近,九轮在途再点 = 取消,十一轮就绪点按 = 断开,十三轮
   /// 重连态点按 = 停止重连**;连接中涟漪 = 会话态 ∪ 面板重连循环,九轮;
   /// **就绪实底统一黄**,十一轮)+ 红卡(等待系统配对 /
-  /// Wi-Fi 手动入网,按态出)+ 就绪态「远程连接相机」+ 配对面板两段列
-  /// 表;当前方式在 AppBar 方式位(六轮)。进入页面不回链不连接(驱动
-  /// 已挂起)全手动;扫描打开沿自动起、静默。
+  /// Wi-Fi 手动入网,按态出;后者在 join 成功沿即撤)+ 就绪态「远程
+  /// 连接相机」+ 配对面板两段列表;当前方式在 AppBar 方式位(六轮)。
+  /// 进入页面不回链不连接(驱动已挂起)全手动;扫描打开沿自动起、静默。
   Widget _bleView(BuildContext context, ConnectionController controller) {
     final session = controller.bleSession!;
     final ready = controller.bleReady;
     final creds = controller.cameraApCredentials;
     final (label, dot, busy) = _bleStatusPresentation(controller, context);
+    // 连接尝试在途(AP 交接的 PTP 连接/重连):失败引导一律不渲染 ——
+    // 旧待办/旧错误不能在本轮成功途中闪出来,只有状态落定(失败)才显示。
+    final inFlight = controller.state == CameraLinkState.connecting ||
+        controller.state == CameraLinkState.reconnecting;
     // 错误位消息(键+参记录):唤醒未直连 → 固定红字提醒压过会话杂错
     //(解密未中已改写 AppLog 不上屏);否则沿会话 lastError 如实。
-    final L10nMessage? hintMsg = !ready
+    final L10nMessage? hintMsg = !ready && !inFlight
         ? (controller.wifiAwakePending
             ? const (key: 'conn.wifiManualConnectHint', args: null)
             : session.displayError)
@@ -802,9 +795,11 @@ class _ConnectionPageState extends State<ConnectionPage>
             keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
             padding: AppSpacing.screenPadding.copyWith(top: AppSpacing.md),
             children: [
-              // 唤起 Wi-Fi 手动入网红卡(仅无程序化 joiner 平台,2026-10-19
+              // 唤起 Wi-Fi 手动入网卡(仅无程序化 joiner 平台,2026-10-19
               // 裁定③④;App 不主动跳 Wi-Fi 设置,手动按钮不点不跳)。
-              if (controller.wifiAwakePending && creds != null) ...[
+              // 连接在途不渲染(见 inFlight):成功途中不得闪现失败引导;
+              // 成功沿另由 controller.joinCameraAp/connected 沿清待办。
+              if (controller.wifiAwakePending && creds != null && !inFlight) ...[
                 const SizedBox(height: AppSpacing.lg),
                 ConnGuideCard(
                   title: context.t('conn.wifiAwakeCardTitle'),
@@ -831,7 +826,7 @@ class _ConnectionPageState extends State<ConnectionPage>
               ],
               // iOS 系统蓝牙配对红卡(2026-10-19 裁定②③:自动跳转删除,
               // ohos 程序化绑定不出卡;手动按钮保留,点了才跳)。
-              if (controller.bleAwaitSystemBond) ...[
+              if (controller.bleAwaitSystemBond && !inFlight) ...[
                 const SizedBox(height: AppSpacing.lg),
                 ConnGuideCard(
                   title: context.t('ble.bondCardTitle'),
@@ -965,6 +960,9 @@ class _ConnectionPageState extends State<ConnectionPage>
   /// 解密未中改写 AppLog)。GPS 注入随断链暂停。
   static Future<void> _wakeWifiWithCredentials(
       BuildContext context, ConnectionController controller) async {
+    // 新一次唤醒意图:先撤上一次失败留下的手动入网引导,避免重试途中
+    // 红字/卡片一直挂着、成功瞬间才消失(肉眼「闪一下」)。
+    controller.clearWifiAwakePending();
     final ok = await controller.wakeCameraWifi();
     if (!context.mounted) return;
     if (!ok) {
@@ -1002,17 +1000,11 @@ class _ConnectionPageState extends State<ConnectionPage>
       controller.markWifiAwakePending();
       return;
     }
-    // 自动加入路上:join 看门狗 30s 兜底,过渡提示给足时长。
-    _showHintStatic(context, controller,
-        context.t('conn.joiningHotspot', {'ssid': creds.ssid}),
-        duration: const Duration(seconds: 30));
+    // 自动加入路上不弹任何状态条(「正在加入」「已加入」皆撤):
+    // 交接对用户透明,成功直接落到连接页(2026-11-04 用户定稿)。
     final outcome = await controller.joinCameraAp();
     if (!context.mounted) return;
-    if (outcome == ApJoinOutcome.joined) {
-      _showHintStatic(context, controller,
-          context.t('conn.joinedHotspot', {'ssid': creds.ssid}),
-          duration: const Duration(seconds: 5));
-    } else if (outcome == ApJoinOutcome.failed) {
+    if (outcome == ApJoinOutcome.failed) {
       if (controller.cameraApCredentials != null) {
         // join 失败但凭据已解出(iOS 免费签名无 Hotspot entitlement,
         // 2026-10-27 真机):弹层直呈 SSID/密码(行尾复制)—— 别让用户
@@ -1141,9 +1133,8 @@ class _ConnectionPageState extends State<ConnectionPage>
         await controller.saveWifiPassword(password);
         if (!context.mounted) return outcome;
       }
-      _showHintStatic(context, controller,
-          context.t('conn.joinedHotspot', {'ssid': pick.ssid}),
-          duration: const Duration(seconds: 5));
+      // 成功沿不弹「已加入相机热点…」:交接静默,直接进连接页
+      // (2026-11-04 用户定稿)。
     } else if (outcome == ApJoinOutcome.failed) {
       _showHintStatic(
         context,

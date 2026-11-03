@@ -252,8 +252,11 @@ export class BlePlugin implements FlutterPlugin, AbilityAware {
   private startScan(seconds: number, filterDeviceId: number | null,
     result: MethodResult): void {
     if (this.scanResult !== null) {
-      result.error('busy', '已有扫描在进行', null);
-      return;
+      // 扫描单飞行:新请求顶掉旧扫描(旧调用方按 superseded 收场)——
+      // 面板周期扫描与会话重连扫描交替时,stop→start 间隙会让旧扫描
+      // 仍在栈上;旧实现直接回 busy,Dart 侧扫描反复失败(2026-11-03
+      // 鸿蒙真机:每 2s 一条「扫描失败:busy」,状态点永远灰)。
+      this.finishScan('superseded', '扫描被新请求接管');
     }
     if (this.scanner !== null) {
       this.stopScanNative(); // 上一次的定时器/监听未清(防御)
@@ -374,11 +377,15 @@ export class BlePlugin implements FlutterPlugin, AbilityAware {
     }
   }
 
-  private finishScan(): void {
+  private finishScan(errorCode?: string, errorMessage?: string): void {
     this.stopScanNative();
     const result = this.scanResult;
     this.scanResult = null;
     if (result === null) {
+      return;
+    }
+    if (errorCode !== undefined) {
+      result.error(errorCode, errorMessage ?? '', null);
       return;
     }
     const list: Record<string, Object>[] = [];
@@ -411,12 +418,22 @@ export class BlePlugin implements FlutterPlugin, AbilityAware {
     this.discoveryDone = false;
     this.pendingConnect = result;
     try {
-      this.gattClient = ble.createGattClientDevice(uuid);
-      this.gattClient.on('BLEConnectionStateChange',
+      const client = ble.createGattClientDevice(uuid);
+      this.gattClient = client;
+      client.on('BLEConnectionStateChange',
         (d: ble.BLEConnectionChangeState): void => {
+          // 旧客户端的迟到回调(connectPaired 先 teardown 旧客户端再挂
+          // 新客户端,旧 disconnect 事件常在异步里才到):不校验身份会
+          // 把新一次尝试误判成断链落错 —— 表现为连上即断、反复重连
+          // (2026-11-04 鸿蒙真机实证)。
+          if (this.gattClient !== client) {
+            return;
+          }
           if (d.state === 2) {
+            // 立即请求 MTU(2026-11-04 回退:150ms 礼让 + 1.5s 兜底反而
+            // 让深睡相机在 MTU 前断链;恢复旧节奏 —— 立即请求、5s 兜底)。
             try {
-              this.gattClient?.setBLEMtuSize(517);
+              client.setBLEMtuSize(517);
             } catch (e) {
               Log.w(TAG, `setBLEMtuSize: ${e}`);
             }
@@ -437,7 +454,10 @@ export class BlePlugin implements FlutterPlugin, AbilityAware {
             this.emit({ 'type': 'disconnected', 'uuid': this.deviceId });
           }
         });
-      this.gattClient.on('BLEMtuChange', (mtu: number): void => {
+      client.on('BLEMtuChange', (mtu: number): void => {
+        if (this.gattClient !== client) {
+          return;
+        }
         this.lastMtu = mtu;
         if (this.mtuTimerId !== -1) {
           clearTimeout(this.mtuTimerId);
@@ -445,14 +465,17 @@ export class BlePlugin implements FlutterPlugin, AbilityAware {
         }
         this.discoverServices();
       });
-      this.gattClient.on('BLECharacteristicChange',
+      client.on('BLECharacteristicChange',
         (d: ble.BLECharacteristic): void => {
+          if (this.gattClient !== client) {
+            return;
+          }
           const u = (d.characteristicUuid as string ?? '').toLowerCase();
           const v = d.characteristicValue;
           const bytes = v instanceof Uint8Array ? v : new Uint8Array(v);
           this.emit({ 'type': 'notify', 'uuid': u, 'data': bytes });
         });
-      this.gattClient.connect();
+      client.connect();
     } catch (err) {
       const e = err as BusinessError;
       Log.e(TAG, `connect: ${e.code} ${e.message}`);
@@ -481,6 +504,17 @@ export class BlePlugin implements FlutterPlugin, AbilityAware {
         }
         if (err) {
           Log.e(TAG, `getServices: ${err.code} ${err.message}`);
+          // 2026-11-04 回退:不在失败时立即断开(那会让深睡相机进入
+          // 连-断循环);恢复同链路 2s 重试,最多 15 次,外层 50s 收口。
+          if (this.discoveryRetries < 15) {
+            this.discoveryRetries++;
+            Log.w(TAG,
+              `getServices 失败 — 重试(${this.discoveryRetries}/15)`);
+            setTimeout((): void => {
+              this.discoverServices();
+            }, 2000);
+            return;
+          }
           const pending = this.pendingConnect;
           this.pendingConnect = null;
           pending?.error('discoveryFailed', `${err.message}`, null);

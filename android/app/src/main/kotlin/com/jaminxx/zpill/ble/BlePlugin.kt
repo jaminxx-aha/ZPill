@@ -75,7 +75,8 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
         private const val DISCOVERY_RETRY_MS = 2000L
         private const val DISCOVERY_RETRY_MAX = 2
         private const val BOND_TIMEOUT_MS = 20000L
-        private const val CONNECT_WATCHDOG_MS = 10000L
+        private const val BOND_DISCOVERY_TIMEOUT_MS = 30000L
+        private const val CONNECT_WATCHDOG_MS = 30000L
         private const val OP_WATCHDOG_MS = 5000L
     }
 
@@ -109,7 +110,11 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
 
     // 扫描
     private var scanHits = LinkedHashMap<String, ScanHit>()
-    private var scanFilterDeviceId: Int? = null
+    // deviceId 是相机侧的无符号 32 位(u32):超过 2^31-1 时 Flutter 以
+    // Long 传递,用 Int 强转会抛 ClassCastException(2026-11-04 真机
+    // "java.lang.Long cannot be cast to java.lang.Integer",全部过滤
+    // 扫描失败)。全链路用 Long 承载。
+    private var scanFilterDeviceId: Long? = null
     private var scanResult: MethodChannel.Result? = null
 
     // 连接 / GATT
@@ -119,6 +124,8 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
     private val propsMap = HashMap<String, String>()
     private var mtu = 20
     private var pendingConnect: MethodChannel.Result? = null
+    private var connectWatchdog: Runnable? = null
+    private var discoveryRetryTimer: Runnable? = null
     private var discoveryRetries = 0
     private var discoveryInFlight = false
     private var discoveryDone = false
@@ -128,6 +135,15 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
 
     // 绑定(经典蓝牙)
     private var pendingBond: MethodChannel.Result? = null
+
+    /** 经典发现命中后的 BR/EDR 地址(BLE 随机地址不能直接用)。 */
+    private var bondAddress: String? = null
+
+    /** 绑定期的经典发现接收器;命中/超时/引擎卸载时注销。 */
+    private var bondDiscoverReceiver: BroadcastReceiver? = null
+
+    /** 绑定看门狗(发现总时长 → createBond 回调),同一时刻只跑一个。 */
+    private var bondWatchdog: Runnable? = null
 
     private val adapter: BluetoothAdapter?
         get() = (context?.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
@@ -184,7 +200,7 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
                     "uuid" to dev.address, "name" to (safeName(dev) ?: ""),
                 )
             )
-            if (dev.address != deviceId) return
+            if (dev.address != bondAddress) return
             when (state) {
                 BluetoothDevice.BOND_BONDED -> settleBond(true, null)
                 BluetoothDevice.BOND_NONE -> settleBond(false, "配对被拒绝或失败")
@@ -201,6 +217,7 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
                 if (newState == BluetoothProfile.STATE_CONNECTED) {
                     discoveryRetries = 0
                     discoveryDone = false
+                    armConnectWatchdog() // 建链进展:服务发现阶段重新计时
                     try {
                         g.requestMtu(MTU_TARGET)
                     } catch (e: Exception) {
@@ -224,6 +241,7 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
                 if (g !== this@BlePlugin.gatt) return@post
                 NativeLog.i("ble", "MTU 回调:mtu=$mtu status=$status")
                 if (status == BluetoothGatt.GATT_SUCCESS) this@BlePlugin.mtu = mtu
+                armConnectWatchdog() // MTU 进展:服务发现阶段重新计时
                 discoverServices()
             }
         }
@@ -231,7 +249,10 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
         override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
             mainHandler.post {
                 if (g !== this@BlePlugin.gatt) return@post
+                if (discoveryDone) return@post // 重发发现后的迟到回调:忽略
                 discoveryInFlight = false
+                discoveryRetryTimer?.let { mainHandler.removeCallbacks(it) }
+                discoveryRetryTimer = null
                 NativeLog.i("ble", "服务发现回调:status=$status")
                 if (status != BluetoothGatt.GATT_SUCCESS) {
                     settleConnect("discoveryFailed", "服务发现失败(status=$status)")
@@ -374,6 +395,7 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
         } catch (e: Exception) {
             android.util.Log.w(TAG, "unregister bondReceiver: $e")
         }
+        stopBondDiscovery(adapter)
         mainHandler.removeCallbacksAndMessages(null)
         context = null
     }
@@ -457,12 +479,16 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
             // 不同;iOS/ohos 原生面不实现此方法(探针落 null)。
             "platformTag" -> result.success("android")
             "scan" -> ensurePermissions(result) {
-                startScan(call.argument<Int>("seconds") ?: 10, null, result)
+                startScan(
+                    (call.argument<Any>("seconds") as? Number)?.toInt() ?: 10,
+                    null,
+                    result,
+                )
             }
             "scanForDeviceId" -> ensurePermissions(result) {
                 startScan(
-                    call.argument<Int>("seconds") ?: 10,
-                    call.argument<Int>("deviceId"),
+                    (call.argument<Any>("seconds") as? Number)?.toInt() ?: 10,
+                    (call.argument<Any>("deviceId") as? Number)?.toLong(),
                     result,
                 )
             }
@@ -471,11 +497,22 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
                 result.success(null)
             }
             "connectPaired" -> {
-                val uuid = call.arguments as? String ?: ""
+                // 兼容两种载荷:裸 uuid 字符串(iOS/ohos 同形)或
+                // {uuid, autoConnect}(Android 挂起式建链,2026-11-03)。
+                val rawArgs = call.arguments
+                val uuid = when (rawArgs) {
+                    is String -> rawArgs
+                    is Map<*, *> -> rawArgs["uuid"] as? String ?: ""
+                    else -> ""
+                }
+                val autoConnect =
+                    (rawArgs as? Map<*, *>)?.get("autoConnect") == true
                 if (uuid.isEmpty()) {
                     result.error("badArgs", "connectPaired 须传设备标识", null)
                 } else {
-                    ensurePermissions(result) { connectPaired(uuid, result) }
+                    ensurePermissions(result) {
+                        connectPaired(uuid, autoConnect, result)
+                    }
                 }
             }
             "setNotify" -> setNotify(call.arguments as? String ?: "", result)
@@ -545,10 +582,13 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
     // ------------------------------------------------------------------
 
     @SuppressLint("MissingPermission")
-    private fun startScan(seconds: Int, filterDeviceId: Int?, result: MethodChannel.Result) {
+    private fun startScan(seconds: Int, filterDeviceId: Long?, result: MethodChannel.Result) {
         if (scanResult != null) {
-            result.error("busy", "已有扫描在进行", null)
-            return
+            // 扫描单飞行:新请求顶掉旧扫描,旧调用方按 superseded 收场。
+            // 面板扫描与会话重连扫描在状态沿交替时,stop→start 的间隙仍会
+            // 让旧扫描留在栈上;旧实现直接回 busy,Dart 侧重连白丢一轮
+            // (2026-11-03 真机 `扫描失败:busy` 实证)。
+            finishScan("superseded", "扫描被新请求接管")
         }
         val scanner = adapter?.bluetoothLeScanner
         if (scanner == null) {
@@ -592,12 +632,12 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
         val name = sr.scanRecord?.deviceName ?: ""
         val mfg = parseNikonMfg(sr.scanRecord)
         if (scanFilterDeviceId != null) {
-            // 重连过滤:厂商数据 = 0x0399 + deviceId 小端 4B
+            // 重连过滤:厂商数据 = 0x0399 + deviceId 小端 4B(u32 → Long)
             if (mfg.size < 6) return
-            val dev = (mfg[2].toInt() and 0xFF) or
-                ((mfg[3].toInt() and 0xFF) shl 8) or
-                ((mfg[4].toInt() and 0xFF) shl 16) or
-                ((mfg[5].toInt() and 0xFF) shl 24)
+            val dev = (mfg[2].toLong() and 0xFF) or
+                ((mfg[3].toLong() and 0xFF) shl 8) or
+                ((mfg[4].toLong() and 0xFF) shl 16) or
+                ((mfg[5].toLong() and 0xFF) shl 24)
             if (dev != scanFilterDeviceId) return
         } else {
             // 配对扫描:尼康机身(名 Z 开头系 / LSS 服务 / 尼康厂商数据)
@@ -650,11 +690,15 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
 
     private val finishRunnable = Runnable { finishScan() }
 
-    private fun finishScan() {
+    private fun finishScan(errorCode: String? = null, errorMessage: String? = null) {
         stopScanNative()
         val result = scanResult
         scanResult = null
         if (result == null) return
+        if (errorCode != null) {
+            result.error(errorCode, errorMessage, null)
+            return
+        }
         val list = scanHits.values.map {
             mapOf("name" to it.name, "uuid" to it.uuid, "rssi" to it.rssi, "mfg" to it.mfg)
         }
@@ -666,7 +710,11 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
     // ------------------------------------------------------------------
 
     @SuppressLint("MissingPermission")
-    private fun connectPaired(uuid: String, result: MethodChannel.Result) {
+    private fun connectPaired(
+        uuid: String,
+        autoConnect: Boolean,
+        result: MethodChannel.Result,
+    ) {
         val adapter = adapter
         if (adapter == null || !adapter.isEnabled) {
             result.error("connectFailed", "蓝牙未开启", null)
@@ -689,9 +737,12 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
             result.error("connectFailed", "设备标识无效:$e", null)
             return
         }
-        NativeLog.i("ble", "connectPaired 发起:$uuid")
+        NativeLog.i("ble", "connectPaired 发起:$uuid(autoConnect=$autoConnect)")
         try {
-            gatt = device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
+            // autoConnect=true = 挂起式建链:栈把请求挂住,相机射频醒来
+            // 广播/可连时自动连上,语义接近 iOS CoreBluetooth connect;
+            // false = 直接寻呼(醒着的相机 ~1-3s)。
+            gatt = device.connectGatt(context, autoConnect, gattCallback, BluetoothDevice.TRANSPORT_LE)
         } catch (e: SecurityException) {
             android.util.Log.e(TAG, "connectGatt: $e")
             NativeLog.w("ble", "connectGatt SecurityException:$e")
@@ -706,35 +757,64 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
             result.error("connectFailed", "$e", null)
         }
         if (pendingConnect != null && gatt != null) {
-            // 连接看门狗:容器(卓易通)里 GATT 回调可能永不到达 —— 10s 无
-            // 收口即落错清场,不让 channel 干挂(外层 Dart 15s 才放弃)。
-            val captured = gatt
-            NativeLog.i("ble", "connectGatt 已返回:${captured != null}")
-            mainHandler.postDelayed({
-                if (pendingConnect != null && gatt === captured) {
-                    NativeLog.w("ble", "GATT 连接 10s 无回调,强制落错")
-                    settleConnect("connectFailed", "连接超时:GATT 10s 无回调")
-                    teardownGatt()
-                }
-            }, CONNECT_WATCHDOG_MS)
+            // 连接看门狗 = **分阶段**计时:建链(GATT CONNECTED)、MTU 协商
+            // 各是一段,每段有进展就重新计时 —— 深睡相机唤醒时 GATT 回调
+            // 13.5s、MTU 再 7.6s(2026-11-03 真机实证),固定 30s 从头算会
+            // 在服务发现完成前掐断。任何一段 30s 无进展才落错清场。
+            NativeLog.i("ble", "connectGatt 已返回:${gatt != null}")
+            armConnectWatchdog()
         }
+    }
+
+    /** 分阶段连接看门狗:重新武装(旧计时作废),阶段无进展即落错清场。 */
+    private fun armConnectWatchdog(timeoutMs: Long = CONNECT_WATCHDOG_MS) {
+        connectWatchdog?.let { mainHandler.removeCallbacks(it) }
+        connectWatchdog = null
+        if (pendingConnect == null) return
+        val captured = gatt ?: return
+        val wd = Runnable {
+            if (pendingConnect != null && gatt === captured) {
+                NativeLog.w("ble", "GATT 连接 ${timeoutMs / 1000}s 无进展,强制落错")
+                settleConnect(
+                    "connectFailed",
+                    "连接超时:GATT 阶段 ${timeoutMs / 1000}s 无进展",
+                )
+                teardownGatt()
+            }
+        }
+        connectWatchdog = wd
+        mainHandler.postDelayed(wd, timeoutMs)
     }
 
     @SuppressLint("MissingPermission")
     private fun discoverServices() {
         val g = gatt ?: return // 迟到的看门狗回调
-        if (discoveryDone || discoveryInFlight) return
+        if (discoveryDone) return
+        // 深睡相机的 GATT 服务器可能半睡:发现请求会吞掉/迟迟不回。
+        // 不再一次定生死 —— 每 2.5s 重发直到 onServicesDiscovered(或
+        // 分阶段连接看门狗整体收口)。重复请求本身也是唤醒刺激。
         discoveryInFlight = true
         try {
             if (!g.discoverServices()) {
-                discoveryInFlight = false
-                settleConnect("discoveryFailed", "discoverServices 被拒")
+                discoveryInFlight = false // 可能有一次在途发现,重试窗再发
             }
         } catch (e: Exception) {
             discoveryInFlight = false
             android.util.Log.e(TAG, "discoverServices: $e")
-            settleConnect("discoveryFailed", "$e")
         }
+        scheduleDiscoveryRetry()
+    }
+
+    /** 服务发现重试环:深睡相机 GATT 服务器半睡时的持续唤醒/重发。 */
+    private fun scheduleDiscoveryRetry() {
+        discoveryRetryTimer?.let { mainHandler.removeCallbacks(it) }
+        val wd = Runnable {
+            if (pendingConnect == null || discoveryDone) return@Runnable
+            NativeLog.i("ble", "服务发现重试(深睡相机 GATT 服务器半睡)")
+            discoverServices()
+        }
+        discoveryRetryTimer = wd
+        mainHandler.postDelayed(wd, DISCOVERY_RETRY_MS)
     }
 
     private fun buildServiceTable() {
@@ -760,6 +840,10 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
     }
 
     private fun settleConnect(code: String?, message: String?) {
+        connectWatchdog?.let { mainHandler.removeCallbacks(it) }
+        connectWatchdog = null
+        discoveryRetryTimer?.let { mainHandler.removeCallbacks(it) }
+        discoveryRetryTimer = null
         val pending = pendingConnect
         pendingConnect = null
         if (code != null) {
@@ -842,6 +926,11 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
                     } else {
                         BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
                     }
+                    // 载荷必须先落到 characteristic.value:writeCharacteristic(ch)
+                    // 只读这个字段。旧实现漏设,栈收到空值写直接返回 false
+                    // (不触发 GATT 回调/SMP),Dart 侧误判成容器加密墙
+                    // (2026-11-03 HarmonyOS 4.2 真机实证:0x2000 首帧被拒)。
+                    ch.value = op.data ?: ByteArray(0)
                     g.writeCharacteristic(ch)
                 }
                 OpKind.WRITE_DESC -> {
@@ -960,7 +1049,7 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
     }
 
     // ------------------------------------------------------------------
-    // 程序化经典蓝牙绑定(Android 独有便利:BLE MAC 即经典 MAC,免发现)
+    // 程序化经典蓝牙绑定(先经典发现:相机经典地址 ≠ BLE 随机地址)
     // ------------------------------------------------------------------
 
     private fun bondDevice(deviceId: String, name: String, serial: String, result: MethodChannel.Result) {
@@ -977,48 +1066,154 @@ class BlePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHandler,
             result.error("busy", "已有绑定在途", null)
             return
         }
-        val dev = try {
+        try {
             adapter.getRemoteDevice(deviceId)
         } catch (e: IllegalArgumentException) {
             result.error("bondFailed", "设备标识无效:$e", null)
             return
         }
         this.deviceId = deviceId
-        if (dev.bondState == BluetoothDevice.BOND_BONDED) {
-            result.success(true)
-            return
-        }
+        bondAddress = null
         pendingBond = result
-        NativeLog.i("ble", "bondDevice 发起:$deviceId(当前 bondState=${dev.bondState})")
-        val created = try {
-            dev.createBond()
-        } catch (e: SecurityException) {
-            android.util.Log.e(TAG, "createBond: $e")
-            NativeLog.w("ble", "createBond SecurityException:$e")
-            pendingBond = null
-            result.error("bondFailed", "配对请求失败(蓝牙权限):$e", null)
-            return
+        NativeLog.i("ble", "bondDevice 发起:$deviceId(先经典发现;名称=$name 序列号=$serial)")
+        startBondDiscovery(adapter, name, serial)
+    }
+
+    /**
+     * 经典发现 → 命中相机(名称/序列号归一匹配)→ createBond。
+     *
+     * 相机 BLE 侧是随机静态地址(2026-11-03 华为实证 65:4B:33:…),
+     * 不能当 BR/EDR MAC 直用 —— 旧实现直接 createBond 返回 true,
+     * 但系统无任何回调、相机也无反应。经典地址只能靠发现拿到;
+     * 名称/序列号匹配口径与 ohos 侧 BlePlugin.ets#bondDevice 对齐。
+     */
+    @SuppressLint("MissingPermission")
+    private fun startBondDiscovery(adapter: BluetoothAdapter, name: String, serial: String) {
+        stopBondDiscovery(adapter)
+        val norm = { s: String -> s.filter { it.isLetterOrDigit() }.lowercase() }
+        val targetName = norm(name)
+        val targetSerial = norm(serial)
+        // 发现→createBond 切换时撤掉「发现总时长」看门狗,换绑回调看门狗。
+        var totalWatchdog: Runnable? = null
+
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(ctx: Context, intent: Intent) {
+                if (pendingBond == null) return
+                when (intent.action) {
+                    BluetoothDevice.ACTION_FOUND -> {
+                        val dev = if (Build.VERSION.SDK_INT >= 33) {
+                            intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
+                        } else {
+                            @Suppress("DEPRECATION")
+                            intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+                        } ?: return
+                        val dName = safeName(dev) ?: return
+                        val nd = norm(dName)
+                        val hit = (targetName.isNotEmpty() &&
+                            (nd.contains(targetName) || targetName.contains(nd))) ||
+                            (targetSerial.isNotEmpty() && nd.contains(targetSerial))
+                        if (!hit) return
+                        NativeLog.i("ble", "bond: 经典命中 $dName ${dev.address}")
+                        stopBondDiscovery(adapter)
+                        totalWatchdog?.let { mainHandler.removeCallbacks(it) }
+                        bondAddress = dev.address
+                        if (dev.bondState == BluetoothDevice.BOND_BONDED) {
+                            settleBond(true, null)
+                            return
+                        }
+                        val created = try {
+                            dev.createBond()
+                        } catch (e: Exception) {
+                            android.util.Log.e(TAG, "createBond: $e")
+                            NativeLog.w("ble", "createBond 失败:$e")
+                            false
+                        }
+                        if (!created) {
+                            settleBond(false, "配对请求被系统拒绝")
+                            return
+                        }
+                        NativeLog.i("ble", "createBond 返回:true(${dev.address})")
+                        val callbackWatchdog = Runnable {
+                            if (pendingBond != null) settleBond(false, "绑定响应超时")
+                        }
+                        bondWatchdog = callbackWatchdog
+                        mainHandler.postDelayed(callbackWatchdog, BOND_TIMEOUT_MS)
+                    }
+                    BluetoothAdapter.ACTION_DISCOVERY_FINISHED -> {
+                        // 相机经典射频可能延迟暴露:一轮没命中就再扫,总时长由看门狗收口
+                        if (pendingBond != null) {
+                            try {
+                                adapter.startDiscovery()
+                            } catch (e: Exception) {
+                                NativeLog.w("ble", "发现重启失败:$e")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        bondDiscoverReceiver = receiver
+        val filter = IntentFilter().apply {
+            addAction(BluetoothDevice.ACTION_FOUND)
+            addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED)
+        }
+        try {
+            if (Build.VERSION.SDK_INT >= 33) {
+                context?.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
+            } else {
+                context?.registerReceiver(receiver, filter)
+            }
         } catch (e: Exception) {
-            android.util.Log.e(TAG, "createBond: $e")
-            NativeLog.w("ble", "createBond 失败:$e")
-            pendingBond = null
-            result.error("bondFailed", "配对请求失败:$e", null)
+            android.util.Log.e(TAG, "register bondDiscoverReceiver: $e")
+            stopBondDiscovery(adapter)
+            settleBond(false, "经典蓝牙发现失败:$e")
             return
         }
-        NativeLog.i("ble", "createBond 返回:$created")
-        if (!created) {
-            pendingBond = null
-            result.error("bondFailed", "配对请求被系统拒绝", null)
-            return
+        val discoveryWatchdog = Runnable {
+            if (pendingBond != null) {
+                stopBondDiscovery(adapter)
+                settleBond(false, "未发现相机经典蓝牙(绑定超时)")
+            }
         }
-        mainHandler.postDelayed({
-            settleBond(false, "绑定响应超时")
-        }, BOND_TIMEOUT_MS)
+        totalWatchdog = discoveryWatchdog
+        bondWatchdog = discoveryWatchdog
+        mainHandler.postDelayed(discoveryWatchdog, BOND_DISCOVERY_TIMEOUT_MS)
+        val started = try {
+            adapter.startDiscovery()
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "startDiscovery: $e")
+            false
+        }
+        NativeLog.i("ble", "经典发现已发起:$started")
+        if (!started) {
+            stopBondDiscovery(adapter)
+            settleBond(false, "经典蓝牙发现启动失败")
+        }
+    }
+
+    /** 停止经典发现并注销绑定期接收器(幂等)。 */
+    @SuppressLint("MissingPermission")
+    private fun stopBondDiscovery(adapter: BluetoothAdapter?) {
+        try {
+            adapter?.cancelDiscovery()
+        } catch (_: Exception) {
+            // 蓝牙关闭后的 cancel 会抛:忽略
+        }
+        bondDiscoverReceiver?.let {
+            try {
+                context?.unregisterReceiver(it)
+            } catch (_: Exception) {
+                // 未注册/已注销:忽略
+            }
+            bondDiscoverReceiver = null
+        }
     }
 
     private fun settleBond(ok: Boolean, error: String?) {
         val pending = pendingBond ?: return
         pendingBond = null
+        bondWatchdog?.let { mainHandler.removeCallbacks(it) }
+        bondWatchdog = null
         if (ok) {
             pending.success(true)
         } else {

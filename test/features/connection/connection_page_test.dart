@@ -240,10 +240,14 @@ void main() {
                 password: 'wpa2pass99',
                 security: 0x02,
                 keySource: 'test');
+      controller.wifiAwakePending = true; // 早先失败尝试留下的人工入网待办
       final outcome = await controller.joinCameraAp();
       expect(outcome, ApJoinOutcome.joined);
+      expect(controller.wifiAwakePending, isFalse,
+          reason: 'join 成功沿撤引导卡,否则已连上仍会弹「请手动入网」');
       expect(controller.apGateway, '192.168.100.1');
-      expect(controller.method, ConnectionMethod.ap);
+      // 交接静默完成:不改用户当前连接方式视图(2026-11-04 定稿)。
+      expect(controller.method, ConnectionMethod.usb);
       await pumpEventQueue(); // connectWireless 是发射不等待,排微任务落地
       expect(conn.connectIp, '192.168.100.1');
     });
@@ -752,51 +756,6 @@ void main() {
       expect(find.text('AP 模式'), findsOneWidget,
           reason: '方式位随选中切换(弹层已收,仅页面一处)');
       expect(find.text('当前方式:AP 模式'), findsNothing, reason: '「当前方式」字样整删');
-    });
-
-    testWidgets(
-        'AP 凭据卡(EN):标签列自适应,Password 不折行不省略;'
-        '整卡两行共用一宽列对齐', (tester) async {
-      // EN + 测试字体(Ahem 宽度夸张)下 AP 视图在默认 600 高视口本就
-      // 垂直溢出(与标签列无关的既有形态,真机字体紧凑不触)—— 加高
-      // 视口让页面放得下,聚焦标签列本身。
-      tester.view
-        ..physicalSize = const Size(800, 2400)
-        ..devicePixelRatio = 1.0;
-      addTearDown(tester.view.reset);
-      final controller = ConnectionController(connection: FakeConnection());
-      await tester.pumpWidget(L10nScope(
-        code: 'en',
-        child: MaterialApp(home: ConnectionPage(controller: controller)),
-      ));
-      await tester.pumpAndSettle();
-      controller.selectMethod(ConnectionMethod.ap);
-      controller.cameraApCredentials = const WifiCredentials(
-          ssid: 'Zf_80114411',
-          password: 'wpa2pass99',
-          security: 0x02,
-          keySource: kWifiKeyFixed);
-      await tester.pumpAndSettle();
-
-      // EN 长词根治(旧 44 钉宽下 Password 折行):标签列按最长标签
-      // 实测放行 —— 渲染宽 ≥ 自然宽即单行全显(不折行也不省略)。
-      expect(tester.takeException(), isNull);
-      final element = tester.element(find.text('Password'));
-      final natural = TextPainter(
-        text: TextSpan(
-            text: 'Password', style: DefaultTextStyle.of(element).style),
-        textScaler: MediaQuery.textScalerOf(element),
-        textDirection: TextDirection.ltr,
-      )..layout();
-      final naturalWidth = natural.width;
-      natural.dispose();
-      expect(tester.getSize(find.text('Password')).width,
-          greaterThanOrEqualTo(naturalWidth),
-          reason: '标签列 ≥ 标签自然宽 → 单行全显');
-      expect(tester.getSize(find.text('SSID')).width,
-          tester.getSize(find.text('Password')).width,
-          reason: '卡内 SSID/密码两行标签列同宽(整卡列对齐)');
-      expect(find.text('wpa2pass99'), findsOneWidget);
     });
 
     testWidgets('STA 视图:进页自动扫描(静默),两段列表点行连接', (tester) async {
@@ -1894,12 +1853,9 @@ void main() {
       expect(f.controller.method, ConnectionMethod.ap);
       expect(f.controller.wifiAwakePending, isFalse, reason: '显式连接沿撤卡');
       await tester.pumpAndSettle();
-      // AP 视图凭据卡照旧(SSID/密码/安全 + 复制)
-      expect(find.text('相机热点凭据(蓝牙通道解出)'), findsOneWidget);
-      expect(find.text('wpa2pass99'), findsOneWidget);
-      expect(find.text('SSID'), findsOneWidget);
-      // security=LSS 口径(2026-10-27 真机定案):0x02=WPA3。
-      expect(find.textContaining('WPA3'), findsOneWidget);
+      // AP 页不再复述热点凭据(2026-11-04 用户定稿:切 AP 也不显示)。
+      expect(find.text('相机热点凭据(蓝牙通道解出)'), findsNothing);
+      expect(find.text('wpa2pass99'), findsNothing);
     });
 
     testWidgets('唤醒但凭据未解出:错误位红字提醒去系统连 Wi-Fi,提示条撤(十七轮)', (tester) async {
@@ -1952,8 +1908,71 @@ void main() {
       expect(joiner.joinedSecurity, 0x02, reason: '0x2004 安全字节原样透传');
       expect(conn.connectIp, '192.168.1.1',
           reason: 'join 成功沿自动发射 AP 连接(SnapBridge 全程)');
-      expect(f.controller.method, ConnectionMethod.ap, reason: '自动切到 AP 方式');
-      expect(find.textContaining('已加入相机热点'), findsOneWidget);
+      // 交接在入口视图(蓝牙)内静默完成,不跳 AP 视图(2026-11-04 定稿)。
+      expect(f.controller.method, ConnectionMethod.ble,
+          reason: '不切 AP 视图,用户无需知道蓝牙与 AP 的关系');
+      // 成功沿静默:不弹「已加入相机热点…」提示条(2026-11-04 定稿)。
+      expect(find.textContaining('已加入相机热点'), findsNothing);
+      expect(find.byType(SnackBar), findsNothing);
+    });
+
+    testWidgets('连接成功沿撤手动入网卡:退出回蓝牙页不再变样', (tester) async {
+      final conn = FakeConnection();
+      final f = (await tester
+          .runAsync(() => readyFixture(connection: conn)))!;
+      f.host.reads[kNikonCharConfig] =
+          craftBlob('Zf_80114411', 'wpa2pass99', 0x02, cbc: false);
+      await tester.pumpWidget(
+          MaterialApp(home: ConnectionPage(controller: f.controller)));
+      await tester.pumpAndSettle();
+      await openBleTools(tester);
+
+      // 无 joiner → 唤醒后落「手动入网待办」,卡片在场。
+      await tester.tap(find.text('远程连接相机'));
+      await tester.pumpAndSettle();
+      expect(find.text('相机 Wi-Fi 已开启,请手动入网'), findsOneWidget);
+
+      // 任意路径连上相机(含绕过 joinCameraAp 的手动入网后重连)即撤。
+      conn.statesCtrl.add(CameraLinkState.connected);
+      await tester.pumpAndSettle();
+      expect(f.controller.wifiAwakePending, isFalse,
+          reason: '连上即撤待办,不靠 join 成功沿');
+
+      // 退出拍摄回到蓝牙页(connected → disconnected):卡片不得复现。
+      conn.statesCtrl.add(CameraLinkState.disconnected);
+      await tester.pumpAndSettle();
+      expect(find.text('相机 Wi-Fi 已开启,请手动入网'), findsNothing);
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('连接在途不显示失败引导:connecting 隐藏,失败落定再显', (tester) async {
+      final conn = FakeConnection();
+      final f = (await tester
+          .runAsync(() => readyFixture(connection: conn)))!;
+      await tester.pumpWidget(
+          MaterialApp(home: ConnectionPage(controller: f.controller)));
+      await tester.pumpAndSettle();
+      await openBleTools(tester);
+
+      // 唤醒成功但凭据未解出 → 手动入网待办 + 红字(BLE 已断)。
+      await tester.tap(find.text('远程连接相机'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('请在系统 Wi-Fi 中连接相机热点'), findsOneWidget);
+
+      // 连接在途:引导不渲染 —— 成功途中不得闪现失败引导。
+      conn.statesCtrl.add(CameraLinkState.connecting);
+      await tester.pumpAndSettle();
+      expect(find.textContaining('请在系统 Wi-Fi 中连接相机热点'), findsNothing);
+
+      // 失败落定:本次确实失败,引导重新显示。
+      conn.statesCtrl.add(CameraLinkState.failed);
+      await tester.pumpAndSettle();
+      expect(find.textContaining('请在系统 Wi-Fi 中连接相机热点'), findsOneWidget);
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
     });
 
     testWidgets('唤醒沿 joiner fail:不发射连接,终态含手动指引与原因', (tester) async {
@@ -1976,8 +1995,10 @@ void main() {
       // 抄(2026-10-27 真机:无 entitlement internal error)。
       expect(find.text('自动加入失败,请手动加入'), findsOneWidget);
       expect(find.textContaining('unavailable'), findsOneWidget);
-      expect(find.text('Zf_80114411'), findsOneWidget);
-      expect(find.text('wpa2pass99'), findsOneWidget);
+      // 凭据直呈;交接沿已切 AP 视图,SSID 可能在 AP 区块与凭据层各出现
+      // 一次(2026-11-04 切视图提前沿)。
+      expect(find.text('Zf_80114411'), findsWidgets);
+      expect(find.text('wpa2pass99'), findsWidgets);
       // 关层即收。
       await tester.tap(find.text('知道了'));
       await tester.pumpAndSettle();

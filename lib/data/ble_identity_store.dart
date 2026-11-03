@@ -8,6 +8,14 @@ import 'dart:convert';
 import 'atomic_json_file.dart';
 import 'dart:io';
 
+/// 展示用设备名:去掉广播名里的 NUL/控制字符填充。
+/// 相机 BLE 广播名尾部常带 `\0` 填充(2026-11-03 真机档案实证
+/// `Z_f_8014411\u0000…`),原样渲染会占出大量不可见宽度,把名字后的
+/// 状态点/徽标推离设备名 —— 展示与存档前统一清洗(匹配侧另有
+/// 空白/下划线归一,见 ble_pair_panel 的 _normalizeScanName)。
+String sanitizeDeviceName(String raw) =>
+    raw.replaceAll(RegExp(r'[\x00-\x1F\x7F]+'), '').trim();
+
 /// 已配对相机身份(与 BleCameraSession.identity 同构的落盘形态)。
 final class BlePairedIdentity {
   const BlePairedIdentity({
@@ -38,7 +46,8 @@ final class BlePairedIdentity {
   final DateTime pairedAt;
 
   /// 展示名:相机名优先,旧档(未存相机名)回落控制器名。
-  String get displayName => cameraName.isNotEmpty ? cameraName : controllerName;
+  String get displayName => sanitizeDeviceName(
+      cameraName.isNotEmpty ? cameraName : controllerName);
 
   Map<String, Object?> toJson() => {
         'peripheralUuid': peripheralUuid,
