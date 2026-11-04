@@ -569,6 +569,8 @@ const Map<String, String> enCatalog = {
   'remote.errViewfinderOff': 'Start the viewfinder first',
   'remote.errLeverVideo':
       'The camera does not allow recording right now — switch the top "photo/video" lever to video and retry (the viewfinder stays on)',
+  'remote.errMovieProhibited':
+      'The camera prohibits recording (condition {v}) — check video settings/storage or the camera screen',
   'remote.focusNearEnd': 'Focus reached the near limit',
   'remote.focusFarEnd': 'Focus reached the far limit',
   'remote.nearLimitUnlock': 'Near limit reached; drive the other way to unlock',

@@ -620,9 +620,67 @@ mixin _RemoteCaptureOps on _RemoteCore {
       }
     } on PtpResponseException catch (e) {
       if (e.responseCode == NikonResponseCode.invalidStatus) {
-        // 0xA004:机身不在可录制的状态 —— Zf 的机顶「照片/视频」切换
-        // 拨杆在照片档时 0x920A 即被拒(OpenZCine 同码口径 invalidStatus)。
-        error = (key: 'remote.errLeverVideo', args: null);
+        // 0xA004 是笼统 invalidStatus:拨杆只是其一。读规格书
+        // MovieRecProhibitionCondition(0xD0A4)定位真实原因。
+        final prohibition = await _movieRecProhibition();
+        AppLog.i(
+          AppLog.system,
+          '录制 0xA004: 0xD0A4=0x${prohibition.toRadixString(16)}',
+        );
+        if (prohibition & 0x4000 != 0) {
+          // bit14 = 相机不在应用模式(规格 6.5.12.5)。相机本地录不
+          // 走此门;远程 0x920A 必须先进应用模式。重入 0x90C2(1),
+          // 条件清零后重试开录。
+          try {
+            AppLog.i(
+              AppLog.system,
+              '录制重入应用模式 0x9435(1)+0x90C2(1)',
+            );
+            // 0x9435 ChangeApplicationMode 才是 0xD0A4 bit14(应用模式)
+            // 的钥匙;0x90C2 只开 remote 闩。老版(811da881)连接沿两者
+            // 都发;2026-11-04 为省 0x9435 的 ~5s 跳过了它,视频门因此
+            // 失效(2026-11-05 真机:老 iOS 版 Wi-Fi 可录,新版 0xA004)。
+            await session.enableAppControl(remoteLatch: false);
+            await session.changeCameraMode(1);
+            try {
+              // 老版口径“开闩即还身”:0x90C2(1) 后立刻 0x90C2(0),
+              // 机身回自己的取景屏;单向闩不会因此关掉(0x920A 照通)。
+              await session.changeCameraMode(0);
+            } on Object {
+              // 还身失败不阻断录制;teardown 兜底
+            }
+            final after = await _movieRecProhibition();
+            AppLog.i(
+              AppLog.system,
+              '录制 0x90C2(1) 后 0xD0A4=0x${after.toRadixString(16)}',
+            );
+            if (after == 0) {
+              await session.startMovieRec();
+              recording = true;
+              recordingSince = DateTime.now();
+              error = null;
+              notifyListeners();
+              return;
+            }
+            error = (
+              key: 'remote.errMovieProhibited',
+              args: {'v': '0x${after.toRadixString(16)}'},
+            );
+          } on Object catch (e2) {
+            AppLog.w(AppLog.system, '录制 0x90C2(1) 失败: $e2');
+            error = (
+              key: 'remote.errRecFail',
+              args: {'e': userFacingError(e2)},
+            );
+          }
+        } else if (prohibition != 0) {
+          error = (
+            key: 'remote.errMovieProhibited',
+            args: {'v': '0x${prohibition.toRadixString(16)}'},
+          );
+        } else {
+          error = (key: 'remote.errLeverVideo', args: null);
+        }
       } else {
         error = (
           key: 'remote.errRecFail',
@@ -633,6 +691,18 @@ mixin _RemoteCaptureOps on _RemoteCore {
       error = (key: 'remote.errRecFail', args: {'e': userFacingError(e)});
     }
     notifyListeners();
+  }
+
+  /// 0xD0A4 MovieRecProhibitionCondition:非 0 = 相机禁止开录。
+  /// 读不到一律返回 0(不拦,保留既有 0xA004 提示)。
+  Future<int> _movieRecProhibition() async {
+    try {
+      final desc = await session.getDevicePropDesc(0xD0A4);
+      final v = desc.currentValue;
+      return v is int ? v : 0;
+    } on Object {
+      return 0;
+    }
   }
 
   /// MF 步进(0x9204):向近/远驱动一步([pulses] 脉冲,默认 300)。

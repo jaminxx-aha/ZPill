@@ -74,6 +74,27 @@ void _afGroups() {
         expect(controller.recording, isFalse, reason: '被拒不翻转录制态');
       });
 
+      test('0xA004 + 0xD0A4 bit14(不在应用模式)→ 0x90C2(1) 后重试开录',
+          () async {
+        await startLiveView();
+        transport.reply(NikonResponseCode.invalidStatus); // 首拍 0x920A 拒
+        transport.ok(
+            data: _propDescDataset(0xD0A4, PtpDataType.uint32, 0x4000));
+        transport.ok(); // 0x9435(1) 应用模式
+        transport.ok(); // 0x90C2(1) remote 闩
+        transport.ok(); // 0x90C2(0) 还身
+        transport.ok(
+            data: _propDescDataset(0xD0A4, PtpDataType.uint32, 0));
+        transport.ok(); // 重试 0x920A 成功
+        await controller.toggleRecord();
+        expect(controller.recording, isTrue);
+        expect(controller.error, isNull);
+        expect(transport.count(NikonOperationCode.changeApplicationMode), 1);
+        expect(transport.count(NikonOperationCode.changeCameraMode), 2);
+        expect(
+            transport.count(NikonOperationCode.startMovieRecInCard), 2);
+      });
+
       test('0x9205 忙(0x2019)→ 宽限内逐拍退避静默续发(拉焦轮同款口径)',
           () async {
         await startLiveView();

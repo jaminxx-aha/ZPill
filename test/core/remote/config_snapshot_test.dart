@@ -588,5 +588,38 @@ void main() {
         reason: '时钟属性不发 GetDevicePropDesc/0x1016',
       );
     });
+
+    test('视频档恢复跳过照片向属性(0x5007/0x5013/0x5018)', () async {
+      PtpSession.kSetPropEnabled = true;
+      addTearDown(() => PtpSession.kSetPropEnabled = true);
+      transport.ok(data: _deviceInfoDataset([]));
+      final snap = CameraConfigSnapshot(
+        model: 'TestModel',
+        deviceVersion: 'V1.00',
+        capturedAt: DateTime.now(),
+        props: const [
+          ConfigPropSnapshot(
+              code: 0x5007, type: 'uint16', value: 28, writable: true),
+          ConfigPropSnapshot(
+              code: 0x5013, type: 'uint16', value: 1, writable: true),
+          ConfigPropSnapshot(
+              code: 0x5018, type: 'uint16', value: 1, writable: true),
+        ],
+      );
+      final report = await CameraConfigSnapshotter.restore(
+        session,
+        snap,
+        videoMode: true,
+        delay: (_) async {},
+      );
+      expect(report.applied, 0);
+      expect(report.skipped, 3, reason: '视频档照片向全跳过');
+      expect(
+        transport.requests
+            .where((r) => r.opcode == PtpOperationCode.setDevicePropValue),
+        isEmpty,
+        reason: '照片向属性不写',
+      );
+    });
   });
 }

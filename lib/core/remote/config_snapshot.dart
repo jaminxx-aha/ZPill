@@ -174,6 +174,14 @@ final class CameraConfigSnapshotter {
   /// 恢复时计「模式门跳过」,不按故障。
   static const int _rcModeGate = 0x200F;
 
+  /// 主机会话元数据(SessionInitiatorVersionInfo):不属于拍摄配置;
+  /// 写回会按「上一位主机」污染相机会话信息(2026-11-05 真机:快照恢复
+  /// 把 Windows MTP 串写回后,iOS/Android 远程录像均 0xA004)。
+  static const int _propSessionInitiatorVersionInfo = 0xD406;
+
+  /// 纯照片向属性:视频档恢复时跳过(视频曝光/录制走 0xD1xx 族)。
+  static const Set<int> _photoOnlyInVideo = {0x5007, 0x5013, 0x5018};
+
   /// 抓当前机身的全量设备属性快照。
   ///
   /// 属性清单来自缓存的 GetDeviceInfo(连接时已取);PropDesc 值区缺失
@@ -235,6 +243,7 @@ final class CameraConfigSnapshotter {
   static Future<RestoreReport> restore(
     PtpSession session,
     CameraConfigSnapshot snapshot, {
+    bool videoMode = false,
     Future<void> Function(Duration)? delay,
   }) async {
     if (!PtpSession.kSetPropEnabled) {
@@ -266,14 +275,22 @@ final class CameraConfigSnapshotter {
         // blob 轨道失败(无卡/拒写/名字不收):回落逐属性
       }
     }
+    // 视频档恢复要跳过照片向属性(写进去会卡坏视频门,2026-11-05
+    // 真机 0xA004 复现);videoMode 由调用方按当前相机模式传入。
     for (final p in snapshot.props) {
       if (!p.writable) {
         skipped++;
         continue;
       }
-      if (p.code == _propDateTime) {
-        // 时钟豁免:快照存的是拍摄时刻,恢复旧时间必被 0x201C 拒,
-        // 且时间本不属于可恢复的拍摄配置(2026-11-05 真机实证)。
+      if (p.code == _propDateTime ||
+          p.code == _propSessionInitiatorVersionInfo) {
+        // 时钟/主机会话元数据:不属于可恢复的拍摄配置。
+        skipped++;
+        continue;
+      }
+      if (videoMode && _photoOnlyInVideo.contains(p.code)) {
+        // 视频档跳过纯照片向属性(0x5007 F-Number / 0x5013 StillCaptureMode
+        // / 0x5018 BurstNumber),避免写坏视频门。
         skipped++;
         continue;
       }

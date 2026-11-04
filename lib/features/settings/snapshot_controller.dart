@@ -15,6 +15,7 @@ import '../../data/config_snapshot_store.dart';
 import '../../design/app_colors.dart';
 import '../../l10n/l10n.dart';
 import '../../l10n/message.dart';
+import '../remote/remote_controller.dart' show CaptureMode;
 
 final class SnapshotController extends ChangeNotifier {
   SnapshotController({
@@ -104,7 +105,14 @@ final class SnapshotController extends ChangeNotifier {
     message = null;
     notifyListeners();
     try {
-      final report = await CameraConfigSnapshotter.restore(session, snapshot);
+      final report = await CameraConfigSnapshotter.restore(
+        session,
+        snapshot,
+        // 视频档跳过照片向属性(0x5007/0x5013/0x5018):写进去会卡坏
+        // 视频门(2026-11-05 真机 0xA004)。模式取当前相机镜像。
+        videoMode: AppServices.instance.remoteController.cameraMode ==
+            CaptureMode.video,
+      );
       // report 来自 core/remote(本波未抽取,中文如实回落,后续波再收)
       message = (key: '$report', args: null);
     } on Exception catch (e) {

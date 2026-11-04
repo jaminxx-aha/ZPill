@@ -503,6 +503,7 @@ const Map<String, String> zhCatalog = {
   'remote.errRecordNeedsViewfinder': '请先开启取景再录制',
   'remote.errViewfinderOff': '请先开启取景',
   'remote.errLeverVideo': '相机当前状态不允许录制 —— 请把机顶「照片/视频」切换拨杆拨到视频档后重试(取景保持开启)',
+  'remote.errMovieProhibited': '相机禁止录制(条件 {v})——请检查视频设置/存储,或看相机屏幕提示',
   'remote.focusNearEnd': '对焦已到近端',
   'remote.focusFarEnd': '对焦已到远端',
   'remote.nearLimitUnlock': '近端已到,反向驱动解锁',
