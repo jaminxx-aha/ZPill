@@ -50,12 +50,15 @@ abstract interface class UsbBytePipe {
   Stream<Uint8List> get interruptEvents;
 }
 
-/// 流式回调的单块上限:1MB(通道往返从 64KB 一次降到 1MB 一次;Android
-/// AOSP 有限超时 bulkTransfer 上限 16KB,native 内部分块循环组装;ohos
-/// 单次 bulkTransfer 大缓冲真机恒 rc=-1、256KB 挂死(2026-10-25 定案),
-/// native 按 64KB 起步自适应探大至 ≤128KB 的子块循环组装;iOS 容器缓冲
-/// 天然支持任意 maxLen。三端一次通道调用均读满 maxLen,短读/ZLB 即返)。
-const int kUsbStreamChunkBytes = 1024 * 1024;
+/// 流式回调的单块上限:8MB(与 iOS 的 GetPartialObjectEx 8MB 块对齐;
+/// 2026-11-04 Android 真机 180MB 视频 13.4→21MB/s —— 大头是每块的
+/// Dart/native/通道往返,8MB 把这层往返从每 MB 一次降到每 8MB 一次;
+/// 底层 16KB 分块循环不变)。Android AOSP 有限超时 bulkTransfer 上限
+/// 16KB,native 内部分块循环组装;ohos 单次 bulkTransfer 大缓冲真机恒
+/// rc=-1、256KB 挂死(2026-10-25 定案),native 按 64KB 起步自适应探大
+/// 至 ≤128KB 的子块循环组装;iOS 容器缓冲天然支持任意 maxLen。三端一次
+/// 通道调用均读满 maxLen,短读/ZLB 即返。
+const int kUsbStreamChunkBytes = 8 * 1024 * 1024;
 
 /// 非流式数据容器必须整体驻留内存,单笔上限 64MiB。大对象必须由调用方
 /// 提供 onData 走流式路径。
