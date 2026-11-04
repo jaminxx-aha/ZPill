@@ -577,7 +577,29 @@ final class TransferEngineImpl implements TransferEngine, TransferRetry {
         // 非 JPEG(字节级复核)等免写
       }
     }
-    if (!identical(out, src)) await file.writeAsBytes(out);
+    if (!identical(out, src)) {
+      // 原子替换:文件在下载段已 rename 进 downloadsDir,对本地图库
+      // 立即可见;后处理链与下载泵并行,原地 writeAsBytes 会先截断
+      // 文件,图库格恰在此时解码就拿到半截 JPEG —— Flutter 引擎的
+      // ImageDecoder 抛 Java 异常后直接 abort(2026-11-04 真机:传输页
+      // 多选下载,任务「处理中」时 SIGABRT,android_image_generator.cc
+      // CheckException)。写同目录临时文件再 rename 覆盖,同卷原子 ——
+      // 读者要么看到旧完整版、要么看到新完整版,永不见半截。
+      final tmp = File('${file.path}.postproc-${job.task.id}.tmp');
+      try {
+        await tmp.writeAsBytes(out, flush: true);
+        await tmp.rename(file.path);
+      } on FileSystemException {
+        // 替换失败:旧文件仍完整,不影响传输结果。**不 rethrow**:
+        // _runPostproc 的 catch 只吞不落 completed,抛了任务会永远停在
+        // processing(batch 也永不收尾)。
+        try {
+          if (await tmp.exists()) await tmp.delete();
+        } on FileSystemException {
+          // 临时件残留:后处理 best-effort,不掩盖原始结果
+        }
+      }
+    }
   }
 
   /// 批次全员落定后收尾:gallery 批次发起一次导入、回填 galleryUri、

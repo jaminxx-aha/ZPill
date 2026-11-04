@@ -106,7 +106,14 @@ final class TransfersController extends ChangeNotifier {
       final dir = await gallery.downloadsDir();
       final d = Directory(dir);
       final files = await d.exists()
-          ? await d.list().where((e) => e is File).cast<File>().toList()
+          ? await d
+              .list()
+              // 后处理原子替换的临时件(见 TransferEngine._postprocJpeg)
+              // 不属于成品名单;列进图库会闪一个图标格,且与 rename
+              // 竞争。
+              .where((e) => e is File && !e.path.endsWith('.tmp'))
+              .cast<File>()
+              .toList()
           : const <File>[];
       if (epoch != _refreshEpoch) return; // 更新的刷新已接管:旧结果弃
       appFiles = files;
