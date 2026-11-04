@@ -7,7 +7,7 @@
 ///
 /// 连接驱动镜像 `CameraConnectionImpl._openWirelessLink` +
 /// `enableAppControl(remoteLatch: true)`(握手 → GetDeviceInfo →
-/// OpenSession → 0x9435/0x90C2 括号),不引入 USB/配对依赖。
+/// OpenSession → 0x90C2 括号),不引入 USB/配对依赖。
 library;
 
 import 'dart:typed_data';
@@ -145,7 +145,7 @@ void main() {
       await third.transport.close();
     });
 
-    test('连接流镜像:GetDeviceInfo 人设 → OpenSession → 0x9435/0x90C2 括号',
+    test('连接流镜像:GetDeviceInfo 人设 → OpenSession → 0x90C2 括号',
         () async {
       final camera = await _boot();
       final live = await _connect(camera);
@@ -168,12 +168,15 @@ void main() {
 
       final took = await live.session.enableAppControl(remoteLatch: true);
       expect(took, isTrue);
-      // 连接梯:0x9435 OK(假钥匙路径照发)→ 0x90C2(1) OK → 0x90C2(0) OK。
-      expect(live.session.connectLadder, containsAll(['9435:OK', '90C2:OK', '90C2退:OK']));
+      // 连接梯:跳过 0x9435(假钥匙 + Zf 固件慢操作)→ 0x90C2(1) OK
+      // → 0x90C2(0) OK。
+      expect(live.session.connectLadder,
+          containsAll(['9435:SKIP', '90C2:OK', '90C2退:OK']));
       final device = camera.device;
-      expect(device.opCounts[NikonOperationCode.changeApplicationMode], 1);
+      expect(device.opCounts[NikonOperationCode.changeApplicationMode] ?? 0, 0,
+          reason: '连接流不再发 0x9435');
       expect(device.opCounts[NikonOperationCode.changeCameraMode], 2);
-      expect(device.applicationMode, 1);
+      expect(device.applicationMode, 0, reason: '跳过 0x9435,应用模式不再置 1');
       expect(device.cameraMode, 0); // 括号收口:开闩即还身
     });
 

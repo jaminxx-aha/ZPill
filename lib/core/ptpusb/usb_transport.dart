@@ -21,6 +21,7 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
+import '../log/app_log.dart';
 import '../ptp/ptp_transport.dart';
 import '../utils/byte_reader.dart';
 import 'containers.dart';
@@ -124,6 +125,12 @@ final class UsbPtpTransport implements PtpTransport {
       throw StateError('UsbPtpTransport 已关闭');
     }
     final txid = _txid++;
+    // 单笔超时覆盖(见 PtpRequest.timeout):默认用传输层窗口;已知慢
+    // 操作(0x9434 全卡元数据)放宽,避免相机仍在生成索引时被 15s
+    // 判死整条链路。放大的窗口同样透传给 UsbBytePipe,看门狗装饰器
+    // 按「窗口 + 宽限」自动延后,不会提前断链。
+    final readTimeoutMs = request.timeout?.inMilliseconds ?? timeoutMs;
+    final watch = Stopwatch()..start();
 
     // 相位 1:命令容器
     await pipe.bulkOut(encodeUsbCommand(
@@ -144,9 +151,10 @@ final class UsbPtpTransport implements PtpTransport {
     // native 超读暂存)会错位下一事务 —— best-effort 排空后再抛
     // (nico PtpSession 中止收尾同款;排空自身失败不掩盖原始异常)。
     try {
-      final first = await _readContainer(txid, onData: onData);
+      final first =
+          await _readContainer(txid, onData: onData, timeoutMs: readTimeoutMs);
       if (first.type == UsbContainerType.data) {
-        final resp = await _readContainer(txid);
+        final resp = await _readContainer(txid, timeoutMs: readTimeoutMs);
         if (resp.type != UsbContainerType.response) {
           throw FormatException('数据容器之后应为响应容器,收到 type=${resp.type}');
         }
@@ -163,7 +171,25 @@ final class UsbPtpTransport implements PtpTransport {
     } on Exception {
       await _drainAfterAbort();
       rethrow;
+    } finally {
+      _logSlowOp(request, txid, watch, readTimeoutMs);
     }
+  }
+
+  /// 慢事务记账(真机诊断):≥2s 或显式带了超时覆盖的事务必留痕。
+  /// 0x9434 在 HarmonyOS/Zf 上曾占锁 20s 并把链路拖死,日志要能直接
+  /// 读出「哪一笔、多久、用的多大窗口」。
+  static const int _kSlowOpLogMs = 2000;
+
+  void _logSlowOp(
+      PtpRequest request, int txid, Stopwatch watch, int readTimeoutMs) {
+    final ms = watch.elapsedMilliseconds;
+    if (ms < _kSlowOpLogMs && request.timeout == null) return;
+    final op = request.opcode.toRadixString(16).toUpperCase().padLeft(4, '0');
+    AppLog.w(
+        AppLog.usb,
+        'PTP 慢事务 op=0x$op tid=$txid ${ms}ms 读窗=${readTimeoutMs}ms'
+        '${request.timeout != null ? '(覆盖)' : ''}');
   }
 
   /// 事务中止后的 best-effort 排空:吸干 bulk IN 残余,下一事务不从
@@ -192,8 +218,8 @@ final class UsbPtpTransport implements PtpTransport {
   /// [expectedTxid] 为本事务 ID:bulk IN 上容器 txid 必须与命令一致,
   /// 不符即字节流错位,立即报错(异步事件 txid=0xFFFFFFFF 只走 interrupt)。
   Future<_Incoming> _readContainer(int expectedTxid,
-      {void Function(Uint8List chunk)? onData}) async {
-    final head = await _take(kUsbContainerHeaderLength);
+      {void Function(Uint8List chunk)? onData, required int timeoutMs}) async {
+    final head = await _take(kUsbContainerHeaderLength, timeoutMs: timeoutMs);
     final r = ByteReader(head);
     final length = r.u32();
     final type = r.u16();
@@ -220,7 +246,7 @@ final class UsbPtpTransport implements PtpTransport {
         if (bodyLen > 5 * 4) {
           throw FormatException('响应参数 $bodyLen 字节,超过 5 个 u32');
         }
-        final body = await _take(bodyLen);
+        final body = await _take(bodyLen, timeoutMs: timeoutMs);
         final br = ByteReader(body);
         return _Incoming(
           type: type,
@@ -233,8 +259,9 @@ final class UsbPtpTransport implements PtpTransport {
         if (onData != null) {
           var remaining = bodyLen;
           while (remaining > 0) {
-            final chunk =
-                await _takeUpTo(math.min(remaining, kUsbStreamChunkBytes));
+            final chunk = await _takeUpTo(
+                math.min(remaining, kUsbStreamChunkBytes),
+                timeoutMs: timeoutMs);
             remaining -= chunk.length;
             onData(chunk);
           }
@@ -244,7 +271,7 @@ final class UsbPtpTransport implements PtpTransport {
           throw FormatException(
               'USB 非流式数据 $bodyLen B 超过 $kMaxUsbBufferedDataBytes B 上限');
         }
-        final body = await _take(bodyLen);
+        final body = await _take(bodyLen, timeoutMs: timeoutMs);
         return _Incoming(
           type: type,
           code: code,
@@ -260,7 +287,7 @@ final class UsbPtpTransport implements PtpTransport {
 
   /// 精确读 [n] 字节:bulkRead 契约保证「至多 maxLen、≥1 或超时」,
   /// 故只按缺口循环(不存在超读余量)。
-  Future<Uint8List> _take(int n) async {
+  Future<Uint8List> _take(int n, {required int timeoutMs}) async {
     if (n == 0) return Uint8List(0);
     final out = BytesBuilder(copy: false);
     while (out.length < n) {
@@ -279,7 +306,7 @@ final class UsbPtpTransport implements PtpTransport {
   }
 
   /// 至多读 [maxLen] 字节(单次管道读;可能短读,流式回调容忍)。
-  Future<Uint8List> _takeUpTo(int maxLen) async {
+  Future<Uint8List> _takeUpTo(int maxLen, {required int timeoutMs}) async {
     if (maxLen <= 0) {
       throw ArgumentError.value(maxLen, 'maxLen', '必须为正');
     }

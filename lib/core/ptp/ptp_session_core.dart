@@ -87,11 +87,17 @@ mixin _SessionCore {
 
   /// GetDeviceInfo;会话内缓存([force] 强制刷新)。
   /// 唯一可在 OpenSession 之前调用的操作。
-  Future<PtpDeviceInfo> getDeviceInfo({bool force = false}) async {
+  Future<PtpDeviceInfo> getDeviceInfo({bool force = false, Duration? timeout}) async {
     if (_deviceInfo != null && !force) return _deviceInfo!;
-    final result = await _serialized(() => transport.execute(
-          const PtpRequest(opcode: PtpOperationCode.getDeviceInfo),
-        ));
+    // 连接握手(会话未开)用短窗:首连/断开重连都尽快判楔死、进 USB
+    // 端口复位;运行时 force 刷新(会话已开)仍走缺省 15s(写卡/清缓存
+    // 可能慢)。**不能只看 _deviceInfo 缓存**:断开重连时缓存还在,
+    // 按缓存判断会让重连退回 15s(2026-11-04 ohos 真机复报)。
+    final connectProbe = !_sessionOpen;
+    final result = await _serialized(() => transport.execute(PtpRequest(
+          opcode: PtpOperationCode.getDeviceInfo,
+          timeout: timeout ?? (connectProbe ? kConnectHandshakeTimeout : null),
+        )));
     _ensureOk(result, PtpOperationCode.getDeviceInfo);
     _deviceInfo = PtpDeviceInfo.parse(_requireData(result, 'GetDeviceInfo'));
     return _deviceInfo!;
@@ -125,20 +131,31 @@ mixin _SessionCore {
 
   Future<void> _openLocked() async {
     final result = await transport.execute(
-      const PtpRequest(opcode: PtpOperationCode.openSession, params: [1]),
+      const PtpRequest(
+        opcode: PtpOperationCode.openSession,
+        params: [1],
+        timeout: kConnectHandshakeTimeout,
+      ),
     );
     if (result.responseCode == PtpResponseCode.sessionAlreadyOpen) {
       // 上次会话未关(拔线/崩溃残留):关掉重开。残留会话的
       // CloseSession 可能报错(会话号不属于本连接),响应码与异常都不阻断重开。
       try {
         await transport.execute(
-          const PtpRequest(opcode: PtpOperationCode.closeSession),
+          const PtpRequest(
+            opcode: PtpOperationCode.closeSession,
+            timeout: kConnectHandshakeTimeout,
+          ),
         );
       } on Exception {
         // 尽力而为,见上
       }
       final retry = await transport.execute(
-        const PtpRequest(opcode: PtpOperationCode.openSession, params: [1]),
+        const PtpRequest(
+          opcode: PtpOperationCode.openSession,
+          params: [1],
+          timeout: kConnectHandshakeTimeout,
+        ),
       );
       _ensureOk(retry, PtpOperationCode.openSession);
     } else {
@@ -148,6 +165,7 @@ mixin _SessionCore {
     _remoteModeActive = false; // 新链新账:旧链的 remote 模式持有态不带来
     _largeThumbDegraded = false; // 新链新账:0x90C4 重新探测
     _objectPropListDegraded = false; // 新链新账:0x9805 重新探测
+    _objectsMetaDataDegraded = false; // 新链新账:0x9434 重新探测
     protectionOptimistic.clear(); // 新链新账:保护态乐观值不跨连接
     connectLadder.clear(); // 一连接一账:新连接的梯从零记
   }
@@ -158,12 +176,19 @@ mixin _SessionCore {
     _remoteModeActive = false; // 链将亡:remote 持有态一律作废(含未开会话的旁路持有)
     _largeThumbDegraded = false; // 链将亡:0x90C4 降级态作废,新链重探
     _objectPropListDegraded = false; // 链将亡:0x9805 降级态作废,新链重探
+    _objectsMetaDataDegraded = false; // 链将亡:0x9434 降级态作废,新链重探
     if (!_sessionOpen) return;
     _sessionOpen = false;
     await _serialized(() async {
       try {
         await transport.execute(
-          const PtpRequest(opcode: PtpOperationCode.closeSession),
+          const PtpRequest(
+            opcode: PtpOperationCode.closeSession,
+            // 收会话**不能**用 5s 握手短窗:CloseSession 排在在途事务
+            // 之后,短窗会提前放弃、把相机留在忙态,下一次重连的首笔
+            // 读到晚到的旧响应(2026-11-04 ohos 真机 "V3.00" 流错位
+            // 根因)。15s 缺省窗是相机响应上限,不是连接握手窗。
+          ),
         );
       } on Exception {
         // 链路已断:本地状态已清,足够
@@ -182,6 +207,21 @@ mixin _SessionCore {
   /// 复位 —— 新连接重新探测;码表不在册不置位(不做 supportsOperation
   /// 门禁,STA 9-op 小表假门,直发纪律同 0x90C4/0x920F)。
   bool _objectPropListDegraded = false;
+
+  /// 0x9434 会话级降级旗标(语义同 [_objectPropListDegraded]):本会话内
+  /// GetObjectsMetaData 已超时/失败过,仓库层不再自动重试,直走逐张
+  /// 评级补读。[open()] / [close()] 复位 —— 新连接重新探测。
+  ///
+  /// 动机(2026-11-04 真机):Zf/HarmonyOS USB 上 0x9434 生成整卡索引
+  /// 超过 15s 缺省事务窗,重试会把整条链路拖死;降级后只损失「批量
+  /// 星级位」,评级仍可由逐张 0xDC8A/XMP 补齐。
+  bool _objectsMetaDataDegraded = false;
+
+  /// 0x9434 是否已在本会话降级(见 [_objectsMetaDataDegraded])。
+  bool get objectsMetaDataDegraded => _objectsMetaDataDegraded;
+
+  /// 标记 0x9434 本会话不可用(仓库层失败沿调用;下一次 open/close 复位)。
+  void noteObjectsMetaDataFailed() => _objectsMetaDataDegraded = true;
 
   /// 事件流 = 异步通道(USB interrupt / PTP-IP 事件 socket)+ 轮询注入
   /// ([emitPolledEvents],[NikonEventPoller] 用)的并流。尼康机身的重要

@@ -345,7 +345,7 @@ final class RatingDiagnostics {
           }
         }
       }
-    } on PtpResponseException catch (e) {
+    } on Exception catch (e) {
       _p('⑥ 0x9434 拒答: $e');
     }
     _p('── 结束 ──');

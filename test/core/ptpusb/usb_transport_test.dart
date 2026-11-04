@@ -437,6 +437,22 @@ void main() {
       expect(pipe.drainCalls, 1);
     });
   });
+
+  group('单笔超时覆盖(PtpRequest.timeout)', () {
+    test('缺省窗口与覆盖窗口分别透传给 bulkRead', () async {
+      final pipe = FakeUsbBytePipe();
+      final t = UsbPtpTransport(pipe: pipe, timeoutMs: 15000);
+      pipe.enqueue(encodeUsbResponse(
+          responseCode: PtpResponseCode.ok, transactionId: 0));
+      await t.execute(const PtpRequest(opcode: PtpOperationCode.getDeviceInfo));
+      pipe.enqueue(encodeUsbResponse(
+          responseCode: PtpResponseCode.ok, transactionId: 1));
+      await t.execute(const PtpRequest(
+          opcode: PtpOperationCode.getDeviceInfo,
+          timeout: Duration(seconds: 45)));
+      expect(pipe.readTimeouts, [15000, 45000]);
+    });
+  });
 }
 
 final class _BadUsbPipe implements UsbBytePipe {

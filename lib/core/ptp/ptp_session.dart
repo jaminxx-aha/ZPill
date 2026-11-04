@@ -58,7 +58,24 @@ final class PtpResponseException implements Exception {
   }
 }
 
-/// PTP 数据集数组元素上限。正常相机全卡对象数远低于 100 万;超过即按
+/// 连接握手(GetDeviceInfo / OpenSession)的短超时。
+///
+/// 运行时事务用传输层缺省窗(USB 15s:相机写卡/清缓存可能慢),但连接
+/// 握手不需要等满 15s。**10s** 是按真机标定的:ohos 立刻断开重连时
+/// 相机对首笔 GetDeviceInfo 实测 ~6s 才回(上一条事务收尾),5s 会误判
+/// 成楔死并触发复位;10s 留出余量,健康链路握手仍是亚秒级。真楔死
+/// (10s 仍无响应)才交给连接层走 USB 端口复位两段式重连。
+const Duration kConnectHandshakeTimeout = Duration(seconds: 10);
+
+/// 连接首笔 GetDeviceInfo 的短探针。
+///
+/// teardown 有意不送 CloseSession(避免挂满串行门),相机侧旧会话仍开着;
+/// 此时相机对 GetDeviceInfo 可能沉默。先用 2s 探针,沉默即走
+/// OpenSession 的 0x201E 自愈(Close+Open)再取 —— 不能在这里等 10s
+/// 然后复位 USB(2026-11-04 ohos「断开后首连必败」根因)。
+const Duration kConnectProbeTimeout = Duration(seconds: 2);
+
+/// 数据集数组元素上限。正常相机全卡对象数远低于 100 万;超过即按
 /// 畸形响应拒绝,防止 count 字段驱动超大 List 分配。
 const int _kMaxPtpArrayElements = 1 << 20;
 

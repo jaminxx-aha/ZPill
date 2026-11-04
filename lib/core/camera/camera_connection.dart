@@ -10,6 +10,7 @@ import 'dart:io';
 import 'paired_cameras_store.dart';
 import '../../l10n/message.dart';
 import '../../platform/usb/usb_host.dart';
+import '../log/app_log.dart';
 import '../ptp/operation_codes.dart';
 import '../ptp/ptp_link_router.dart';
 import '../ptp/ptp_session.dart';
@@ -131,6 +132,10 @@ abstract interface class CameraConnection {
 /// `link.detach()`(挡新请求)→ 无线实例 close()(毒化在途,gate 秒
 /// 释放)→ `session.close()`(本地状态复位;CloseSession 不再下链路,
 /// 相机侧残留由 0x201E 自愈处理)→ `usb.close()`。
+/// **例外**:用户主动 `disconnect()` 时链路还活着,先 `session.close()`
+/// 再把 CloseSession 送下链路关掉相机侧会话,然后才 teardown —— 否则
+/// 下一次连接的首笔 GetDeviceInfo 会被残留会话无视(2026-11-04 ohos
+/// 「断开后首连必败」真因)。
 ///
 /// **自动重连**(2026-10-10,OpenZCine ReconnectBackoff/SessionRecovery
 /// 理念):connected 断链 → [CameraLinkState.reconnecting],按 [_lastGood]
@@ -319,7 +324,20 @@ final class CameraConnectionImpl implements CameraConnection {
     try {
       await _connectUsbOnce(silent: silent);
     } on Exception catch (e) {
-      if (e is TimeoutException) {
+      // 首笔事务超时 = 相机对同枚举新会话沉默;流错位(FormatException,
+      // 容器头读到旧载荷)同属「上轮会话没干净」的楔死形态。流错位先
+      // 原地排空残留再试一次(比端口复位轻,ohos 上残尾常晚到一拍);
+      // 排空仍失败/超时再走 USB 端口复位(recoveryReset)两段式。
+      if (e is FormatException) {
+        try {
+          await _usb.drainIn();
+          await _connectUsbOnce(silent: silent);
+          return;
+        } on Exception {
+          // 排空重试仍失败:落回下面的端口复位路径
+        }
+      }
+      if (e is TimeoutException || e is FormatException) {
         try {
           if (await _usb.recoveryReset()) {
             await Future<void>.delayed(const Duration(milliseconds: 300));
@@ -357,17 +375,24 @@ final class CameraConnectionImpl implements CameraConnection {
 
   Future<void> _connectUsbOnce({bool silent = false}) async {
     await _awaitTeardown();
+    final sw = Stopwatch()..start();
     final cameras = await _usb.listCameras();
+    AppLog.i(AppLog.connection,
+        'USB 连接: listCameras ${cameras.length} 台 ${sw.elapsedMilliseconds}ms');
     if (cameras.isEmpty) {
       if (silent) throw const CameraNotPresentException();
       await _failConnect((key: 'conn.errNoUsbCamera', args: null));
       return;
     }
     await _usb.open(cameras.first);
+    AppLog.i(
+        AppLog.connection, 'USB 连接: open ${sw.elapsedMilliseconds}ms');
     _link.attach(_usbTransport);
     _linkGen++;
     _wireless = false;
     await _openSessionOrReject(silent: silent);
+    AppLog.i(AppLog.connection,
+        'USB 连接: 会话就绪 ${sw.elapsedMilliseconds}ms');
   }
 
   /// [silent] = true 供配对后的重试拍:失败不上报状态(teardown 后把
@@ -609,10 +634,30 @@ final class CameraConnectionImpl implements CameraConnection {
   /// [silent] = true 供恢复循环:受限画像不落 _failConnect(reconnecting
   /// 态会被守卫静默吞掉、循环误判成功),改抛 [ConnectRefusedException]。
   Future<void> _openSessionOrReject({bool silent = false}) async {
+    final sw = Stopwatch()..start();
     // GetDeviceInfo 是 OpenSession 之前唯一允许的操作,顺带拿到型号名。
     // force:相机重启后 op 表可能变化(受限画像 ⇄ 全量),不能吃上次
     // 连接的缓存。
-    final info = await _session.getDeviceInfo(force: true);
+    PtpDeviceInfo info;
+    try {
+      info = await _session
+          .getDeviceInfo(force: true, timeout: kConnectProbeTimeout);
+      AppLog.i(AppLog.connection,
+          'USB 连接: GetDeviceInfo ${sw.elapsedMilliseconds}ms');
+    } on TimeoutException {
+      // 旧会话残留:teardown 有意不送 CloseSession(避免挂满串行门),
+      // 相机侧旧会话仍开着时会无视 GetDeviceInfo。先走 OpenSession 的
+      // 0x201E 自愈链(Close+Open)再取,别直接复位 USB —— 这是
+      // 「断开后第一次重连必败」的真因(2026-11-04 ohos 真机)。
+      AppLog.w(AppLog.connection,
+          'USB 连接: GetDeviceInfo 沉默,先 OpenSession 自愈');
+      await _session.open();
+      AppLog.i(AppLog.connection,
+          'USB 连接: OpenSession(自愈) ${sw.elapsedMilliseconds}ms');
+      info = await _session.getDeviceInfo(force: true);
+      AppLog.i(AppLog.connection,
+          'USB 连接: GetDeviceInfo(重取) ${sw.elapsedMilliseconds}ms');
+    }
     if (!info.supportsOperation(PtpOperationCode.getObject)) {
       // 受限画像(USB 真机 2026-10-01:op 表只剩元数据/属性/事件,
       // GetObject/GetThumb 等数据操作全 0x200F;触发器未明,自行翻回)。
@@ -626,16 +671,16 @@ final class CameraConnectionImpl implements CameraConnection {
       return;
     }
     await _session.open();
-    // 切应用模式 + 进 remote(Z 系真机口径:不切则遥控写被 0x200F
-    // AccessDenied 拒)。连接流一律进 remote 模式:2026-10-07 归因梯
-    // (macOS-IC 真机)定案 —— 0x9435 回 OK 也是假钥匙,唯一实证解锁
-    // 取景门 = 0x90C2(1);remote + 连接即取景 = 机身及时取景
-    // (OpenZCine 效果)。尽力而为,失败不拦连接(梯记入
-    // session.connectLadder,取景失败时浮出)。
-    await _session.enableAppControl(remoteLatch: true);
+    AppLog.i(AppLog.connection,
+        'USB 连接: OpenSession ${sw.elapsedMilliseconds}ms');
     // 迟到续体守卫:拨号在途被外部收口(disconnect/断链)时,不得把
     // 已收口的状态覆盖成 connected。pairing 态合法(配对流程经此转正),
     // 只挡 disconnected/failed。
+    //
+    // 「已连接」在 OpenSession 成功即成立:应用模式切换(0x9435)是
+    // 相机固件的慢操作(2026-11-04 真机 ~5s),不能把它压在状态沿前面
+    // —— 否则 Android 有线连接比 ohos/iOS 慢一大截。latch 转后台,
+    // 后续事务在会话串行门上自然排队等它收口。
     if (_state == CameraLinkState.disconnected ||
         _state == CameraLinkState.failed) {
       return;
@@ -645,6 +690,25 @@ final class CameraConnectionImpl implements CameraConnection {
     _deviceModel = info.model;
     _setError(null);
     _transition(CameraLinkState.connected);
+    AppLog.i(AppLog.connection,
+        'USB 连接: 连接成立 ${sw.elapsedMilliseconds}ms');
+    // 应用模式切换放在「已连接」状态沿之后:0x9435 是相机固件慢操作
+    // (2026-11-04 真机 ~5s),不能压住状态沿;但 connect() Future 仍
+    // await 它收口 —— 调用方/测试看到的连接完成语义不变,UI 则由
+    // 状态流先行显示「已连接」。后续事务在会话串行门上自然排队等它。
+    try {
+      // 切应用模式 + 进 remote(Z 系真机口径:不切则遥控写被 0x200F
+      // AccessDenied 拒)。连接流一律进 remote 模式:2026-10-07 归因梯
+      // (macOS-IC 真机)定案 —— 0x9435 回 OK 也是假钥匙,唯一实证解锁
+      // 取景门 = 0x90C2(1);remote + 连接即取景 = 机身及时取景
+      // (OpenZCine 效果)。尽力而为,失败不拦连接(梯记入
+      // session.connectLadder,取景失败时浮出)。
+      await _session.enableAppControl(remoteLatch: true);
+      AppLog.i(AppLog.connection,
+          'USB 连接: 应用模式完成 ${sw.elapsedMilliseconds}ms');
+    } on Object catch (e) {
+      AppLog.w(AppLog.connection, 'USB 连接: 应用模式失败 $e');
+    }
   }
 
   /// 连接失败的统一收口:connecting/pairing 守卫(disconnect 竞态下迟到
@@ -711,7 +775,9 @@ final class CameraConnectionImpl implements CameraConnection {
     final gate = _pairingGate;
     _pairingCode = null;
     gate?.complete(false);
-    await _teardown();
+    // 用户主动断开:链路还活着,teardown(graceful) 会在 detach 前先发
+    // CloseSession 关掉相机侧会话;单飞保证并发 connect 等它收口。
+    await _teardown(graceful: true);
     _setError(null);
   }
 
@@ -738,7 +804,7 @@ final class CameraConnectionImpl implements CameraConnection {
   /// 兜住异常 —— 旧实现 `wireless?.close()` 裸 await,一抛错就跳过
   /// session/usb 清理(USB 接口不释放、会话账不归零);③共享资源按世代
   /// 守卫 —— 旧清理不得 detach/close 新链路。
-  Future<void> _teardown() {
+  Future<void> _teardown({bool graceful = false}) {
     final running = _tearingDown;
     if (running != null) return running;
     final gen = _linkGen;
@@ -746,7 +812,8 @@ final class CameraConnectionImpl implements CameraConnection {
     _wirelessBreakageSub = null;
     final wireless = _wirelessTransport;
     if (identical(_wirelessTransport, wireless)) _wirelessTransport = null;
-    final run = _teardownOnce(gen: gen, sub: sub, wireless: wireless);
+    final run = _teardownOnce(
+        gen: gen, sub: sub, wireless: wireless, graceful: graceful);
     _tearingDown = run;
     return run.whenComplete(() {
       if (identical(_tearingDown, run)) _tearingDown = null;
@@ -768,6 +835,7 @@ final class CameraConnectionImpl implements CameraConnection {
     required int gen,
     required StreamSubscription<String>? sub,
     required PtpIpTransport? wireless,
+    bool graceful = false,
   }) async {
     _deviceName = null;
     _deviceModel = null;
@@ -789,6 +857,19 @@ final class CameraConnectionImpl implements CameraConnection {
         await _session.changeCameraMode(0);
       } on Object {
         // 尽力而为:本地持有态由 close() 收口
+      }
+    }
+    if (gen == _linkGen && graceful) {
+      // 用户主动断开:链路还活着,先把 CloseSession 真正送下链路关掉
+      // 相机侧会话,下一次 GetDeviceInfo 才不会被残留会话无视
+      // (2026-11-04 ohos「断开后首连必败」)。必须在 detach 之前发;
+      // 失败/链路已死静默(下次连接 0x201E 自愈兜底)。放在 teardown
+      // 单飞内:并发 connect 的 _awaitTeardown 会等它收口,不与新拨号
+      // 交错。
+      try {
+        await _session.close();
+      } on Object {
+        // 尽力而为:本地状态已复位,失败不挡断开
       }
     }
     if (gen == _linkGen) {

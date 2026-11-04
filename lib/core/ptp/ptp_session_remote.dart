@@ -1,5 +1,13 @@
 part of 'ptp_session.dart';
 
+/// 0x9434 全卡元数据的单笔超时(覆盖传输层缺省 15s)。
+///
+/// 相机生成整卡索引的耗时随卡内容增长;Zf/HarmonyOS USB 真机 2026-11-04
+/// 实测 15s 内零字节,缺省窗会把「相机还在算」误判成链路死亡。45s 是
+/// 生成索引的宽限,失败后由仓库层标记会话降级、改走逐张评级补读,
+/// 不再反复用这一笔事务拖死链路。
+const Duration kObjectsMetaDataTimeout = Duration(seconds: 45);
+
 /// 遥控域:曝光参数 / Live View / 快门释放 / 属性族(文件原分节注释)。
 mixin _RemoteOps on _SessionCore {
   /// MfDrive 就绪轮询拍数/间隔(facade 注入,测试收窄归零免真钟等待)。
@@ -195,19 +203,27 @@ mixin _RemoteOps on _SessionCore {
   /// 而为,拍照/读参数不依赖它,真机核对)。
   Future<bool> enableAppControl({bool remoteLatch = false}) async {
     var rc = PtpResponseCode.operationNotSupported;
-    try {
-      final result = await _serialized(() => transport.execute(PtpRequest(
-            opcode: NikonOperationCode.changeApplicationMode,
-            params: [1],
-          )));
-      rc = result.responseCode;
-      noteLadder('9435:${_ladderRc(rc)}');
-    } on Object {
-      // op 缺席/链路类(含脚本耗尽类 StateError):走回退。
-      // 尽力而为步骤,on Object 兜底 —— 它失败不得影响连接主流程。
-      noteLadder('9435:ERR');
+    if (!remoteLatch) {
+      try {
+        final result = await _serialized(() => transport.execute(PtpRequest(
+              opcode: NikonOperationCode.changeApplicationMode,
+              params: [1],
+            )));
+        rc = result.responseCode;
+        noteLadder('9435:${_ladderRc(rc)}');
+      } on Object {
+        // op 缺席/链路类(含脚本耗尽类 StateError):走回退。
+        // 尽力而为步骤,on Object 兜底 —— 它失败不得影响连接主流程。
+        noteLadder('9435:ERR');
+      }
+      if (rc == PtpResponseCode.ok) return true;
+    } else {
+      // 连接流直取 remote 闩:0x9435 是假钥匙(0x9201 仍 0xA004),
+      // 且 Zf 固件要 ~5s 才回 —— 它占住会话串行门会把连接后镜头/
+      // 存储/电量等概览读取全部堵在后面(2026-11-04 真机)。唯一实证
+      // 解锁 = 0x90C2(1),故 remoteLatch 路径不再发 0x9435。
+      noteLadder('9435:SKIP');
     }
-    if (rc == PtpResponseCode.ok && !remoteLatch) return true;
     if (remoteLatch) {
       // 2026-10-07 归因梯定案(macOS-IC 真机):0x9435 在 IC 人设下回
       // OK 但是假钥匙(0x9201 仍 0xA004),唯一实证解锁 = 0x90C2(1)。
@@ -750,11 +766,21 @@ mixin _RemoteOps on _SessionCore {
   }
 
   /// 0x9434 裸数据集(诊断取证用:布局有疑,原文先落袋)。
+  ///
+  /// 超时用 [kObjectsMetaDataTimeout] 覆盖缺省 15s:Zf 在 HarmonyOS USB
+  /// 上生成整卡索引可明显超过缺省窗(2026-11-04 真机:15s 零字节 →
+  /// 传输层判死 → 重新枚举 → 反复弹 USB 授权)。放宽的是这一笔事务的
+  /// 等待上限;仍失败则由仓库层标记会话降级,不再自动重试。
   Future<Uint8List> getObjectsMetaDataRaw() async {
+    if (_objectsMetaDataDegraded) {
+      // Exception(不是 Error):仓库事件重同步沿只 catch Exception。
+      throw Exception('GetObjectsMetaData(0x9434) 本会话已降级');
+    }
     final result = await _serialized(() => transport.execute(const PtpRequest(
           opcode: NikonOperationCode.getObjectsMetaData,
           // P1 = 0xFFFFFFFF 全卡;P2 = 0x00000000 全格式(§6.2.3.3 参数表)。
           params: [0xFFFFFFFF, 0x00000000],
+          timeout: kObjectsMetaDataTimeout,
         )));
     _ensureOk(result, NikonOperationCode.getObjectsMetaData);
     return result.data ?? Uint8List(0);

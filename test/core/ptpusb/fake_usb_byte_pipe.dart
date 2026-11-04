@@ -15,6 +15,9 @@ final class FakeUsbBytePipe implements UsbBytePipe {
   Uint8List _leftover = Uint8List(0);
   final StreamController<Uint8List> _eventCtrl = StreamController.broadcast();
 
+  /// 每次 bulkRead 传入的超时窗(断言按事务覆盖用)。
+  final List<int> readTimeouts = [];
+
   /// drainIn 调用计数(中止后排空断言用)。
   int drainCalls = 0;
 
@@ -46,6 +49,7 @@ final class FakeUsbBytePipe implements UsbBytePipe {
 
   @override
   Future<Uint8List> bulkRead(int maxLen, {required int timeoutMs}) async {
+    readTimeouts.add(timeoutMs);
     if (_leftover.isEmpty) {
       if (_inChunks.isEmpty) {
         throw TimeoutException('fake bulkRead: 窗口内无数据');

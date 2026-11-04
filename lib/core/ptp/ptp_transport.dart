@@ -12,7 +12,11 @@ import 'dart:typed_data';
 
 /// 一次 PTP 操作请求。
 final class PtpRequest {
-  const PtpRequest({required this.opcode, this.params = const [], this.dataOut});
+  const PtpRequest(
+      {required this.opcode,
+      this.params = const [],
+      this.dataOut,
+      this.timeout});
 
   /// 操作码,取值见 core/ptp/operation_codes.dart 的 PtpOperationCode。
   final int opcode;
@@ -23,6 +27,13 @@ final class PtpRequest {
   /// 数据出相位(payload 由 initiator 发出,如 SetDevicePropValue);
   /// null 表示无数据出。
   final Uint8List? dataOut;
+
+  /// 本事务的超时覆盖(null = 传输层缺省)。
+  ///
+  /// 只给**已知慢操作**用(如 0x9434 全卡元数据:相机生成整卡索引可
+  /// 超过 15s 缺省窗)。放宽的仅是这一笔事务的等待上限,不改链路级
+  /// 看门狗策略;传输层据此把超时传给底层读/整事务计时。
+  final Duration? timeout;
 }
 
 /// 操作结果:响应码 + 响应参数;数据入相位聚合在 [data]。

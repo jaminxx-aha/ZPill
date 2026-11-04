@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- USB 设备过滤:仅匹配尼康(vendor 0x04B0 = 1200)。插入相机时
+     系统以本过滤把 Nikon Pill 列为候选/默认处理者,经用户选一次
+     「总是」后自动授 USB 权限,免每次连接弹授权框。 -->
+<resources>
+    <usb-device vendor-id="1200"/>
+</resources>

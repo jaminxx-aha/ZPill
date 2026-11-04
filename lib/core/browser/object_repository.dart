@@ -880,14 +880,32 @@ final class ObjectRepositoryImpl implements ObjectRepository {
   /// 回退旧逐张全量补读([_fillRatingsInBackground])。
   Future<void> _syncRatingsViaMeta(int generation) async {
     await Future<void>.delayed(const Duration(milliseconds: 500));
+    final watch = Stopwatch()..start();
     try {
       final metas = await session.getObjectsMetaData();
+      if (watch.elapsedMilliseconds >= 1000) {
+        AppLog.i(
+            AppLog.browser,
+            '0x9434 评级位图 ${metas.length} 条 '
+            '${watch.elapsedMilliseconds}ms');
+      }
       if (generation != _generation) return;
       for (final m in metas) {
         if (m.hasRating) _metaRated.add(m.handle);
       }
-    } on Object {
-      AppLog.w(AppLog.browser, '0x9434 评级位图失败,回退逐张补读');
+    } on Object catch (e) {
+      // 失败原因与耗时必须留痕:0x9434 是已知慢操作(整卡索引),真机
+      // 超时会把链路拖死;降级后本会话不再自动重试,改逐张补读。
+      AppLog.w(
+          AppLog.browser,
+          '0x9434 评级位图失败(${watch.elapsedMilliseconds}ms): $e'
+          ',回退逐张补读');
+      session.noteObjectsMetaDataFailed();
+      if (e is TimeoutException) {
+        // 相机还在算/不回:此时再逐张补读只会继续压链路,评级本会话
+        // 留空(降级旗标已置,下次连接重新探测)。
+        return;
+      }
       await _fillRatingsInBackground(generation);
       return;
     }

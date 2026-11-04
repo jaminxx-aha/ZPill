@@ -136,54 +136,27 @@ void main() {
     });
 
     test(
-        'enableAppControl(remoteLatch):0x9435 拒(USB 人设)→ '
-        '0x90C2(1)→(0) 开闩括号 → true,remoteModeActive 归 false(2026-10-07 '
-        'v8/v9 定案:上传优先门单向闩,开了不因退而关;remote 持有态才是'
-        '「已连接到计算机」屏元凶,开闩即还身,机身直回取景屏)', () async {
+        'enableAppControl(remoteLatch):跳过 0x9435(Zf 固件 ~5s 慢操作),'
+        '直取 0x90C2(1)→(0) 开闩括号 → true,remoteModeActive 归 false', () async {
       final fake = FakePtpTransport()
-        ..reply(const PtpResult(
-            responseCode: PtpResponseCode.operationNotSupported)) // 0x9435
         ..reply(const PtpResult(responseCode: PtpResponseCode.ok)) // 0x90C2(1)
         ..reply(const PtpResult(responseCode: PtpResponseCode.ok)); // 0x90C2(0)
       final session = PtpSession(transport: fake);
       expect(await session.enableAppControl(remoteLatch: true), isTrue);
       expect(fake.requests.map((r) => r.opcode), [
-        NikonOperationCode.changeApplicationMode,
         NikonOperationCode.changeCameraMode,
         NikonOperationCode.changeCameraMode,
-      ]);
-      expect(fake.requests[1].params, [1]);
-      expect(fake.requests[2].params, [0], reason: '开闩即还身:1→0 背靠背');
+      ], reason: 'remoteLatch 不再发 0x9435(假钥匙 + 5s 慢操作)');
+      expect(fake.requests[0].params, [1]);
+      expect(fake.requests[1].params, [0], reason: '开闩即还身:1→0 背靠背');
       expect(session.remoteModeActive, isFalse, reason: '括号已退 remote');
-    });
-
-    test(
-        'enableAppControl(remoteLatch):0x9435 回 OK(IC 假钥匙)→ '
-        '仍走 0x90C2(1)→(0) 括号(2026-10-07 归因梯定案:0x9435 接受 ≠ '
-        '解锁 0x9201,唯一实证开闩钥匙 = 0x90C2(1)),梯记三步', () async {
-      final fake = FakePtpTransport()
-        ..reply(const PtpResult(responseCode: PtpResponseCode.ok)) // 0x9435
-        ..reply(const PtpResult(responseCode: PtpResponseCode.ok)) // 0x90C2(1)
-        ..reply(const PtpResult(responseCode: PtpResponseCode.ok)); // 0x90C2(0)
-      final session = PtpSession(transport: fake);
-      expect(await session.enableAppControl(remoteLatch: true), isTrue);
-      expect(fake.requests.map((r) => r.opcode), [
-        NikonOperationCode.changeApplicationMode,
-        NikonOperationCode.changeCameraMode,
-        NikonOperationCode.changeCameraMode,
-      ]);
-      expect(fake.requests[1].params, [1]);
-      expect(fake.requests[2].params, [0]);
-      expect(session.remoteModeActive, isFalse);
-      expect(session.connectLadder, ['9435:OK', '90C2:OK', '90C2退:OK']);
+      expect(session.connectLadder, ['9435:SKIP', '90C2:OK', '90C2退:OK']);
     });
 
     test(
         'enableAppControl(remoteLatch):0x90C2(0) 退步被拒 → 仍 true '
-        '(闩已开,流不受影响),remoteModeActive 保持 true(接管侧如实对齐,'
-        '退由 teardown 兜底)', () async {
+        '(闩已开,流不受影响),remoteModeActive 保持 true', () async {
       final fake = FakePtpTransport()
-        ..reply(const PtpResult(responseCode: PtpResponseCode.ok)) // 0x9435
         ..reply(const PtpResult(responseCode: PtpResponseCode.ok)) // 0x90C2(1)
         ..reply(const PtpResult(
             responseCode:
@@ -191,24 +164,23 @@ void main() {
       final session = PtpSession(transport: fake);
       expect(await session.enableAppControl(remoteLatch: true), isTrue);
       expect(fake.requests.map((r) => r.opcode), [
-        NikonOperationCode.changeApplicationMode,
         NikonOperationCode.changeCameraMode,
         NikonOperationCode.changeCameraMode,
       ]);
       expect(session.remoteModeActive, isTrue, reason: '退被拒 = remote 仍持有');
-      expect(session.connectLadder, ['9435:OK', '90C2:OK', '90C2退:拒']);
+      expect(session.connectLadder, ['9435:SKIP', '90C2:OK', '90C2退:拒']);
     });
 
     test(
-        'enableAppControl(remoteLatch):0x9435 OK + 0x90C2 拒 → '
-        '仍 true(应用模式已接受,不发 0xD1F0),梯记拒码;open() 清梯', () async {
+        'enableAppControl(remoteLatch):0x90C2(1) 拒 → 0xD1F0 兜底;'
+        'open() 清梯', () async {
       final fake = FakePtpTransport()
         ..reply(
             const PtpResult(responseCode: PtpResponseCode.ok)) // OpenSession
-        ..reply(const PtpResult(responseCode: PtpResponseCode.ok)) // 0x9435
         ..reply(const PtpResult(
             responseCode:
-                PtpResponseCode.operationNotSupported)); // 0x90C2(1) 拒
+                PtpResponseCode.operationNotSupported)) // 0x90C2(1) 拒
+        ..reply(const PtpResult(responseCode: PtpResponseCode.ok)); // 0xD1F0
       final session = PtpSession(transport: fake);
       session.noteLadder('旧账');
       await session.open();
@@ -216,27 +188,24 @@ void main() {
       expect(await session.enableAppControl(remoteLatch: true), isTrue);
       expect(fake.requests.map((r) => r.opcode), [
         PtpOperationCode.openSession,
-        NikonOperationCode.changeApplicationMode,
         NikonOperationCode.changeCameraMode,
+        PtpOperationCode.setDevicePropValue,
       ]);
       expect(session.remoteModeActive, isFalse, reason: '0x90C2 被拒不置位');
-      expect(session.connectLadder, ['9435:OK', '90C2:0x2005']);
+      expect(session.connectLadder, ['9435:SKIP', '90C2:0x2005', 'D1F0:OK']);
     });
 
     test(
-        'enableAppControl(remoteLatch):0x9435 链路异常 → '
-        '0x90C2 兜底照走(尽力而为,异常不得拦连接主流程)', () async {
-      // 首发传输层异常(execute 抛)也落兜底:on Object 兜底语义。
+        'enableAppControl(remoteLatch):0x90C2 链路异常 → 0xD1F0 兜底'
+        '(尽力而为,异常不得拦连接主流程)', () async {
       final fake = FakePtpTransport()
-        ..fail(Exception('链路异常')) // 0x9435 抛
-        ..reply(const PtpResult(responseCode: PtpResponseCode.ok)) // 0x90C2(1)
-        ..reply(const PtpResult(responseCode: PtpResponseCode.ok)); // 0x90C2(0)
+        ..fail(Exception('链路异常')) // 0x90C2(1) 抛
+        ..reply(const PtpResult(responseCode: PtpResponseCode.ok)); // 0xD1F0
       final session = PtpSession(transport: fake);
       expect(await session.enableAppControl(remoteLatch: true), isTrue);
       expect(fake.requests.map((r) => r.opcode), [
-        NikonOperationCode.changeApplicationMode,
         NikonOperationCode.changeCameraMode,
-        NikonOperationCode.changeCameraMode,
+        PtpOperationCode.setDevicePropValue,
       ]);
     });
 
@@ -245,27 +214,22 @@ void main() {
         'true,remoteModeActive 不置位', () async {
       final fake = FakePtpTransport()
         ..reply(const PtpResult(
-            responseCode: PtpResponseCode.operationNotSupported)) // 0x9435
-        ..reply(const PtpResult(
             responseCode:
                 PtpResponseCode.operationNotSupported)) // 0x90C2 op 缺席
         ..reply(const PtpResult(responseCode: PtpResponseCode.ok)); // 0xD1F0
       final session = PtpSession(transport: fake);
       expect(await session.enableAppControl(remoteLatch: true), isTrue);
       expect(fake.requests.map((r) => r.opcode), [
-        NikonOperationCode.changeApplicationMode,
         NikonOperationCode.changeCameraMode,
         PtpOperationCode.setDevicePropValue,
       ]);
-      expect(fake.requests[2].params, [PtpDevicePropCode.applicationMode]);
-      expect(fake.requests[2].dataOut, Uint8List.fromList([1]));
+      expect(fake.requests[1].params, [PtpDevicePropCode.applicationMode]);
+      expect(fake.requests[1].dataOut, Uint8List.fromList([1]));
       expect(session.remoteModeActive, isFalse, reason: '0x90C2 被拒不置位');
     });
 
-    test('enableAppControl(remoteLatch):三段全拒 → false 不抛', () async {
+    test('enableAppControl(remoteLatch):两段全拒 → false 不抛', () async {
       final allRejected = FakePtpTransport()
-        ..reply(const PtpResult(
-            responseCode: PtpResponseCode.operationNotSupported)) // 0x9435
         ..reply(const PtpResult(
             responseCode: PtpResponseCode.operationNotSupported)) // 0x90C2 拒
         ..reply(const PtpResult(
@@ -273,7 +237,6 @@ void main() {
       final session2 = PtpSession(transport: allRejected);
       expect(await session2.enableAppControl(remoteLatch: true), isFalse);
       expect(allRejected.requests.map((r) => r.opcode), [
-        NikonOperationCode.changeApplicationMode,
         NikonOperationCode.changeCameraMode,
         PtpOperationCode.setDevicePropValue,
       ]);
@@ -1017,6 +980,23 @@ void main() {
       t.reply(const PtpResult(responseCode: PtpResponseCode.deviceBusy));
       await expectLater(
           session.clearEvent(), throwsA(isA<PtpResponseException>()));
+    });
+  });
+
+  group('0x9434 全卡元数据', () {
+    test('超时覆盖 45s 透传;会话降级后零事务', () async {
+      final fake = FakePtpTransport();
+      final session = PtpSession(transport: fake);
+      fake.reply(PtpResult(
+          responseCode: PtpResponseCode.ok, data: Uint8List(8)));
+      await session.getObjectsMetaData();
+      expect(fake.requests.single.timeout, kObjectsMetaDataTimeout);
+
+      session.noteObjectsMetaDataFailed();
+      expect(session.objectsMetaDataDegraded, isTrue);
+      await expectLater(
+          session.getObjectsMetaData(), throwsA(isA<Exception>()));
+      expect(fake.requests.length, 1); // 降级后不再发事务
     });
   });
 }

@@ -96,6 +96,21 @@ class UsbHostPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHandl
         /// interrupt 事件缓冲:PTP 事件容器 ≤64B(Zf 实测 12/16B)。
         private const val INTERRUPT_BUF_BYTES = 64
 
+        /// interrupt 轮询单次等待窗(毫秒):**必须有限**。HarmonyOS 的
+        /// UsbDeviceConnection 对同一设备的传输是串行的,timeout=0 的
+        /// interrupt 读会长期占住设备,把 bulk OUT 卡到 Dart 看门狗 20s
+        /// 判死(2026-11-04 Zf 真机:下载命令一条都发不出去,clearHalt
+        /// 也 rc=-1)。有限窗 + bulk 在途让路,见 [bulkActive]。
+        private const val INTERRUPT_READ_TIMEOUT_MS = 100
+
+        /// bulk 事务在途时 interrupt 轮询的让路休眠:不碰端点,防设备级
+        /// 锁互踩;下载期间事件暂停(传输结束恢复),优先保传输。
+        private const val INTERRUPT_YIELD_SLEEP_MS = 10L
+
+        /// CLEAR_FEATURE 控制传输上限:原来传 0(无限)会在设备楔死时
+        /// 把 ioExecutor 挂死(bulkOut 看门狗 20s 的真因之一)。
+        private const val CLEAR_HALT_TIMEOUT_MS = 1000
+
         /// drainIn 单轮静默窗:一轮 300ms 内无数据即认为吸干(nico 同口径)。
         private const val DRAIN_QUIET_MS = 300
 
@@ -173,6 +188,11 @@ class UsbHostPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHandl
     /// bulk IN 超读余量(≥maxLen 之外的突发字节),下次 bulkRead 先掏这里。
     private var bulkInLeftover = ByteArray(0)
 
+    /// 在途 bulk 事务计数(volatile:interrupt 轮询线程读)。>0 时轮询
+    /// 主动让路,避免同一 UsbDeviceConnection 上并发传输互踩。
+    @Volatile
+    private var bulkActive = 0
+
     private lateinit var appContext: Context
     private lateinit var usbManager: UsbManager
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -212,6 +232,7 @@ class UsbHostPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHandl
                 result,
             )
             "drainIn" -> drainIn(result)
+            "recoveryReset" -> recoveryReset(result)
             "close" -> {
                 teardownSession()
                 postSuccess(result, null)
@@ -419,6 +440,24 @@ class UsbHostPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHandl
                 // DATA0。clearHalt 尽力而为,失败不阻断 open。
                 clearHalt(s, bulkIn.address)
                 clearHalt(s, bulkOut.address)
+                // 丢弃上轮残留:相机在上次会话未收口(app 被杀/超时)时
+                // 可能还压着一条响应的尾巴;不清会把新事务的首个容器头
+                // 读成旧载荷 —— 真机表现为 FormatException 且头字节是
+                // DeviceInfo 的 UTF-16 片段("V3.00")。最多 3 轮 × 20ms,
+                // 无残留时只多等 20ms。
+                val stale = ByteArray(BULK_IN_MIN_READ_BYTES)
+                var staleRounds = 0
+                while (staleRounds < 3) {
+                    val n = try {
+                        connection.bulkTransfer(s.bulkIn, stale, stale.size, 20)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "open: 残留探测异常 $e")
+                        -1
+                    }
+                    if (n <= 0) break
+                    staleRounds++
+                    Log.w(TAG, "open: 丢弃上轮残留 ${n}B")
+                }
 
                 if (gen != openGeneration) {
                     // 等待 I/O 期间会话被轮换:刚拿到的连接立即关掉
@@ -452,6 +491,7 @@ class UsbHostPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHandl
             return
         }
         ioExecutor.execute {
+            bulkActive++
             try {
                 var off = 0
                 while (off < bytes.size) {
@@ -479,6 +519,8 @@ class UsbHostPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHandl
                 postSuccess(result, null)
             } catch (e: Exception) {
                 postError(result, "usb_error", "bulkOut: $e")
+            } finally {
+                bulkActive--
             }
         }
     }
@@ -515,6 +557,7 @@ class UsbHostPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHandl
             return
         }
         ioExecutor.execute {
+            bulkActive++
             try {
                 synchronized(lock) {
                     if (bulkInLeftover.isNotEmpty()) {
@@ -618,6 +661,8 @@ class UsbHostPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHandl
             } catch (e: Exception) {
                 NativeLog.e("usb", "bulkRead 异常:$e")
                 postError(result, "usb_error", "bulkRead: $e")
+            } finally {
+                bulkActive--
             }
         }
     }
@@ -642,6 +687,7 @@ class UsbHostPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHandl
             return
         }
         ioExecutor.execute {
+            bulkActive++
             try {
                 synchronized(lock) {
                     bulkInLeftover = ByteArray(0)
@@ -668,6 +714,45 @@ class UsbHostPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHandl
             } catch (e: Exception) {
                 NativeLog.e("usb", "drainIn 异常:$e")
                 postError(result, "usb_error", "drainIn: $e")
+            } finally {
+                bulkActive--
+            }
+        }
+    }
+
+    /// 端口复位(等价 ohos @ohos.usb resetUsbDevice):对 UsbDeviceConnection
+    /// 的 usbfs fd 发 USBDEVFS_RESET,强制相机重枚举、复位 PTP 栈。
+    ///
+    /// 时机:连接层在首笔事务 TimeoutException(相机对同枚举新会话沉默)
+    /// 时调用;成功后本地会话立即收尾,调用方等稳定窗后重新
+    /// listCameras/open(与 ohos 两段式复位同一路径)。Android 公开 API
+    /// 没有 resetDevice(),ioctl 在 cpp/usb_reset.c。
+    private fun recoveryReset(result: Result) {
+        val s = session
+        if (s == null) {
+            postError(result, "usb_closed", "会话未打开")
+            return
+        }
+        ioExecutor.execute {
+            bulkActive++ // 暂停 interrupt 轮询,复位期间不碰端点
+            try {
+                val fd = s.connection.fileDescriptor
+                val rc = UsbResetNative.reset(fd)
+                if (rc == 0) {
+                    Log.i(TAG, "recoveryReset: USBDEVFS_RESET ok")
+                    teardownSession()
+                    postSuccess(result, true)
+                } else {
+                    Log.w(TAG, "recoveryReset: USBDEVFS_RESET rc=$rc")
+                    postSuccess(result, false)
+                }
+            } catch (e: Throwable) {
+                // UnsatisfiedLinkError 也在内:能力不可用按 false 降级,
+                // 不让复位通道把 App 带崩。
+                NativeLog.e("usb", "recoveryReset 失败:$e")
+                postError(result, "usb_error", "recoveryReset: $e")
+            } finally {
+                bulkActive--
             }
         }
     }
@@ -683,7 +768,7 @@ class UsbHostPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHandl
                 endpointAddr,
                 null,
                 0,
-                0,
+                CLEAR_HALT_TIMEOUT_MS,
             )
             if (rc < 0) {
                 Log.w(TAG, "clearHalt(0x${endpointAddr.toString(16)}) rc=$rc")
@@ -707,8 +792,21 @@ class UsbHostPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHandl
             Log.i(TAG, "interrupt 轮询启动")
             val buf = ByteArray(INTERRUPT_BUF_BYTES)
             while (!pollStopped && session === s && sink != null) {
+                // bulk 事务在途:主动让路,不碰端点。HarmonyOS 的
+                // UsbDeviceConnection 对同一设备串行传输;旧实现用
+                // timeout=0 的 interrupt 读长期占设备,下载的 bulk OUT
+                // 被卡到 20s 看门狗判死(2026-11-04 真机)。
+                if (bulkActive > 0) {
+                    try {
+                        Thread.sleep(INTERRUPT_YIELD_SLEEP_MS)
+                    } catch (_: InterruptedException) {
+                        break
+                    }
+                    continue
+                }
                 val n = try {
-                    s.connection.bulkTransfer(endpoint, buf, buf.size, 0)
+                    s.connection.bulkTransfer(
+                        endpoint, buf, buf.size, INTERRUPT_READ_TIMEOUT_MS)
                 } catch (e: Exception) {
                     Log.w(TAG, "interrupt 读异常: $e")
                     -1
@@ -722,9 +820,15 @@ class UsbHostPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHandl
                         mainHandler.post { sink?.success(frame) }
                     }
                 } else if (n < 0) {
-                    // 无限等待下仍失败:连接已坏或端点不接受该传输类型。
-                    Log.w(TAG, "interrupt 读失败 ret=$n,停止轮询(事件流不可用,主线不受影响)")
-                    break
+                    // 有限窗超时(-1 与 STALL 不可分)是常态:让一拍继续。
+                    // 连接真死由 teardown / 会话轮换收口(pollStopped /
+                    // session !== s);旧实现把第一次 -1 当致命,轮询直接
+                    // 停——事件流静默,但主线照旧,正是故障难查的原因。
+                    try {
+                        Thread.sleep(INTERRUPT_YIELD_SLEEP_MS)
+                    } catch (_: InterruptedException) {
+                        break
+                    }
                 }
                 // n == 0:ZLB 空包,继续
             }

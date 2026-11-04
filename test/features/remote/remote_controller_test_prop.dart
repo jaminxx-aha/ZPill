@@ -68,7 +68,6 @@ void _propGroups() {
         // 0x90C2(1)→(0) 开闩括号 —— 闩单向,退步不关门;remote 持有态
         // 才是机身停「已连接到计算机」屏的元凶,开闩即还身(已连接屏只
         // 闪一次往返的宽度,机身直回自己的取景屏)。
-        transport.reply(PtpResponseCode.operationNotSupported); // 0x9435 拒
         transport.ok(); // 0x90C2 [1] 开闩兜底通
         transport.ok(); // 0x90C2 [0] 括号退步通(还身)
         await controller.session.enableAppControl(remoteLatch: true);
@@ -198,7 +197,6 @@ void _propGroups() {
         // 新链:连接流括号的退步被拒(边沿:机身正忙/模式切换中)→
         // remote 仍持有 —— connected 沿静默对齐接管态;防御性解除不再发
         // (对齐分支先于悬挂分支,重复 [0] 无益;闩已开,门不会丢)。
-        transport.reply(PtpResponseCode.operationNotSupported); // 0x9435 拒
         transport.ok(); // 0x90C2 [1] 开闩通
         transport.reply(NikonResponseCode.changeCameraModeFailed); // [0] 退步被拒
         await controller.session.enableAppControl(remoteLatch: true);

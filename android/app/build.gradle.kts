@@ -78,6 +78,16 @@ android {
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
+    // USB 端口复位(USBDEVFS_RESET):Android 无公开 resetDevice,
+    // 用 JNI 对 UsbDeviceConnection 的 usbfs fd 发 ioctl,等价 ohos
+    // resetUsbDevice;相机 PTP 楔死时断开重连不再必须关机。
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
+    }
+
     buildFeatures {
         resValues = true
     }

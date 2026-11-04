@@ -138,6 +138,13 @@ const PIPE_IDLE_FALLBACK_MS = 1000;
 /// interrupt 事件缓冲:PTP 事件容器 ≤64B(Zf 实测 12/16B)。
 const INTERRUPT_BUF_BYTES = 64;
 
+/// interrupt 轮询单次等待窗(毫秒):**必须有限**。timeout=0 的读在
+/// teardown 后不会中止(promise 永不返回),旧读会占住 USB 服务,把
+/// 新会话的 bulk 读/开链排空拖到超时(真机 2026-11-04:重连 5s 超时 +
+/// 残尾流错位)。与 Android 端同款修法:有限窗 + bulk 在途让路。
+const INTERRUPT_READ_TIMEOUT_MS = 100;
+const INTERRUPT_YIELD_SLEEP_MS = 20;
+
 /** 打开会话:设备、管道、接口与三个端点。 */
 class UsbSession {
   device: usb.USBDevice;
@@ -229,6 +236,16 @@ export class UsbHostPlugin implements FlutterPlugin {
   private assembler: InterruptAssembler = new InterruptAssembler();
   /// bulk IN 超读余量(≥maxLen 之外的突发字节),下次 bulkRead 先掏这里。
   private bulkInLeftover: Uint8Array = new Uint8Array(0);
+
+  /// 复位后的下一次 open 用长静默窗排空:可靠端口复位后相机仍可能补发
+  /// 上一条响应的尾巴(真机 21:57: open→5s 超时→drainIn 12B→
+  /// resetUsbDevice true→open,残尾晚到喂给新链)。普通 open 仍是 300ms;
+  /// 仅复位后的首开付 1.5s,把晚到残尾吸干净。
+  private longDrainNextOpen: boolean = false;
+
+  /// 在途 bulk 事务计数:>0 时 interrupt 轮询让路,避免同一 pipe 上
+  /// 并发传输互相拖拽(Android 同款)。
+  private bulkActive: number = 0;
 
   /// bulk IN 子块读尺寸(AIMD 自适应,会话内跨调用记忆):起步 64KB
   /// (实测安全粒度),一次通道调用全程满块收满(saturated)后 ×2 探大,
@@ -480,9 +497,25 @@ export class UsbHostPlugin implements FlutterPlugin {
     // 开链后必无合法在途数据,有即残留,吸到静默为止。
     const opened = this.session;
     if (opened !== null) {
-      const drained = await this.drainBulkIn(opened, DRAIN_QUIET_MS);
-      if (drained > 0) {
-        Log.w(TAG, `open 吸干上链残余 ${drained}B(新链从干净流开始)`);
+      // 真机实测残尾在 open 后 ~0.7s 才到(上链响应补发),300ms 静默窗
+      // 必漏:普通 open 用 1s,复位后的首开用 2s,把晚到尾巴吸干净。
+      const quietMs = this.longDrainNextOpen ? 2000 : 1000;
+      this.longDrainNextOpen = false;
+      this.bulkActive++; // 排空期间 interrupt 轮询让路
+      try {
+        let drained = await this.drainBulkIn(opened, quietMs);
+        // 残留可能分几拍晚到:吸到过残余就再做静默窗确认,别让晚到的
+        // 尾巴喂给新链第一笔事务(真机:上链 DeviceInfo 尾巴"V3.00"被
+        // 当容器头,容器 txid 不符)。无残时只付一轮静默窗。
+        for (let i = 0; i < 2 && drained > 0; i++) {
+          hlog(`open 吸干上链残余 ${drained}B,再确认静默窗`);
+          drained = await this.drainBulkIn(opened, quietMs);
+        }
+        if (drained > 0) {
+          Log.w(TAG, `open 吸干上链残余 ${drained}B(新链从干净流开始)`);
+        }
+      } finally {
+        this.bulkActive--;
       }
     }
     // 先订阅后连接的场景:打开成功时若事件流已在监听,这里补启动轮询
@@ -500,6 +533,7 @@ export class UsbHostPlugin implements FlutterPlugin {
       result.error('usb_closed', '会话未打开', null);
       return;
     }
+    this.bulkActive++;
     try {
       for (let off = 0; off < bytes.length; off += BULK_OUT_CHUNK_BYTES) {
         const end = Math.min(off + BULK_OUT_CHUNK_BYTES, bytes.length);
@@ -525,6 +559,8 @@ export class UsbHostPlugin implements FlutterPlugin {
       result.success(null);
     } catch (e) {
       result.error('usb_error', `bulkOut: ${e}`, null);
+    } finally {
+      this.bulkActive--;
     }
   }
 
@@ -554,6 +590,7 @@ export class UsbHostPlugin implements FlutterPlugin {
       result.error('usb_error', `bulkRead maxLen=${maxLen} 非正`, null);
       return;
     }
+    this.bulkActive++;
     try {
       if (this.bulkInLeftover.length > 0) {
         const take = Math.min(maxLen, this.bulkInLeftover.length);
@@ -682,6 +719,8 @@ export class UsbHostPlugin implements FlutterPlugin {
     } catch (e) {
       NativeLog.e('usb', `bulkRead 异常:${e}`);
       result.error('usb_error', `bulkRead: ${e}`, null);
+    } finally {
+      this.bulkActive--;
     }
   }
 
@@ -979,6 +1018,7 @@ export class UsbHostPlugin implements FlutterPlugin {
       result.error('usb_closed', '会话未打开', null);
       return;
     }
+    this.bulkActive++;
     try {
       this.cancelPipeUrbs();
       const drained = await this.drainBulkIn(s, DRAIN_QUIET_MS);
@@ -996,6 +1036,8 @@ export class UsbHostPlugin implements FlutterPlugin {
     } catch (e) {
       NativeLog.e('usb', `drainIn 异常:${e}`);
       result.error('usb_error', `drainIn: ${e}`, null);
+    } finally {
+      this.bulkActive--;
     }
   }
 
@@ -1008,6 +1050,8 @@ export class UsbHostPlugin implements FlutterPlugin {
   /// (14400013 pipe validity 实证),不能直接用;请求权限沿用授权记录。
   private recoveryReset(result: MethodResult): void {
     const s = this.session;
+    // 复位后相机可能补发上一条响应尾巴:下一次 open 用长静默窗。
+    this.longDrainNextOpen = true;
     this.teardownSession();
     if (s === null || typeof usb.resetUsbDevice !== 'function') {
       result.error('usb_unsupported', 'resetUsbDevice 不可用', null);
@@ -1082,7 +1126,7 @@ export class UsbHostPlugin implements FlutterPlugin {
         wIndex: endpointAddr,
         wLength: 0,
         data: new Uint8Array(0),
-      } as usb.USBDeviceRequestParams, 0);
+      } as usb.USBDeviceRequestParams, 1000);
     } catch (e) {
       Log.w(TAG, `clearHalt(0x${endpointAddr.toString(16)}): ${e}`);
     }
@@ -1107,10 +1151,17 @@ export class UsbHostPlugin implements FlutterPlugin {
     const endpoint = s.interruptIn;
     Log.i(TAG, 'interrupt 轮询启动(bulkTransfer 直投 interrupt 端点,本 SDK 无 submitTransfer)');
     while (!this.pollStopped && this.session === s && this.sink !== null) {
+      // bulk 事务在途:主动让路,不碰端点(Android 同款)。ohos 的
+      // bulkTransfer 会按 pipe 串行,轮询的无限读会把新会话的 bulk
+      // 读/开链排空拖到超时。
+      if (this.bulkActive > 0) {
+        await new Promise<void>((resolve) => setTimeout(resolve, INTERRUPT_YIELD_SLEEP_MS));
+        continue;
+      }
       const buffer = new Uint8Array(INTERRUPT_BUF_BYTES);
       let n = -1;
       try {
-        n = await usb.bulkTransfer(s.pipe, endpoint, buffer, 0);
+        n = await usb.bulkTransfer(s.pipe, endpoint, buffer, INTERRUPT_READ_TIMEOUT_MS);
       } catch (e) {
         n = -1;
       }
@@ -1124,9 +1175,11 @@ export class UsbHostPlugin implements FlutterPlugin {
           }
         });
       } else if (n < 0) {
-        // 无限等待下仍失败:多半是 bulkTransfer 不接受 interrupt 端点,或 pipe 已坏。
-        Log.w(TAG, `interrupt 读失败 rc=${n},停止轮询(事件流不可用,主线不受影响)`);
-        break;
+        // 有限窗超时是常态(-1 与错误不可分):让一拍继续;连接真死由
+        // 会话轮换/teardown 收口,不在这里单次判死(旧 timeout=0 实现
+        // 永不返回,teardown 后旧读仍占住 USB 服务 —— 2026-11-04 真机
+        // 重连 5s 超时 + 残尾错位的根因)。
+        await new Promise<void>((resolve) => setTimeout(resolve, INTERRUPT_YIELD_SLEEP_MS));
       }
       // n === 0:ZLB 空包,继续
     }

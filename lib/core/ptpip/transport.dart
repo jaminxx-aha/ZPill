@@ -117,13 +117,20 @@ int _dataPhaseFor(int opcode, Uint8List? dataOut) {
 
 /// 一个在途事务的记账。
 final class _Pending {
-  _Pending({required this.transactionId, required this.opcode, this.onData});
+  _Pending(
+      {required this.transactionId,
+      required this.opcode,
+      this.onData,
+      required this.timeout});
 
   final int transactionId;
 
   /// 请求操作码(OperationResponse 不回带 opcode,响应沿日志从这里取)。
   final int opcode;
   final void Function(Uint8List chunk)? onData;
+
+  /// 本事务的整事务看门狗窗口(请求覆盖或传输层缺省)。
+  final Duration timeout;
 
   /// 事务计时(发送沿起跑,响应沿量耗时;Stopwatch 单调,不撞对时跳变)。
   final Stopwatch clock = Stopwatch()..start();
@@ -657,9 +664,10 @@ final class PtpIpTransport implements PtpTransport, PtpCancelCapable {
   /// (重)挂整事务看门狗:收到该事务任意帧即重置。
   void _armWatchdog(_Pending pending) {
     pending.watchdog?.cancel();
-    pending.watchdog = Timer(transactionTimeout, () {
+    final timeout = pending.timeout;
+    pending.watchdog = Timer(timeout, () {
       _onBreakage('事务超时(tid=${pending.transactionId},'
-          '${transactionTimeout.inSeconds}s 无新帧)');
+          '${timeout.inSeconds}s 无新帧)');
     });
   }
 
@@ -679,8 +687,11 @@ final class PtpIpTransport implements PtpTransport, PtpCancelCapable {
       _nextTid = 0;
     }
     final tid = _nextTid++;
-    final pending =
-        _Pending(transactionId: tid, opcode: request.opcode, onData: onData);
+    final pending = _Pending(
+        transactionId: tid,
+        opcode: request.opcode,
+        onData: onData,
+        timeout: request.timeout ?? transactionTimeout);
     _pending[tid] = pending;
     _armWatchdog(pending);
     try {

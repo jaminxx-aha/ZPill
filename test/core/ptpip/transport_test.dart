@@ -548,6 +548,26 @@ void main() {
           throwsA(isA<PtpLinkException>()));
     });
 
+    test('PtpRequest.timeout 覆盖整事务看门狗(只放宽本笔)', () async {
+      final (t, command, _) =
+          await connectTransport(timeout: const Duration(milliseconds: 50));
+      final broke = <String>[];
+      t.breakages.listen(broke.add);
+      final future = t.execute(const PtpRequest(
+          opcode: PtpOperationCode.getDeviceInfo,
+          timeout: Duration(milliseconds: 500)));
+      await pumpEventQueue();
+      // 超过缺省 50ms、仍在覆盖窗 500ms 内:不得判超时/毒化
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+      expect(broke, isEmpty);
+      final req = codec.decode(command.sent.last) as OperationRequestPacket;
+      command.emit(frameOf(OperationResponsePacket(
+          responseCode: PtpResponseCode.ok,
+          transactionId: req.transactionId)));
+      final result = await future;
+      expect(result.responseCode, PtpResponseCode.ok);
+    });
+
     test('close 中断 in-flight:以 Exception 失败,不广播 breakage,幂等', () async {
       final (t, command, _) = await connectTransport();
       final broke = <String>[];
