@@ -14,10 +14,10 @@
 ///
 /// 三端落地状态:ohos ✅ 真机闭环(photoAccessHelper + SaveButton
 /// 安全控件);iOS ✅ 真机闭环(PHPhotoLibrary + SaveButton 控件,
-/// 提交 f949349);Android ✅ 已落地(编译过,真机待验证)——
-/// MediaStore 直写(RELATIVE_PATH=Pictures/Movies/ZPill +
-/// IS_PENDING 自有贡献,免权限零弹窗;无系统对话框故无取消路径,
-/// 要么全量成功要么整体异常)。
+/// 提交 f949349);Android ✅ 已真机验收(NEF 系统图库可见,2026-11-04;
+/// IS_PENDING 落盘速度待测)—— MediaStore 直写
+/// (RELATIVE_PATH=Pictures/Movies/ZPill + IS_PENDING 自有贡献,免权限
+/// 零弹窗;无系统对话框故无取消路径,要么全量成功要么整体异常)。
 ///
 /// 实况照片三端路径(见 [GalleryImportRequest.videoPath]):iOS =
 /// photo+pairedVideo 同资源配对;ohos = IMAGE+VIDEO 分开导入;Android =

@@ -32,9 +32,9 @@ import java.util.concurrent.Executors
  * - 自有贡献(contentResolver.insert)免权限:RELATIVE_PATH 指定
  *   Pictures/ZPill 或 Movies/ZPill,IS_PENDING=1 → 拷字节 →
  *   IS_PENDING=0 原子可见,系统不会再弹「允许访问照片」;
- * - NEF 按官方 MIME image/x-nikon-nef 入 Images 集合(系统图库可能
- *   不渲染缩略图,但记录持久、可被其他应用读取;SnapBridge 同做法,
- *   待真机核对);
+ * - NEF 按官方 MIME image/x-nikon-nef 入 Images 集合(2026-11-04
+ *   真机核对:系统图库可见;记录持久、可被其他应用读取;SnapBridge
+ *   同做法);
  * - 没有保存面板 → 不存在用户取消路径:要么全量导入成功,要么整体
  *   PlatformException(Dart 引擎侧按「未导入」落定并允许重排)。
  *
