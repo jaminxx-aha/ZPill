@@ -531,9 +531,13 @@ class ConnectionController extends ChangeNotifier {
     }
   }
 
-  Future<void> stopScan() async {
+  Future<void> stopScan({bool notify = true}) async {
     scanning = false;
-    notifyListeners();
+    // dispose/finalizeTree 期间调用时树已锁,notify 会触发
+    // setState while locked(红屏);销毁沿只停 native 浏览,不通知。
+    if (notify) {
+      notifyListeners();
+    }
     final s = scanner;
     if (s != null) {
       try {

@@ -202,29 +202,53 @@ Widget buildSnapshotSection(BuildContext context) {
 
 Future<void> _promptCapture(
     BuildContext context, SnapshotController controller) async {
-  final field = TextEditingController();
   final name = await showDialog<String>(
     context: context,
-    builder: (dialogContext) => AlertDialog(
+    builder: (_) => const _SnapshotNameDialog(),
+  );
+  if (name == null || name.isEmpty) return;
+  await controller.capture(name);
+}
+
+/// 命名对话框自持 controller:TextEditingController 必须在路由退场动画
+/// 结束后才 dispose。旧实现在 showDialog 返回处立即 dispose,退场中的
+/// TextField 继续使用它 → 「used after being disposed」并把 unmount
+/// 级联成 _dependents.isEmpty 断言红屏(2026-11-05 真机)。
+class _SnapshotNameDialog extends StatefulWidget {
+  const _SnapshotNameDialog();
+
+  @override
+  State<_SnapshotNameDialog> createState() => _SnapshotNameDialogState();
+}
+
+class _SnapshotNameDialogState extends State<_SnapshotNameDialog> {
+  final _field = TextEditingController();
+
+  @override
+  void dispose() {
+    _field.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
       title: Text(context.t('snapshot.nameTitle')),
       content: TextField(
-        controller: field,
+        controller: _field,
         autofocus: true,
         decoration: InputDecoration(hintText: context.t('snapshot.nameHint')),
       ),
       actions: [
         TextButton(
-          onPressed: () => Navigator.of(dialogContext).pop(),
+          onPressed: () => Navigator.of(context).pop(),
           child: Text(context.t('common.cancel')),
         ),
         FilledButton(
-          onPressed: () => Navigator.of(dialogContext).pop(field.text.trim()),
+          onPressed: () => Navigator.of(context).pop(_field.text.trim()),
           child: Text(context.t('common.save')),
         ),
       ],
-    ),
-  );
-  field.dispose();
-  if (name == null || name.isEmpty) return;
-  await controller.capture(name);
+    );
+  }
 }

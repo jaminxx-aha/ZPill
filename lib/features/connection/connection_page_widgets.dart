@@ -188,7 +188,9 @@ class _StaScanBodyState extends State<_StaScanBody> {
     // 离开 STA 视图停扫(扫描只在本页面存续期运行,2026-10-19 定稿;
     // 切到其它方式页同样不经此体,不触发扫描)。
     if (widget.controller.scanning) {
-      unawaited(widget.controller.stopScan());
+      // dispose 处于 finalizeTree 锁树期:stopScan 只停 native 浏览,
+      // 不再 notify(避免 setState while locked 红屏)。
+      unawaited(widget.controller.stopScan(notify: false));
     }
     super.dispose();
   }

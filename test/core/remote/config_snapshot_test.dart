@@ -542,5 +542,51 @@ void main() {
               .where((r) => r.opcode == PtpOperationCode.getDevicePropDesc),
           isEmpty);
     });
+
+    test('0x5011 时钟豁免;0x200F 计模式门跳过', () async {
+      PtpSession.kSetPropEnabled = true;
+      addTearDown(() => PtpSession.kSetPropEnabled = true);
+
+      transport
+        ..ok(data: _deviceInfoDataset([])) // 型号比对
+        ..ok(data: _propDescDataset(0x500C, PtpDataType.uint16, 2)) // 闪光
+        ..reply(0x200F) // 视频档/拨盘模式门
+        ..ok(data: _propDescDataset(0x5007, PtpDataType.uint16, 28))
+        ..ok(); // 0x5007 写成功
+
+      final snap = CameraConfigSnapshot(
+        model: 'TestModel',
+        deviceVersion: 'V1.00',
+        capturedAt: DateTime.now(),
+        props: const [
+          ConfigPropSnapshot(
+              code: 0x5011,
+              type: 'string',
+              value: '20261105T002541',
+              writable: true),
+          ConfigPropSnapshot(
+              code: 0x500C, type: 'uint16', value: 2, writable: true),
+          ConfigPropSnapshot(
+              code: 0x5007, type: 'uint16', value: 28, writable: true),
+        ],
+      );
+      final report = await CameraConfigSnapshotter.restore(session, snap,
+          delay: (_) async {});
+
+      expect(report.applied, 1, reason: '只有 0x5007 写成功');
+      expect(report.skipped, 1, reason: '0x5011 时钟豁免');
+      expect(report.modeGated, 1, reason: '0x200F 计模式门');
+      expect(report.failed, 0, reason: '模式门不算故障');
+      final writes = transport.requests
+          .where((r) => r.opcode == PtpOperationCode.setDevicePropValue)
+          .toList();
+      expect(writes.map((r) => r.params.single), [0x500C, 0x5007]);
+      expect(
+        transport.requests.where(
+            (r) => r.params.isNotEmpty && r.params.first == 0x5011),
+        isEmpty,
+        reason: '时钟属性不发 GetDevicePropDesc/0x1016',
+      );
+    });
   });
 }

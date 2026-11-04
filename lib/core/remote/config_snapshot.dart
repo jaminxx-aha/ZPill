@@ -16,6 +16,7 @@ library;
 import 'dart:convert' show base64Decode, base64Encode;
 import 'dart:typed_data' show Uint8List;
 
+import '../log/app_log.dart';
 import '../ptp/device_prop.dart';
 import '../ptp/operation_codes.dart';
 import '../ptp/ptp_session.dart';
@@ -124,6 +125,7 @@ final class RestoreReport {
     required this.applied,
     required this.skipped,
     required this.failed,
+    this.modeGated = 0,
     this.modelMismatch = false,
     this.blobSaved = false,
   });
@@ -137,6 +139,10 @@ final class RestoreReport {
   /// 相机拒绝(非忙错误等)的属性数。
   final int failed;
 
+  /// 模式门拒绝(0x200F:拨盘/当前模式不适配)而跳过的属性数;
+  /// 属预期门,不计入 [failed]。
+  final int modeGated;
+
   /// 当前机身型号与快照机身不一致(提示不拦截)。
   final bool modelMismatch;
 
@@ -146,7 +152,9 @@ final class RestoreReport {
 
   @override
   String toString() {
-    final detail = '写入 $applied 项,跳过 $skipped 项,失败 $failed 项'
+    final detail = '写入 $applied 项,跳过 $skipped 项'
+        '${modeGated > 0 ? ',模式门跳过 $modeGated 项' : ''}'
+        ',失败 $failed 项'
         '${modelMismatch ? '(注意:与快照机身型号不一致)' : ''}';
     return blobSaved
         ? '恢复完成:设定文件已写入机身卡(经机身菜单「载入设定」生效);$detail'
@@ -156,6 +164,15 @@ final class RestoreReport {
 
 final class CameraConfigSnapshotter {
   const CameraConfigSnapshotter._();
+
+  /// 恢复豁免的时钟属性(0x5011 Date Time):快照存的是拍摄时刻,
+  /// 回写旧值会被相机 0x201C(Invalid Device Prop Value)拒;时钟不
+  /// 属于可恢复的拍摄配置。
+  static const int _propDateTime = 0x5011;
+
+  /// Nikon 用 0x200F(Access Denied 方言)表达拨盘/当前模式不适配;
+  /// 恢复时计「模式门跳过」,不按故障。
+  static const int _rcModeGate = 0x200F;
 
   /// 抓当前机身的全量设备属性快照。
   ///
@@ -224,7 +241,7 @@ final class CameraConfigSnapshotter {
       throw UnsupportedError('恢复已被总闸关断(kSetPropEnabled=false,紧急关断)');
     }
     final wait = delay ?? Future<void>.delayed;
-    var applied = 0, skipped = 0, failed = 0;
+    var applied = 0, skipped = 0, modeGated = 0, failed = 0;
     var modelMismatch = false;
     try {
       final info = await session.getDeviceInfo();
@@ -254,6 +271,12 @@ final class CameraConfigSnapshotter {
         skipped++;
         continue;
       }
+      if (p.code == _propDateTime) {
+        // 时钟豁免:快照存的是拍摄时刻,恢复旧时间必被 0x201C 拒,
+        // 且时间本不属于可恢复的拍摄配置(2026-11-05 真机实证)。
+        skipped++;
+        continue;
+      }
       try {
         final desc = await session.getDevicePropDesc(p.code);
         if (!desc.getSet) {
@@ -273,12 +296,35 @@ final class CameraConfigSnapshotter {
                 code: p.code, dataType: desc.dataType, value: p.value),
             wait);
         applied++;
-      } on Exception {
+      } on PtpResponseException catch (e) {
+        if (e.responseCode == _rcModeGate) {
+          // 拨盘/当前模式不适配:预期门,不计故障。
+          modeGated++;
+          AppLog.i(
+            AppLog.system,
+            '快照恢复属性 0x${p.code.toRadixString(16)} 模式门跳过(0x200F)',
+          );
+        } else {
+          AppLog.w(
+            AppLog.system,
+            '快照恢复属性 0x${p.code.toRadixString(16)} 失败: $e',
+          );
+          failed++;
+        }
+      } on Exception catch (e) {
+        AppLog.w(
+          AppLog.system,
+          '快照恢复属性 0x${p.code.toRadixString(16)} 失败: $e',
+        );
         failed++;
       }
     }
     return RestoreReport(
-        applied: applied, skipped: skipped, failed: failed, modelMismatch: modelMismatch);
+        applied: applied,
+        skipped: skipped,
+        failed: failed,
+        modeGated: modeGated,
+        modelMismatch: modelMismatch);
   }
 
   static Future<void> _sendRestoredBlob(
