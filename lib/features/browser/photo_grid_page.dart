@@ -225,6 +225,7 @@ class _PhotoGridPageState extends State<PhotoGridPage>
             (v['grid.folderNames'] as List<Object?>?)?.cast<String>();
         _persistedFolderSel =
             (v['grid.folderSel'] as List<Object?>?)?.cast<String>();
+        _bumpView(); // 恢复的排序/筛选是新的派生输入
       });
     } on Object {
       // 默认值(净格 + 时间降序)
@@ -287,6 +288,15 @@ class _PhotoGridPageState extends State<PhotoGridPage>
   /// 弹层分区折叠态(排序/筛选/显示头行点按收展)。
   final MenuSectionState _sections = MenuSectionState();
 
+  /// 可见格派生缓存(见 build 内 canReuse):[_viewRev] 在排序/筛选/
+  /// 相册选择变更沿自增;[_visibleSource] 记当次输入的相册快照身份。
+  int _viewRev = 0;
+  int _visibleRev = -1;
+  Object? _visibleSource;
+  List<_GridItem>? _visibleCache;
+
+  void _bumpView() => _viewRev++;
+
   /// 评级滤网:评级数据未建立时恒放行(防把「未取到」当「未评」筛空);
   /// 空选集 = 全部,非空 = 各分类任一命中即收(多选并集)。
   bool _ratingAllows(PhotoGroup group) => _ratingSelection.allows(
@@ -314,6 +324,7 @@ class _PhotoGridPageState extends State<PhotoGridPage>
       _ratingSelection.clear();
       _selected.clear();
       _revealDownload = false;
+      _bumpView();
     });
     unawaited(_savePrefs());
   }
@@ -353,12 +364,41 @@ class _PhotoGridPageState extends State<PhotoGridPage>
     _builtMinIndex = 1 << 30;
   }
 
+  /// 滚动活跃期(拖拽/惯性):只记锚点,不起预取。滚动中拉 24 张缩略
+  /// 并解码会与可视格抢通道/CPU,Android/ohos 真机表现为猛滑掉帧
+  /// (2026-11-05 复报);滚停后 [_prefetchWindowNow] 一次补当前窗口。
+  bool _scrolling = false;
+
+  bool _onScrollNotification(ScrollNotification n) {
+    if (n is ScrollStartNotification) {
+      _scrolling = true;
+    } else if (n is ScrollEndNotification) {
+      _scrolling = false;
+      _prefetchWindowNow();
+    }
+    return false;
+  }
+
+  /// 滚停补窗:当前构建窗 ± [_prefetchWindow] 内尚未发起取数的格。
+  void _prefetchWindowNow() {
+    final cells = _prefetchItems;
+    if (cells == null || cells.isEmpty) return;
+    final lo = (_builtMinIndex - _prefetchWindow).clamp(0, cells.length - 1);
+    final hi = (_builtMaxIndex + _prefetchWindow).clamp(0, cells.length - 1);
+    if (lo > hi) return;
+    _schedulePrefetch(<_GridItem>[
+      for (var i = lo; i <= hi; i++)
+        if (!_thumbFutures.containsKey(cells[i].rep.handle)) cells[i],
+    ]);
+  }
+
   void _noteBuilt(int index, List<_GridItem> cells) {
     final newMax = index > _builtMaxIndex;
     final newMin = index < _builtMinIndex;
     if (!newMax && !newMin) return;
     if (newMax) _builtMaxIndex = index;
     if (newMin) _builtMinIndex = index;
+    if (_scrolling) return; // 滚停后补窗
     final targets = <_GridItem>[];
     void window(int lo, int hi) {
       for (var i = lo; i <= hi && i < cells.length; i++) {
@@ -371,18 +411,17 @@ class _PhotoGridPageState extends State<PhotoGridPage>
 
     if (newMax) window(index + 1, index + _prefetchWindow);
     if (newMin) window(index - _prefetchWindow, index - 1);
+    _schedulePrefetch(targets);
+  }
+
+  void _schedulePrefetch(List<_GridItem> targets) {
     if (targets.isEmpty) return;
     SchedulerBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       for (final c in targets) {
         final future = _thumbFuture(c.rep, prefetch: true);
-        // 评级轻量段(0xDC8A 一笔)与缩略图同窗预热:格滚到视口时星档
-        // 已在手,不再落后整个预热窗(重发由仓库去重集空转)。
-        _ratings.ensure(c.group);
-        // 视频时长探测(容器行走,数次小读;去重,成果经 updates 回来)。
-        if (c.isVideo) {
-          _ratings.repository.requestVideoDuration(c.rep.handle);
-        }
+        // 评级/视频时长不再随预取窗即发(2026-11-05):它们由格驻留沿
+        // 触发,滚动期不占相机串行链,首屏缩略图先走。
         // 解码缓存预热(与本地图库页同款,2026-10-26 首过猛滑黑格
         // 同案):小图路径在账直预热;在途的落地沿补预热 —— 缺了这层,
         // 首次猛滑的格滚走了解码才落地,回滚才秒出。失败人设已有重试,
@@ -448,6 +487,7 @@ class _PhotoGridPageState extends State<PhotoGridPage>
             }
           }
         }
+        _bumpView(); // build 内应用持久化选集:可见格派生失效
       }
       return;
     }
@@ -474,6 +514,71 @@ class _PhotoGridPageState extends State<PhotoGridPage>
     return null;
   }
 
+  /// 派生展示格(排序后的扁平格列表):文件夹并集 → 连拍拆簇 → 评级/
+  /// 格式过滤 → 排序。输入变化时才走(build 内缓存命中直接复用)。
+  List<_GridItem> _computeVisible(CameraAlbum? aggregate,
+      List<CameraAlbum> albums, BrowserController controller) {
+    // 文件夹多选并集:空选 = 汇总相册;所选夹在重枚举后全部消失时
+    // 回落汇总(渐进同步期间不判 —— 早期块可能还没枚举到)。post-
+    // frame 规避 build 内 setState。
+    List<PhotoGroup> items;
+    if (_folderSelection.isAll) {
+      items = aggregate?.items ?? _lastItems ?? const <PhotoGroup>[];
+      if (aggregate != null) _lastItems = aggregate.items;
+    } else {
+      final picked = <PhotoGroup>[
+        for (final album in albums)
+          if (!_folderSelection.isAll &&
+              album.folderHandle != CameraAlbum.allPhotosHandle &&
+              _folderSelection.contains(album.folderHandle))
+            ...album.items,
+      ];
+      if (picked.isNotEmpty) {
+        items = picked;
+        _lastItems = items;
+      } else {
+        items = _lastItems ?? const <PhotoGroup>[];
+        if (!controller.syncing && controller.albums.isNotEmpty) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) {
+              setState(() {
+                _folderSelection.clear();
+                _bumpView();
+              });
+            }
+          });
+        }
+      }
+    }
+    // 相机相册不聚合连拍(2026-10-24 定稿,聚合只在图库):连拍簇
+    // 按基名拆回单快门组 —— 同基名 RAW+JPG 孪生/双槽副本仍同组,
+    // 实况对不动;评级/选择/查看器语义随单快门组走,每张各显各档。
+    if (items.isNotEmpty) {
+      final flat = <PhotoGroup>[
+        for (final group in items)
+          if (group.isBurst) ..._splitBurst(group) else group,
+      ];
+      items = flat;
+      _lastItems = flat;
+    }
+    // 展示格 = 组 × 格式档(RAW+JPG 拆分,每格式一格);评级滤组、
+    // 格式滤格;排序(共享件:时间/文件名/文件大小 × 双向)。
+    return sortMedia(
+      [
+        for (final group in items)
+          if (_ratingAllows(group))
+            ..._expandGroup(group)
+                .where((c) => _formatSelection.allows(c.format)),
+      ],
+      _sort,
+      (c) => (
+        c.group.capturedAt,
+        c.rep.name,
+        c.members.fold<int>(0, (n, m) => n + m.sizeInBytes),
+      ),
+    );
+  }
+
   /// 最后一次非空的相册列表(chips 快照,断连后保持可切换)。
   List<CameraAlbum> _lastAlbums = const [];
 
@@ -496,6 +601,7 @@ class _PhotoGridPageState extends State<PhotoGridPage>
           : _folderSelection.toggle(handle);
       _selected.clear();
       _revealDownload = false;
+      _bumpView();
     });
     unawaited(_savePrefs());
   }
@@ -713,60 +819,25 @@ class _PhotoGridPageState extends State<PhotoGridPage>
         final albums =
             controller.albums.isNotEmpty ? controller.albums : _lastAlbums;
         final aggregate = _resolveAggregate(albums);
-        // 文件夹多选并集:空选 = 汇总相册;所选夹在重枚举后全部消失时
-        // 回落汇总(渐进同步期间不判 —— 早期块可能还没枚举到)。post-
-        // frame 规避 build 内 setState。
-        List<PhotoGroup> items;
-        if (_folderSelection.isAll) {
-          items = aggregate?.items ?? _lastItems ?? const <PhotoGroup>[];
-          if (aggregate != null) _lastItems = aggregate.items;
+        // 可见格派生带缓存:评级角标/视频时长到达会频繁通知,输入
+        // (相册快照/排序/筛选)不变时不该每次重排、重拆整卡 —— 这是
+        // Android/ohos 滑动掉帧的另一源(2026-11-05)。评级筛选启用时
+        // 必须重算(评级值本身即筛选依据)。
+        final Object? sourceIdentity =
+            controller.albums.isNotEmpty ? controller.albums : null;
+        final List<_GridItem> visible;
+        if (_ratingSelection.isAll &&
+            _visibleCache != null &&
+            _visibleRev == _viewRev &&
+            (controller.albums.isEmpty ||
+                identical(_visibleSource, sourceIdentity))) {
+          visible = _visibleCache!;
         } else {
-          final picked = <PhotoGroup>[
-            for (final album in albums)
-              if (!_folderSelection.isAll &&
-                  album.folderHandle != CameraAlbum.allPhotosHandle &&
-                  _folderSelection.contains(album.folderHandle))
-                ...album.items,
-          ];
-          if (picked.isNotEmpty) {
-            items = picked;
-            _lastItems = items;
-          } else {
-            items = _lastItems ?? const <PhotoGroup>[];
-            if (!controller.syncing && controller.albums.isNotEmpty) {
-              WidgetsBinding.instance.addPostFrameCallback((_) {
-                if (mounted) _folderSelection.clear();
-              });
-            }
-          }
+          visible = _computeVisible(aggregate, albums, controller);
+          _visibleCache = visible;
+          _visibleRev = _viewRev;
+          _visibleSource = sourceIdentity;
         }
-        // 相机相册不聚合连拍(2026-10-24 定稿,聚合只在图库):连拍簇
-        // 按基名拆回单快门组 —— 同基名 RAW+JPG 孪生/双槽副本仍同组,
-        // 实况对不动;评级/选择/查看器语义随单快门组走,每张各显各档。
-        if (items.isNotEmpty) {
-          final flat = <PhotoGroup>[
-            for (final group in items)
-              if (group.isBurst) ..._splitBurst(group) else group,
-          ];
-          items = flat;
-          _lastItems = flat;
-        }
-        // 展示格 = 组 × 格式档(RAW+JPG 拆分,每格式一格);评级滤组、
-        // 格式滤格;排序(共享件:时间/文件名/文件大小 × 双向)。
-        final visible = sortMedia(
-          [
-            for (final group in items)
-              if (_ratingAllows(group))
-                ..._expandGroup(group)
-                    .where((c) => _formatSelection.allows(c.format)),
-          ],
-          _sort,
-          (c) => (
-            c.group.capturedAt,
-            c.rep.name,
-            c.members.fold<int>(0, (n, m) => n + m.sizeInBytes),
-          ),
-        );
         // 筛选弹层相册区源:活列表优先,断连后用快照(切换保持可用)。
         if (controller.albums.isNotEmpty) _lastAlbums = controller.albums;
         final filterAlbums =
@@ -815,7 +886,7 @@ class _PhotoGridPageState extends State<PhotoGridPage>
                   )
                 : null,
           ),
-          body: _body(controller, items, visible),
+          body: _body(controller, visible),
           bottomSheet: _selecting ? _actionBar(visible) : null,
         );
       },
@@ -824,8 +895,7 @@ class _PhotoGridPageState extends State<PhotoGridPage>
 
   /// 主体四态:无内容硬错误屏 / 首块前骨架 / 空相册提示 / 内容网格
   /// (同步中断仅软横幅,已显示内容可继续浏览,下拉刷新重枚举)。
-  Widget _body(BrowserController controller, List<PhotoGroup> items,
-      List<_GridItem> cells) {
+  Widget _body(BrowserController controller, List<_GridItem> cells) {
     _resetPrefetchAnchors(cells); // items 换实例(刷新/切换):预取锚点重置
     if (cells.isEmpty) {
       if (controller.error != null) {
@@ -869,25 +939,50 @@ class _PhotoGridPageState extends State<PhotoGridPage>
         Expanded(
           child: RefreshIndicator(
             onRefresh: controller.linkUp ? controller.reload : () async {},
-            child: CustomScrollView(
-              // 常可滚动:内容不足一屏时下拉刷新仍可用。
-              physics: const AlwaysScrollableScrollPhysics(),
-              slivers: [
-                // 时间排序才按拍摄日分段;文件名/文件大小排序列平铺。
-                if (_sort.key == MediaSortKey.time)
-                  for (final section in groupMediaByDate(
-                      cells, (c) => c.group.capturedAt)) ...[
-                    SliverToBoxAdapter(
-                      child: MediaSectionHeader(
-                        day: section.day,
-                        count: section.items.length,
-                        selecting: _selecting,
-                        daySelected: _selecting &&
-                            section.items
-                                .every((c) => _selected.contains(c.key)),
-                        onToggle: () => _toggleDay(section.items),
+            child: NotificationListener<ScrollNotification>(
+              onNotification: _onScrollNotification,
+              child: CustomScrollView(
+                // 常可滚动:内容不足一屏时下拉刷新仍可用。
+                physics: const AlwaysScrollableScrollPhysics(),
+                slivers: [
+                  // 时间排序才按拍摄日分段;文件名/文件大小排序列平铺。
+                  if (_sort.key == MediaSortKey.time)
+                    for (final section in groupMediaByDate(
+                        cells, (c) => c.group.capturedAt)) ...[
+                      SliverToBoxAdapter(
+                        child: MediaSectionHeader(
+                          day: section.day,
+                          count: section.items.length,
+                          selecting: _selecting,
+                          daySelected: _selecting &&
+                              section.items
+                                  .every((c) => _selected.contains(c.key)),
+                          onToggle: () => _toggleDay(section.items),
+                        ),
                       ),
-                    ),
+                      SliverPadding(
+                        padding: const EdgeInsets.symmetric(horizontal: 2),
+                        sliver: SliverGrid.builder(
+                          gridDelegate:
+                              const SliverGridDelegateWithFixedCrossAxisCount(
+                            crossAxisCount: 3,
+                            mainAxisSpacing: 2,
+                            crossAxisSpacing: 2,
+                          ),
+                          itemCount: section.items.length,
+                          // key 按格身份键(组键:格式名):增长期间尾部追加、
+                          // 条目重排时元素正确复用(选中态与缩略图 Future 都
+                          // 按键控);渐进配对前后键稳定。
+                          itemBuilder: (_, i) => _cell(
+                            section.items[i],
+                            section.firstIndex + i,
+                            cells,
+                            key: ValueKey(section.items[i].key),
+                          ),
+                        ),
+                      ),
+                    ]
+                  else
                     SliverPadding(
                       padding: const EdgeInsets.symmetric(horizontal: 2),
                       sliver: SliverGrid.builder(
@@ -897,44 +992,22 @@ class _PhotoGridPageState extends State<PhotoGridPage>
                           mainAxisSpacing: 2,
                           crossAxisSpacing: 2,
                         ),
-                        itemCount: section.items.length,
-                        // key 按格身份键(组键:格式名):增长期间尾部追加、
-                        // 条目重排时元素正确复用(选中态与缩略图 Future 都
-                        // 按键控);渐进配对前后键稳定。
+                        itemCount: cells.length,
                         itemBuilder: (_, i) => _cell(
-                          section.items[i],
-                          section.firstIndex + i,
+                          cells[i],
+                          i,
                           cells,
-                          key: ValueKey(section.items[i].key),
+                          key: ValueKey(cells[i].key),
                         ),
                       ),
                     ),
-                  ]
-                else
-                  SliverPadding(
-                    padding: const EdgeInsets.symmetric(horizontal: 2),
-                    sliver: SliverGrid.builder(
-                      gridDelegate:
-                          const SliverGridDelegateWithFixedCrossAxisCount(
-                        crossAxisCount: 3,
-                        mainAxisSpacing: 2,
-                        crossAxisSpacing: 2,
-                      ),
-                      itemCount: cells.length,
-                      itemBuilder: (_, i) => _cell(
-                        cells[i],
-                        i,
-                        cells,
-                        key: ValueKey(cells[i].key),
-                      ),
-                    ),
+                  // 尾部留白:滚到底最后一行不贴死底缘(ohos 真机底部安全
+                  // 区常报 0,手势条会压住最后一行;iOS 自动安全区外再垫一档)。
+                  const SliverPadding(
+                    padding: EdgeInsets.only(bottom: 48),
                   ),
-                // 尾部留白:滚到底最后一行不贴死底缘(ohos 真机底部安全
-                // 区常报 0,手势条会压住最后一行;iOS 自动安全区外再垫一档)。
-                const SliverPadding(
-                  padding: EdgeInsets.only(bottom: 48),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
@@ -1003,6 +1076,7 @@ class _PhotoGridPageState extends State<PhotoGridPage>
       f == null ? _formatSelection.clear() : _formatSelection.toggle(f);
       _selected.clear();
       _revealDownload = false;
+      _bumpView();
     });
     unawaited(_savePrefs());
   }
@@ -1018,6 +1092,7 @@ class _PhotoGridPageState extends State<PhotoGridPage>
       }
       _selected.clear();
       _revealDownload = false;
+      _bumpView();
     });
     unawaited(_savePrefs());
   }
@@ -1029,6 +1104,7 @@ class _PhotoGridPageState extends State<PhotoGridPage>
       _ratingSelection.toggle(r);
       _selected.clear();
       _revealDownload = false;
+      _bumpView();
     });
     unawaited(_savePrefs());
   }
@@ -1107,19 +1183,21 @@ class _PhotoGridPageState extends State<PhotoGridPage>
   Widget _cell(_GridItem cell, int index, List<_GridItem> cells, {Key? key}) {
     final group = cell.group;
     _noteBuilt(index, cells); // 构建沿 = 预取锚点沿(前瞻预热)
-    // 当前格不在 [_noteBuilt] 的前瞻窗内(窗口排除自身),必须直接发起;
-    // 否则最新/筛选后首个视频永远拿不到 mvhd 时长。
-    if (cell.isVideo) {
-      _ratings.repository.requestVideoDuration(cell.rep.handle);
-    }
-    _ratings.ensure(group); // 评级轻量段即发(可见格先答,后台队只兜底)
     final selected = _selected.contains(cell.key);
     final stars = _ratings.ratingOf(group);
     final unknown = _ratings.ratedUnknown(group);
     final trash = _ratings.trashStar(group);
     return _CellDwell(
       onDwell: () {
-        if (mounted) _ratings.ensureTrash(group); // 驻留 ~400ms 才探删除候选
+        if (!mounted) return;
+        // 评级/时长/删除候选都在驻留沿才发(2026-11-05):build 沿即发会
+        // 随每次重建重入相机串行链,滚动时把缩略图挤在后面;默认也不
+        // 显示评级角标,驻留后到达不影响观感。
+        _ratings.ensure(group);
+        if (cell.isVideo) {
+          _ratings.repository.requestVideoDuration(cell.rep.handle);
+        }
+        _ratings.ensureTrash(group); // 驻留 ~400ms 才探删除候选
       },
       child: MediaGridCell(
         key: key,
@@ -1150,15 +1228,10 @@ class _PhotoGridPageState extends State<PhotoGridPage>
           future: _thumbFuture(cell.rep),
           builder: (context, snap) {
             if (snap.connectionState != ConnectionState.done) {
+              // 静态占位(不转圈):滚动期每个待取格一个无限动画是
+              // Android/ohos 掉帧源之一(AppBar 细条已承担「在动」反馈)。
               return ColoredBox(
                 color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                child: const Center(
-                  child: SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  ),
-                ),
               );
             }
             final path = snap.data;

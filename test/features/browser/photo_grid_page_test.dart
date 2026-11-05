@@ -327,10 +327,12 @@ void main() {
     ], loaded: 2, total: 2, complete: true));
     await tester.pump();
     await tester.pumpAndSettle();
+    // 时长探测在格驻留沿(400ms)才发:滚动期不占相机串行链。
+    await tester.pump(const Duration(milliseconds: 450));
 
     // 摄像机角标退场;时长胶囊上屏(150s → 2:30),黑底同格式角标。
     expect(repo.durationRequests, contains(1),
-        reason: '首位视频当前格也必须发起探测,不能只依赖后续格的前瞻窗');
+        reason: '驻留的可见视频格必须发起探测(2026-11-05 起由 build 沿移至驻留沿)');
     expect(find.byIcon(Icons.videocam), findsNothing);
     expect(find.text('2:30'), findsOneWidget);
 

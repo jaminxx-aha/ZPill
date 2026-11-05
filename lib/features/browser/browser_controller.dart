@@ -64,8 +64,13 @@ final class BrowserController extends ChangeNotifier {
 
   void _onUpdate(AlbumsUpdate update) {
     if (!_linkUp) return;
+    final albumsChanged = !identical(update.albums, albums);
+    final progressChanged = progress != (update.loaded, update.total);
     albums = update.albums;
     progress = (update.loaded, update.total);
+    // 评级/视频时长等非结构发布复用同一相册快照(见仓库 _albumsSnapshot):
+    // 对页面是空变化,不重建整页(2026-11-05 相册滑动卡顿根修之一)。
+    if (!albumsChanged && !progressChanged) return;
     notifyListeners();
   }
 

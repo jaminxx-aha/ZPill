@@ -1249,6 +1249,44 @@ void main() {
     );
   });
 
+  test('requestRating 空转不重发布:可见格反复 build 不自激重建', () async {
+    final fake = FakePtpTransport();
+    final repo = ObjectRepositoryImpl(session: PtpSession(transport: fake));
+    _replyPagedHandles(fake);
+    _replyRoots(fake);
+    fake.reply(_okData(_rootProbeDataset()));
+    fake.reply(_okData(_page101Dataset()));
+    fake.reply(_okData(_page100Dataset()));
+    await repo.loadAlbums();
+    // 枚举后的评级主同步(0x9434 → 甄别)先落定,排除发布干扰。
+    fake.reply(_okData(_metaDataset(const [])));
+    fake.reply(_okData(Uint8List.fromList(List.filled(16, 0)))); // 视频容器速败
+    fake.reply(_okData(Uint8List.fromList(
+        utf8.encode('<x:xmpmeta><xmp:Rating>0</xmp:Rating></x:xmpmeta>'))));
+    fake.reply(_okData(Uint8List.fromList(
+        utf8.encode('<x:xmpmeta><xmp:Rating>0</xmp:Rating></x:xmpmeta>'))));
+    await Future<void>.delayed(const Duration(milliseconds: 1200));
+
+    final updates = <AlbumsUpdate>[];
+    final sub = repo.updates.listen(updates.add);
+    addTearDown(sub.cancel);
+
+    fake.reply(_okData(Uint8List.fromList([50, 0]))); // 0x9803 → ★3
+    repo.requestRating(0x13, trashProbe: false);
+    await pumpEventQueue();
+    await Future<void>.delayed(const Duration(milliseconds: 400));
+    expect(repo.ratingForHandle(0x13), 3);
+    final afterFirst = updates.length;
+    expect(afterFirst, greaterThan(0));
+
+    // 已问过去重空转:不得再发布 —— 否则页面 build→发布→build 每帧自激。
+    repo.requestRating(0x13, trashProbe: false);
+    repo.requestRating(0x13, trashProbe: false);
+    await pumpEventQueue();
+    await Future<void>.delayed(const Duration(milliseconds: 400));
+    expect(updates.length, afterFirst);
+  });
+
   test('requestRating NEF:跳过必拒的 0xDC8A,直走 XMP 头读(脚本空=静默)',
       () async {
     final fake = FakePtpTransport();

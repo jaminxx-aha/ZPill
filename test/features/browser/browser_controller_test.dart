@@ -136,6 +136,32 @@ void main() {
     expect(notifications, 4); // 块 2 + finally 各一次
   });
 
+  test('非结构发布(同相册快照/同进度)不 notify:评级角标不触发整页重建',
+      () async {
+    final repo = _FakeRepo();
+    final controller = BrowserController(repository: repo);
+    final loading = controller.load();
+    final a1 = _album([_entry(1), _entry(2)]);
+    final snapshot = [a1];
+    repo.updatesCtrl.add(
+        AlbumsUpdate(albums: snapshot, loaded: 2, total: 2, complete: true));
+    repo.completeLoad(snapshot);
+    await loading;
+    var notifications = 0;
+    controller.addListener(() => notifications++);
+
+    // 评级发布复用同一相册快照实例 → 对页面是空变化,不重建。
+    repo.updatesCtrl.add(
+        AlbumsUpdate(albums: snapshot, loaded: 2, total: 2, complete: true));
+    expect(notifications, 0);
+
+    // 结构变化(新快照实例)照常通知。
+    final a2 = _album([_entry(1), _entry(2), _entry(3)]);
+    repo.updatesCtrl.add(AlbumsUpdate(
+        albums: [a2], loaded: 3, total: 3, complete: true));
+    expect(notifications, 1);
+  });
+
   test('并发 load 去重:第二次调用直接返回,不重复发起枚举', () async {
     final repo = _FakeRepo();
     final controller = BrowserController(repository: repo);

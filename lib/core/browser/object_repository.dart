@@ -263,6 +263,7 @@ final class ObjectRepositoryImpl implements ObjectRepository {
         if (gen != _generation) return; // reset 竞态:弃
         _byHandle[handle] = ObjectRepository.toEntry(info);
         _groupIndexOf = null;
+        _albumsCache = null;
         // 枚举进行中不另发布(其分块广播读活缓存,新对象自然带上);
         // 日常拍照(枚举外)即时广播一次完整快照。
         if (_loaded && _loading == null) {
@@ -410,18 +411,20 @@ final class ObjectRepositoryImpl implements ObjectRepository {
     switch (entry.kind) {
       case ObjectKind.video:
         unawaited(() async {
-          await _detectTrashViaNctg(entry);
-          _publishRatingsNow();
+          if (await _detectTrashViaNctg(entry)) _publishRatingsNow();
         }());
       case ObjectKind.image:
         unawaited(() async {
           if (isRatingCapable(entry)) {
-            await _fetchRating(handle); // 星档(位图有星 0xDC8A/拒走 XMP 兜底)
-            _publishRatingsNow(); // 便宜一笔,即读即上屏,不等甄别
+            // 星档(位图有星 0xDC8A/拒走 XMP 兜底)。**只在真拿到数据时
+            // 即时发布**:本方法被可见格 build 沿反复调用(已问过去重
+            // 空转),无条件发布会自激成「每帧重建整页」循环(2026-11-05
+            // Android/ohos 相册滑动卡顿根因)。
+            if (await _fetchRating(handle)) _publishRatingsNow();
           }
           if (trashProbe && !_metaRated.contains(handle)) {
-            await _detectTrashViaXmp(handle); // 删除候选(NEF 兼档位兜底)
-            _publishRatingsNow();
+            // 删除候选(NEF 兼档位兜底)
+            if (await _detectTrashViaXmp(handle)) _publishRatingsNow();
           }
         }());
       default:
@@ -442,8 +445,7 @@ final class ObjectRepositoryImpl implements ObjectRepository {
       while (_ratingInFlight.contains(handle)) {
         await Future<void>.delayed(const Duration(milliseconds: 50));
       }
-      await _detectTrashViaXmp(handle);
-      _publishRatingsNow();
+      if (await _detectTrashViaXmp(handle)) _publishRatingsNow();
     }());
   }
 
@@ -645,6 +647,12 @@ final class ObjectRepositoryImpl implements ObjectRepository {
 
   Map<int, PhotoGroup>? _groupIndexOf;
 
+  /// 完成态相册快照缓存:评级/视频时长等**非结构**发布复用同一份
+  /// (页面侧按 identical 跳过整页重建);任何对象表变动置空重派生。
+  List<CameraAlbum>? _albumsCache;
+
+  List<CameraAlbum> _albumsSnapshot() => _albumsCache ??= _buildAlbums();
+
   Map<int, PhotoGroup> _groupIndex() {
     final cached = _groupIndexOf;
     if (cached != null) return cached;
@@ -663,7 +671,7 @@ final class ObjectRepositoryImpl implements ObjectRepository {
   @override
   Future<List<CameraAlbum>> loadAlbums() async {
     await _ensureLoaded();
-    return _buildAlbums();
+    return _albumsSnapshot();
   }
 
   @override
@@ -682,6 +690,7 @@ final class ObjectRepositoryImpl implements ObjectRepository {
     _generation++;
     _byHandle = <int, ObjectEntry>{};
     _groupIndexOf = null;
+    _albumsCache = null;
     _ratings.clear();
     _videoDurations.clear();
     _videoDurationAttempts.clear();
@@ -714,6 +723,7 @@ final class ObjectRepositoryImpl implements ObjectRepository {
     }
     if (removed) {
       _groupIndexOf = null;
+      _albumsCache = null;
       final n = _byHandle.length;
       _publish(n, n, complete: true);
     }
@@ -752,6 +762,7 @@ final class ObjectRepositoryImpl implements ObjectRepository {
     // 同会话内已删除的对象清出缓存防幽灵;已缓存对象跳过(断点续传)。
     final handleSet = handles.toSet();
     _byHandle.removeWhere((h, _) => !handleSet.contains(h));
+    _albumsCache = null; // 幽灵清理改变对象表:快照重派生
     final pending = [
       for (final h in ordered)
         if (!_byHandle.containsKey(h)) h,
@@ -860,6 +871,7 @@ final class ObjectRepositoryImpl implements ObjectRepository {
         if (generation != _generation) return; // 每个 await 后、写缓存前
         _byHandle[handle] = ObjectRepository.toEntry(info);
         _groupIndexOf = null;
+        _albumsCache = null;
         loaded++;
       }
       if (generation != _generation) return;
@@ -949,29 +961,35 @@ final class ObjectRepositoryImpl implements ObjectRepository {
   /// 删除候选甄别单张:头 256KB XMP 包 Rating 值 —— **-1 = 删除候选**
   /// (真机复标实证:未评分 0、标垃圾桶后变 -1);0 = 无评级;1-5 =
   /// 星档(顺手收);无元素 = 不可判,保持无评级态。
-  Future<void> _detectTrashViaXmp(int handle) async {    if (!_trashProbed.add(handle)) return;
-    if (!_ratingInFlight.add(handle)) return;
+  /// 返回是否写入新数据(调用方据此决定发不发更新 —— 空转不发)。
+  Future<bool> _detectTrashViaXmp(int handle) async {
+    if (!_trashProbed.add(handle)) return false;
+    if (!_ratingInFlight.add(handle)) return false;
     final gen = _generation;
     try {
       final head = await session.getPartialObject(handle, 0, 262144);
-      if (gen != _generation) return;
+      if (gen != _generation) return false;
       final text = String.fromCharCodes(head);
-      if (!text.contains('<x:xmpmeta')) return; // 头里无 XMP 包:不作判
+      if (!text.contains('<x:xmpmeta')) return false; // 头里无 XMP 包:不作判
       final match = _xmpRatingPattern.firstMatch(text);
-      if (match == null) return; // 无 Rating 元素:不可判
+      if (match == null) return false; // 无 Rating 元素:不可判
       final value = int.tryParse(match.group(1)!) ?? 0;
       if (value < 0) {
         _trashMarked.add(handle); // -1 = 删除候选
         _ratingsSeen = true;
         _scheduleRatingPublish();
+        return true;
       } else if (value >= 1) {
         _ratings[handle] = value; // 位图外但文件里有星(顺手收)
         _ratingsSeen = true;
         _scheduleRatingPublish();
+        return true;
       }
       // 0 = 无评级:甄别已落账即可
+      return false;
     } on Object {
       // 头读失败:静默(保持无评级态)
+      return false;
     } finally {
       _ratingInFlight.remove(handle);
     }
@@ -981,9 +999,9 @@ final class ObjectRepositoryImpl implements ObjectRepository {
   /// —— 0xFFFF = 删除候选;1-5 = 星档(位图外顺手收);0/null = 无评级。
   /// 每视频 ~12 笔小读(顶层/moov/udta 箱头 + udta 头 1KB),预算内
   /// 有限步,失败静默不误判。
-  Future<void> _detectTrashViaNctg(ObjectEntry entry) async {
-    if (!_trashProbed.add(entry.handle)) return;
-    if (!_ratingInFlight.add(entry.handle)) return;
+  Future<bool> _detectTrashViaNctg(ObjectEntry entry) async {
+    if (!_trashProbed.add(entry.handle)) return false;
+    if (!_ratingInFlight.add(entry.handle)) return false;
     final gen = _generation;
     try {
       final size = entry.sizeInBytes;
@@ -992,8 +1010,8 @@ final class ObjectRepositoryImpl implements ObjectRepository {
         return session.getPartialObject(
             entry.handle, off, len.clamp(0, size - off));
       });
-      if (gen != _generation) return;
-      if (rating == null) return; // 不可判:保持无评级
+      if (gen != _generation) return false;
+      if (rating == null) return false; // 不可判:保持无评级
       _ratingsSeen = true;
       if (rating == 0xffff) {
         _trashMarked.add(entry.handle);
@@ -1001,8 +1019,10 @@ final class ObjectRepositoryImpl implements ObjectRepository {
         _ratings[entry.handle] = rating; // 位图外但容器里有星(顺手收)
       }
       _scheduleRatingPublish();
+      return true;
     } on Object {
       // 读失败:静默(保持无评级态)
+      return false;
     } finally {
       _ratingInFlight.remove(entry.handle);
     }
@@ -1117,6 +1137,7 @@ final class ObjectRepositoryImpl implements ObjectRepository {
       if (entry != null) {
         _byHandle[e.key] = entry;
         _groupIndexOf = null;
+        _albumsCache = null;
         added.add(entry);
       }
     }
@@ -1137,9 +1158,13 @@ final class ObjectRepositoryImpl implements ObjectRepository {
   }
 
   /// 广播一次增量快照;未完成发布丢弃未具名文件夹相册(见 _buildAlbums)。
+  /// 完成态复用 [_albumsCache]:评级/时长发布不重派生相册,页面按
+  /// identical 跳过整页重建(2026-11-05 滚动卡顿根修之一)。
   void _publish(int loaded, int total, {required bool complete}) {
     _updatesCtrl.add(AlbumsUpdate(
-      albums: _buildAlbums(dropUnnamedFolders: !complete),
+      albums: complete
+          ? _albumsSnapshot()
+          : _buildAlbums(dropUnnamedFolders: true),
       loaded: loaded,
       total: total,
       complete: complete,
