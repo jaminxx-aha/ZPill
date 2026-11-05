@@ -618,6 +618,11 @@ def decode_lv_header(p: bytes) -> None:
         print(f"        recording@828={p[828]} tcOn@831={p[831]}"
               f" tc@832-835={p[832]:02d}:{p[833]:02d}:{p[834]:02d}:{p[835]:02d}"
               f" rotation@839={p[839]}")
+    if len(p) > 838:
+        # 官方 §9.7.1:836-837 = 录制自动停止倒计时(BE u16 秒);838 = 点测
+        # WB 状态(0 关/1 待机/2 采集中/3 成功/4 失败)。
+        print(f"        recCountdown@836-837={(p[836] << 8) | p[837]}s"
+              f" spotWb@838={p[838]}")
     if len(p) >= 852:
         print(f"        level roll@840={_angle(p, 840)} pitch@844={_angle(p, 844)}"
               f" yaw@848={_angle(p, 848)}")

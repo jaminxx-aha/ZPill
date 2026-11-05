@@ -258,7 +258,9 @@ abstract final class NikonEventCode {
   static const int portraitImpressionBalanceAdjustChanged = 0xC126; // 仅 GetEventEx
   static const int pictureControlHlgAdjustChanged = 0xC127;
   // 0xC120-0xC124、0xC128、0xC700 在 Zf DeviceInfo 事件表内但官方文档
-  // 无条目,语义仍欠 —— 待 --events 真机抓包核对后再入册。
+  // 无条目,语义仍欠 —— NikonEventPoller 已对它们(及上面三个
+  // GetEventEx-only 码)加观测日志(每码每会话一条);真实事件到达后
+  // 按 AppLog protocol 域的码与参数形态补册,不预先臆造。
 }
 
 /// 设备属性码。0x50xx 标准区:Zf 真机 GetDeviceInfo 在册(现代尼康走

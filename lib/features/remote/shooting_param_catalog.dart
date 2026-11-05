@@ -603,8 +603,13 @@ final kShootingParams = <ShootingParam>[
 /// 刷/显**(照片档零流量)。取值域一律相机 FORM 驱动 —— 枚举随帧率/
 /// 镜头/N-Log 浮动(§6.5.12.2:快门枚举随帧率收口,120fps 最慢 1/125;
 /// §6.5.3.8:N-Log 开时 ISO 范围收口),静态值表只标官方逐字确认过的值。
-/// 0xD1FD TimeCodeOrigin 是 AUINT8 数组型(int 面板体系外,不入);
-/// 0xD0A0 MovieRecordScreenSize u64(尺寸/帧率复合编码,待布局定案后入)。
+/// 目录收口(2026-11-05 A 批,依据 ZfUsbMtpE_02):
+/// - 0xD1FD TimeCodeOrigin = AUINT8 数组(§6.5.3.71),int 面板体系外,不入;
+/// - 0xD0A0 MovieRecordScreenSize = u64 枚举(§6.5.3.4,15 个合法值,含
+///   慢动作),合法值随 MovieFileType(0xD0AF)变化 —— 需先按文件类型过滤
+///   + 定面板布局,先不入;要做时按 spec 表逐值映射;
+/// - 麦克风 0xD0A2(0 自动/1 手动/2 关,§6.5.3.64)与 0xD0A8(1-20,
+///   §6.5.3.65)音频向,产品未提需求,不入。
 /// 0x0001D006 主体检测静照/视频同码共用(§6.5.3.59 = §6.5.2.67),不重复。
 final kVideoShootingParams = <ShootingParam>[
   // 视频曝光四件套(§6.5.12.1-3/§6.5.3.8):写入门 = 视频档 A/M(相机拒,

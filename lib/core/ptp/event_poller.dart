@@ -13,7 +13,10 @@ library;
 
 import 'dart:async';
 
+import '../log/app_log.dart';
+import 'operation_codes.dart';
 import 'ptp_session.dart';
+import 'ptp_transport.dart';
 
 final class NikonEventPoller {
   NikonEventPoller({
@@ -35,11 +38,17 @@ final class NikonEventPoller {
   int _failures = 0;
   bool _polling = false;
 
+  /// 补册观测去重(每码每会话一条):0xC10B/0xC10F/0xC126 只走本通道;
+  /// 0xC120-24/0xC128/0xC700 官方无条目 —— 真实事件到达即落 AppLog,
+  /// 供后续补册,不改行为。
+
   /// 轮询是否在跑。
   bool get isRunning => _timer != null;
 
   void start() {
     _timer ??= Timer.periodic(interval, (_) => _poll());
+    // 新连接会话:观测去重表复位(每码每会话一条,重连后可重新留痕)。
+    _observed.clear();
   }
 
   void stop() {
@@ -54,6 +63,7 @@ final class NikonEventPoller {
       final events = await session.getEventEx();
       _failures = 0;
       if (events.isNotEmpty) {
+        _noteUncatalogued(events);
         session.emitPolledEvents(events);
       }
     } on Exception {
@@ -64,6 +74,27 @@ final class NikonEventPoller {
       _polling = false;
     }
   }
+
+  /// 补册观测:GetEventEx-only 三码 + 官方无条目六码,每码本会话只记
+  /// 一次(参数一并留痕)。纯日志,不影响事件投递。
+  void _noteUncatalogued(List<PtpEvent> events) {
+    for (final e in events) {
+      final code = e.code;
+      final watch = code == NikonEventCode.pictureControlAdjustChanged ||
+          code == NikonEventCode.openCaptureComplete ||
+          code == NikonEventCode.portraitImpressionBalanceAdjustChanged ||
+          (code >= 0xC120 && code <= 0xC124) ||
+          code == 0xC128 ||
+          code == 0xC700;
+      if (!watch || !_observed.add(code)) continue;
+      AppLog.i(
+          AppLog.protocol,
+          'GetEventEx 事件 0x${code.toRadixString(16).toUpperCase()}'
+          ' 参数 ${e.params}');
+    }
+  }
+
+  final Set<int> _observed = <int>{};
 
   void dispose() => stop();
 }

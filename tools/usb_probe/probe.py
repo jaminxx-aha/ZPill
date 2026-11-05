@@ -833,6 +833,11 @@ def decode_lv_header(p: bytes) -> None:
         print(f"        recording@828={p[828]} tcOn@831={p[831]}"
               f" tc@832-835={p[832]:02d}:{p[833]:02d}:{p[834]:02d}:{p[835]:02d}"
               f" rotation@839={p[839]}")
+    if len(p) > 838:
+        # 官方 §9.7.1:836-837 = 录制自动停止倒计时(BE u16 秒,3600 起/过热
+        # 30s 起);838 = 点测 WB 状态(0 关/1 待机/2 采集中/3 成功/4 失败)。
+        print(f"        recCountdown@836-837={_be16(p, 836)}s"
+              f" spotWb@838={p[838]}")
     if len(p) >= 852:
         print(f"        level roll@840={_angle(p, 840)} pitch@844={_angle(p, 844)}"
               f" yaw@848={_angle(p, 848)}")
@@ -918,6 +923,8 @@ def main() -> int:
                     default=INITIATE_CAPTURE,
                     help="拍照操作码:0x100E(标准,默认)/ 0x9207 / 0x90C0"
                          "(尼康候选,配合 --capture)")
+    ap.add_argument("--setting-blob", action="store_true",
+                    help="0x946D 相机设定文件:文件名/文件体大小/头 32B")
     ap.add_argument("--vendorcodes", action="store_true",
                     help="0x9439 GetVendorCodes:厂商操作码(0x09)/属性码(0x0D)全表")
     ap.add_argument("--picctrl", action="store_true",
@@ -1581,6 +1588,27 @@ def main() -> int:
             else:
                 print(f"[4x] GetVendorCodes({label}) <- 0x{rc:04X}"
                       f"(拒答不阻断 —— 不在表 ≠ 不应答,STA 9-op 同理)")
+
+    # 步骤 4y(可选,--setting-blob):0x946D GetCameraSettingData ——
+    # 机身菜单「保存/载入设定」产物的卡 1 文件;数据集 = 64B ASCII 文件名
+    # (63+NUL)+ 文件体。B 批用:确认快照 blob 双轨的真实文件名/大小/头,
+    # 回写 0x946E 只写卡不生效(应用须机身菜单载入)。
+    if args.setting_blob:
+        txid += 1
+        try:
+            txid, blob, rc = xact(dev, ep_out, ep_in, txid, 0x946D)
+        except (usb.core.USBError, IOError) as e:
+            print(f"[4y] GetCameraSettingData(0x946D) <- USB 异常:{e}")
+            blob, rc = None, None
+        if rc == OK and blob is not None:
+            d = blob[HDR:]
+            name = d[:64].split(b"\0", 1)[0].decode("ascii", "replace")
+            body = d[64:]
+            print(f"[4y] GetCameraSettingData <- OK name={name!r}"
+                  f" body={len(body)}B head={body[:32].hex(' ')}")
+        else:
+            print(f"[4y] GetCameraSettingData <- 0x{rc:04X}"
+                  if rc is not None else "[4y] GetCameraSettingData <- 无应答")
 
     # 步骤 4v(可选,--liveview N):Live View 轮询摸底 —— 0x9435 切应用
     # 模式 → 0x9201 开取景 → 取帧轮询直到 N 帧成功(间隔 200ms 对齐 app;
