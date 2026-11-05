@@ -84,6 +84,41 @@ void main() {
     expect(find.text('后台传输'), findsNothing);
   });
 
+  testWidgets('GPS 注入:Android denied 也发起授权请求并落库', (tester) async {
+    var status = 'denied';
+    var requests = 0;
+    const channel = MethodChannel('zpill/location');
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      switch (call.method) {
+        case 'authStatus':
+          return status;
+        case 'requestAlways':
+          requests++;
+          status = 'whenInUse'; // 系统授权框点允许后的回读
+          return null;
+        default:
+          return null;
+      }
+    });
+    addTearDown(() => TestDefaultBinaryMessengerBinding.instance
+        .defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, null));
+
+    await boot(tester);
+    final row = find.text('GPS 位置注入');
+    await tester.scrollUntilVisible(row, 300,
+        scrollable: find.byType(Scrollable).first);
+    await tester.pumpAndSettle();
+
+    await tester.tap(row);
+    await tester.pumpAndSettle();
+
+    expect(requests, 1, reason: 'denied 也必须发起系统授权请求(2026-11-05 修)');
+    expect(AppServices.instance.settingsController.settings.bleGpsInject, isTrue,
+        reason: '授权成功(whenInUse)后落库');
+  });
+
   testWidgets('文本框:点空白散焦收键盘,输入随焦点离开落库', (tester) async {
     await boot(tester);
 

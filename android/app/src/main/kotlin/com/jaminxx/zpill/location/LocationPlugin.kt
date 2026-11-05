@@ -69,6 +69,12 @@ class LocationPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHan
     private var lastStreamFix: Map<String, Any?>? = null
     private var pendingAlways: MethodChannel.Result? = null
 
+    /// 本轮 requestAlways 是否已问过后台定位:Android 11+ 用户保持
+    /// 「仅使用期间」时 background 权限仍为拒绝,continueAlways 若无此
+    /// 标志会再次 requestPermissions(BACKGROUND) → 系统框反复重弹、
+    /// pending 永不完成(Dart 开关卡在未落库)。问过一次即收口。
+    private var backgroundAsked = false
+
     private val mainHandler = Handler(Looper.getMainLooper())
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
@@ -360,8 +366,12 @@ class LocationPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHan
         }
         pendingAlways = result
         val want = if (fine) {
+            // 前景已授,直接问后台:这一问就是本轮的唯一一次后台询问。
+            backgroundAsked = true
             arrayOf(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
         } else {
+            // 先问前景;结果回来后在 continueAlways 里补一次后台询问。
+            backgroundAsked = false
             arrayOf(
                 Manifest.permission.ACCESS_FINE_LOCATION,
                 Manifest.permission.ACCESS_COARSE_LOCATION,
@@ -379,7 +389,8 @@ class LocationPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHan
         val bg = Build.VERSION.SDK_INT < 29 || (ctx != null &&
             ctx.checkSelfPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION) ==
             PackageManager.PERMISSION_GRANTED)
-        if (fine && !bg && act != null) {
+        if (fine && !bg && act != null && !backgroundAsked) {
+            backgroundAsked = true
             pendingAlways = pending
             act.requestPermissions(
                 arrayOf(Manifest.permission.ACCESS_BACKGROUND_LOCATION),
@@ -387,6 +398,9 @@ class LocationPlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHan
             )
             return
         }
+        // 后台只问一次:用户保持「仅使用期间」时继续收口为成功(whenInUse
+        // 本身即放行注入),绝不再弹第二次。
+        backgroundAsked = false
         pending.success(null)
     }
 

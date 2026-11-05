@@ -226,11 +226,16 @@ class _SettingsPageState extends State<SettingsPage> {
   /// 用中」皆放行(2026-10-21 试验改:10-13 账本「whenInUse 退后台即
   /// 停」与 SnapBridge 仅使用中可用的实证相抵,待真机 A/B 复核;仅使
   /// 用中的后台续命 = allowsBackgroundLocationUpdates 后台会话蓝胶囊
-  /// 路径);仅未定态才请求授权(requestAlways 未定时先弹「使用中」
-  /// 一级窗;已「仅使用中」再调只会招来「升级始终」二次弹窗,污染试
-  /// 验),拒授/受限/通道缺失即切换失败翻回,不落库;关闭直落。注入
-  /// 驱动刷新由 AppServices 的 settingsController 监听收口,此处不碰
-  /// 驱动。
+  /// 路径)。**未授权一律请求**(notDetermined/denied 都走):Android
+  /// 的 authStatus 未授权恒回 'denied'、无持久未定态,旧逻辑只认
+  /// notDetermined → 撤销权限后再开开关只出内置提示、永不弹系统框
+  /// (2026-11-05 修);Android/ohos 的 native request 在系统授权结果
+  /// 落定时才返回,await 后复查即可;iOS 的 request 先返回、结果由
+  /// delegate 异步落定,仍需轮询(用户手速不一,10s 上限;固定 2s 会
+  /// 跟手速赛跑,2026-10-21 真机实证:用户 6s 才点允许,2s 查询扑空,
+  /// 开关误翻回把注入层整个拆了)。拒授/受限/通道缺失即切换失败翻回,
+  /// 不落库;关闭直落。注入驱动刷新由 AppServices 的 settingsController
+  /// 监听收口,此处不碰驱动。
   Future<void> _setBleGpsInject(
       BuildContext context, SettingsController controller, bool on) async {
     if (!on) {
@@ -240,17 +245,20 @@ class _SettingsPageState extends State<SettingsPage> {
     var granted = false;
     try {
       var status = await PlatformServices.locationStream.authorizationStatus();
-      if (status == 'notDetermined') {
+      if (status != 'always' && status != 'whenInUse') {
         await PlatformServices.locationStream.requestAlwaysAuthorization();
-        // 系统弹窗落定时长不定(用户手速):轮询等授权离开未定态,上限
-        // 10s。固定 2s 会跟手速赛跑 —— 2026-10-21 真机实证:用户 6s 才
-        // 点允许,2s 查询扑空,开关误翻回把注入层整个拆了(BLE ready 后
-        // 定位流再没起来,相机位置数据冻结)。
-        final deadline = DateTime.now().add(const Duration(seconds: 10));
-        while (DateTime.now().isBefore(deadline)) {
-          await Future<void>.delayed(const Duration(milliseconds: 500));
+        if (defaultTargetPlatform == TargetPlatform.iOS) {
+          // iOS:系统弹窗落定时长不定(用户手速),轮询等授权离开未定态,
+          // 上限 10s。
+          final deadline = DateTime.now().add(const Duration(seconds: 10));
+          while (DateTime.now().isBefore(deadline)) {
+            await Future<void>.delayed(const Duration(milliseconds: 500));
+            status = await PlatformServices.locationStream.authorizationStatus();
+            if (status != 'notDetermined') break;
+          }
+        } else {
+          // Android/ohos:native request 已等到系统授权结果返回,复查一次。
           status = await PlatformServices.locationStream.authorizationStatus();
-          if (status != 'notDetermined') break;
         }
       }
       granted = status == 'always' || status == 'whenInUse';
