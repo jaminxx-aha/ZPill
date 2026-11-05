@@ -76,6 +76,7 @@ void _afGroups() {
 
       test('0xA004 + 0xD0A4 bit14(不在应用模式)→ 0x90C2(1) 后重试开录',
           () async {
+        conn.isWireless = true; // Wi-Fi:0x9435 可进应用模式
         await startLiveView();
         transport.reply(NikonResponseCode.invalidStatus); // 首拍 0x920A 拒
         transport.ok(
@@ -93,6 +94,24 @@ void _afGroups() {
         expect(transport.count(NikonOperationCode.changeCameraMode), 2);
         expect(
             transport.count(NikonOperationCode.startMovieRecInCard), 2);
+      });
+
+      test('0xA004 + bit14 + USB(非无线)→ 直接提示 USB 不支持,不发 0x9435/0x90C2',
+          () async {
+        // FakeConnection.isWireless 默认 false = USB。2026-11-05 B 批:
+        // USB 下 0x9435 是 5s 慢事务且恒被拒,bit14 清不掉 —— 不再
+        // 空等,直接给出可操作提示。
+        conn.deviceModel = 'Z f'; // USB 直连 Zf:相机不开放应用模式
+        await startLiveView();
+        transport.reply(NikonResponseCode.invalidStatus); // 首拍 0x920A 拒
+        transport.ok(
+            data: _propDescDataset(0xD0A4, PtpDataType.uint32, 0x4000));
+        await controller.toggleRecord();
+        expect(controller.error?.key, 'remote.errMovieUsbUnsupported');
+        expect(controller.recording, isFalse);
+        expect(transport.count(NikonOperationCode.changeApplicationMode), 0,
+            reason: 'USB 下不发 0x9435 空等 5s');
+        expect(transport.count(NikonOperationCode.changeCameraMode), 0);
       });
 
       test('0x9205 忙(0x2019)→ 宽限内逐拍退避静默续发(拉焦轮同款口径)',

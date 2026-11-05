@@ -677,10 +677,11 @@ final class CameraConnectionImpl implements CameraConnection {
     // 已收口的状态覆盖成 connected。pairing 态合法(配对流程经此转正),
     // 只挡 disconnected/failed。
     //
-    // 「已连接」在 OpenSession 成功即成立:应用模式切换(0x9435)是
-    // 相机固件的慢操作(2026-11-04 真机 ~5s),不能把它压在状态沿前面
-    // —— 否则 Android 有线连接比 ohos/iOS 慢一大截。latch 转后台,
-    // 后续事务在会话串行门上自然排队等它收口。
+    // 「已连接」在 OpenSession 成功即成立:连接流只进 remote 闩
+    // (0x90C2 1→0),0x9435 真应用模式在 USB 下恒被拒(5s 慢事务后
+    // 0x200F,2026-11-05 实证;Wi-Fi 录像重试时按需补发),不能把它
+    // 压在状态沿前面 —— 否则 Android 有线连接比 ohos/iOS 慢一大截。
+    // latch 转后台,后续事务在会话串行门上自然排队等它收口。
     if (_state == CameraLinkState.disconnected ||
         _state == CameraLinkState.failed) {
       return;
@@ -705,9 +706,9 @@ final class CameraConnectionImpl implements CameraConnection {
       // session.connectLadder,取景失败时浮出)。
       await _session.enableAppControl(remoteLatch: true);
       AppLog.i(AppLog.connection,
-          'USB 连接: 应用模式完成 ${sw.elapsedMilliseconds}ms');
+          'USB 连接: remote 模式完成 ${sw.elapsedMilliseconds}ms(0x90C2 闩)');
     } on Object catch (e) {
-      AppLog.w(AppLog.connection, 'USB 连接: 应用模式失败 $e');
+      AppLog.w(AppLog.connection, 'USB 连接: remote 模式失败 $e');
     }
   }
 

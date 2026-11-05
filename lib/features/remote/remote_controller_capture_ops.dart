@@ -628,6 +628,19 @@ mixin _RemoteCaptureOps on _RemoteCore {
           '录制 0xA004: 0xD0A4=0x${prohibition.toRadixString(16)}',
         );
         if (prohibition & 0x4000 != 0) {
+          // USB 连接下相机不开放应用模式(0x9435 是 ~5s 慢事务,
+          // 且 USB 下恒被拒,0xD0A4 bit14 清不掉;2026-11-05 B 批
+          // app 日志 + 探针双实证):远程录像只在 Wi-Fi 可用 —— 直接
+          // 如实提示,不再空等 5s 做无效重试。
+          final usbZf = connection?.isWireless == false &&
+              connection?.deviceModel
+                      ?.replaceAll(RegExp(r'\s+'), '')
+                      .toLowerCase() ==
+                  'zf';
+          if (usbZf) {
+            error = (key: 'remote.errMovieUsbUnsupported', args: null);
+            return;
+          }
           // bit14 = 相机不在应用模式(规格 6.5.12.5)。相机本地录不
           // 走此门;远程 0x920A 必须先进应用模式。重入 0x90C2(1),
           // 条件清零后重试开录。
