@@ -114,6 +114,9 @@ final class _FakeDownloader implements ObjectDownloader {
   int? get partialChunkBytes => null;
 
   @override
+  int? get chunkedCancelAboveBytes => null;
+
+  @override
   Future<ObjectDownload> download(
     ObjectEntry entry, {
     required String targetDir,

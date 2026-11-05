@@ -1,10 +1,14 @@
 package com.jaminxx.zpill.video
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Matrix
 import android.media.MediaMetadataRetriever
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.MethodChannel
+import io.flutter.plugin.common.StandardMessageCodec
+import io.flutter.plugin.platform.PlatformView
+import io.flutter.plugin.platform.PlatformViewFactory
 import java.io.ByteArrayOutputStream
 import kotlin.math.max
 
@@ -12,8 +16,9 @@ import kotlin.math.max
  * ZPill 视频(Android 平台,native 侧)。
  *
  * 对应 Dart 契约 lib/platform/video_player.dart(MethodChannel
- * `zpill/video`),当前覆盖全屏播放、抽帧与帧率探测;内嵌平台视图
- * 尚未落地,调用方按全屏路径回退:
+ * `zpill/video`),覆盖全屏播放、抽帧、帧率探测与**内嵌平台视图**
+ * (2026-11-05:`zpill/video-view` = [EmbeddedVideoView],查看器页内
+ * 原层播放;全屏 play 保留为通道兜底):
  *
  * - `thumbnail({path, maxPixelSize})`:取 0.1s 处一帧(iOS 取同点位避
  *   纯黑首帧),按 METADATA_KEY_VIDEO_ROTATION 旋转正立(与 iOS
@@ -22,7 +27,9 @@ import kotlin.math.max
  * - `frameRate({path})`:METADATA_KEY_CAPTURE_FRAMERATE 是拍摄帧率
  *   (API 28+),多数设备只回整档;退路 = 帧数/时长估算,拿不到 = null
  *   (调用方不设顺帧门,直放)。
- * - `play({path, rate})`:MediaPlayer + VideoActivity 全屏播放。
+ * - `play({path, rate})`:MediaPlayer + VideoActivity 全屏播放(兜底)。
+ * - `viewLoad/viewControl/viewStatus/viewSeek`:内嵌视图契约(Dart
+ *   EmbeddedVideoPlayer 驱动),视图实例按 id 登记在 [embeddedViews]。
  *
  * 线程:通道调用在主线程,retriever 抽帧是重活 —— 切后台队列执行,
  * 结果回主线程交付(MethodChannel.Result 线程契约)。
@@ -30,7 +37,16 @@ import kotlin.math.max
 class VideoPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
     companion object {
         private const val CHANNEL = "zpill/video"
+        private const val VIEW_TYPE = "zpill/video-view"
         private const val THUMB_TIME_US = 100_000L // 0.1s,避纯黑首帧
+
+        /// 内嵌视图登记(id → view)。通道调用、视图创建/销毁都在主线程,
+        /// 无需加锁;视图 [EmbeddedVideoView.dispose] 沿自行摘表。
+        private val embeddedViews = HashMap<Int, EmbeddedVideoView>()
+
+        fun unregisterEmbeddedView(id: Int) {
+            embeddedViews.remove(id)
+        }
 
         /// 全屏播放的待交付通道结果(VideoActivity 关闭/出错时交付;
         /// 插件与 Activity 同进程,静态槽直连 —— ohos SaveSession 同款)。
@@ -68,6 +84,10 @@ class VideoPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
         channel = MethodChannel(binding.binaryMessenger, CHANNEL).also {
             it.setMethodCallHandler(this)
         }
+        binding.platformViewRegistry.registerViewFactory(
+            VIEW_TYPE,
+            VideoViewFactory(),
+        )
         executor = java.util.concurrent.Executors.newSingleThreadExecutor()
         handler = android.os.Handler(android.os.Looper.getMainLooper())
         engineContext = binding.applicationContext
@@ -76,6 +96,7 @@ class VideoPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         channel?.setMethodCallHandler(null)
         channel = null
+        embeddedViews.clear()
         executor?.shutdown()
         executor = null
         handler = null
@@ -112,6 +133,48 @@ class VideoPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
                 } catch (e: Exception) {
                     playResult = null
                     result.error("play_failed", "无法打开播放页:${e.message}", null)
+                }
+            }
+            "viewLoad" -> {
+                val id = call.argument<Int>("id")
+                val path = call.argument<String>("path")
+                if (id == null || path == null) {
+                    result.error("bad_args", "viewLoad 需要 id/path", null)
+                } else {
+                    embeddedViews[id]?.load(path)
+                    result.success(null)
+                }
+            }
+            "viewControl" -> {
+                val id = call.argument<Int>("id")
+                if (id == null) {
+                    result.error("bad_args", "viewControl 需要 id", null)
+                } else {
+                    embeddedViews[id]?.control(
+                        call.argument<Boolean>("playing") ?: false,
+                        call.argument<Double>("rate") ?: 1.0,
+                    )
+                    result.success(null)
+                }
+            }
+            "viewStatus" -> {
+                val id = call.argument<Int>("id")
+                val status = if (id == null) null else embeddedViews[id]?.status()
+                result.success(
+                    status ?: mapOf(
+                        "position" to 0.0,
+                        "duration" to 0.0,
+                        "playing" to false,
+                    ),
+                )
+            }
+            "viewSeek" -> {
+                val id = call.argument<Int>("id")
+                if (id == null) {
+                    result.error("bad_args", "viewSeek 需要 id", null)
+                } else {
+                    embeddedViews[id]?.seek(call.argument<Double>("position") ?: 0.0)
+                    result.success(null)
                 }
             }
             "thumbnail" -> {
@@ -203,6 +266,19 @@ class VideoPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
                 retriever.release()
             } catch (_: Exception) {
             }
+        }
+    }
+
+    /** `zpill/video-view` 工厂:创建即按 viewId 登记,供通道寻址。 */
+    private class VideoViewFactory : PlatformViewFactory(StandardMessageCodec.INSTANCE) {
+        override fun create(
+            context: Context,
+            viewId: Int,
+            args: Any?,
+        ): PlatformView {
+            val view = EmbeddedVideoView(context, viewId)
+            embeddedViews[viewId] = view
+            return view
         }
     }
 

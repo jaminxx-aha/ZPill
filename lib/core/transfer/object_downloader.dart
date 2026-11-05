@@ -89,6 +89,7 @@ class ObjectDownloader {
     bool enablePartialObjectEx = false,
     AimdChunkPolicy? exChunkPolicy,
     int? Function()? chunkCap,
+    this.chunkedCancelAboveBytes,
   })  : // 每下载器(= 传输会话)一个策略实例:跨 download 调用延续学习,
         // 不跨下载器/会话共享。注入是测试口径(小数值 + 判快阈值可控);
         // 缺省自建,上限随 [partialChunkBytes](生产 iOS = 1MB)。
@@ -120,6 +121,13 @@ class ObjectDownloader {
   /// GetObject 流式(见库注释)。相机 op 表无 0x101B 时忽略,回落
   /// GetObject。
   final int? partialChunkBytes;
+
+  /// 大档可取消下载改走分块路线的体积阈值(null = 关闭):
+  /// 整档 GetObject 的取消要**排空剩余数据流**(事务已开始,协议状态机
+  /// 兜底),500MB 视频取消像卡死(2026-11-05 传输页复报);超过此体积
+  /// 且调用方给了 isCancelled 时改走 0x101B 分块 —— 取消 = 在途块跑完
+  /// 即停。小档维持整档路线(排空代价小,保 Android/ohos 整档吞吐)。
+  final int? chunkedCancelAboveBytes;
 
   /// 每块上限的外部闸(缺省 null = 不钳):每块请求前调用,返回本块
   /// 字节数上限(小于策略块时钳制),null = 本块不钳。取景保帧用
@@ -169,6 +177,14 @@ class ObjectDownloader {
     var chunked = false;
     try {
       chunked = partialChunkBytes != null && await _partialReadable();
+      // 大档 + 可取消:整档排空不可接受,改走分块(见字段注)。相机
+      // 不支持 0x101B 时回落整档,行为与旧版一致。
+      if (!chunked &&
+          isCancelled != null &&
+          chunkedCancelAboveBytes != null &&
+          entry.sizeInBytes >= chunkedCancelAboveBytes!) {
+        chunked = await _partialReadable();
+      }
       // 逐块记账只在实收大档(见 _kLoudChunkLogBytes):同一下载器
       // 还服务缩略图/头读,小档不吵日志环。
       final loud = entry.sizeInBytes >= _kLoudChunkLogBytes;

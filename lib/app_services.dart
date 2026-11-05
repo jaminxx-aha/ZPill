@@ -34,6 +34,7 @@ import 'core/ptpip/transport.dart';
 import 'core/ptpusb/usb_transport.dart';
 import 'core/remote/live_view_engine.dart';
 import 'core/transfer/auto_transfer.dart';
+import 'core/transfer/aimd_chunk.dart';
 import 'core/transfer/object_downloader.dart';
 import 'core/transfer/transfer_engine.dart';
 import 'data/ble_identity_store.dart';
@@ -174,9 +175,34 @@ final class AppServices {
       session: session,
       partialChunkBytes: Platform.isIOS ? 1024 * 1024 : null,
       enablePartialObjectEx: Platform.isIOS,
+      // 大档可取消(2026-11-05 传输页复报「取消卡死」):整档 GetObject
+      // 取消要排空剩余数据流,几百 MB 视频要再收几十秒;≥32MB 且有
+      // isCancelled(传输引擎全走)时改分块,块间即停。小档维持整档
+      // 吞吐(Android/ohos 21MB/s 路线不变)。
+      chunkedCancelAboveBytes: 32 * 1024 * 1024,
       // 取景在场钳块(见 [kViewfinderChunkCapBytes]):闸懒取 —— 引擎
       // 在本方法之后才创建,闭包在块沿才跑,装配早已收口;引擎缺席按
       // 不钳走(不因装配时序牺牲下载)。
+      chunkCap: () {
+        final engine = _liveViewEngine;
+        return (engine != null && engine.framesFlowing)
+            ? kViewfinderChunkCapBytes
+            : null;
+      },
+    );
+    // 播放临时档下载器(相机相册视频页专用):**分块路线**换取消即时性
+    // —— 整档 GetObject 的取消要排空剩余数据流,500MB 视频取消像卡死
+    // (2026-11-05 真机复报)。按块 4MB(策略 64KB 起爬、封顶 4MB):
+    // 取消最多等一块跑完;播放档不追极限吞吐。取景钳块同主下载器。
+    playbackDownloader = ObjectDownloader(
+      session: session,
+      partialChunkBytes: 4 * 1024 * 1024,
+      // 起步 1MB(IC 链已证的块粒度),快块加性升到 4MB:取消最多等
+      // 一块;大档每 MB 事务开销也摊得住。
+      chunkPolicy: AimdChunkPolicy(
+        maxBytes: 4 * 1024 * 1024,
+        initialBytes: 1024 * 1024,
+      ),
       chunkCap: () {
         final engine = _liveViewEngine;
         return (engine != null && engine.framesFlowing)
@@ -679,6 +705,9 @@ final class AppServices {
   late final CameraOverviewController cameraOverview;
   late final StorageOverviewController storageOverview;
   late final RemoteController remoteController;
+
+  /// 相机相册视频页的临时档下载器(分块路线,取消块间即停;见装配注)。
+  late final ObjectDownloader playbackDownloader;
 
   /// 取景引擎引用(下载钳块闸用,见 [kViewfinderChunkCapBytes]):
   /// 引擎创建晚于下载器装配,闭包经此转发;nullable 防晚绑期读炸 ——

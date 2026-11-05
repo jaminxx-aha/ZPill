@@ -159,6 +159,11 @@ class _PhotoViewerPageState extends State<PhotoViewerPage>
       widget.ratings ?? AppServices.instance.ratings;
   ObjectDownloader get _downloader =>
       widget.downloader ?? AppServices.instance.downloader;
+
+  /// 视频播放临时档:分块下载器(取消块间即停)。整档 GetObject 路线
+  /// 取消要排空剩余数据流 —— 500MB 视频取消像卡死(2026-11-05 复报)。
+  ObjectDownloader get _playbackDownloader =>
+      widget.downloader ?? AppServices.instance.playbackDownloader;
   GallerySaver get _gallery => widget.gallery ?? PlatformServices.gallery;
   VideoPlayer get _videoPlayer =>
       widget.videoPlayer ?? PlatformServices.videoPlayer;
@@ -506,12 +511,14 @@ class _PhotoViewerPageState extends State<PhotoViewerPage>
     }
   }
 
-  /// 播放视频:整档下载到临时目录(进度对话框,可取消)→ iOS/ohos
-  /// **页内**内嵌播放(EmbeddedVideoPlayer,与图库查看器同款),Android
-  /// 交原生全屏播放(onDownloaded 分支)。PTP 相机没有
-  /// 流式播放(Nikon moov 原子位置未验,亦无 HTTP range 语义),大文件
-  /// 需等下载;取消 = 删半成品。临时档随视频页存活(翻回不重拉),
-  /// 页面销毁(查看器关闭)时交给 [_PlayedVideoCache] 会话级持有
+  /// 播放视频:整档下载到临时目录(进度对话框,可取消)→ 三端
+  /// **页内**内嵌播放(EmbeddedVideoPlayer,与图库查看器同款)。
+  /// 下载走分块路线([_playbackDownloader]):整档 GetObject 的取消要
+  /// 排空剩余数据流(500MB 视频取消像卡死,2026-11-05 复报),分块
+  /// 路线取消 = 在途块跑完即停(≤4MB)。PTP 相机没有流式播放
+  /// (Nikon moov 原子位置未验,亦无 HTTP range 语义),大文件需等
+  /// 下载;取消 = 删半成品。临时档随视频页存活(翻回不重拉),页面
+  /// 销毁(查看器关闭)时交给 [_PlayedVideoCache] 会话级持有
   /// (容量 2 LRU,翻回/重开查看器秒开;驱逐时才删)。
   Future<void> _startPlayback(_CameraVideoPageState page) async {
     final video = page.widget.group.movie;
@@ -531,7 +538,7 @@ class _PhotoViewerPageState extends State<PhotoViewerPage>
     ));
     ObjectDownload? dl;
     try {
-      dl = await _downloader.download(video,
+      dl = await _playbackDownloader.download(video,
           targetDir: await _gallery.tempDir(),
           onProgress: (received) => cancel.progress.value = received,
           isCancelled: () => cancel.cancelled);
@@ -1117,8 +1124,9 @@ class _CameraVideoPageState extends State<_CameraVideoPage>
   }
 
   /// 宿主拉取完成的回投([_PhotoViewerPageState._startPlayback] 调)。
-  /// iOS/ohos 装内嵌视图页内播;Android 交原生全屏播放(拉档已完成,
-  /// 失败弹提示不占页面态,海报留守可重播)。
+  /// 三端装内嵌视图页内播(Android 2026-11-05 起同路);无内嵌视图
+  /// (旧平台门禁外)才交原生全屏播放(拉档已完成,失败弹提示不占
+  /// 页面态,海报留守可重播)。
   void onDownloaded(String path) {
     if (!mounted) return;
     if (!widget.player.supportsEmbeddedView) {

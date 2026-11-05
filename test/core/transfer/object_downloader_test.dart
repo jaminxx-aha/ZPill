@@ -202,6 +202,52 @@ void main() {
     expect(await dir.list().toList(), isEmpty); // 半成品已删
   });
 
+  test('大档可取消:超阈值自动改分块,取消块间即停(不排空整档)', () async {
+    final fake = FakePtpTransport();
+    final downloader = ObjectDownloader(
+      session: PtpSession(transport: fake),
+      // 整档默认(partialChunkBytes null);只靠取消阈值触发分块。
+      chunkPolicy: AimdChunkPolicy(maxBytes: 50),
+      chunkedCancelAboveBytes: 100,
+    );
+
+    fake.reply(deviceInfoWithPartial());
+    fake.reply(_okData(Uint8List.fromList(List.filled(50, 7))));
+
+    var cancelAfterFirstChunk = false;
+    await expectLater(
+      downloader.download(
+        _entry('DSC_BIG.MOV', 120),
+        targetDir: dir.path,
+        onProgress: (_) => cancelAfterFirstChunk = true,
+        isCancelled: () => cancelAfterFirstChunk,
+      ),
+      throwsA(isA<DownloadCancelledException>()),
+    );
+    // 门禁 + 第一块;取消后不再发新事务,无整档排空。
+    expect(fake.requests.map((r) => r.opcode),
+        [PtpOperationCode.getDeviceInfo, PtpOperationCode.getPartialObject]);
+    expect(await dir.list().toList(), isEmpty);
+  });
+
+  test('小档低于取消阈值:维持整档 GetObject(不为取消牺牲吞吐)', () async {
+    final fake = FakePtpTransport();
+    final downloader = ObjectDownloader(
+      session: PtpSession(transport: fake),
+      chunkedCancelAboveBytes: 100,
+    );
+    final payload = Uint8List.fromList(List.filled(80, 3));
+    fake.reply(_okData(payload));
+
+    final result = await downloader.download(
+      _entry('DSC_SMALL.JPG', 80),
+      targetDir: dir.path,
+      isCancelled: () => false,
+    );
+    expect(fake.requests.map((r) => r.opcode), [PtpOperationCode.getObject]);
+    expect(result.bytes, 80);
+  });
+
   test('分块短读:实收不足按大小对账,FormatException 且不留半成品', () async {
     final fake = FakePtpTransport();
     final downloader = chunkedDownloaderFor(fake);

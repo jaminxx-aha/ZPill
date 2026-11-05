@@ -6,22 +6,26 @@
 ///   (2026-10-13):iOS = AVKit(见 ios/Runner/VideoPlugin.swift:
 ///   AVPlayerViewController 包一层关闭钮),Android = VideoActivity
 ///   (MediaPlayer + TextureView),ohos = VideoSheet 覆盖层(AVPlayer +
-///   XComponent)。[rate] 为播放速率:顺帧预览(conform)
+///   XComponent)。**内嵌视图(2026-11-05 起三端齐)**:Android 也走
+///   `zpill/video-view` 平台视图(TextureView + MediaPlayer),查看器
+///   页内原层播放;`play` 全屏路保留为通道兜底/未来用途。[rate] 为播放速率:顺帧预览(conform)
 ///   传 24/fps(如 60fps 素材按 24fps 看 = 0.4);非 1 速率静音 —— 变速
 ///   下音轨无意义(OpenZCine conform 同款)。
 /// - `thumbnail({path, maxPixelSize})`:抽取一帧编码为 JPEG 返回
 ///   (iOS AVAssetImageGenerator / Android MediaMetadataRetriever +
 ///   ROTATION 正立 / ohos AVImageGenerator;取 0.1s 处避开纯黑首帧,
 ///   iOS 按拍摄方向正立)。图库网格/查看器用它出 MOV 海报帧。
-///   三端抽帧通道已落地;内嵌视图由 iOS/ohos 提供,Android 回落全屏。
+///   三端抽帧通道已落地;内嵌视图三端齐(iOS/ohos 平台视图,Android
+///   2026-11-05 补齐 TextureView + MediaPlayer 平台视图)。
 /// - `frameRate({path})`:探测视频标称帧率(iOS
 ///   AVAssetTrack.nominalFrameRate)。顺帧预览的门禁:>30fps 的高帧率
 ///   素材才提供「24fps 顺帧」选项;拿不到/无视频轨返回 null。
 ///
 /// 另有**内嵌播放**一路(图库查看器视频页,2026-10-09):
-/// - `supportsEmbeddedView`:平台是否具备内嵌播放视图(= iOS/ohos
-///   平台视图 `zpill/video-view` 已注册;Android 回 false → 调用方
-///   回落海报帧 + 播放钮,点了走全屏 play)。
+/// - `supportsEmbeddedView`:平台是否具备内嵌播放视图(= 三端
+///   `zpill/video-view` 平台视图均已注册;iOS/ohos 原生实现,Android
+///   2026-11-05 补齐 —— 调用方在查看器页内原层播放,不再起全屏
+///   Activity)。
 /// - `loadEmbeddedView(viewId, path)`:内嵌视图装载档案。**路径不走
 ///   平台视图 creationParams**(引擎对工厂可选编解码钩子的挂接不可靠,
 ///   实测参数到不了原生侧 → 黑页无法播放),改走方法通道 ——
@@ -33,7 +37,9 @@
 ///   包 AVPlayerViewController;点按出 Flutter 自绘控制、横滑归 Flutter
 ///   翻页 —— UiKitView 空 gestureRecognizers 的竞技场语义;视图本体
 ///   iOS = UiKitView 包 AVPlayerViewController,ohos = OhosView 包
-///   XComponent + AVPlayer(2026-10-24 对齐,iOS 同款点按层语义)。
+///   XComponent + AVPlayer(2026-10-24 对齐,iOS 同款点按层语义),
+///   Android = AndroidView 包 TextureView + MediaPlayer(2026-11-05
+///   对齐,页内原层播放,不再起 VideoActivity)。
 ///
 /// PTP 相机没有流式播放在谈:MOV 播放必须先整档下载(相机相册路径),
 /// 调用方(PhotoViewerPage)播完删档(iOS 内嵌路;原生全屏路临时档
@@ -68,8 +74,8 @@ abstract interface class VideoPlayer {
   /// (调用方按「实时播放」处理,不拦顺帧以外的路径)。
   Future<double?> frameRate(String path);
 
-  /// 内嵌播放视图是否可用(iOS/ohos 平台视图已注册;Android 回 false,
-  /// 调用方回落海报帧 + 全屏 play)。
+  /// 内嵌播放视图是否可用(三端平台视图均已注册;调用方在查看器页内
+  /// 原层播放)。
   bool get supportsEmbeddedView;
 
   /// 内嵌播放视图 [viewId] 装载 [path](onCreated 回传 viewId 后、
@@ -94,17 +100,25 @@ abstract interface class VideoPlayer {
 /// 生产内嵌视图:`zpill/video-view` 平台视图 —— iOS = UiKitView 包
 /// AVPlayerViewController(VideoPlugin 注册),ohos = **OhosView**(fork
 /// 亲儿子件,渲染对象 offset 带仿射 transform,引擎旋转支持只认它 ——
-/// AndroidView 载具实测转横即死:无 transform 被引擎按「不处理旋转」
-/// 摆位,纹理停在旧几何,2026-10-24 探针实锤)。上游 flutter 无
+/// 该端 AndroidView 载具实测转横即死:无 transform 被引擎按「不处理
+/// 旋转」摆位,纹理停在旧几何,2026-10-24 探针实锤),Android = 标准
+/// [AndroidView] 包 TextureView + MediaPlayer(VideoPlugin.kt 注册;
+/// 2026-11-05 对齐 iOS/ohos,查看器页内原层播放)。上游 flutter 无
 /// OhosView 符号,lib/ 须双 SDK 编译 —— 上游 widgets 已打构造兼容垫片
 /// (ink_sparkle 同账,升级丢补丁要回打;垫片运行时不可达:调用方以
-/// Platform.operatingSystem 门禁)。不带 creationParams —— 档案路径由
+/// Platform 门禁)。不带 creationParams —— 档案路径由
 /// [VideoPlayer.loadEmbeddedView] 走方法通道装载(见类注释)。
-/// Android 未注册(原生全屏 play 兜底);未注册平台不得构建。
+/// 未注册平台不得构建(门禁外空占位)。
 Widget embeddedVideoViewBuilder(
     String path, void Function(int viewId) onCreated) {
   if (Platform.isIOS) {
     return UiKitView(
+      viewType: 'zpill/video-view',
+      onPlatformViewCreated: onCreated,
+    );
+  }
+  if (Platform.isAndroid) {
+    return AndroidView(
       viewType: 'zpill/video-view',
       onPlatformViewCreated: onCreated,
     );
@@ -124,7 +138,9 @@ final class MethodChannelVideoPlayer implements VideoPlayer {
 
   @override
   bool get supportsEmbeddedView =>
-      Platform.isIOS || Platform.operatingSystem == 'ohos';
+      Platform.isIOS ||
+      Platform.isAndroid ||
+      Platform.operatingSystem == 'ohos';
 
   @override
   Future<void> loadEmbeddedView(int viewId, String path) async {
