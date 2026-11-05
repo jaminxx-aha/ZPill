@@ -98,6 +98,9 @@ Uint8List _propDescDataset(int code, PtpDataType type, int current,
   return w.takeBytes();
 }
 
+Uint8List _u16Value(int value) =>
+    Uint8List.fromList([value & 0xFF, (value >> 8) & 0xFF]);
+
 void main() {
   late _ScriptTransport transport;
   late PtpSession session;
@@ -227,7 +230,8 @@ void main() {
         settingsBlobName: 'NCSET011.BIN',
         settingsBlob: Uint8List.fromList([9, 8, 7]),
       );
-      final report = await CameraConfigSnapshotter.restore(session, snap);
+      final report = await CameraConfigSnapshotter.restore(session, snap,
+          writeBlob: true);
 
       expect(report.blobSaved, isTrue);
       expect(report.applied, 0, reason: 'blob 轨道成功,属性未逐个写');
@@ -252,7 +256,8 @@ void main() {
         ..ok(data: _deviceInfoDataset([]))
         ..reply(PtpResponseCode.storeNotAvailable) // 0x946E 拒(无卡)
         ..ok(data: _propDescDataset(0x5007, PtpDataType.uint16, 28))
-        ..ok(); // 0x1016 写成功
+        ..ok() // 0x1016 写成功
+        ..ok(data: _u16Value(28)); // 0x1015 写后读回
       final snap = CameraConfigSnapshot(
         model: 'TestModel',
         deviceVersion: 'V1.00',
@@ -264,7 +269,8 @@ void main() {
         settingsBlobName: 'NCSET011.BIN',
         settingsBlob: Uint8List.fromList([9, 8, 7]),
       );
-      final report = await CameraConfigSnapshotter.restore(session, snap);
+      final report = await CameraConfigSnapshotter.restore(session, snap,
+          writeBlob: true);
       expect(report.blobSaved, isFalse);
       expect(report.applied, 1, reason: '逐属性兜底照常写');
     });
@@ -289,6 +295,7 @@ void main() {
       final report = await CameraConfigSnapshotter.restore(
         session,
         snap,
+        writeBlob: true,
         delay: (d) async => waits.add(d),
       );
 
@@ -320,7 +327,8 @@ void main() {
         settingsBlobName: 'NCSET011.BIN',
         settingsBlob: Uint8List.fromList([9, 8, 7]),
       );
-      final report = await CameraConfigSnapshotter.restore(session, snap);
+      final report = await CameraConfigSnapshotter.restore(session, snap,
+          writeBlob: true);
 
       expect(report.blobSaved, isTrue);
       expect(
@@ -339,7 +347,8 @@ void main() {
       transport
         ..ok(data: _deviceInfoDataset([]))
         ..ok(data: _propDescDataset(0x5007, PtpDataType.uint16, 28))
-        ..ok(); // 0x1016
+        ..ok() // 0x1016
+        ..ok(data: _u16Value(28)); // 0x1015 读回
       final snap = CameraConfigSnapshot(
         model: 'TestModel',
         deviceVersion: 'V1.00',
@@ -350,7 +359,8 @@ void main() {
         ],
         settingsBlob: Uint8List.fromList([9, 8, 7]),
       );
-      final report = await CameraConfigSnapshotter.restore(session, snap);
+      final report = await CameraConfigSnapshotter.restore(session, snap,
+          writeBlob: true);
       expect(report.blobSaved, isFalse);
       expect(report.applied, 1);
       expect(
@@ -389,6 +399,7 @@ void main() {
         ..ok(data: _propDescDataset(
             0x5007, PtpDataType.uint16, 28)) // 仍可写 → 写
         ..ok() // 0x1016 写成功
+        ..ok(data: _u16Value(28)) // 0x1015 读回一致
         ..ok(data: _propDescDataset(
             0x5001, PtpDataType.uint8, 80, getSet: false)) // 当下只读 → 跳
         ..ok(data: _propDescDataset(
@@ -418,6 +429,7 @@ void main() {
           delay: (_) async {});
 
       expect(report.applied, 1);
+      expect(report.verified, 1, reason: '写后读回一致');
       expect(report.skipped, 2, reason: '当下只读 + 类型漂移各计一跳');
       expect(report.failed, 1);
       expect(report.modelMismatch, isFalse, reason: '型号一致');
@@ -443,7 +455,8 @@ void main() {
         ..ok(data: _propDescDataset(0x5007, PtpDataType.uint16, 28))
         ..reply(PtpResponseCode.deviceBusy)
         ..reply(PtpResponseCode.deviceBusy)
-        ..ok();
+        ..ok() // 0x1016 重试成功
+        ..ok(data: _u16Value(28)); // 0x1015 读回
       final snap = CameraConfigSnapshot(
         model: 'TestModel',
         deviceVersion: 'V1.00',
@@ -475,7 +488,8 @@ void main() {
         ..ok(data: _propDescDataset(0x5007, PtpDataType.uint16, 28))
         ..reply(PtpResponseCode.sessionAlreadyOpen)
         ..ok() // reopen: OpenSession
-        ..ok(); // 重试写
+        ..ok() // 重试写
+        ..ok(data: _u16Value(28)); // 0x1015 读回
       final snap = CameraConfigSnapshot(
         model: 'TestModel',
         deviceVersion: 'V1.00',
@@ -506,7 +520,8 @@ void main() {
         ..ok(data: _propDescDataset(0x5007, PtpDataType.uint16, 28))
         ..reply(PtpResponseCode.sessionNotOpen)
         ..ok() // reopen: OpenSession
-        ..ok(); // 重试写
+        ..ok() // 重试写
+        ..ok(data: _u16Value(28)); // 0x1015 读回
       final snap = CameraConfigSnapshot(
         model: 'TestModel',
         deviceVersion: 'V1.00',
@@ -536,7 +551,8 @@ void main() {
       transport
         ..ok(data: _deviceInfoDataset([])) // model = TestModel
         ..ok(data: _propDescDataset(0x5007, PtpDataType.uint16, 28))
-        ..ok(); // 0x1016
+        ..ok() // 0x1016
+        ..ok(data: _u16Value(28)); // 0x1015 读回
       final snap = CameraConfigSnapshot(
         model: 'OtherModel',
         deviceVersion: 'V1.00',
@@ -583,7 +599,8 @@ void main() {
         ..ok(data: _propDescDataset(0x500C, PtpDataType.uint16, 2)) // 闪光
         ..reply(0x200F) // 视频档/拨盘模式门
         ..ok(data: _propDescDataset(0x5007, PtpDataType.uint16, 28))
-        ..ok(); // 0x5007 写成功
+        ..ok() // 0x5007 写成功
+        ..ok(data: _u16Value(28)); // 0x1015 读回
 
       final snap = CameraConfigSnapshot(
         model: 'TestModel',
@@ -651,6 +668,37 @@ void main() {
         isEmpty,
         reason: '照片向属性不写',
       );
+    });
+
+    test('写后读回:不一致/读回失败只诊断,不改写入计数', () async {
+      PtpSession.kSetPropEnabled = true;
+      addTearDown(() => PtpSession.kSetPropEnabled = true);
+      transport
+        ..ok(data: _deviceInfoDataset([]))
+        ..ok(data: _propDescDataset(0x5007, PtpDataType.uint16, 28))
+        ..ok() // 0x1016 写成功
+        ..ok(data: _u16Value(29)) // 0x1015 读回不一致
+        ..ok(data: _propDescDataset(0x5010, PtpDataType.uint16, 100))
+        ..ok() // 0x1016 写成功
+        ..reply(PtpResponseCode.accessDenied); // 0x1015 读回失败
+      final snap = CameraConfigSnapshot(
+        model: 'TestModel',
+        deviceVersion: 'V1.00',
+        capturedAt: DateTime.now(),
+        props: const [
+          ConfigPropSnapshot(
+              code: 0x5007, type: 'uint16', value: 28, writable: true),
+          ConfigPropSnapshot(
+              code: 0x5010, type: 'uint16', value: 100, writable: true),
+        ],
+      );
+      final report = await CameraConfigSnapshotter.restore(session, snap);
+
+      expect(report.applied, 2, reason: '读回差异不反向否定写入');
+      expect(report.verified, 0);
+      expect(report.mismatched, 1, reason: '写入成功但读回 29≠28');
+      expect(report.unverified, 1, reason: '0x1015 拒答计无法确认');
+      expect(report.failed, 0, reason: '读回只诊断,不算写入失败');
     });
   });
 }
