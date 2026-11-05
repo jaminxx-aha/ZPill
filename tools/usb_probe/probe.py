@@ -38,6 +38,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import struct
 import sys
 import time
@@ -1624,7 +1625,8 @@ def main() -> int:
             name = d[:64].split(b"\0", 1)[0].decode("ascii", "replace")
             body = d[64:]
             print(f"[4y] GetCameraSettingData <- OK name={name!r}"
-                  f" body={len(body)}B head={body[:32].hex(' ')}")
+                  f" body={len(body)}B sha256={hashlib.sha256(body).hexdigest()}"
+                  f" head={body[:32].hex(' ')}")
         else:
             print(f"[4y] GetCameraSettingData <- 0x{rc:04X}"
                   if rc is not None else "[4y] GetCameraSettingData <- 无应答")

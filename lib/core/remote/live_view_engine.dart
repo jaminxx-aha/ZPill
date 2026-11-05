@@ -62,6 +62,10 @@ Duration liveViewPaceSleep({
 /// (写卡/下载 flush 中),画面保持不重启;frozen = 冻结判死重启中。
 enum LiveViewHealth { ok, busy, frozen }
 
+/// B4 探针:录制中帧头 @836(倒计时)/@838(点测 WB)采样日志。
+/// `--dart-define=VIDEO_HEADER_PROBE=true` 打开,默认关;每秒一条。
+const bool kVideoHeaderProbe = bool.fromEnvironment('VIDEO_HEADER_PROBE');
+
 final class LiveViewEngine {
   LiveViewEngine({
     required this.session,
@@ -338,6 +342,21 @@ final class LiveViewEngine {
   /// 暂停闸:非空 = 循环正停在这上面(pause 建、resume/stop 放)。
   Completer<void>? _resumeGate;
 
+  static int _headerProbeLastMs = 0;
+
+  /// B4 探针(默认关):每秒采一条帧头关键域,录制前后对照 @836/@838。
+  void _logHeaderProbe(LiveViewHeader? h) {
+    if (h == null) return;
+    final ms = DateTime.now().millisecondsSinceEpoch;
+    if (ms - _headerProbeLastMs < 1000) return;
+    _headerProbeLastMs = ms;
+    AppLog.i(
+        AppLog.live,
+        '帧头探针 rec=${h.recording} @836=${h.recordingCountdownSeconds}'
+        ' @838=${h.spotWbRaw} @816=${h.videoRemainingMs}'
+        ' @820=${h.videoElapsedMs} overheat=${h.overheatRaw}');
+  }
+
   Future<void> _loop(int run) async {
     while (status.value == LiveViewStatus.running && run == _runId) {
       if (_paused) {
@@ -357,6 +376,7 @@ final class LiveViewEngine {
         if (run != _runId) return; // 停止后的迟到结果不发布
         final jpeg = extractLiveViewJpeg(raw);
         header.value = parseLiveViewHeader(raw);
+        if (kVideoHeaderProbe) _logHeaderProbe(header.value);
         frame.value = jpeg;
         _failures = 0;
         // 冻结检测(事务成功但内容冻结;静默/坏帧由下方退避覆盖):
