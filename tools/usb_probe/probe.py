@@ -907,6 +907,10 @@ def main() -> int:
                          "(间隔 200ms 对齐 app;连续 5 帧失败收口)→ 0x9202。"
                          "首帧落盘 /tmp + 逐域头解码,SOI 偏移直方图、帧率/"
                          "字节数/单帧往返延迟统计")
+    ap.add_argument("--app-mode-early", action="store_true",
+                    help="OpenSession 成功后第一笔立即发 0x9435(1),读 0xD0A4(验证连接沿早发能否进应用模式)")
+    ap.add_argument("--movie-record", action="store_true",
+                    help="配合 --liveview:起景后发 0x920A 远程开录,抓完发 0x920B(相机须视频档)")
     ap.add_argument("--liveview-op", type=lambda s: int(s, 16), metavar="hex",
                     default=NIKON_GET_LIVEVIEW_IMG,
                     help="取帧操作码:0x9203(老码,默认)/ 0x9428(Ex 码,"
@@ -1002,6 +1006,21 @@ def main() -> int:
     if rcode != OK:
         print("    OpenSession 失败:检查相机是否弹出连接确认(部分机身需在相机上确认)")
         return 1
+    if args.app_mode_early:
+        # 2026-11-05 B 批:0x9435 放在后续 xact 里恒 0x200F(可能已被
+        # 其它事务改态);这里 OpenSession 后第一笔直发,验「连接沿早发」
+        # 假设(老版连接流就是这么发的,2026-11-04 为省 5s 被跳过)。
+        txid += 1
+        txid, _, rc_app = xact(dev, ep_out, ep_in, txid, 0x9435, [1])
+        print(f"[4a] ChangeApplicationMode(0x9435,1) <- 0x{rc_app:04X}"
+              f"(OpenSession 后第一笔)")
+        txid += 1
+        txid, blob, rc_d0a4 = xact(
+            dev, ep_out, ep_in, txid, GET_DEVICE_PROP_VALUE, [0xD0A4])
+        if rc_d0a4 == OK and blob is not None and len(blob) >= HDR + 4:
+            cond = struct.unpack_from("<I", blob, HDR)[0]
+            print(f"    0xD0A4 MovieRecProhibition <- 0x{cond:08X}"
+                  + ("(应用模式已进)" if (cond & 0x4000) == 0 else "(bit14 仍置位)"))
 
     # 步骤 4x(可选,--xact):任意事务梯 —— 连接脚本/模式门直发仪器。
     # 背景:OpenZCine 连接脚本(0x9435 → 0x90C2(1) USB 兜底)与 ZPill
@@ -1625,10 +1644,46 @@ def main() -> int:
         txid, _, rc = xact(dev, ep_out, ep_in, txid,
                            NIKON_CHANGE_APPLICATION_MODE, [1])
         print(f"    ChangeApplicationMode(0x9435,1) <- 0x{rc:04X}")
+        held_remote = False
+        if rc != OK:
+            # USB 直连:0x9435(应用模式)被拒(0x200F),0x90C2(remote 闩)
+            # 是实证钥匙(2026-11-05 B 批:0x90C2(1) 后 0x9201 回 0x2001);
+            # 与 app 起景自愈梯同款,收尾配对 0x90C2(0) 还身。
+            txid += 1
+            txid, _, rc2 = xact(dev, ep_out, ep_in, txid, 0x90C2, [1])
+            held_remote = rc2 == OK
+            print(f"    0x9435 被拒 → ChangeCameraMode(0x90C2,1)"
+                  f" <- 0x{rc2:04X}{'(USB 钥匙)' if held_remote else '(也失败)'}")
         txid += 1
         txid, blob, rc = xact(dev, ep_out, ep_in, txid, NIKON_START_LIVEVIEW)
         print(f"    StartLiveView <- 0x{rc:04X}")
         if rc == OK:
+            if args.movie_record:
+                # 物理录制键在 USB 连接下被锁:按 app 录制重入序走 ——
+                # 0x9435(1)(可拒)→ 0x90C2(1) → **0x90C2(0) 还身** →
+                # 读 0xD0A4 → 0x920A(app RemoteControllerCaptureOps 同款;
+                # 少还身那步 0x920A 恒 0xA004,2026-11-05 实锤)。
+                if held_remote:
+                    txid += 1
+                    txid, _, rc_rel = xact(dev, ep_out, ep_in, txid, 0x90C2, [0])
+                    print(f"    ChangeCameraMode(0x90C2,0) <- 0x{rc_rel:04X}(还身)")
+                    held_remote = False
+                else:
+                    txid += 1
+                    txid, _, rc_on = xact(dev, ep_out, ep_in, txid, 0x90C2, [1])
+                    txid += 1
+                    txid, _, rc_off = xact(dev, ep_out, ep_in, txid, 0x90C2, [0])
+                    print(f"    ChangeCameraMode(0x90C2,1/0) <- 0x{rc_on:04X}/0x{rc_off:04X}")
+                txid += 1
+                txid, blob, rc_d0a4 = xact(
+                    dev, ep_out, ep_in, txid, GET_DEVICE_PROP_VALUE, [0xD0A4])
+                if rc_d0a4 == OK and blob is not None and len(blob) >= HDR + 4:
+                    cond = struct.unpack_from("<I", blob, HDR)[0]
+                    print(f"    0xD0A4 MovieRecProhibition <- 0x{cond:08X}")
+                txid += 1
+                txid, _, rc_rec = xact(dev, ep_out, ep_in, txid, 0x920A)
+                print(f"    StartMovieRecInCard(0x920A) <- 0x{rc_rec:04X}"
+                      + ("(开录)" if rc_rec == OK else "(被拒:检查视频档/模式)"))
             t0 = time.monotonic()
             sizes, latencies, soi_hist = [], [], {}
             fails = got = attempt = 0
@@ -1729,10 +1784,18 @@ def main() -> int:
                         else:
                             print(f"      帧 a#{i + 1}: {len(data)}B SOI@{soi}(无头)")
 
+            if args.movie_record:
+                txid += 1
+                txid, _, rc_stop = xact(dev, ep_out, ep_in, txid, 0x920B)
+                print(f"    EndMovieRec(0x920B) <- 0x{rc_stop:04X}(停录)")
             txid += 1
             txid, blob, rc = xact(dev, ep_out, ep_in, txid, NIKON_END_LIVEVIEW)
             print(f"    EndLiveView <- 0x{rc:04X}")
             drain_events()  # 0xC10C 若在停止时推送,语义在此落定
+        if held_remote:
+            txid += 1
+            txid, _, rcx = xact(dev, ep_out, ep_in, txid, 0x90C2, [0])
+            print(f"    ChangeCameraMode(0x90C2,0) <- 0x{rcx:04X}(还身)")
 
     # 步骤 4c(可选,--capture):快门释放摸底 —— 0x100E(标准)/0x9207/
     # 0x90C0(尼康候选)发一次,事件时间线(interrupt 轮询穿插,非阻塞)

@@ -137,6 +137,8 @@ NIKON_INITIATE_CAPTURE_REC_IN_MEDIA = 0x9207
 NIKON_INITIATE_CAPTURE_REC_IN_SDRAM = 0x90C0
 NIKON_START_LIVEVIEW = 0x9201
 NIKON_END_LIVEVIEW = 0x9202
+NIKON_START_MOVIE = 0x920A   # StartMovieRecInCard
+NIKON_END_MOVIE = 0x920B     # EndMovieRec
 NIKON_GET_LIVEVIEW_IMG = 0x9203
 NIKON_GET_LIVEVIEW_IMG_EX = 0x9428  # OpenZCine 全系取帧码(ZR dump 实证带 display-info 头)
 NIKON_CHANGE_AF_AREA = 0x9205  # p1/p2 = whole-size 坐标(OpenZCine PTPIPClientSession)
@@ -747,6 +749,9 @@ def main() -> int:
                     help="步骤 9v:Live View 摸底 0x9201 → 取帧轮询 N 帧"
                          "(间隔 200ms 对齐 app;连续 5 帧失败收口)→ 0x9202;"
                          "帧率/字节数/SOI 偏移/单帧往返延迟 + evt 事件时间线")
+    ap.add_argument("--movie-record", action="store_true",
+                    help="配合 --liveview:起景后 0x920A 远程开录,抓完 0x920B 停录"
+                         "(需视频档;Wi-Fi 0x9435 应用模式已由 ensure_app_mode 切)")
     ap.add_argument("--liveview-op", type=lambda s: int(s, 16), metavar="hex",
                     default=NIKON_GET_LIVEVIEW_IMG,
                     help="取帧操作码:0x9203(默认,老 GetLiveViewImage)/"
@@ -1047,6 +1052,14 @@ def main() -> int:
             print(f"    StartLiveView:链路异常({e})")
             code = -1
         if code == PTP_OK:
+            if args.movie_record:
+                try:
+                    t, payload, stats, (code, echoed, _) = cmd_xact(
+                        cmd, tid, NIKON_START_MOVIE, dp=DP_NO_DATA)
+                    print(f"    StartMovieRecInCard(0x920A) <- 0x{code:04X}"
+                          + ("(开录)" if code == PTP_OK else "(被拒:检查视频档)"))
+                except (ConnectionError, socket.timeout, ProtocolError) as e:
+                    print(f"    StartMovieRecInCard:链路异常({e})")
             drain_evt_events(evt, t0)
             sizes, latencies, soi_hist = [], [], {}
             fails = got = attempt = 0
@@ -1130,6 +1143,13 @@ def main() -> int:
                                   f" SOI@{soi}")
                         else:
                             print(f"      帧 a#{i + 1}: {len(payload)}B SOI@{soi}(无头)")
+            if args.movie_record:
+                try:
+                    t, payload, stats, (code, echoed, _) = cmd_xact(
+                        cmd, tid, NIKON_END_MOVIE, dp=DP_NO_DATA)
+                    print(f"    EndMovieRec(0x920B) <- 0x{code:04X}(停录)")
+                except (ConnectionError, socket.timeout, ProtocolError) as e:
+                    print(f"    EndMovieRec:链路异常({e})")
             try:
                 t, payload, stats, (code, echoed, _) = cmd_xact(
                     cmd, tid, NIKON_END_LIVEVIEW, dp=DP_NO_DATA)
