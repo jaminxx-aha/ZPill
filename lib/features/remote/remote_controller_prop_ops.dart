@@ -672,7 +672,10 @@ mixin _RemotePropOps on _RemoteCore {
           await _delay(Duration(milliseconds: 200 * busyAttempts));
           continue;
         }
-        if (e.responseCode == PtpResponseCode.sessionAlreadyOpen &&
+        // 0x201E / 0x2003 同为相机侧会话账丢:重复 OpenSession = 0x201E,
+        // 会话被关后继续操作 = 0x2003(2026-11-05 B 批真机实证)。
+        if ((e.responseCode == PtpResponseCode.sessionAlreadyOpen ||
+                e.responseCode == PtpResponseCode.sessionNotOpen) &&
             !sessionRetried) {
           // 0x201E 表示相机侧会话账已丢/残留。重开会话会清掉 remote
           // 闩,持有接管时必须重打再写,不能把参数静默写进非接管态。

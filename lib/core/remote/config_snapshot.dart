@@ -362,7 +362,10 @@ final class CameraConfigSnapshotter {
           await delay(Duration(milliseconds: 200 * busyAttempts));
           continue;
         }
-        if (e.responseCode == PtpResponseCode.sessionAlreadyOpen &&
+        // 0x201E/0x2003 同为会话账丢(重复 OpenSession / 会话已关);
+        // 2026-11-05 B 批真机:CloseSession 后操作回 0x2003。
+        if ((e.responseCode == PtpResponseCode.sessionAlreadyOpen ||
+                e.responseCode == PtpResponseCode.sessionNotOpen) &&
             !sessionRetried) {
           sessionRetried = true;
           await session.reopen();
@@ -390,7 +393,10 @@ final class CameraConfigSnapshotter {
           await delay(Duration(milliseconds: 200 * busyAttempts));
           continue;
         }
-        if (e.responseCode == PtpResponseCode.sessionAlreadyOpen &&
+        // 0x201E/0x2003 同为会话账丢(重复 OpenSession / 会话已关);
+        // 2026-11-05 B 批真机:CloseSession 后操作回 0x2003。
+        if ((e.responseCode == PtpResponseCode.sessionAlreadyOpen ||
+                e.responseCode == PtpResponseCode.sessionNotOpen) &&
             !sessionRetried) {
           sessionRetried = true;
           await session.reopen();

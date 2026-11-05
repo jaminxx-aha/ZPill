@@ -870,6 +870,46 @@ void _propGroups() {
           ]);
     });
 
+    test('0x2003 会话已关 → 同 0x201E 重开会话后自动重写一次', () async {
+      PtpSession.kSetPropEnabled = true;
+      addTearDown(() => PtpSession.kSetPropEnabled = true);
+      controller.dispose();
+      controller = RemoteController(
+        session: PtpSession(transport: transport),
+        connection: conn,
+        engine: LiveViewEngine(
+            session: PtpSession(transport: transport), delay: delay.call),
+        delay: delay.call,
+        setPropGate: () => true,
+      );
+
+      _scriptParams(transport);
+      _emitConnected(transport, conn);
+      await pumpEventQueue();
+
+      transport.ok(); // 显式启用接管
+      expect(await controller.enableTakeover(), isTrue);
+      transport
+        ..reply(PtpResponseCode.sessionNotOpen) // 首次参数写(会话已关)
+        ..ok() // reopen: OpenSession
+        ..ok() // 重打接管 0x90C2(1)
+        ..ok() // 参数写重试
+        ..ok(data: _propDescDataset(
+            PtpDevicePropCode.fNumber, PtpDataType.uint16, 320));
+      await controller.setParam(PtpDevicePropCode.fNumber, 320);
+
+      expect(controller.error, isNull);
+      expect(controller.exposure?.fNumber, 320);
+      expect(
+          transport.requests
+              .where((r) => r.opcode == PtpOperationCode.openSession),
+          hasLength(1));
+      expect(
+          transport.requests
+              .where((r) => r.opcode == PtpOperationCode.setDevicePropValue),
+          hasLength(2));
+    });
+
     test('0x201E 重开会话失败 → 提示会话失步并停止重写', () async {
       PtpSession.kSetPropEnabled = true;
       addTearDown(() => PtpSession.kSetPropEnabled = true);

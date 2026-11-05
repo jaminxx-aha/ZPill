@@ -498,6 +498,37 @@ void main() {
           hasLength(2));
     });
 
+    test('0x2003:重开会话后继续写当前属性', () async {
+      PtpSession.kSetPropEnabled = true;
+      addTearDown(() => PtpSession.kSetPropEnabled = true);
+      transport
+        ..ok(data: _deviceInfoDataset([]))
+        ..ok(data: _propDescDataset(0x5007, PtpDataType.uint16, 28))
+        ..reply(PtpResponseCode.sessionNotOpen)
+        ..ok() // reopen: OpenSession
+        ..ok(); // 重试写
+      final snap = CameraConfigSnapshot(
+        model: 'TestModel',
+        deviceVersion: 'V1.00',
+        capturedAt: DateTime.now(),
+        props: const [
+          ConfigPropSnapshot(
+              code: 0x5007, type: 'uint16', value: 28, writable: true),
+        ],
+      );
+      final report = await CameraConfigSnapshotter.restore(session, snap);
+      expect(report.applied, 1);
+      expect(report.failed, 0);
+      expect(
+          transport.requests
+              .where((r) => r.opcode == PtpOperationCode.openSession),
+          hasLength(1));
+      expect(
+          transport.requests
+              .where((r) => r.opcode == PtpOperationCode.setDevicePropValue),
+          hasLength(2));
+    });
+
     test('型号不一致:不拦截,报告标记', () async {
       PtpSession.kSetPropEnabled = true;
       addTearDown(() => PtpSession.kSetPropEnabled = true);
