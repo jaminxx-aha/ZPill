@@ -68,12 +68,13 @@ import 'platform/services.dart';
 import 'platform/usb/usb_host.dart';
 import 'platform/usb/watchdog_usb_host.dart';
 
-/// 连接沿侧链放行门兜底(2026-10-16 真机定案):概览/双卡槽/清事件/
+/// 连接沿侧链放行门兜底(2026-10-16 真机定案):概览其余事务/清事件/
 /// 对时/事件轮询/相册预热与起景链(接管→模式→画质→0x9201)同在会话
 /// 串行锁上轮转,曾把 0x9201 压到十几事务深 —— 拍摄页「取景未开启」
-/// 卡好几秒。侧链整组等 RemoteController.connectedStartSettled(起景
-/// 段落定,事件驱动 —— 起景快就早放行,相机页信息卡不再白扛固定让路
-/// 窗);门含楔死自愈梯,正常 ~1-3s,超时兜底防押死。
+/// 卡好几秒。**机身/镜头名与双卡槽小事务例外**(2026-11-05:门前直读,
+/// 连接页信息卡不再陪等起景);其余仍等
+/// RemoteController.connectedStartSettled(起景段落定,事件驱动);门含
+/// 楔死自愈梯,正常 ~1-3s,超时兜底防押死。
 const Duration kConnectStartGateTimeout = Duration(seconds: 3);
 
 /// 取景在场下载钳块(2026-10-25「拍照后取景卡一下」根修):速传/
@@ -344,18 +345,18 @@ final class AppServices {
       thumbnails: thumbnails,
     );
     // 相机页信息总览:机身/镜头/电池,连接成功即拉(能力门禁见类注;
-    // 纯实时属性路,不读照片)。
+    // 纯实时属性路,不读照片)。机身/镜头名两笔在起景门前先读,其余
+    // 静态信息等门(控制器内部分段)。
     cameraOverview = CameraOverviewController(
       session: session,
       connection: connection,
       repository: repository,
       connectRefreshGate: _connectSideChainGate,
     );
-    // 双卡槽余量:连接成功即拉,相册页顶展示。
+    // 双卡槽余量:连接成功即拉、逐槽渐进上屏,不等起景门(静态数据)。
     storageOverview = StorageOverviewController(
       session: session,
       connection: connection,
-      connectRefreshGate: _connectSideChainGate,
     );
     // 取景引擎先行创建再注入控制器:看门狗重启预算耗尽时升级整链重连
     // (engine → connection.requestRecovery,恢复循环由连接层接管;
@@ -685,9 +686,9 @@ final class AppServices {
   LiveViewEngine? _liveViewEngine;
 
   /// 侧链放行门:等当前连接沿的起景段落定(超时兜底见
-  /// kConnectStartGateTimeout)。概览/双卡槽/清事件/对时/轮询/相册预热
-  /// 共此门。引用 late final 字段,连接沿才执行(装配早已收口),无
-  /// 先序问题。
+  /// kConnectStartGateTimeout)。概览其余事务/清事件/对时/轮询/相册
+  /// 预热共此门(机身/镜头名与双卡槽小事务在门前)。引用 late final
+  /// 字段,连接沿才执行(装配早已收口),无先序问题。
   Future<void> _connectSideChainGate() => remoteController.connectedStartSettled
       .timeout(kConnectStartGateTimeout, onTimeout: () {});
 

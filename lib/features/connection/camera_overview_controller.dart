@@ -127,25 +127,16 @@ final class CameraOverviewController extends ChangeNotifier {
   final Duration propResyncDebounce;
 
   /// 连接沿刷新放行门(生产装配传「起景段落定门」,测试默认 null 直刷):
-  /// 概览整链 8 事务与起景链在会话串行锁上轮转,曾把 0x9201 压到十几
-  /// 事务深 —— 拍摄页「取景未开启」卡好几秒(2026-10-16 真机定案)。
-  /// 事件驱动:起景段(0x9201 含自愈梯)落定即放行,不再死等固定窗,
-  /// 起景快信息卡就早亮。
+  /// 只挡**起景无关的其余事务**(档位/电池/焦距/光圈/规格),不挡机身/
+  /// 镜头名两笔早读 —— 整链 8 事务全压在 0x9201 前曾把起景压到十几
+  /// 事务深(2026-10-16 真机定案),而全放门后又让连接页信息卡陪等
+  /// 起景段 1-3s(2026-11-05 复报)。两笔早读压门前、其余门后即两全。
   final Future<void> Function()? connectRefreshGate;
 
   void _refreshWhenDue() {
-    final gate = connectRefreshGate;
-    if (gate == null) {
-      unawaited(refresh());
-      return;
-    }
-    unawaited(() async {
-      await gate();
-      // 门等窗里沿翻篇(断开/重连)不追;重连沿有自己的新定时。
-      if (connection.state == CameraLinkState.connected) {
-        unawaited(refresh());
-      }
-    }());
+    // 机身 + 镜头 ID 两笔小事务即时上路(见 [refresh] 前半段):
+    // 连接页镜头名不再等起景段落定。门只拦 refresh() 的后半段。
+    unawaited(refresh());
   }
 
   /// 机身信息(GetDeviceInfo);null = 未连接/未读到。
@@ -311,11 +302,14 @@ final class CameraOverviewController extends ChangeNotifier {
   /// (Wi-Fi 每事务一次往返),链尾一次 notify 曾把电池、镜头整卡压到
   /// 全链跑完才一起亮。
   ///
-  /// 镜头名先行(2026-10-26 真机反馈「连接后镜头信息出来很慢」修):
-  /// 0xD0E0 单事务紧随 GetDeviceInfo,命中 [kLensIdNames] 即 notify 出
-  /// 全称;规格四连读(0xD0E3-E6,只是未收录 ID 的退路描述 + 换镜哨
-  /// 基线)垫到链尾 —— 门放行后相册预热/双卡槽/对时整组同抢会话串行
-  /// 锁,镜头名原压在电池/焦距/光圈 + 规格四连读后面,全卡最尾才亮。
+  /// 镜头名先行且不等门(2026-11-05 连接页复报「镜头/存储卡出来很
+  /// 慢」):GetDeviceInfo + 0xD0E0 两笔立即读、逐笔 notify;随后才
+  /// await [connectRefreshGate](起景段落定,≤3s),把档位/电池/焦距/
+  /// 光圈/规格压在门后,既不陪等起景也不压深 0x9201。
+  ///
+  /// 规格四连读(0xD0E3-E6,只是未收录 ID 的退路描述 + 换镜哨基线)
+  /// 垫到链尾;门放行后相册预热/双卡槽/对时整组同抢会话串行锁,规格
+  /// 码最终才答不影响镜头名(名早已按 ID 亮过)。
   Future<void> refresh() async {
     if (_refreshing || !_linkUp) return;
     _refreshing = true;
@@ -329,6 +323,11 @@ final class CameraOverviewController extends ChangeNotifier {
       final specWanted = await _readLensId();
       if (!_linkUp) return;
       notifyListeners(); // 镜头名先亮(早于规格四连读 4 事务)
+      // 静态信息两笔已亮;其余事务等起景段落定,不与 0x9201 争串行锁
+      // (2026-10-16 定案;门超时 3s 兜底,起景失败也不会永久空卡)。
+      final gate = connectRefreshGate;
+      if (gate != null) await gate();
+      if (!_linkUp) return;
       // 档位先行(1 事务,声明表外直读):光圈读码随档切。
       try {
         final m = await session

@@ -215,18 +215,17 @@ void main() {
     ]);
   });
 
-  test('连接沿放行门:门挂住概览零请求,放行即上路', () async {
+  test('连接沿:机身/镜头名两笔先读,其余等起景门放行', () async {
     final transport = FakePtpTransport();
     final session = PtpSession(transport: transport);
     final conn = FakeConnection();
     final gate = Completer<void>();
-    CameraOverviewController(
+    final controller = CameraOverviewController(
         session: session,
         connection: conn,
         connectRefreshGate: () => gate.future);
 
-    // 放行后整链可排空的应答(GetDeviceInfo + 镜头 ID + 电池/焦距/光圈
-    // + 规格四连读)
+    // 全链应答:GetDeviceInfo + 镜头 ID + 档位 + 电池/焦距/光圈 + 规格
     transport.reply(PtpResult(
         responseCode: PtpResponseCode.ok,
         data: buildDataset(deviceProps: const [0x5001, 0x5008, 0x5007])));
@@ -245,14 +244,18 @@ void main() {
     conn.state = CameraLinkState.connected;
     conn.statesCtrl.add(CameraLinkState.connected);
     await pumpEventQueue();
-    expect(transport.requests, isEmpty, reason: '门挂住:起景段未落定,概览不抢锁');
+    expect(transport.requests.map((r) => r.opcode), [0x1001, 0x1015],
+        reason: '机身 + 镜头 ID 两笔不等门(2026-11-05)');
+    expect(transport.requests.last.params.single, PtpDevicePropCode.lensId);
+    expect(controller.lensId, 99, reason: '镜头名门放行前已亮');
 
     gate.complete();
     await pumpEventQueue();
-    expect(transport.requests.first.opcode, 0x1001, reason: '门放行即上路');
+    expect(transport.requests, hasLength(10), reason: '门放行后续走完整链');
+    expect(controller.batteryPercent, 80);
   });
 
-  test('连接沿放行门:等窗里翻篇(断开),放行后不追', () async {
+  test('连接沿:等窗里翻篇(断开),门放行后不追其余事务', () async {
     final transport = FakePtpTransport();
     final session = PtpSession(transport: transport);
     final conn = FakeConnection();
@@ -262,12 +265,22 @@ void main() {
         connection: conn,
         connectRefreshGate: () => gate.future);
 
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: buildDataset()));
+    transport.reply(PtpResult(
+        responseCode: PtpResponseCode.ok,
+        data: Uint8List.fromList([99, 0]))); // 镜头 ID(第二笔早读)
     conn.statesCtrl.add(CameraLinkState.connected);
     conn.statesCtrl.add(CameraLinkState.disconnected);
     await pumpEventQueue();
+    expect(transport.requests.map((r) => r.opcode), [0x1001, 0x1015],
+        reason: '两笔早读已发在途;断连后档位/电池/规格不再续');
+
     gate.complete(); // 放行时已是断开态
     await pumpEventQueue();
-    expect(transport.requests, isEmpty, reason: '翻篇不追:重连沿有自己的新定时');
+    expect(transport.requests.map((r) => r.opcode), [0x1001, 0x1015],
+        reason: '翻篇不追:重连沿有自己的新定时');
   });
 
   test('渐进刷新:数据点赋值沿即 notify,不等整链跑完', () async {

@@ -278,7 +278,7 @@ class _LinkPill extends StatelessWidget {
 /// bento 卡基座:surfaceContainerLow 底 + lg 圆角 + 1px hairline 描边
 /// (亮色主题下卡底≈页面底,描边才可辨)。
 class _BentoCard extends StatelessWidget {
-  const _BentoCard({required this.child});
+  const _BentoCard({super.key, required this.child});
 
   final Widget child;
 
@@ -549,8 +549,8 @@ class _StorageFooterState extends State<_StorageFooter> {
 /// 存储卡(半宽):每槽 = 卡型图标即槽标(SD 大 / mSD 小,22 列居中,
 /// 机型表命中不出文字)+ 记录槽绿点 + 已用/总量(GB 只缀总量后)+
 /// 4px 胶囊条(填充 = 已用量、百分比 = 已用 %,亮暗均品牌黄)。组尾
-/// 「可拍」为卡底附带脚注,不参与槽块居中;容量未知无条;无槽整卡
-/// 退场。
+/// 「可拍」为卡底附带脚注,不参与槽块居中;容量未知无条;数据未到
+/// 出骨架占位卡(不整卡退场 —— 连接页右列不空、到货不撑跳)。
 class StorageCard extends StatelessWidget {
   const StorageCard({
     super.key,
@@ -581,7 +581,7 @@ class StorageCard extends StatelessWidget {
       builder: (context, _) {
         final storages = source.storages;
         if (storages.isEmpty) {
-          return const SizedBox.shrink();
+          return const _StorageCardPlaceholder();
         }
         final slot = source.activeSlot;
         final slots = <Widget>[];
@@ -620,6 +620,62 @@ class StorageCard extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+}
+
+/// 存储卡骨架(连接沿数据未到):几何对齐真卡(槽行 + 5px 条 + 脚注),
+/// 数据到后同位置换成真卡 —— 右列不从空缺到突现,双列布局不撑跳
+/// (2026-11-05 用户要求"加个占位,不要等数据加载了才出现")。
+class _StorageCardPlaceholder extends StatelessWidget {
+  const _StorageCardPlaceholder();
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final skeleton = BoxDecoration(
+      color: scheme.surfaceContainerHighest,
+      borderRadius: BorderRadius.circular(2),
+    );
+    return _BentoCard(
+      key: const Key('storageCardPlaceholder'),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    children: [
+                      SizedBox(
+                        width: 22,
+                        child: Center(
+                          child: Icon(Icons.sd_card,
+                              size: 20, color: scheme.outlineVariant),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Container(width: 44, height: 10, decoration: skeleton),
+                      const Spacer(),
+                      Container(width: 64, height: 10, decoration: skeleton),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Container(
+                    width: double.infinity,
+                    height: 5,
+                    decoration: skeleton,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 4),
+          Container(width: 40, height: 9, decoration: skeleton),
+        ],
+      ),
     );
   }
 }

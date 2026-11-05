@@ -350,12 +350,14 @@ void main() {
     expect(find.byKey(const Key('storageUsageBar')), findsNothing);
   });
 
-  testWidgets('无槽不占位(卡壳退场)', (tester) async {
+  testWidgets('无槽出骨架占位卡(不整卡退场,数据到再换真卡)', (tester) async {
     final controller = _stub(storages: const [], activeSlot: null);
     addTearDown(controller.dispose);
 
     await _pumpCard(tester, StorageCard(overview: controller));
 
+    expect(find.byKey(const Key('storageCardPlaceholder')), findsOneWidget,
+        reason: '连接页右列先占位,不等存储数据到达才出现(2026-11-05)');
     expect(find.text('插槽 1'), findsNothing);
     expect(find.byKey(const Key('storageUsageBar')), findsNothing);
   });

@@ -19,13 +19,14 @@ final class StorageOverviewController extends ChangeNotifier {
   StorageOverviewController({
     required this.session,
     required this.connection,
-    this.connectRefreshGate,
   }) {
     _statesSub = connection.states.listen((s) {
       if (s == CameraLinkState.connected) {
+        _linkUp = true;
         _refreshWhenDue();
       } else if (s == CameraLinkState.disconnected ||
           s == CameraLinkState.failed) {
+        _linkUp = false;
         _clear();
       }
     });
@@ -35,25 +36,12 @@ final class StorageOverviewController extends ChangeNotifier {
   final PtpSession session;
   final CameraConnection connection;
 
-  /// 连接沿刷新放行门(生产装配传「起景段落定门」,测试默认 null 直刷):
-  /// 双卡槽枚举与起景链在会话串行锁上轮转,曾把 0x9201 压深 —— 拍摄页
-  /// 「取景未开启」卡好几秒(2026-10-16 真机定案)。同概览卡,事件驱动:
-  /// 起景段(0x9201 含自愈梯)落定即放行,不再死等固定窗。
-  final Future<void> Function()? connectRefreshGate;
-
+  /// 连接沿即拉,不再等起景门(2026-11-05):卡槽信息是静态数据,连
+  /// 接页要对用户可见;整链 1+N+1 笔小事务(两槽 = 4 笔)压在 0x9201
+  /// 前的代价远小于陪等起景段 1-3s。每槽读回即 notify,首槽先亮,
+  /// 不等记录槽尾读。
   void _refreshWhenDue() {
-    final gate = connectRefreshGate;
-    if (gate == null) {
-      unawaited(refresh());
-      return;
-    }
-    unawaited(() async {
-      await gate();
-      // 门等窗里沿翻篇(断开/重连)不追;重连沿有自己的新定时。
-      if (connection.state == CameraLinkState.connected) {
-        unawaited(refresh());
-      }
-    }());
+    unawaited(refresh());
   }
 
   /// 按槽序展示(按 ID 升序稳定)。
@@ -61,6 +49,10 @@ final class StorageOverviewController extends ChangeNotifier {
 
   /// 当前记录槽(0xD1F2:0=无卡/1=槽1/2=槽2/3=双槽);null = 未读或拒答。
   int? activeSlot;
+
+  /// 连接门闩(状态流驱动,与 connection.state 解耦):连接沿即发后,
+  /// 断连/重连可能穿插在刷新链中,迟到结果据此丢弃。
+  bool _linkUp = false;
 
   StreamSubscription<CameraLinkState>? _statesSub;
   StreamSubscription<PtpEvent>? _eventsSub;
@@ -113,21 +105,31 @@ final class StorageOverviewController extends ChangeNotifier {
   }
 
   /// 手动/事件触发刷新(单飞,在途重入直接丢弃)。
+  ///
+  /// 逐槽渐进:每读回一槽即入列 notify(连接页首槽先亮),记录槽
+  /// (0xD1F2)单笔尾读只更新台账高亮,不挡卡信息本身。
   Future<void> refresh() async {
     if (_refreshing) return;
     _refreshing = true;
     try {
       final ids = await session.getVendorStorageIds();
+      // 连接沿即发后,断连/重连可能穿插在链中:每步收口前确认真源仍是
+      // 已连接态,迟到结果不覆盖 _clear 后的空态。
+      if (!_linkUp) return;
       final infos = <CameraStorage>[];
       for (final id in ids..sort()) {
         try {
           infos.add(await session.getStorageInfo(id));
+          if (!_linkUp) return;
+          storages = List<CameraStorage>.unmodifiable(infos);
+          notifyListeners();
         } on Exception {
           // 单槽拒答/未插卡:跳过,其余槽照常展示
         }
       }
       activeSlot = await _readActiveSlot();
-      storages = infos;
+      if (!_linkUp) return;
+      storages = List<CameraStorage>.unmodifiable(infos);
       notifyListeners();
     } on Exception {
       // 整组不支持(方言差异):无面板,不算错误

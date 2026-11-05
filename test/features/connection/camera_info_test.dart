@@ -345,7 +345,9 @@ void main() {
         ],
       ),
     ]);
-    // 门永不开放:connected 沿只置 _linkUp,不触发刷参吃脚本。
+    // 门永不开放:connected 沿只跑机身/镜头两笔早读(2026-11-05 起在
+    // 门前),这里喂一笔异常把它收口,不吃后续快门数脚本。
+    t.fail(Exception('skip fast probe'));
     final c = CameraOverviewController(
       session: PtpSession(transport: t),
       connection: conn,
@@ -372,6 +374,7 @@ void main() {
       connection: conn,
       connectRefreshGate: () => Completer<void>().future,
     );
+    t.fail(Exception('skip fast probe')); // 机身早读收口(门永不放行)
     conn.statesCtrl.add(CameraLinkState.connected);
     await pumpEventQueue();
     c.shutterLive = true;
@@ -382,7 +385,9 @@ void main() {
     // 事件沿自动重读:零枚举(仅 1 个 partial 直指 0x777),状态即新值。
     expect(c.shutterCount, 15965);
     expect(c.shutterReading, isFalse);
-    expect(t.opcodes, [PtpOperationCode.getPartialObject]);
+    expect(
+        t.opcodes.where((o) => o == PtpOperationCode.getPartialObject),
+        [PtpOperationCode.getPartialObject]);
     expect(t.partialHandles, [0x777]);
     c.dispose();
   });

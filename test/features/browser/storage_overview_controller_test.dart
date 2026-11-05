@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -179,28 +178,23 @@ void main() {
     expect(fake.requests.last.params.single, PtpDevicePropCode.activeSlot);
   });
 
-  test('连接沿放行门:门挂住零请求,放行即上路;翻篇不追', () async {
+  test('连接沿即上路:不等起景门,逐槽渐进上屏', () async {
     final fake = FakePtpTransport()
       ..reply(_ok(_idsDataset([0x00010001])))
       ..reply(_ok(_infoDataset(description: 'Slot 1')))
       ..reply(_ok(_slotDataset(0))); // 0xD1F2 尾读(0x9209 整链口径)
     final conn = FakeConnection();
-    final gate = Completer<void>();
     final controller = StorageOverviewController(
-        session: PtpSession(transport: fake),
-        connection: conn,
-        connectRefreshGate: () => gate.future);
+        session: PtpSession(transport: fake), connection: conn);
     addTearDown(controller.dispose);
     addTearDown(conn.statesCtrl.close);
 
     conn.state = CameraLinkState.connected;
     conn.statesCtrl.add(CameraLinkState.connected);
     await pumpEventQueue();
-    expect(fake.requests, isEmpty, reason: '门挂住:起景段未落定,卡槽枚举不抢锁');
-
-    gate.complete();
-    await pumpEventQueue();
     expect(fake.requests.first.opcode, NikonOperationCode.getVendorStorageIds,
-        reason: '门放行即上路');
+        reason: '静态卡槽信息连接即读,不陪等起景段(2026-11-05)');
+    expect(controller.storages, hasLength(1));
+    expect(controller.activeSlot, 0);
   });
 }
