@@ -247,6 +247,12 @@ export class UsbHostPlugin implements FlutterPlugin {
   /// 并发传输互相拖拽(Android 同款)。
   private bulkActive: number = 0;
 
+  /// 事件泵优先窗(0x9435 应用模式专用):USB 下 ChangeApplicationMode 会
+  /// 阻塞等 StoreRemoved 事件送达,期间必须让 interrupt 轮询并发读,
+  /// 否则命令 5s 后被拒(0x200F;OpenCine enableAppControlServicingEvents
+  /// 同款,2026-11-05 三端同病)。只在命令在途的短窗置位。
+  private eventPumpBoost: boolean = false;
+
   /// bulk IN 子块读尺寸(AIMD 自适应,会话内跨调用记忆):起步 64KB
   /// (实测安全粒度),一次通道调用全程满块收满(saturated)后 ×2 探大,
   /// 上限 128KB(256KB 挂死实证,见常量注);负值回退并把该尺寸记入
@@ -332,6 +338,10 @@ export class UsbHostPlugin implements FlutterPlugin {
         break;
       case 'drainIn':
         this.drainIn(result);
+        break;
+      case 'eventPumpBoost':
+        this.eventPumpBoost = (call.argument('on') as boolean) ?? false;
+        result.success(null);
         break;
       case 'probeLog':
         hlog(`[dart] ${call.argument('line') as string}`);
@@ -1153,8 +1163,9 @@ export class UsbHostPlugin implements FlutterPlugin {
     while (!this.pollStopped && this.session === s && this.sink !== null) {
       // bulk 事务在途:主动让路,不碰端点(Android 同款)。ohos 的
       // bulkTransfer 会按 pipe 串行,轮询的无限读会把新会话的 bulk
-      // 读/开链排空拖到超时。
-      if (this.bulkActive > 0) {
+      // 读/开链排空拖到超时。例外:eventPumpBoost(0x9435 在途)——
+      // 相机在等 StoreRemoved,必须并发收;有限读窗只占一拍。
+      if (this.bulkActive > 0 && !this.eventPumpBoost) {
         await new Promise<void>((resolve) => setTimeout(resolve, INTERRUPT_YIELD_SLEEP_MS));
         continue;
       }

@@ -193,6 +193,14 @@ class UsbHostPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHandl
     @Volatile
     private var bulkActive = 0
 
+    /// 事件泵优先窗(0x9435 应用模式专用):USB 下 ChangeApplicationMode
+    /// 会阻塞等 StoreRemoved 事件送达,期间必须让 interrupt 轮询并发读,
+    /// 否则命令 5s 后被拒(0x200F;OpenCine enableAppControlServicingEvents
+    /// 同款,2026-11-05 真机+app 日志实证)。只在命令在途的短窗置位,
+    /// 平时仍按 [bulkActive] 让路。
+    @Volatile
+    private var eventPumpBoost = false
+
     private lateinit var appContext: Context
     private lateinit var usbManager: UsbManager
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -232,6 +240,10 @@ class UsbHostPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHandl
                 result,
             )
             "drainIn" -> drainIn(result)
+            "eventPumpBoost" -> {
+                eventPumpBoost = call.argument<Boolean>("on") ?: false
+                postSuccess(result, null)
+            }
             "recoveryReset" -> recoveryReset(result)
             "close" -> {
                 teardownSession()
@@ -796,7 +808,9 @@ class UsbHostPlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHandl
                 // UsbDeviceConnection 对同一设备串行传输;旧实现用
                 // timeout=0 的 interrupt 读长期占设备,下载的 bulk OUT
                 // 被卡到 20s 看门狗判死(2026-11-04 真机)。
-                if (bulkActive > 0) {
+                // 例外:eventPumpBoost(0x9435 在途)—— 相机在等
+                // StoreRemoved 事件,必须并发收;有限 100ms 窗只占一拍。
+                if (bulkActive > 0 && !eventPumpBoost) {
                     try {
                         Thread.sleep(INTERRUPT_YIELD_SLEEP_MS)
                     } catch (_: InterruptedException) {

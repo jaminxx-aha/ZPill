@@ -22,6 +22,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import '../log/app_log.dart';
+import '../ptp/operation_codes.dart';
 import '../ptp/ptp_transport.dart';
 import '../utils/byte_reader.dart';
 import 'containers.dart';
@@ -48,6 +49,19 @@ abstract interface class UsbBytePipe {
 
   /// interrupt IN 事件流:每条为一个完整事件容器(native 组帧,≤64B)。
   Stream<Uint8List> get interruptEvents;
+}
+
+/// 平台可选能力:事务在途期间临时提高 interrupt 事件泵优先级。
+///
+/// USB 下 `ChangeApplicationMode`(0x9435)会阻塞到相机把 StoreRemoved
+/// 事件送到主机;native 的 interrupt 轮询平时在 bulk 在途时让路,会把
+/// 命令饿到 ~5s 后回 0x200F(2026-11-05 OpenCine
+/// `enableAppControlServicingEvents` 对照 + 我方 app 日志实证)。
+/// 实现方在 [setEventPumpBoost] 为真时允许事件读与 bulk 命令并发;
+/// 命令收口后立即复位。未实现该能力的管道(测试假件/旧 native)按
+/// 原行为走,不拦事务。
+abstract interface class UsbEventPumpBoost {
+  Future<void> setEventPumpBoost(bool on);
 }
 
 /// 流式回调的单块上限:8MB(与 iOS 的 GetPartialObjectEx 8MB 块对齐;
@@ -135,47 +149,70 @@ final class UsbPtpTransport implements PtpTransport {
     final readTimeoutMs = request.timeout?.inMilliseconds ?? timeoutMs;
     final watch = Stopwatch()..start();
 
-    // 相位 1:命令容器
-    await pipe.bulkOut(encodeUsbCommand(
-      opcode: request.opcode,
-      transactionId: txid,
-      params: request.params,
-    ));
-    // 相位 2(可选):数据出容器
-    if (request.dataOut != null) {
-      await pipe.bulkOut(encodeUsbData(
+    // 0x9435 专用:USB 应用模式在相机侧阻塞等 StoreRemoved 事件,事务
+    // 全程让事件泵并发读(见 [UsbEventPumpBoost])。平台未实现时静默
+    // 降级为原行为(5s 后 0x200F)。
+    final boost =
+        request.opcode == NikonOperationCode.changeApplicationMode &&
+            pipe is UsbEventPumpBoost;
+    if (boost) {
+      try {
+        await (pipe as UsbEventPumpBoost).setEventPumpBoost(true);
+      } on Exception {
+        // 旧 native/测试假件无此方法:照旧走
+      }
+    }
+    try {
+      // 相位 1:命令容器
+      await pipe.bulkOut(encodeUsbCommand(
         opcode: request.opcode,
         transactionId: txid,
-        payload: request.dataOut!,
+        params: request.params,
       ));
-    }
-    // 相位 3:数据入(可选)+ 响应。错误序:相机直接回响应、无数据入。
-    // 本相位任何异常 = 事务中止:残余字节(相机还在吐的数据相位尾巴、
-    // native 超读暂存)会错位下一事务 —— best-effort 排空后再抛
-    // (nico PtpSession 中止收尾同款;排空自身失败不掩盖原始异常)。
-    try {
-      final first =
-          await _readContainer(txid, onData: onData, timeoutMs: readTimeoutMs);
-      if (first.type == UsbContainerType.data) {
-        final resp = await _readContainer(txid, timeoutMs: readTimeoutMs);
-        if (resp.type != UsbContainerType.response) {
-          throw FormatException('数据容器之后应为响应容器,收到 type=${resp.type}');
+      // 相位 2(可选):数据出容器
+      if (request.dataOut != null) {
+        await pipe.bulkOut(encodeUsbData(
+          opcode: request.opcode,
+          transactionId: txid,
+          payload: request.dataOut!,
+        ));
+      }
+      // 相位 3:数据入(可选)+ 响应。错误序:相机直接回响应、无数据入。
+      // 本相位任何异常 = 事务中止:残余字节(相机还在吐的数据相位尾巴、
+      // native 超读暂存)会错位下一事务 —— best-effort 排空后再抛
+      // (nico PtpSession 中止收尾同款;排空自身失败不掩盖原始异常)。
+      try {
+        final first = await _readContainer(txid,
+            onData: onData, timeoutMs: readTimeoutMs);
+        if (first.type == UsbContainerType.data) {
+          final resp = await _readContainer(txid, timeoutMs: readTimeoutMs);
+          if (resp.type != UsbContainerType.response) {
+            throw FormatException('数据容器之后应为响应容器,收到 type=${resp.type}');
+          }
+          return PtpResult(
+            responseCode: resp.code,
+            params: resp.params,
+            data: onData != null ? null : first.payload,
+          );
         }
-        return PtpResult(
-          responseCode: resp.code,
-          params: resp.params,
-          data: onData != null ? null : first.payload,
-        );
+        if (first.type != UsbContainerType.response) {
+          throw FormatException('期待响应容器,收到 type=${first.type}');
+        }
+        return PtpResult(responseCode: first.code, params: first.params);
+      } on Exception {
+        await _drainAfterAbort();
+        rethrow;
+      } finally {
+        _logSlowOp(request, txid, watch, readTimeoutMs);
       }
-      if (first.type != UsbContainerType.response) {
-        throw FormatException('期待响应容器,收到 type=${first.type}');
-      }
-      return PtpResult(responseCode: first.code, params: first.params);
-    } on Exception {
-      await _drainAfterAbort();
-      rethrow;
     } finally {
-      _logSlowOp(request, txid, watch, readTimeoutMs);
+      if (boost) {
+        try {
+          await (pipe as UsbEventPumpBoost).setEventPumpBoost(false);
+        } on Exception {
+          // 复位失败不掩盖事务结果;下次命令/重连自愈
+        }
+      }
     }
   }
 

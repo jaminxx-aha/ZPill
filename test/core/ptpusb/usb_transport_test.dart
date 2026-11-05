@@ -67,6 +67,24 @@ void main() {
     });
   });
 
+  group('应用模式事件泵(0x9435)', () {
+    test('0x9435 事务前后开/关 boost;其它操作不触发', () async {
+      final pipe = FakeUsbBytePipe();
+      final t = UsbPtpTransport(pipe: pipe);
+      pipe.enqueue(encodeUsbResponse(
+          responseCode: PtpResponseCode.ok, transactionId: 0));
+      await t.execute(const PtpRequest(
+          opcode: NikonOperationCode.changeApplicationMode, params: [1]));
+      expect(pipe.boostLog, [true, false],
+          reason: 'USB 应用模式阻塞等 StoreRemoved,命令全程事件泵同跑');
+
+      pipe.enqueue(encodeUsbResponse(
+          responseCode: PtpResponseCode.ok, transactionId: 1));
+      await t.execute(const PtpRequest(opcode: PtpOperationCode.getDeviceInfo));
+      expect(pipe.boostLog, [true, false], reason: '非 0x9435 不提升');
+    });
+  });
+
   group('数据入相位(bulk IN)', () {
     test('DATA + RESPONSE 双序:小容器整体返回', () async {
       final pipe = FakeUsbBytePipe();

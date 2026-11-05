@@ -578,6 +578,12 @@ public final class UsbHostPlugin: NSObject, FlutterPlugin, FlutterStreamHandler 
       usbQueue.async {
         result(self.listCamerasLocked())
       }
+    case "eventPumpBoost":
+      // Android/ohos 原生事件泵的同契约调用:0x9435 在 USB 下阻塞等
+      // StoreRemoved,需并发收事件。ImageCaptureCore 自身常驻事件循环
+      // (OpenCine 同口径),IC 链路无需额外动作 —— 这里仅应答契约,
+      // 不改变行为。
+      result(nil)
     case "open":
       let identifier = (call.arguments as? [String: Any])?["identifier"] as? String ?? ""
       usbQueue.async {

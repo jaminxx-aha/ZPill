@@ -9,7 +9,7 @@ import 'package:z_pill/core/ptpusb/usb_transport.dart';
 ///
 /// bulkRead 语义对齐 UsbBytePipe 契约:返回至多 maxLen、≥1 字节或抛
 /// TimeoutException;队列分片比 maxLen 长时只给 maxLen,余量留到下次读。
-final class FakeUsbBytePipe implements UsbBytePipe {
+final class FakeUsbBytePipe implements UsbBytePipe, UsbEventPumpBoost {
   final List<Uint8List> outWrites = [];
   final Queue<Uint8List> _inChunks = Queue();
   Uint8List _leftover = Uint8List(0);
@@ -17,6 +17,9 @@ final class FakeUsbBytePipe implements UsbBytePipe {
 
   /// 每次 bulkRead 传入的超时窗(断言按事务覆盖用)。
   final List<int> readTimeouts = [];
+
+  /// 事件泵 boost 账(0x9435 并发收事件;true 开 / false 关)。
+  final List<bool> boostLog = [];
 
   /// drainIn 调用计数(中止后排空断言用)。
   int drainCalls = 0;
@@ -43,6 +46,9 @@ final class FakeUsbBytePipe implements UsbBytePipe {
 
   /// 往 interrupt 流注入一条事件字节。
   void emitEvent(Uint8List bytes) => _eventCtrl.add(bytes);
+
+  @override
+  Future<void> setEventPumpBoost(bool on) async => boostLog.add(on);
 
   @override
   Future<void> bulkOut(Uint8List bytes) async => outWrites.add(bytes);

@@ -96,22 +96,50 @@ void _afGroups() {
             transport.count(NikonOperationCode.startMovieRecInCard), 2);
       });
 
-      test('0xA004 + bit14 + USB(非无线)→ 直接提示 USB 不支持,不发 0x9435/0x90C2',
+      test('0xA004 + bit14 + USB(事件泵已修)→ 0x9435 可进应用模式并开录',
           () async {
-        // FakeConnection.isWireless 默认 false = USB。2026-11-05 B 批:
-        // USB 下 0x9435 是 5s 慢事务且恒被拒,bit14 清不掉 —— 不再
-        // 空等,直接给出可操作提示。
-        conn.deviceModel = 'Z f'; // USB 直连 Zf:相机不开放应用模式
+        // FakeConnection.isWireless 默认 false = USB。事件泵并发服务
+        // StoreRemoved 后 0x9435 成功(2026-11-05 三端修正)。
+        conn.deviceModel = 'Z f';
         await startLiveView();
         transport.reply(NikonResponseCode.invalidStatus); // 首拍 0x920A 拒
         transport.ok(
             data: _propDescDataset(0xD0A4, PtpDataType.uint32, 0x4000));
+        transport.ok(); // 0x9435(1) 应用模式(事件泵并发收 StoreRemoved)
+        transport.ok(); // 0x90C2(1)
+        transport.ok(); // 0x90C2(0)
+        transport.ok(
+            data: _propDescDataset(0xD0A4, PtpDataType.uint32, 0));
+        transport.ok(); // 重试 0x920A 成功
         await controller.toggleRecord();
-        expect(controller.error?.key, 'remote.errMovieUsbUnsupported');
+        expect(controller.recording, isTrue);
+        expect(controller.error, isNull);
+        expect(transport.count(NikonOperationCode.changeApplicationMode), 1);
+        expect(transport.count(NikonOperationCode.changeCameraMode), 2);
+        expect(transport.count(NikonOperationCode.startMovieRecInCard), 2);
+      });
+
+      test('0xA004 + bit14 + USB 且 0x9435 仍拒 → USB 不支持兜底提示',
+          () async {
+        conn.deviceModel = 'Z f';
+        await startLiveView();
+        transport.reply(NikonResponseCode.invalidStatus);
+        transport.ok(
+            data: _propDescDataset(0xD0A4, PtpDataType.uint32, 0x4000));
+        transport.reply(PtpResponseCode.accessDenied); // 0x9435 仍拒
+        transport.reply(PtpResponseCode.accessDenied); // 0xD1F0 旧机身属性也拒
+        transport.ok(); // 0x90C2(1)
+        transport.ok(); // 0x90C2(0)
+        transport.ok(
+            data: _propDescDataset(0xD0A4, PtpDataType.uint32, 0x4000));
+        await controller.toggleRecord();
+        expect(controller.error?.key, 'remote.errMovieProhibited');
+        expect(controller.error?.args?['v'], '0x4000',
+            reason: '失败上报真实 0xD0A4,不用固定 USB 文案掩盖');
         expect(controller.recording, isFalse);
-        expect(transport.count(NikonOperationCode.changeApplicationMode), 0,
-            reason: 'USB 下不发 0x9435 空等 5s');
-        expect(transport.count(NikonOperationCode.changeCameraMode), 0);
+        expect(transport.count(NikonOperationCode.changeApplicationMode), 1,
+            reason: '失败前必须先真试一次 0x9435,不能短路');
+        expect(transport.count(NikonOperationCode.changeCameraMode), 2);
       });
 
       test('0x9205 忙(0x2019)→ 宽限内逐拍退避静默续发(拉焦轮同款口径)',

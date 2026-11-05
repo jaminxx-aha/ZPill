@@ -571,8 +571,6 @@ const Map<String, String> enCatalog = {
       'The camera does not allow recording right now — switch the top "photo/video" lever to video and retry (the viewfinder stays on)',
   'remote.errMovieProhibited':
       'The camera prohibits recording (condition {v}) — check video settings/storage or the camera screen',
-  'remote.errMovieUsbUnsupported':
-      'Remote video recording is unavailable over USB (the camera does not allow application mode here). Use Wi-Fi instead.',
   'remote.focusNearEnd': 'Focus reached the near limit',
   'remote.focusFarEnd': 'Focus reached the far limit',
   'remote.nearLimitUnlock': 'Near limit reached; drive the other way to unlock',

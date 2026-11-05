@@ -87,7 +87,8 @@ abstract interface class UsbHostChannel implements UsbBytePipe {
 ///   requestPermission 授权(无 intent-filter),bulkTransfer + 独立
 ///   interrupt 轮询线程,android/…/usb/UsbHostPlugin.kt。
 /// - iOS:✅ 真机闭环(ImageCaptureCore 免费路线,非 dext)。
-final class MethodChannelUsbHost implements UsbHostChannel {
+final class MethodChannelUsbHost
+    implements UsbHostChannel, UsbEventPumpBoost {
   MethodChannelUsbHost();
 
   static const MethodChannel channel = MethodChannel('zpill/usb');
@@ -142,6 +143,17 @@ final class MethodChannelUsbHost implements UsbHostChannel {
     return _eventStream ??= _events
         .receiveBroadcastStream()
         .map((dynamic b) => b as Uint8List);
+  }
+
+  @override
+  Future<void> setEventPumpBoost(bool on) async {
+    try {
+      await channel.invokeMethod('eventPumpBoost', {'on': on});
+    } on MissingPluginException {
+      // ohos/旧 native 未实现:保持原行为(0x9435 5s 后拒)
+    } on PlatformException {
+      // native 侧暂不可用:同样不拦事务
+    }
   }
 
   @override

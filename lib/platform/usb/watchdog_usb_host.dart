@@ -29,6 +29,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import '../../core/ptpusb/usb_transport.dart';
 import 'usb_host.dart';
 
 /// bulkRead 看门狗在底层窗口超时之上的宽限:真机 bulkRead 传 15s 窗口,
@@ -54,7 +55,8 @@ const Duration kUsbLinkProbeInterval = Duration(seconds: 5);
 /// 瞬时失败可能,单次不判死。
 const int kUsbLinkProbeFailureLimit = 2;
 
-final class WatchdogUsbHostChannel implements UsbHostChannel {
+final class WatchdogUsbHostChannel
+    implements UsbHostChannel, UsbEventPumpBoost {
   WatchdogUsbHostChannel({
     required this.inner,
     this.readGraceMs = kUsbWatchdogGraceMs,
@@ -66,6 +68,14 @@ final class WatchdogUsbHostChannel implements UsbHostChannel {
   });
 
   final UsbHostChannel inner;
+
+  @override
+  Future<void> setEventPumpBoost(bool on) async {
+    final inner = this.inner;
+    if (inner is UsbEventPumpBoost) {
+      await (inner as UsbEventPumpBoost).setEventPumpBoost(on);
+    }
+  }
 
   /// bulkRead 宽限(毫秒);测试可调小。
   final int readGraceMs;
