@@ -67,6 +67,13 @@ final class AutoTransferService {
       if (!formatAllows(entry, policy.format)) {
         return;
       }
+      // 已下载过同名文件(历史账跨会话)不再自动重下:相机重连后
+      // ObjectAdded 可能重报,与「跳过已下载」同一口径。
+      final index = engine;
+      if (index is TransferDownloadedIndex &&
+          (index as TransferDownloadedIndex).isDownloadedName(entry.name)) {
+        return;
+      }
       await engine.enqueue([entry], destination: destination);
       _transferred.add(handle);
     } on Exception catch (e) {

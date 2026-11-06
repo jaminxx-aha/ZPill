@@ -11,12 +11,17 @@ import 'package:z_pill/platform/gallery_saver.dart';
 
 /// 快照流由测试驱动的伪引擎(sync 广播:add 时刻同步送达;removeRecord
 /// 出快照,模拟引擎真实单删回放)。
-final class _PageEngine implements TransferEngine, TransferRetry {
+final class _PageEngine
+    implements TransferEngine, TransferRetry, TransferQueueControl {
   final tasksCtrl = StreamController<List<TransferTask>>.broadcast(sync: true);
   final removed = <String>[];
   final retried = <String>[];
   final cancelled = <String>[];
   var clearCalls = 0;
+  var pauseCalls = 0;
+  var resumeCalls = 0;
+  @override
+  var paused = false;
   var snapshot = const <TransferTask>[];
 
   void emit(List<TransferTask> tasks) {
@@ -53,6 +58,20 @@ final class _PageEngine implements TransferEngine, TransferRetry {
   Future<bool> retry(String taskId) async {
     retried.add(taskId);
     return true;
+  }
+
+  @override
+  Future<void> pause() async {
+    pauseCalls++;
+    paused = true;
+    emit(snapshot);
+  }
+
+  @override
+  Future<void> resume() async {
+    resumeCalls++;
+    paused = false;
+    emit(snapshot);
   }
 }
 
@@ -331,5 +350,37 @@ void main() {
 
     expect(find.byIcon(Icons.download_outlined), findsOneWidget);
     expect(find.textContaining('暂无传输任务'), findsOneWidget);
+  });
+
+  testWidgets('队列暂停/恢复:按钮随引擎 paused 切换并调用引擎', (tester) async {
+    final engine = _PageEngine();
+    final controller =
+        TransfersController(engine: engine, gallery: _FakeGallery());
+    addTearDown(controller.dispose);
+
+    await tester
+        .pumpWidget(MaterialApp(home: TransfersPage(controller: controller)));
+    engine.emit([
+      const TransferTask(
+        id: 't1',
+        handle: 1,
+        filename: 'A.JPG',
+        totalBytes: 100,
+        destination: TransferDestination.app,
+        state: TransferState.running,
+        receivedBytes: 40,
+      ),
+    ]);
+    await tester.pump();
+
+    expect(find.byIcon(Icons.pause_circle_outline), findsOneWidget);
+    await tester.tap(find.byIcon(Icons.pause_circle_outline));
+    await tester.pump();
+    expect(engine.pauseCalls, 1);
+    expect(find.byIcon(Icons.play_arrow), findsOneWidget);
+
+    await tester.tap(find.byIcon(Icons.play_arrow));
+    await tester.pump();
+    expect(engine.resumeCalls, 1);
   });
 }

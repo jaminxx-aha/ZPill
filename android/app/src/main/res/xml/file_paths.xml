@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 分享应用内文件(zpill/gallery shareFiles)的 FileProvider 白名单:
+     filesDir(zpill-downloads/zpill-data)、cacheDir(临时下载/缩略图)
+     及其外部对应目录。路径按目录树开放,具体 URI 仍由 FileProvider
+     按文件生成,不暴露目录列表。 -->
+<paths>
+    <files-path name="files" path="."/>
+    <cache-path name="cache" path="."/>
+    <external-files-path name="external_files" path="."/>
+    <external-cache-path name="external_cache" path="."/>
+</paths>

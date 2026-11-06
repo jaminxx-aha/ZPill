@@ -1437,6 +1437,32 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
     }
   }
 
+  /// 批量分享:交给系统分享面板(native 授权读);失败只提示,不改选择。
+  Future<void> _shareSelected() async {
+    final files = _selectedFiles;
+    if (files.isEmpty) {
+      return;
+    }
+    final host = _gallery;
+    if (host is! ShareHost) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+            SnackBar(content: Text(context.t('common.shareFailed'))));
+      return;
+    }
+    try {
+      await (host as ShareHost).shareFiles([for (final f in files) f.path]);
+    } on Exception {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+            SnackBar(content: Text(context.t('common.shareFailed'))));
+    }
+  }
+
   /// 底部操作栏(多选常驻,空选禁用按钮 —— iPhone 图库式)。
   Widget _actionBar() {
     return SafeArea(
@@ -1449,6 +1475,12 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
                 icon: const Icon(Icons.photo_library_outlined),
                 label: Text(context.t('libpage.exportToAlbum')),
               ),
+            ),
+            const SizedBox(width: 8),
+            IconButton(
+              tooltip: context.t('libpage.shareSelected'),
+              onPressed: _selected.isEmpty ? null : _shareSelected,
+              icon: const Icon(Icons.share_outlined),
             ),
             const SizedBox(width: 8),
             IconButton(

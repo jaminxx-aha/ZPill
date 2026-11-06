@@ -64,6 +64,30 @@ abstract interface class TransferRetry {
   Future<bool> retry(String taskId);
 }
 
+/// 队列暂停控制(可选能力,同 [TransferRetry] 的探测式接线):
+/// pause 后不再起新任务;在途分块下载在块界停下并保留半成品,
+/// resume 从已收字节续传。整档 GetObject 路线的小档会跑完当前文件
+/// 再停队。
+abstract interface class TransferQueueControl {
+  bool get paused;
+
+  /// 暂停队列。幂等;无进行中任务时只停调度。
+  Future<void> pause();
+
+  /// 恢复队列:暂停中的任务回 queued 并从半成品续传。
+  Future<void> resume();
+}
+
+/// 已下载索引(可选能力):按**文件名**记账,跨会话稳定(PTP 句柄
+/// 重连后会变,不能当键)。相册格角标与「跳过已下载」的数据源。
+abstract interface class TransferDownloadedIndex {
+  /// 已成功落地的文件名集合(app 目的地 = 已完成;gallery 目的地 =
+  /// 已完成且导入成功;用户取消系统保存面板的不算)。
+  Set<String> get downloadedNames;
+
+  bool isDownloadedName(String filename);
+}
+
 /// 一次 enqueue 对应一个批次:gallery 批次共享同一次导入对话框。
 final class _Batch {
   _Batch(this.destination);
@@ -85,6 +109,11 @@ final class _Job {
   final _Batch batch;
   var cancelRequested = false; // running 中被 cancel 置位
 
+  /// 暂停/中断留下的半成品(路径 + 已收字节):resume/重试沿传给
+  /// 下载器续拉;完成/取消/最终失败时清账(文件由下载器或本类删)。
+  String? partialPath;
+  int partialBytes = 0;
+
   /// 首跑起点(elapsed 墙钟口径;重试不重盖)。
   DateTime? firstStart;
 
@@ -96,7 +125,9 @@ final class _Job {
 Duration _defaultBackoff(int retry) =>
     Duration(milliseconds: 200 * (1 << (retry - 1)));
 
-final class TransferEngineImpl implements TransferEngine, TransferRetry {
+final class TransferEngineImpl
+    implements TransferEngine, TransferRetry, TransferQueueControl,
+        TransferDownloadedIndex {
   TransferEngineImpl({
     required this.downloader,
     required this.gallery,
@@ -147,6 +178,11 @@ final class TransferEngineImpl implements TransferEngine, TransferRetry {
   final StreamController<List<TransferTask>> _ctrl =
       StreamController<List<TransferTask>>.broadcast();
   var _pumping = false;
+
+  /// 队列暂停:true 时泵不再起新任务;在途分块下载经 [_pauseRequested]
+  /// 在块界停下并保留半成品。processing(本地后处理)不受影响。
+  var _paused = false;
+  var _pauseRequested = false;
   var _seq = 0;
   String? _tempDir;
   String? _downloadsDir;
@@ -225,6 +261,27 @@ final class TransferEngineImpl implements TransferEngine, TransferRetry {
   Future<void> cancel(String taskId) async {
     final job = _jobs[taskId];
     if (job == null || job.task.isTerminal) return;
+    if (job.task.state == TransferState.paused) {
+      // 暂停态无在途事务:直接落 cancelled,半成品一并删(用户取消 =
+      // 不留续传账)。
+      final partial = job.partialPath;
+      job.partialPath = null;
+      job.partialBytes = 0;
+      job.task = job.task.copyWith(
+          state: TransferState.cancelled,
+          clearError: true,
+          finishedAt: DateTime.now());
+      _settleAfterDownload(job);
+      if (partial != null) {
+        try {
+          final f = File(partial);
+          if (await f.exists()) await f.delete();
+        } on FileSystemException {
+          // 删失败不掩盖取消结果
+        }
+      }
+      return;
+    }
     if (job.task.state == TransferState.running ||
         job.task.state == TransferState.processing) {
       // running:downloader 排空后以 cancelled 落定;processing:后处理
@@ -234,6 +291,73 @@ final class TransferEngineImpl implements TransferEngine, TransferRetry {
     } else {
       _settle(job, TransferState.cancelled, null);
     }
+  }
+
+  // ---- 队列暂停/恢复(TransferQueueControl)---------------------------
+
+  @override
+  bool get paused => _paused;
+
+  @override
+  Future<void> pause() async {
+    if (_paused) return;
+    _paused = true;
+    _pauseRequested = true;
+    _notify();
+  }
+
+  @override
+  Future<void> resume() async {
+    if (!_paused &&
+        !_jobs.values.any((j) => j.task.state == TransferState.paused)) {
+      return;
+    }
+    _paused = false;
+    _pauseRequested = false;
+    for (final job in _jobs.values) {
+      if (job.task.state == TransferState.paused) {
+        job.task = job.task.copyWith(
+            state: TransferState.queued, receivedBytes: job.partialBytes);
+      }
+    }
+    _notify();
+    unawaited(_pump());
+  }
+
+  // ---- 已下载索引(TransferDownloadedIndex)--------------------------
+
+  @override
+  Set<String> get downloadedNames {
+    final names = <String>{};
+    for (final job in _jobs.values) {
+      final task = job.task;
+      if (task.state != TransferState.completed) continue;
+      // gallery 目的地:导入成功才算落地(ohos 用户取消保存面板 =
+      // 未导入,可重下);app 目的地文件已在 downloadsDir。
+      if (task.destination == TransferDestination.gallery &&
+          task.galleryUri == null) {
+        continue;
+      }
+      names.add(task.filename);
+    }
+    return names;
+  }
+
+  @override
+  bool isDownloadedName(String filename) {
+    // 逐条短路(不建全量集合):相册格逐成员调用,历史账 500 条时
+    // 每次构建都建集合是白费。
+    for (final job in _jobs.values) {
+      final task = job.task;
+      if (task.filename != filename) continue;
+      if (task.state != TransferState.completed) continue;
+      if (task.destination == TransferDestination.gallery &&
+          task.galleryUri == null) {
+        continue;
+      }
+      return true;
+    }
+    return false;
   }
 
   @override
@@ -316,6 +440,7 @@ final class TransferEngineImpl implements TransferEngine, TransferRetry {
   }
 
   _Job? _firstQueued() {
+    if (_paused) return null; // 暂停:不再起新任务(在途任务见 _runDownload)
     for (final job in _jobs.values) {
       if (job.task.state == TransferState.queued) return job;
     }
@@ -385,7 +510,13 @@ final class TransferEngineImpl implements TransferEngine, TransferRetry {
           }
         },
         isCancelled: () => job.cancelRequested,
+        isPaused: () => _pauseRequested,
+        resumePath: job.partialPath,
+        resumeOffset: job.partialBytes,
       );
+      // 下载完成:半成品账清空(文件已完整,后续改名/后处理接管)。
+      job.partialPath = null;
+      job.partialBytes = 0;
       if (job.task.destination == TransferDestination.app) {
         // 暂存件改名进 downloadsDir:同卷 rename 原子;跨卷被拒时拷贝
         // 兜底(拷的是已完整的暂存件)。终名冲突按 uniquePath 加序号
@@ -411,34 +542,72 @@ final class TransferEngineImpl implements TransferEngine, TransferRetry {
       // 移交后处理:任务落 processing(非终态,批次不收尾),由
       // [_runPostproc] 在后处理链上收场。
       job.task = job.task.copyWith(
-          state: TransferState.processing, downloadMs: _attemptMs(job));
+          state: TransferState.processing,
+          receivedBytes: dl.bytes,
+          downloadMs: _attemptMs(job));
       _notify();
       _enqueuePostproc(job, dl);
+    } on DownloadPausedException catch (e) {
+      // 队列暂停在块界生效:半成品保留,resume 从已收字节续传。
+      job.partialPath = e.path;
+      job.partialBytes = e.receivedBytes;
+      job.task = job.task.copyWith(
+          state: TransferState.paused,
+          receivedBytes: e.receivedBytes,
+          downloadMs: _attemptMs(job));
+      _notify();
     } on DownloadCancelledException {
+      job.partialPath = null;
+      job.partialBytes = 0;
       job.task = job.task.copyWith(
           state: TransferState.cancelled,
           clearError: true,
           downloadMs: _attemptMs(job),
           finishedAt: DateTime.now());
       _settleAfterDownload(job);
+    } on DownloadInterruptedException catch (e) {
+      // 链路/相机中途失败:半成品保留,重试从断点续拉。
+      job.partialPath = e.path;
+      job.partialBytes = e.receivedBytes;
+      await _handleDownloadFailure(job, e.cause);
     } catch (e) {
-      // 链路/写盘失败(StateError、PtpResponseException、FileSystemException…)
-      final attempts = job.task.attempts + 1;
-      if (attempts <= maxAttempts) {
-        await Future<void>.delayed(_backoffFor(attempts));
-        job.task = job.task.copyWith(
-            state: TransferState.queued, attempts: attempts, error: e.toString());
-        _notify();
-      } else {
-        // 放弃:attempts 保留已用重试数(不含本次放弃的尝试)。
-        job.task = job.task.copyWith(
-            state: TransferState.failed,
-            error: e.toString(),
-            downloadMs: _attemptMs(job),
-            finishedAt: DateTime.now());
-        _settleAfterDownload(job);
+      await _handleDownloadFailure(job, e);
+    }
+  }
+
+  /// 下载失败的重试/放弃收口(链路失败与可续传中断共用):指数退避后
+  /// 回 queued 重试;用完次数则删半成品、落 failed。
+  Future<void> _handleDownloadFailure(_Job job, Object error) async {
+    final attempts = job.task.attempts + 1;
+    if (attempts <= maxAttempts) {
+      await Future<void>.delayed(_backoffFor(attempts));
+      job.task = job.task.copyWith(
+          state: TransferState.queued,
+          attempts: attempts,
+          error: error.toString(),
+          receivedBytes: job.partialBytes);
+      _notify();
+      return;
+    }
+    // 放弃:半成品不再保留(避免 temp/staging 里留孤儿),attempts
+    // 保留已用重试数(不含本次放弃的尝试)。
+    final partial = job.partialPath;
+    job.partialPath = null;
+    job.partialBytes = 0;
+    if (partial != null) {
+      try {
+        final f = File(partial);
+        if (await f.exists()) await f.delete();
+      } on FileSystemException {
+        // 删失败不掩盖失败结果
       }
     }
+    job.task = job.task.copyWith(
+        state: TransferState.failed,
+        error: error.toString(),
+        downloadMs: _attemptMs(job),
+        finishedAt: DateTime.now());
+    _settleAfterDownload(job);
   }
 
   /// 末次尝试的纯下载耗时(毫秒);无起点(理论不可达)记 0。

@@ -47,8 +47,60 @@ public final class GalleryPlugin: NSObject, FlutterPlugin {
       }
       result(dataDir)
     case "importFiles": importFiles(call.arguments, result: result)
+    case "shareFiles": shareFiles(call.arguments, result: result)
     default: result(FlutterMethodNotImplemented)
     }
+  }
+
+  /// 系统分享(UIActivityViewController):本地文件 URL + 可选文本。
+  /// iPad 必须给 popover 锚点,否则 present 会崩。
+  private func shareFiles(_ arguments: Any?, result: @escaping FlutterResult) {
+    guard let args = arguments as? [String: Any],
+      let paths = args["paths"] as? [String], !paths.isEmpty
+    else {
+      result(FlutterError(code: "gallery_error", message: "shareFiles 参数须为非空路径列表", details: nil))
+      return
+    }
+    for path in paths where !FileManager.default.fileExists(atPath: path) {
+      result(FlutterError(code: "gallery_error", message: "文件不存在: \(path)", details: nil))
+      return
+    }
+    var items: [Any] = paths.map { URL(fileURLWithPath: $0) }
+    if let text = args["text"] as? String, !text.isEmpty {
+      items.append(text)
+    }
+    DispatchQueue.main.async {
+      guard let host = Self.topViewController() else {
+        result(FlutterError(code: "gallery_error", message: "无可展示分享面板的视图控制器", details: nil))
+        return
+      }
+      let controller = UIActivityViewController(activityItems: items, applicationActivities: nil)
+      if let popover = controller.popoverPresentationController {
+        popover.sourceView = host.view
+        popover.sourceRect = CGRect(
+          x: host.view.bounds.midX, y: host.view.bounds.midY, width: 0, height: 0)
+        popover.permittedArrowDirections = []
+      }
+      host.present(controller, animated: true) { result(nil) }
+    }
+  }
+
+  private static func topViewController() -> UIViewController? {
+    let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+    var top = scenes
+      .flatMap { $0.windows }
+      .first(where: { $0.isKeyWindow })?
+      .rootViewController
+    while let presented = top?.presentedViewController {
+      top = presented
+    }
+    if let nav = top as? UINavigationController {
+      return nav.visibleViewController ?? nav
+    }
+    if let tab = top as? UITabBarController {
+      return tab.selectedViewController ?? tab
+    }
+    return top
   }
 
   private static func ensureSubdir(_ name: String, base: String) -> String? {

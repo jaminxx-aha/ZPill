@@ -62,6 +62,32 @@ final class DownloadCancelledException implements Exception {
   String toString() => '下载已取消';
 }
 
+/// 队列暂停在块界生效:半成品保留在 [path],下次从 [receivedBytes]
+/// 续传(整档 GetObject 路线不会走到这里,小档跑完才停队)。
+final class DownloadPausedException implements Exception {
+  const DownloadPausedException(this.path, this.receivedBytes);
+
+  final String path;
+  final int receivedBytes;
+
+  @override
+  String toString() => '下载已暂停($receivedBytes 字节已保留)';
+}
+
+/// 下载中途失败但半成品可续传:引擎重试时从 [receivedBytes] 续拉,
+/// 不再整档重下。分块路线特有(整档路线的半成品不可续,按旧语义删除)。
+final class DownloadInterruptedException implements Exception {
+  const DownloadInterruptedException(
+      this.path, this.receivedBytes, this.cause);
+
+  final String path;
+  final int receivedBytes;
+  final Object cause;
+
+  @override
+  String toString() => '下载中断($receivedBytes 字节已保留):$cause';
+}
+
 /// 一次完成的下载:落盘信息 + 耗时/平均速度。
 final class ObjectDownload {
   const ObjectDownload({
@@ -159,21 +185,59 @@ class ObjectDownloader {
   /// 加 ` (n)` 序号。[onProgress] 回调累计字节数(整档路线块大小对齐
   /// kUsbStreamChunkBytes,64KB 级;分块路线 = AIMD 策略当前块,见
   /// [_chunkPolicy])。
+  ///
+  /// [resumePath]/[resumeOffset] = 队列暂停或上一次中断留下的半成品:
+  /// 文件存在且长度正好等于 [resumeOffset] 时以追加模式续拉(分块路线
+  /// 从该偏移起;整档路线无法中途续传,丢弃半成品从头下)。
+  /// [isPaused] = 队列暂停旗标:分块路线在块界检查,命中即停并保留半
+  /// 成品;整档路线不中断(小档跑完,泵随后停在队列界)。
   Future<ObjectDownload> download(
     ObjectEntry entry, {
     required String targetDir,
     void Function(int receivedBytes)? onProgress,
     bool Function()? isCancelled,
+    bool Function()? isPaused,
+    String? resumePath,
+    int resumeOffset = 0,
   }) async {
     final dir = Directory(targetDir);
     if (!dir.existsSync()) {
       dir.createSync(recursive: true);
     }
-    final file = File(await uniquePath(dir, _safeBasename(entry.name)));
-    final sink = file.openWrite();
-    final watch = Stopwatch()..start();
+    File file;
     var received = 0;
+    var resumed = false;
+    if (resumePath != null &&
+        resumeOffset > 0 &&
+        resumeOffset <= entry.sizeInBytes) {
+      final partial = File(resumePath);
+      if (await partial.exists() && await partial.length() == resumeOffset) {
+        file = partial;
+        received = resumeOffset;
+        resumed = true;
+      } else {
+        // 半成品账实不符(外部删除/截断):清掉旧件从头下,避免
+        // uniquePath 另起文件名留孤儿。
+        await _deleteQuietly(partial);
+        file = File(await uniquePath(dir, _safeBasename(entry.name)));
+      }
+    } else {
+      file = File(await uniquePath(dir, _safeBasename(entry.name)));
+    }
+    var sink = file.openWrite(
+        mode: resumed ? FileMode.append : FileMode.write);
+    var sinkClosed = false;
+    Future<void> closeSink() async {
+      if (sinkClosed) return;
+      sinkClosed = true;
+      await sink.flush();
+      await sink.close();
+    }
+
+    final watch = Stopwatch()..start();
+    var attemptBase = received;
     var cancelled = false;
+    var paused = false;
     var chunked = false;
     try {
       chunked = partialChunkBytes != null && await _partialReadable();
@@ -185,6 +249,18 @@ class ObjectDownloader {
           entry.sizeInBytes >= chunkedCancelAboveBytes!) {
         chunked = await _partialReadable();
       }
+      // 整档路线不能中途续传:已有半成品时丢弃重下(分块路线的续传
+      // 路径见上方参数注)。
+      if (!chunked && resumed) {
+        await closeSink();
+        await _deleteQuietly(file);
+        file = File(await uniquePath(dir, _safeBasename(entry.name)));
+        sink = file.openWrite();
+        sinkClosed = false;
+        received = 0;
+        attemptBase = 0;
+        resumed = false;
+      }
       // 逐块记账只在实收大档(见 _kLoudChunkLogBytes):同一下载器
       // 还服务缩略图/头读,小档不吵日志环。
       final loud = entry.sizeInBytes >= _kLoudChunkLogBytes;
@@ -194,10 +270,14 @@ class ObjectDownloader {
         // 块发 PTP-IP Cancel 包**:2026-10-16 真机 2.2 定案,Zf 收 Cancel
         // 直接掐链(取消即断链);软取消的即时性代价(一块)远小于断链
         // 代价。Cancel-Drain 机制留传输层留档,生产已无调用方。
-        var offset = 0;
+        var offset = received;
         while (offset < entry.sizeInBytes) {
           if (isCancelled != null && isCancelled()) {
             cancelled = true;
+            break;
+          }
+          if (isPaused != null && isPaused()) {
+            paused = true; // 块界暂停:半成品保留,resume 从 offset 续
             break;
           }
           final useEx = _enablePartialObjectEx && (_exUsable ?? true);
@@ -285,28 +365,36 @@ class ObjectDownloader {
           onProgress?.call(received);
         });
       }
-      await sink.flush();
-      await sink.close();
+      await closeSink();
     } on PtpCancelledException {
       // 在途块被本端 Cancel-Drain 收口:按「取消成功」收场(不得当
       // 传输失败重试)。半成品照删,异常换成下载管线的取消语义。
       try {
-        await sink.close();
+        await closeSink();
       } on Exception {
         // 关闭失败不掩盖取消语义
       }
       await _deleteQuietly(file);
       throw const DownloadCancelledException();
-    } on Exception {
+    } on Exception catch (e) {
       try {
-        await sink.close();
+        await closeSink();
       } on Exception {
         // 关闭失败不掩盖原始异常
+      }
+      // 分块路线已有完整块落盘:保留半成品交引擎续传;整档路线无续传
+      // 语义(单事务),维持旧行为删半成品。取消走上面的专用分支。
+      if (chunked && received > 0) {
+        throw DownloadInterruptedException(file.path, received, e);
       }
       await _deleteQuietly(file);
       rethrow;
     }
     watch.stop();
+    if (paused) {
+      // 块界暂停:半成品保留(不删),引擎记下路径/字节,resume 续传。
+      throw DownloadPausedException(file.path, received);
+    }
     if (cancelled) {
       await _deleteQuietly(file);
       throw const DownloadCancelledException();
@@ -321,11 +409,13 @@ class ObjectDownloader {
           '下载数据不完整:${entry.name} 期望 ${entry.sizeInBytes}B,'
           '实收 ${received}B');
     }
+    final attemptBytes = received - attemptBase;
     return ObjectDownload(
       path: file.path,
       bytes: received,
       elapsed: watch.elapsed,
-      averageBytesPerSecond: received / watch.elapsed.inMicroseconds * 1e6,
+      averageBytesPerSecond:
+          attemptBytes / watch.elapsed.inMicroseconds * 1e6,
     );
   }
 

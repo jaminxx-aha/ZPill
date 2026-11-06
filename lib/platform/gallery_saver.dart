@@ -84,11 +84,22 @@ abstract interface class GallerySaver {
   Future<List<Uri>> importFiles(List<GalleryImportRequest> requests);
 }
 
+/// 系统分享(可选能力,同 TransferQueueControl 的探测式接线):
+/// 只有实现了本接口的 saver 才提供分享;测试假件不必改。
+abstract interface class ShareHost {
+  /// 调系统分享面板分享本地文件(应用内下载/图库文件)。
+  ///
+  /// [paths] 为本地绝对路径;native 侧负责授予目标应用临时读权限
+  /// (Android FileProvider / iOS activity items / ohos ShareKit)。
+  /// 通道缺失或不支持时抛异常,调用方提示失败即可。
+  Future<void> shareFiles(List<String> paths, {String? text});
+}
+
 /// 经 `zpill/gallery` channel。
 ///
-/// native 实现状态:ohos(GalleryPlugin.ets)全量实现;
-/// Android/iOS 留待平台落地(native 侧 notImplemented,Dart 不改)。
-final class MethodChannelGallerySaver implements GallerySaver {
+/// native 实现状态:三端已落地(tempDir/importFiles/shareFiles 全量;
+/// Android 允许/拒绝口径见 GalleryPlugin.kt 类注)。
+final class MethodChannelGallerySaver implements GallerySaver, ShareHost {
   static const MethodChannel channel = MethodChannel('zpill/gallery');
 
   @override
@@ -165,6 +176,16 @@ final class MethodChannelGallerySaver implements GallerySaver {
           '(用户取消/部分选择)');
     }
     return [for (final u in list) Uri.parse(u)];
+  }
+
+  @override
+  Future<void> shareFiles(List<String> paths, {String? text}) async {
+    final files = [for (final p in paths) if (p.isNotEmpty) p];
+    if (files.isEmpty) return;
+    await channel.invokeMethod<void>('shareFiles', {
+      'paths': files,
+      if (text != null && text.isNotEmpty) 'text': text,
+    });
   }
 
   /// 拼接静帧 + 视频段 → 同目录临时文件;任一步失败返回 null(降级)。

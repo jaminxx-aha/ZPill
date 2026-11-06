@@ -68,6 +68,22 @@ final class TransfersController extends ChangeNotifier {
     return (e as TransferRetry).canRetry(taskId);
   }
 
+  /// 队列暂停能力(引擎未实现时按钮不显示,行为同旧版)。
+  TransferQueueControl? get _queueControl {
+    final e = engine;
+    return e is TransferQueueControl ? e as TransferQueueControl : null;
+  }
+
+  bool get canPause =>
+      _queueControl != null &&
+      (paused || tasks.any((t) => !t.isTerminal));
+
+  bool get paused => _queueControl?.paused ?? false;
+
+  Future<void> pause() async => _queueControl?.pause();
+
+  Future<void> resume() async => _queueControl?.resume();
+
   /// 重下并重新走目的地流程(失败重试 / 未导入重新下载导入)。
   Future<bool> retry(String taskId) async {
     final e = engine;
@@ -228,6 +244,18 @@ class _TransfersPageState extends State<TransfersPage> {
           title: Text(context.t('transfers.title'),
               style: Theme.of(context).textTheme.titleLarge),
           actions: [
+            if (_controller.canPause)
+              IconButton(
+                tooltip: _controller.paused
+                    ? context.t('transfers.resume')
+                    : context.t('transfers.pause'),
+                onPressed: () => unawaited(_controller.paused
+                    ? _controller.resume()
+                    : _controller.pause()),
+                icon: Icon(_controller.paused
+                    ? Icons.play_arrow
+                    : Icons.pause_circle_outline),
+              ),
             if (_controller.tasks.any((t) => !t.isTerminal))
               IconButton(
                 tooltip: context.t('transfers.cancelAll'),
@@ -462,7 +490,8 @@ class _TaskTile extends StatelessWidget {
             )
           : Icon(Icons.warning_amber_rounded, size: 22, color: scheme.error);
     } else if (task.state == TransferState.queued ||
-        task.state == TransferState.running) {
+        task.state == TransferState.running ||
+        task.state == TransferState.paused) {
       trailing = IconButton(
         tooltip: context.t('common.cancel'),
         onPressed: () => controller.cancel(task.id),
@@ -500,6 +529,14 @@ class _TaskTile extends StatelessWidget {
         ].join(' · '),
       // 已收满但还在拆分/水印/XMP(与下一文件的下载并行)。
       TransferState.processing => context.t('transfers.processing'),
+      TransferState.paused => [
+          if (task.totalBytes > 0)
+            '${formatBytes(task.receivedBytes)} / '
+                '${formatBytes(task.totalBytes)}'
+          else
+            formatBytes(task.receivedBytes),
+          context.t('transfers.paused'),
+        ].join(' · '),
       TransferState.completed => switch (task.destination) {
           TransferDestination.gallery => task.galleryUri != null
               ? context.t('transfers.importedAlbum')
@@ -586,7 +623,8 @@ class _TaskTile extends StatelessWidget {
                         style: AppTypography.bodyS
                             .copyWith(color: AppColors.muted(context))),
                   ),
-                if (task.state == TransferState.running)
+                if (task.state == TransferState.running ||
+                    task.state == TransferState.paused)
                   Padding(
                     padding: const EdgeInsets.only(top: AppSpacing.sm),
                     child: ClipRRect(

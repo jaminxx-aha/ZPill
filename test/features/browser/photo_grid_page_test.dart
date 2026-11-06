@@ -237,8 +237,15 @@ PhotoGroup _video(int handle) => PhotoGroup([
     ]);
 
 /// 记录入队调用的假引擎。
-final class _FakeEngine implements TransferEngine {
+final class _FakeEngine implements TransferEngine, TransferDownloadedIndex {
   final List<(List<ObjectEntry>, TransferDestination)> calls = [];
+  final Set<String> downloaded = {};
+
+  @override
+  Set<String> get downloadedNames => downloaded;
+
+  @override
+  bool isDownloadedName(String filename) => downloaded.contains(filename);
 
   @override
   Future<void> enqueue(Iterable<ObjectEntry> entries,
@@ -953,6 +960,53 @@ void main() {
     expect(destination, TransferDestination.gallery);
     expect(find.textContaining('跳过'), findsNothing);
 
+    await _drainSnackBar(tester);
+  });
+
+  testWidgets('已下载角标与跳过:命中文件名上角标,批量下载可跳过', (tester) async {
+    final repo = _FakeRepo();
+    final engine = _FakeEngine()..downloaded.add('DSC_0001.JPG');
+    final controller = BrowserController(repository: repo);
+    await tester.pumpWidget(_host(PhotoGridPage(
+      controller: controller,
+      folderHandle: CameraAlbum.allPhotosHandle,
+      fallbackName: '全部照片',
+      thumbnails: _FakeThumbs(),
+      uiPrefs: InMemoryUiPrefsStore(),
+      engine: engine,
+    )));
+    final loading = controller.load();
+    final album = CameraAlbum.allPhotos([_pair(101, 102)]);
+    repo.updatesCtrl.add(
+        AlbumsUpdate(albums: [album], loaded: 2, total: 2, complete: true));
+    await tester.pump();
+    repo.completeLoad([album]);
+    await loading;
+    await tester.pump();
+
+    // JPG 格命中已下载文件名:左上角标上格。
+    expect(find.byIcon(Icons.download_done), findsOneWidget);
+
+    await tester.longPress(find.byKey(const ValueKey('102:jpg')));
+    await tester.pump();
+    await tester.tap(find.text('下载'));
+    await tester.pump();
+    await tester.tap(find.byTooltip('跳过已下载'));
+    await tester.pump();
+    await tester.tap(find.text('下载到应用'));
+    await tester.pumpAndSettle();
+
+    // 全被跳过:不发起入队,只提示。
+    expect(engine.calls, isEmpty);
+    expect(find.text('所选文件都已下载过'), findsOneWidget);
+    await _drainSnackBar(tester);
+
+    // 关掉开关:照常入队。
+    await tester.tap(find.byTooltip('跳过已下载'));
+    await tester.pump();
+    await tester.tap(find.text('下载到应用'));
+    await tester.pumpAndSettle();
+    expect(engine.calls.single.$1.map((e) => e.name), ['DSC_0001.JPG']);
     await _drainSnackBar(tester);
   });
 

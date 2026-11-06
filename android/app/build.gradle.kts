@@ -146,6 +146,9 @@ flutter {
 }
 
 dependencies {
+    // 分享应用内文件(FileProvider):Flutter embedding 虽传递引入
+    // androidx.core,显式钉住避免版本/裁剪差异导致类缺失。
+    implementation("androidx.core:core:1.13.1")
     // 视频 LUT 导出(VideoLutExportPlugin):Transformer 硬件导出 +
     // 内置 SingleColorLut 效果。版本对齐参考实现(Camera_Bridge 实证
     // 1.9.2 全链可用);ToShortPcm 音频前置在该版本 family 内。

@@ -21,6 +21,8 @@ import fs from '@ohos.file.fs';
 import abilityAccessCtrl from '@ohos.abilityAccessCtrl';
 import common from '@ohos.app.ability.common';
 import UIAbility from '@ohos.app.ability.UIAbility';
+import { fileUri } from '@kit.CoreFileKit';
+import { systemShare } from '@kit.ShareKit';
 import {
   FlutterPlugin,
   FlutterPluginBinding,
@@ -95,6 +97,11 @@ export class GalleryPlugin implements FlutterPlugin, AbilityAware {
         break;
       case 'importFiles':
         this.importFiles(call, result);
+        break;
+      case 'shareFiles':
+        this.shareFiles(call, result).catch((e: Object): void => {
+          result.error('gallery_error', `shareFiles: ${e}`, null);
+        });
         break;
       default:
         result.notImplemented();
@@ -200,6 +207,65 @@ export class GalleryPlugin implements FlutterPlugin, AbilityAware {
     } catch (e) {
       Log.e(TAG, `importFiles 异常: ${e}`);
       result.error('gallery_error', `importFiles: ${e}`, null);
+    }
+  }
+
+  /// 系统分享(ShareKit):本地文件路径 → file:// URI + SharedData。
+  /// utd 统一 general.file(批量选择模式只接受通用文件类型;具体类型
+  /// 由扩展名/系统自行识别)。UIAbility 上下文缺失时明确报错。
+  private async shareFiles(call: MethodCall, result: MethodResult): Promise<void> {
+    if (this.ability === null) {
+      Log.e(TAG, 'shareFiles: UIAbility 未挂载(AbilityAware 未回调)');
+      result.error('gallery_error', 'UIAbility 未挂载(AbilityAware 未回调)', null);
+      return;
+    }
+    const ability = this.ability; // 收窄:UIAbility(ShareKit 要它的 context)
+    try {
+      const args = call.args as Map<string, Object>;
+      if (args === null) {
+        result.error('gallery_error', 'shareFiles 参数须为非空路径列表', null);
+        return;
+      }
+      const raw = args.get('paths') as Array<string>;
+      if (raw === null || raw === undefined || raw.length === 0) {
+        result.error('gallery_error', 'shareFiles 参数须为非空路径列表', null);
+        return;
+      }
+      const records: Array<systemShare.SharedRecord> = [];
+      for (const path of raw) {
+        if (path.length === 0) {
+          continue;
+        }
+        if (!fs.accessSync(path)) {
+          result.error('gallery_error', `文件不存在: ${path}`, null);
+          return;
+        }
+        const slash = path.lastIndexOf('/');
+        records.push({
+          utd: 'general.file',
+          uri: fileUri.getUriFromPath(path),
+          title: slash >= 0 ? path.substring(slash + 1) : path,
+        });
+      }
+      if (records.length === 0) {
+        result.error('gallery_error', 'shareFiles 参数须为非空路径列表', null);
+        return;
+      }
+      const data = new systemShare.SharedData(
+        records[0] as systemShare.SharedRecord);
+      for (let i = 1; i < records.length; i++) {
+        data.addRecord(records[i]);
+      }
+      const controller = new systemShare.ShareController(data);
+      await controller.show(ability.context as common.UIAbilityContext, {
+        selectionMode: systemShare.SelectionMode.BATCH,
+        previewMode: systemShare.SharePreviewMode.DEFAULT,
+      });
+      Log.i(TAG, `分享面板已关闭:${records.length} 个文件`);
+      result.success(null);
+    } catch (e) {
+      Log.e(TAG, `shareFiles 异常: ${e}`);
+      result.error('gallery_error', `shareFiles: ${e}`, null);
     }
   }
 

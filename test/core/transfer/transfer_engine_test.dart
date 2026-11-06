@@ -1255,6 +1255,172 @@ void main() {
     final tasks = await done;
     expect(tasks.single.state, TransferState.completed);
   });
+
+  test('暂停队列:在途分块停在块界保留半成品,resume 从断点续传', () async {
+    final fake = FakePtpTransport();
+    final gallery = FakeGallerySaver();
+    final engine = TransferEngineImpl(
+      downloader: ObjectDownloader(
+        session: PtpSession(transport: fake),
+        partialChunkBytes: 64,
+      ),
+      gallery: gallery,
+      backoffFor: (_) => Duration.zero,
+    );
+    final deviceInfo =
+        _okData(buildDeviceInfoDataset(operations: const [0x1001, 0x1009, 0x101B]));
+    fake.reply(deviceInfo); // 首块前能力探测(会话缓存,resume 不再发)
+    final gate = Completer<void>();
+    fake.replyAfter(gate.future, _okData(Uint8List.fromList(List.filled(64, 1))));
+    fake.reply(_okData(Uint8List.fromList(List.filled(64, 2))));
+
+    await engine.enqueue([_entry(1, 'A.NEF', 128)],
+        destination: TransferDestination.app);
+    while (fake.requests.length < 2) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    await engine.pause();
+    final pausedFuture = waitUntil(
+        engine, (ts) => ts.length == 1 && ts.single.state == TransferState.paused);
+    gate.complete(); // 在途块跑完后停在块界
+    final paused = await pausedFuture;
+    expect(paused.single.receivedBytes, 64);
+    // 半成品保留在 app 暂存目录(未删、未进成品名单)
+    final staging = Directory('${gallery.root.path}/temp/.staging-app');
+    final partials = staging.listSync().whereType<File>().toList();
+    expect(partials.single.lengthSync(), 64);
+    expectDownloadsEmpty(gallery);
+
+    final done = waitUntil(
+        engine, (ts) => ts.length == 1 && ts.single.isTerminal);
+    await engine.resume();
+    final tasks = await done;
+    expect(tasks.single.state, TransferState.completed);
+    // 第二块从 64 起拉(不是从头重下)
+    final chunkOffsets = [
+      for (final r in fake.requests)
+        if (r.opcode == 0x101B) r.params[1],
+    ];
+    expect(chunkOffsets, [0, 64]);
+    final saved = File('${gallery.root.path}/downloads/A.NEF');
+    expect(saved.existsSync(), isTrue);
+    expect(saved.lengthSync(), 128);
+  });
+
+  test('链路中断:分块半成品保留,重试从断点续拉', () async {
+    final fake = FakePtpTransport();
+    final gallery = FakeGallerySaver();
+    final engine = TransferEngineImpl(
+      downloader: ObjectDownloader(
+        session: PtpSession(transport: fake),
+        partialChunkBytes: 64,
+      ),
+      gallery: gallery,
+      backoffFor: (_) => Duration.zero,
+    );
+    final deviceInfo =
+        _okData(buildDeviceInfoDataset(operations: const [0x1001, 0x1009, 0x101B]));
+    fake.reply(deviceInfo);
+    fake.reply(_okData(Uint8List.fromList(List.filled(64, 1)))); // 块 1
+    fake.fail(Exception('link down')); // 块 2:链路断
+    fake.reply(_okData(Uint8List.fromList(List.filled(64, 2)))); // 断点续拉
+
+    final done = waitUntil(
+        engine, (ts) => ts.length == 1 && ts.single.isTerminal);
+    await engine.enqueue([_entry(1, 'A.NEF', 128)],
+        destination: TransferDestination.app);
+    final tasks = await done;
+    expect(tasks.single.state, TransferState.completed);
+    final chunkOffsets = [
+      for (final r in fake.requests)
+        if (r.opcode == 0x101B) r.params[1],
+    ];
+    // 0 → 64(失败)→ 64(重试从断点续拉):没有第二次 0,即未整档重下
+    expect(chunkOffsets, [0, 64, 64]);
+    expect(File('${gallery.root.path}/downloads/A.NEF').lengthSync(), 128);
+  });
+
+  test('暂停队列:queued 任务不起跑,resume 后继续', () async {
+    final fake = FakePtpTransport();
+    final engine = TransferEngineImpl(
+      downloader: ObjectDownloader(session: PtpSession(transport: fake)),
+      gallery: FakeGallerySaver(),
+      backoffFor: (_) => Duration.zero,
+    );
+    fake.reply(_okBytes(4));
+    await engine.pause();
+    await engine.enqueue([_entry(1, 'A.NEF', 4)],
+        destination: TransferDestination.app);
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(fake.requests, isEmpty);
+    final done = waitUntil(
+        engine, (ts) => ts.length == 1 && ts.single.isTerminal);
+    await engine.resume();
+    final tasks = await done;
+    expect(tasks.single.state, TransferState.completed);
+  });
+
+  test('已下载索引:app 完成入账;gallery 未导入不入账,导入后入账', () async {
+    // app 目的地:完成即入账。
+    final fake = FakePtpTransport();
+    final engine = TransferEngineImpl(
+      downloader: ObjectDownloader(session: PtpSession(transport: fake)),
+      gallery: FakeGallerySaver(),
+      backoffFor: (_) => Duration.zero,
+    );
+    fake.reply(_okBytes(4));
+    final appDone = waitUntil(
+        engine, (ts) => ts.length == 1 && ts.single.isTerminal);
+    await engine.enqueue([_entry(1, 'A.NEF', 4)],
+        destination: TransferDestination.app);
+    await appDone;
+    final index = engine as TransferDownloadedIndex;
+    expect(index.isDownloadedName('A.NEF'), isTrue);
+    expect(index.downloadedNames, {'A.NEF'});
+
+    // gallery 用户取消保存面板:完成但未导入,不算已下载。
+    final fake2 = FakePtpTransport();
+    final gallery2 = FakeGallerySaver()..importResult = const [];
+    final engine2 = TransferEngineImpl(
+      downloader: ObjectDownloader(session: PtpSession(transport: fake2)),
+      gallery: gallery2,
+      backoffFor: (_) => Duration.zero,
+    );
+    fake2.reply(_okBytes(4));
+    final cancelDone = waitUntil(
+        engine2, (ts) => ts.length == 1 && ts.single.isTerminal);
+    await engine2.enqueue([_entry(2, 'B.JPG', 4)],
+        destination: TransferDestination.gallery);
+    await cancelDone;
+    final index2 = engine2 as TransferDownloadedIndex;
+    expect(index2.isDownloadedName('B.JPG'), isFalse);
+
+    // gallery 导入成功:回填 galleryUri 后入账。
+    final fake3 = FakePtpTransport();
+    final gallery3 = FakeGallerySaver()
+      ..importResult = [Uri.parse('content://media/B')];
+    final engine3 = TransferEngineImpl(
+      downloader: ObjectDownloader(session: PtpSession(transport: fake3)),
+      gallery: gallery3,
+      backoffFor: (_) => Duration.zero,
+    );
+    fake3.reply(_okBytes(4));
+    final importedDone = waitUntil(
+        engine3, (ts) => ts.length == 1 && ts.single.isTerminal);
+    await engine3.enqueue([_entry(3, 'C.JPG', 4)],
+        destination: TransferDestination.gallery);
+    await importedDone;
+    // 导入回填沿晚于 completed:等快照里 galleryUri 落位。
+    final imported = await waitUntil(
+        engine3,
+        (ts) =>
+            ts.length == 1 &&
+            ts.single.state == TransferState.completed &&
+            ts.single.galleryUri != null);
+    expect(imported.single.galleryUri, isNotNull);
+    final index3 = engine3 as TransferDownloadedIndex;
+    expect(index3.isDownloadedName('C.JPG'), isTrue);
+  });
 }
 
 /// load 即炸的账本(恢复失败路用)。

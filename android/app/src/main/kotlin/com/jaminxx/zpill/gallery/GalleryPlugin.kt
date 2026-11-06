@@ -1,12 +1,18 @@
 package com.jaminxx.zpill.gallery
 
+import android.app.Activity
+import android.content.ClipData
 import android.content.ContentValues
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import android.os.Environment
 import android.provider.MediaStore
 import android.util.Log
+import androidx.core.content.FileProvider
 import io.flutter.embedding.engine.plugins.FlutterPlugin
+import io.flutter.embedding.engine.plugins.activity.ActivityAware
+import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.MethodChannel.MethodCallHandler
@@ -41,7 +47,7 @@ import java.util.concurrent.Executors
  * 文件拷贝走 executor(单文件可达 25MB+,不得占主线程),结果经主线程
  * Handler 回传。
  */
-class GalleryPlugin : FlutterPlugin, MethodCallHandler {
+class GalleryPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
     companion object {
         private const val TAG = "GalleryPlugin"
         private const val CHANNEL = "zpill/gallery"
@@ -57,6 +63,7 @@ class GalleryPlugin : FlutterPlugin, MethodCallHandler {
 
     private var channel: MethodChannel? = null
     private lateinit var appContext: Context
+    private var activity: Activity? = null
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private val ioExecutor: ExecutorService = Executors.newSingleThreadExecutor()
 
@@ -73,6 +80,22 @@ class GalleryPlugin : FlutterPlugin, MethodCallHandler {
         ioExecutor.shutdown()
     }
 
+    override fun onAttachedToActivity(binding: ActivityPluginBinding) {
+        activity = binding.activity
+    }
+
+    override fun onDetachedFromActivityForConfigChanges() {
+        activity = null
+    }
+
+    override fun onReattachedToActivityForConfigChanges(binding: ActivityPluginBinding) {
+        activity = binding.activity
+    }
+
+    override fun onDetachedFromActivity() {
+        activity = null
+    }
+
     override fun onMethodCall(call: MethodCall, result: Result) {
         when (call.method) {
             "tempDir" -> cacheSubDir(TEMP_SUBDIR, result)
@@ -81,7 +104,65 @@ class GalleryPlugin : FlutterPlugin, MethodCallHandler {
             "downloadsDir" -> filesSubDir(DOWNLOADS_SUBDIR, result)
             "dataDir" -> filesSubDir(DATA_SUBDIR, result)
             "importFiles" -> importFiles(call, result)
+            "shareFiles" -> shareFiles(call, result)
             else -> result.notImplemented()
+        }
+    }
+
+    /**
+     * 系统分享(ACTION_SEND_MULTIPLE):应用内文件经 FileProvider 授予
+     * 临时读权限。没有 Activity 时用 applicationContext + NEW_TASK(仍能
+     * 出选择器);单文件也可走 SEND,统一 MULTIPLE 简化。
+     */
+    private fun shareFiles(call: MethodCall, result: Result) {
+        val args = call.arguments as? Map<*, *>
+        val paths = (args?.get("paths") as? List<*>)?.filterIsInstance<String>()
+            ?.filter { it.isNotEmpty() }.orEmpty()
+        if (paths.isEmpty()) {
+            result.error("gallery_error", "shareFiles 参数须为非空路径列表", null)
+            return
+        }
+        val text = args?.get("text") as? String
+        mainHandler.post {
+            try {
+                val uris = ArrayList<Uri>(paths.size)
+                for (path in paths) {
+                    val file = File(path)
+                    if (!file.exists()) {
+                        result.error("gallery_error", "文件不存在: $path", null)
+                        return@post
+                    }
+                    uris.add(
+                        FileProvider.getUriForFile(
+                            appContext,
+                            "${appContext.packageName}.fileprovider",
+                            file
+                        )
+                    )
+                }
+                val intent = Intent(Intent.ACTION_SEND_MULTIPLE).apply {
+                    type = "*/*"
+                    putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris)
+                    if (!text.isNullOrBlank()) putExtra(Intent.EXTRA_TEXT, text)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    clipData = ClipData.newUri(
+                        appContext.contentResolver, "zpill-share", uris.first()
+                    ).apply {
+                        for (i in 1 until uris.size) addItem(ClipData.Item(uris[i]))
+                    }
+                }
+                val chooser = Intent.createChooser(intent, null)
+                val host = activity
+                if (host != null) {
+                    host.startActivity(chooser)
+                } else {
+                    chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    appContext.startActivity(chooser)
+                }
+                result.success(null)
+            } catch (e: Exception) {
+                result.error("gallery_error", "shareFiles: $e", null)
+            }
         }
     }
 

@@ -659,6 +659,10 @@ final class AppServices {
   /// 应用级单例;首次访问时构建(pumpWidget 的测试不经 main 也能跑)。
   static AppServices get instance => _instance ??= AppServices._();
 
+  /// 已构建实例(null = 尚未 bootstrap/首次访问):可选订阅用,不触发
+  /// 构造(测试未装配 AppServices 时页面可安全跳过)。
+  static AppServices? get maybeInstance => _instance;
+
   /// main() 中显式触发构建。
   static void bootstrap() => instance;
 

@@ -156,6 +156,8 @@ const Map<String, String> enCatalog = {
   'snapshot.metaLine': '{model} · {n} props · {date}',
   'snapshot.restore': 'Restore to Camera',
   'common.delete': 'Delete',
+  'common.share': 'Share',
+  'common.shareFailed': 'Share failed',
   'snapshot.nameTitle': 'Name This Config',
   'snapshot.nameHint': 'e.g. Indoor wedding · Mode A',
   'common.back': 'Back',
@@ -738,6 +740,9 @@ const Map<String, String> enCatalog = {
   'grid.toApp': 'to the app',
   'grid.downloadStarted':
       'Download started: {i}/{g} items / {f} files{tag} {where}{skip}; see "Gallery" for progress',
+  'grid.skipDownloaded': 'Skip downloaded',
+  'grid.skippedDownloaded': ', skipped {n} already-downloaded files',
+  'grid.allDownloaded': 'All selected files are already downloaded',
   'grid.deleteCameraTitle': 'Delete Files on the Camera?',
   'grid.deleteCameraBody':
       'This will delete {n} items ({f} files in total).\nThis cannot be undone.',
@@ -800,6 +805,7 @@ const Map<String, String> enCatalog = {
   'libpage.groupBursts': 'Group Bursts',
   'libpage.exportedAlbum': 'Save to Photos',
   'libpage.deleteSelected': 'Delete Selected',
+  'libpage.shareSelected': 'Share Selected',
   'libpage.deleteBody':
       'This will delete {n} files.\nThis cannot be undone (the originals on the camera are unaffected).',
   'libpage.empty':
@@ -837,6 +843,9 @@ const Map<String, String> enCatalog = {
   'transfers.empty':
       'No transfer tasks yet\n(select multiple in the camera album, or download single items from the photo viewer)',
   'transfers.queued': 'Queued',
+  'transfers.paused': 'Paused',
+  'transfers.pause': 'Pause Queue',
+  'transfers.resume': 'Resume Queue',
   'transfers.processing': 'Processing…',
   'transfers.secondsLeft': '{n}s left',
   'transfers.importedAlbum': 'Imported to the album',

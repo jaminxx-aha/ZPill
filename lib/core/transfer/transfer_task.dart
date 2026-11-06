@@ -6,7 +6,19 @@ library;
 /// running 与 processing 拆开的缘由:后处理不占相机链路,可与下一个
 /// 文件的下载重叠(见 TransferEngineImpl);running 保持「至多一个」
 /// 的下载语义,processing 可与 running 并存。
-enum TransferState { queued, running, processing, completed, failed, cancelled }
+///
+/// paused = 用户暂停队列时,在途分块下载停在块界、半成品保留;
+/// resume 后回 queued 并从已收字节续传(整档 GetObject 路线不中断,
+/// 小档跑完即停队)。paused 不是终态:不计历史、不触发批次导入。
+enum TransferState {
+  queued,
+  running,
+  processing,
+  paused,
+  completed,
+  failed,
+  cancelled,
+}
 
 /// 下载目的地:系统相册(ohos 经系统保存对话框导入)/ 应用内存储。
 enum TransferDestination { gallery, app }

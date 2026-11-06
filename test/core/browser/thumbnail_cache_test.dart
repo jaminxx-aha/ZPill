@@ -144,6 +144,9 @@ final class _FakeDownloader implements ObjectDownloader {
     required String targetDir,
     void Function(int receivedBytes)? onProgress,
     bool Function()? isCancelled,
+    bool Function()? isPaused,
+    String? resumePath,
+    int resumeOffset = 0,
   }) async {
     calls.add((entry, targetDir));
     if (gate != null) {

@@ -288,6 +288,11 @@ class _LibraryViewerState extends State<_LibraryViewer>
           icon: const Icon(Icons.info_outline),
         ),
         IconButton(
+          tooltip: context.t('common.share'),
+          onPressed: _share,
+          icon: const Icon(Icons.share_outlined),
+        ),
+        IconButton(
           tooltip: context.t('libpage.importAlbum'),
           onPressed: _importToGallery,
           icon: const Icon(Icons.photo_library_outlined),
@@ -615,6 +620,21 @@ class _LibraryViewerState extends State<_LibraryViewer>
         ..hideCurrentSnackBar()
         ..showSnackBar(
             SnackBar(content: Text(context.t('libpage.notImported'))));
+    }
+  }
+
+  /// 系统分享当前文件(native 面板;失败只提示,不影响图库)。
+  Future<void> _share() async {
+    final host = widget.gallery;
+    if (host is! ShareHost) {
+      _toastKey('common.shareFailed');
+      return;
+    }
+    try {
+      await (host as ShareHost).shareFiles([_current.path]);
+    } on Exception {
+      if (!mounted) return;
+      _toastKey('common.shareFailed');
     }
   }
 

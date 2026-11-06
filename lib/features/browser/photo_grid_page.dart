@@ -29,7 +29,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart' show listEquals;
+import 'package:flutter/foundation.dart' show listEquals, setEquals;
 import 'package:flutter/scheduler.dart';
 
 import '../../app_services.dart';
@@ -147,11 +147,24 @@ class _PhotoGridPageState extends State<PhotoGridPage>
     // 不重枚举,断连期调用静默失败不上屏。
     unawaited(widget.controller.load());
     unawaited(_restorePrefs()); // 弹层选项:上次退出时的状态
+    // 已下载角标:先取历史账快照,再随任务流更新(只在集合变化时重建)。
+    final index = _downloadIndex;
+    if (index != null) _downloadedNames = index.downloadedNames;
+    final engine = _engineOrNull;
+    if (engine != null) {
+      _transferSub = engine.tasks.listen((_) {
+        final next = _downloadIndex?.downloadedNames ?? const <String>{};
+        if (!setEquals(next, _downloadedNames) && mounted) {
+          setState(() => _downloadedNames = next);
+        }
+      });
+    }
     WidgetsBinding.instance.addObserver(this); // 后台返回沿重预热
   }
 
   @override
   void dispose() {
+    unawaited(_transferSub?.cancel());
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -333,6 +346,23 @@ class _PhotoGridPageState extends State<PhotoGridPage>
   /// 选择集一变(改选/整日/全选/切相册/清空)即复位,重新从「下载」
   /// 第一段起(2026-10-17 真机:展开态残留,全选后直显双目的地)。
   bool _revealDownload = false;
+
+  /// 批量下载跳过已下载(底栏 download_done 开关,仅本次页生命周期)。
+  bool _skipDownloaded = false;
+
+  /// 已下载文件名快照(TransferDownloadedIndex;空 = 无索引或未下载)。
+  /// 传输任务流只在集合变化时 setState,进度沿不触发重建。
+  Set<String> _downloadedNames = const {};
+  StreamSubscription<List<TransferTask>>? _transferSub;
+
+  /// 可选传输引擎(不触发 AppServices 构造):测试未注入时跳过角标订阅。
+  TransferEngine? get _engineOrNull =>
+      widget.engine ?? AppServices.maybeInstance?.transferEngine;
+
+  TransferDownloadedIndex? get _downloadIndex {
+    final e = _engineOrNull;
+    return e is TransferDownloadedIndex ? e as TransferDownloadedIndex : null;
+  }
 
   /// 缩略图 Future 按代表文件句柄缓存:主文件变化(渐进配对完成
   /// NEF→JPG 切换)时取新 Future,其余重建不闪、不重发请求。
@@ -679,7 +709,24 @@ class _PhotoGridPageState extends State<PhotoGridPage>
     for (final cell in selected) {
       entries.addAll(cell.members);
     }
-    await _engine.enqueue(entries, destination: destination);
+    // 「跳过已下载」:按文件名过滤(历史账跨会话);全被跳过时只提示,
+    // 不改选择集 —— 用户可关掉开关再下。
+    final index = _downloadIndex;
+    final toEnqueue = _skipDownloaded && index != null
+        ? entries
+            .where((e) => !index.isDownloadedName(e.name))
+            .toList(growable: false)
+        : entries;
+    final skipped = entries.length - toEnqueue.length;
+    if (toEnqueue.isEmpty) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(
+            persist: false,
+            content: Text(context.t('grid.allDownloaded'))));
+      return;
+    }
+    await _engine.enqueue(toEnqueue, destination: destination);
     _clearSelection();
     if (!mounted) {
       return;
@@ -692,6 +739,9 @@ class _PhotoGridPageState extends State<PhotoGridPage>
     final formats =
         selected.map((c) => c.format?.label).whereType<String>().toSet();
     final tag = formats.isEmpty ? '' : '(${formats.join('+')})';
+    final skipLabel = skipped > 0
+        ? context.t('grid.skippedDownloaded', {'n': skipped})
+        : '';
     // Navigator 在展示时刻捕获:SnackBar 活得比本页久(用户立即返回,
     // 提示挂到上一页),届时 State 已 unmount,Navigator.of(context) 会
     // 抛 defunct —— 捕获的根 Navigator 跨 pop 存活,窗口期内动作照常。
@@ -703,12 +753,12 @@ class _PhotoGridPageState extends State<PhotoGridPage>
           // true 永不自动消失:显式关掉,恢复随 duration 自动隐藏。
           persist: false,
           content: Text(context.t('grid.downloadStarted', {
-            'i': entries.length,
+            'i': toEnqueue.length,
             'g': selected.length,
-            'f': entries.length,
+            'f': toEnqueue.length,
             'tag': tag,
             'where': where,
-            'skip': '',
+            'skip': skipLabel,
           })),
           action: SnackBarAction(
             label: context.t('viewer.viewProgress'),
@@ -1206,6 +1256,24 @@ class _PhotoGridPageState extends State<PhotoGridPage>
         onTap: () => _selecting ? _toggle(cell) : _openViewer(cells, index),
         onLongPress: () => _toggle(cell),
         badges: [
+          // 已下载角标(左上,黑底圆圈):文件名命中历史账;与左下的
+          // 格式/评级胶囊、右上的多选勾圈互不占位。
+          if (cell.members.any((m) => _downloadedNames.contains(m.name)))
+            Align(
+              alignment: Alignment.topLeft,
+              child: Padding(
+                padding: const EdgeInsets.all(4),
+                child: Container(
+                  padding: const EdgeInsets.all(3),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.55),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.download_done,
+                      size: 12, color: Colors.white),
+                ),
+              ),
+            ),
           // 「显示」胶囊(左下,黑底 = 格式标签同款框):格式文案、评级
           // 图标同框;未勾选不占位(净格)。
           Align(
@@ -1307,6 +1375,18 @@ class _PhotoGridPageState extends State<PhotoGridPage>
                   icon: const Icon(Icons.folder_outlined),
                   label: Text(context.t('grid.downloadToApp')),
                 ),
+              ),
+            ],
+            if (_revealDownload) ...[
+              const SizedBox(width: 8),
+              IconButton(
+                tooltip: context.t('grid.skipDownloaded'),
+                onPressed: () =>
+                    setState(() => _skipDownloaded = !_skipDownloaded),
+                icon: const Icon(Icons.download_done),
+                color: _skipDownloaded
+                    ? Theme.of(context).colorScheme.primary
+                    : null,
               ),
             ],
             const SizedBox(width: 8),
