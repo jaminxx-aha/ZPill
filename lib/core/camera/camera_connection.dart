@@ -82,7 +82,11 @@ abstract interface class CameraConnection {
   /// (相机 Wi-Fi 热点,先在相机菜单 网络 → 连接至智能设备 打开)。
   /// [instanceName] 为 mDNS 实例名(扫描发现时传入,如 Z_f_8014411),
   /// 用于配对记录的展示名;手动输入 IP 时可空。
-  Future<void> connect({String? ip, String? instanceName});
+  /// [rememberIp] = false 时**不把本次 IP 写进档案 lastIp**:AP 路
+  /// 的 192.168.1.1 是相机热点网关,不是可复用的 STA 地址 —— 写进去
+  /// 会覆盖原来的 STA 地址(2026-11-06 真机:AP 一次后 STA 快连拨 .1)。
+  Future<void> connect(
+      {String? ip, String? instanceName, bool rememberIp = true});
 
   /// 确认配对:发 CompletePairing,相机把本客户端记为已配对设备,
   /// 随后自动重连转正(见类注配对流程)。
@@ -287,7 +291,8 @@ final class CameraConnectionImpl implements CameraConnection {
   String? get pairingCode => _pairingCode;
 
   @override
-  Future<void> connect({String? ip, String? instanceName}) async {
+  Future<void> connect(
+      {String? ip, String? instanceName, bool rememberIp = true}) async {
     if (_state == CameraLinkState.connected ||
         _state == CameraLinkState.connecting ||
         _state == CameraLinkState.pairing ||
@@ -304,7 +309,8 @@ final class CameraConnectionImpl implements CameraConnection {
     if (ip == null) {
       await _connectUsb();
     } else {
-      await _connectWireless(ip, instanceName: instanceName);
+      await _connectWireless(ip,
+          instanceName: instanceName, rememberIp: rememberIp);
     }
   }
 
@@ -399,7 +405,7 @@ final class CameraConnectionImpl implements CameraConnection {
   /// 异常抛回),由调用方的循环节拍决定去留 —— 整个等待窗保持
   /// connecting 态安静重试,不闪失败横幅。
   Future<void> _connectWireless(String ip,
-      {String? instanceName, bool silent = false}) async {
+      {String? instanceName, bool silent = false, bool rememberIp = true}) async {
     await _awaitTeardown();
     final transport = await _createIpTransport();
     // 先登记:握手/会话任一步失败,catch 里的 teardown 都能收尾实例
@@ -419,7 +425,8 @@ final class CameraConnectionImpl implements CameraConnection {
       _deviceName = _deviceLabel(info, instanceName);
       _deviceModel = info.model;
       if (await _needsPairing(info)) {
-        switch (await _runPairing(info, ip, instanceName)) {
+        switch (await _runPairing(info, ip, instanceName,
+            rememberIp: rememberIp)) {
           case _PairResult.newlyPaired:
             // 相机记录本设备后自收会话,并在机身上弹「配对完成」画面
             // 等按 OK —— 按之前单连接槽位不可用(Zf 真机 2026-10-06:
@@ -433,7 +440,9 @@ final class CameraConnectionImpl implements CameraConnection {
             for (var attempt = 0;; attempt++) {
               try {
                 await _connectWireless(ip,
-                    instanceName: instanceName, silent: true);
+                    instanceName: instanceName,
+                    silent: true,
+                    rememberIp: rememberIp);
                 return; // connected(或外部收口后的任意态)
               } on Exception catch (e) {
                 if (attempt >= _postPairingRetryDelays.length) {
@@ -471,7 +480,7 @@ final class CameraConnectionImpl implements CameraConnection {
       // 逻辑只配对成功才落账 → 该模式永远存不下来(2026-10-06 真机
       // 反馈)。写盘失败不拦连接(档案是便利功能,非连接前置)。
       try {
-        await _rememberCamera(info, ip, instanceName);
+        await _rememberCamera(info, ip, instanceName, rememberIp: rememberIp);
       } on Exception {
         // 档案写盘失败:连接照常
       }
@@ -523,7 +532,8 @@ final class CameraConnectionImpl implements CameraConnection {
   /// 仅在 [CameraLinkState.pairing] 态阻塞等待;任何外部状态变化
   /// (disconnect/断链)都以 [_PairResult.aborted] 退出,不重复收口。
   Future<_PairResult> _runPairing(
-      PtpDeviceInfo info, String ip, String? instanceName) async {
+      PtpDeviceInfo info, String ip, String? instanceName,
+      {bool rememberIp = true}) async {
     final code = await _session.getPairingCode();
     if (code == null) {
       // 0x952B 响应非 OK:多半是本客户端已配对或相机不要求配对。
@@ -561,7 +571,8 @@ final class CameraConnectionImpl implements CameraConnection {
     // _pairingCompleting 不复位:离开 pairing 态那一刻统一清(见
     // _transition)—— 0x935A 之后到重连转 connecting 之前,相机收线
     // 都是预期行为,不得按断链失败处理。
-    await _rememberCamera(info, ip, instanceName, pairedOnCamera: true);
+    await _rememberCamera(info, ip, instanceName,
+        pairedOnCamera: true, rememberIp: rememberIp);
     return _PairResult.newlyPaired;
   }
 
@@ -579,34 +590,42 @@ final class CameraConnectionImpl implements CameraConnection {
   /// 记连接档案(键 = 序列号,稳定;补全最近 IP 与展示名,方便快速
   /// 重连)。[pairedOnCamera] = 相机侧已记录本设备(0x935A 完成)——
   /// true 置位后不再重问配对;false 只更新连接信息,保留旧旗标。
+  /// [rememberIp] = false:只更新名字/配对旗标,**保留旧 lastIp**
+  /// (AP 热点网关 .1 不覆盖 STA 地址;见 [connect] 注)。
   Future<void> _rememberCamera(
     PtpDeviceInfo info,
     String ip,
     String? instanceName, {
     bool pairedOnCamera = false,
+    bool rememberIp = true,
   }) async {
     final store = _pairedCameras;
     if (store == null) return;
     final id = _cameraId(info);
+    CameraInfo? existing;
+    for (final c in await store.list()) {
+      if (c.id == id) {
+        existing = c;
+        break;
+      }
+    }
+    final effectiveIp = rememberIp ? ip : existing?.lastIp;
     CameraInfo updated = CameraInfo(
       id: id,
       name: instanceName ?? info.model,
       model: info.model,
-      lastIp: ip,
+      lastIp: effectiveIp,
       lastConnectedAt: DateTime.now(),
       wirelessPaired: pairedOnCamera,
     );
-    for (final existing in await store.list()) {
-      if (existing.id == id) {
-        updated = existing.copyWith(
-          name: instanceName ?? existing.name,
-          model: info.model,
-          lastIp: ip,
-          lastConnectedAt: DateTime.now(),
-          wirelessPaired: pairedOnCamera ? true : null,
-        );
-        break;
-      }
+    if (existing != null) {
+      updated = existing.copyWith(
+        name: instanceName ?? existing.name,
+        model: info.model,
+        lastIp: effectiveIp,
+        lastConnectedAt: DateTime.now(),
+        wirelessPaired: pairedOnCamera ? true : null,
+      );
     }
     await store.save(updated);
   }

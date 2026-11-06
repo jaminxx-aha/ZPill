@@ -44,11 +44,14 @@ final class FakeConnection implements CameraConnection {
   int disconnectCalls = 0;
   String? connectIp;
   String? connectInstanceName;
+  bool? connectRememberIp;
 
   @override
-  Future<void> connect({String? ip, String? instanceName}) async {
+  Future<void> connect(
+      {String? ip, String? instanceName, bool rememberIp = true}) async {
     connectIp = ip;
     connectInstanceName = instanceName;
+    connectRememberIp = rememberIp;
   }
 
   @override
