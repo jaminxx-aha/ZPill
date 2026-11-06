@@ -2,7 +2,9 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:z_pill/features/common/format.dart';
 import 'package:z_pill/l10n/en_catalog.dart';
+import 'package:z_pill/l10n/message.dart';
 import 'package:z_pill/l10n/zh_catalog.dart';
 
 /// 词表完整性闸门(键漂移防线):
@@ -77,6 +79,20 @@ void main() {
     ];
     expect(unused, isEmpty,
         reason: '词表里没有调用点的键(删掉或补调用点;动态拼装加白名单):$unused');
+  });
+
+  // 回归(2026-10-31 死键闸误删 date.weekday1..7):周几键由
+  // sectionDateLabel 拼装,动态拼法必须仍能落到两表;2020-01-06 是周一,
+  // 连续 7 天覆盖 weekday 1..7。
+  test('日期段周几键在两词表内(sectionDateLabel 回归)', () {
+    for (var weekday = 1; weekday <= 7; weekday++) {
+      final msg = sectionDateLabel(DateTime(2020, 1, 5 + weekday));
+      expect(msg.key, 'date.dayYear');
+      final w = msg.args!['w']! as L10nMessage;
+      expect(w.key, 'date.weekday$weekday');
+      expect(zhCatalog, contains(w.key));
+      expect(enCatalog, contains(w.key));
+    }
   });
 
   test('zh/en 两表键集完全相等', () {

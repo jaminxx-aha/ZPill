@@ -71,6 +71,19 @@ String? formatRecentDateTime(DateTime? d) {
   return local.year == DateTime.now().year ? hm : '${local.year}-$hm';
 }
 
+/// 周几键表(1 = 周一 … 7 = 周日)。**必须是完整字面量表**:词表
+/// 「死键闸」只认 lib/ 里的完整键名,动态拼 'date.weekday$n' 会被
+/// 判成死键(2026-10-31 曾因此误删两表 7 键,段头漏出键名原文)。
+const _weekdayKeys = [
+  'date.weekday1',
+  'date.weekday2',
+  'date.weekday3',
+  'date.weekday4',
+  'date.weekday5',
+  'date.weekday6',
+  'date.weekday7',
+];
+
 /// 本地日期分段头(相册网格按日分段,键+参记录,显示点 tm() 落地):
 /// 'date.today' / 'date.yesterday' / 同年 'date.day'{m,d,w} /
 /// 跨年 'date.dayYear'{y,m,d,w}(w = 'date.weekdayN' 嵌套记录,tMsg
@@ -85,7 +98,7 @@ L10nMessage sectionDateLabel(DateTime d) {
     return (key: 'date.today', args: null);
   }
   if (diffDays == 1) return (key: 'date.yesterday', args: null);
-  final L10nMessage w = (key: 'date.weekday${local.weekday}', args: null);
+  final L10nMessage w = (key: _weekdayKeys[local.weekday - 1], args: null);
   if (local.year == now.year) {
     return (
       key: 'date.day',

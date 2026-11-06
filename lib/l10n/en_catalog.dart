@@ -718,6 +718,13 @@ const Map<String, String> enCatalog = {
   'date.yesterday': 'Yesterday',
   'date.day': '{m}/{d} ({w})',
   'date.dayYear': '{y}/{m}/{d} ({w})',
+  'date.weekday1': 'Mon',
+  'date.weekday2': 'Tue',
+  'date.weekday3': 'Wed',
+  'date.weekday4': 'Thu',
+  'date.weekday5': 'Fri',
+  'date.weekday6': 'Sat',
+  'date.weekday7': 'Sun',
   'browser.loadFail': 'Load failed: {e}',
   'browser.syncPartial':
       'Partial sync interrupted: {e} (content already shown stays browsable)',
