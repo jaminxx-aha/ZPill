@@ -200,21 +200,54 @@ void main() {
       final controller =
           ConnectionController(connection: conn, scanner: scanner);
 
-      // 无发现无网关:回落默认
+      // 无发现无网关:回落默认;AP 网关不写档案 lastIp
       await controller.connectWireless();
       expect(conn.connectIp, kDefaultCameraIp);
+      expect(conn.connectRememberIp, isFalse);
 
       // mDNS 发现最优先
       scanner.eventsCtrl.add(const NsdCameraFound(_zfCamera));
       await pumpEventQueue();
       await controller.connectWireless();
       expect(conn.connectIp, '192.168.0.104');
+      expect(conn.connectRememberIp, isFalse);
 
       // mDNS 清空(AP 方式切换沿清旧网结果)后网关次之
       controller.selectMethod(ConnectionMethod.ap);
       controller.apGateway = '192.168.100.1';
       await controller.connectWireless();
       expect(conn.connectIp, '192.168.100.1');
+    });
+
+    test('liveCameraFor:同名/序列号后缀命中当前 mDNS,旧 lastIp 不遮蔽', () async {
+      final conn = FakeConnection();
+      final scanner = _FakeScanner();
+      final controller =
+          ConnectionController(connection: conn, scanner: scanner);
+      final saved = CameraInfo(
+          id: '8014411',
+          name: 'Z_f_8014411',
+          lastIp: '192.168.1.1',
+          lastConnectedAt: DateTime(2026, 11, 5));
+      controller.savedCameras = [saved];
+
+      // 档案名与 mDNS 实例名一致,host 是新的 STA 地址
+      scanner.eventsCtrl.add(const NsdCameraFound(DiscoveredIpCamera(
+          name: 'Z_f_8014411', host: '192.168.1.6', port: 15740)));
+      await pumpEventQueue();
+      expect(controller.liveCameraFor(saved)?.host, '192.168.1.6');
+
+      // 展示名被改过(只剩型号)时,序列号后缀仍能认机
+      final renamed = saved.copyWith(name: 'NIKON Z f');
+      expect(controller.liveCameraFor(renamed)?.host, '192.168.1.6');
+
+      // 不同相机不误配
+      final other = CameraInfo(
+          id: '9999999',
+          name: 'Z_8_9999999',
+          lastIp: '192.168.1.9',
+          lastConnectedAt: DateTime(2026, 11, 5));
+      expect(controller.liveCameraFor(other), isNull);
     });
 
     test('apCameraIp 候选序:mDNS 发现 > join 网关 > 默认', () {
@@ -832,6 +865,42 @@ void main() {
       // 断开沿重拉的档案原地刷新(无面板可收)
       expect(find.text('Z_8_ABC'), findsOneWidget, reason: '断开沿上重拉连接档案');
       expect(find.text('Z_f_8014411'), findsOneWidget);
+    });
+
+    testWidgets('已配对行:同机 mDNS 新地址优先展示并连接(不拨旧 lastIp)',
+        (tester) async {
+      tester.view
+        ..physicalSize = const Size(800, 2400)
+        ..devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      final conn = FakeConnection();
+      final scanner = _FakeScanner();
+      final store = InMemoryPairedCamerasStore();
+      await store.save(const CameraInfo(
+          id: '8014411',
+          name: 'Z_f_8014411',
+          lastIp: '192.168.1.1'));
+      final controller = ConnectionController(
+          connection: conn, scanner: scanner, pairedCameras: store);
+      controller.selectMethod(ConnectionMethod.sta);
+      await tester.pumpWidget(
+          MaterialApp(home: ConnectionPage(controller: controller)));
+      await tester.pump();
+
+      // mDNS 发现同机新地址 .6:已配对行展示当前地址,不再显示旧 .1
+      scanner.eventsCtrl.add(const NsdCameraFound(DiscoveredIpCamera(
+          name: 'Z_f_8014411', host: '192.168.1.6', port: 15740)));
+      await tester.pump();
+      await tester.pump();
+      expect(find.text('192.168.1.6'), findsOneWidget);
+      expect(find.text('192.168.1.1'), findsNothing);
+
+      // 点行 = 连发现地址(成功沿回写 lastIp),不是档案旧 .1
+      await tester.tap(find.text('Z_f_8014411'));
+      await tester.pump();
+      expect(conn.connectIp, '192.168.1.6');
+      expect(conn.connectInstanceName, 'Z_f_8014411');
+      expect(conn.connectRememberIp, isTrue);
     });
 
     testWidgets('STA hero 点按连最近(八轮):首条「最近」徽,在途点按取消', (tester) async {

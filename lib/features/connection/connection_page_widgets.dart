@@ -196,18 +196,28 @@ class _StaScanBodyState extends State<_StaScanBody> {
   }
 
   /// 「其它设备」列示源:mDNS 发现里滤掉已配对相机(2026-10-21 用户
-  /// 定稿,与 BLE 面板同款)—— 匹配 = 归一化名相等(两侧都是 mDNS 实
-  /// 例名)或 host == lastIp(最强信号)。
+  /// 定稿,与 BLE 面板同款)。匹配统一走 [ConnectionController
+  /// .isSameCamera](host / 归一化名 / 序列号后缀)。
   List<DiscoveredIpCamera> _othersIpCameras(ConnectionController controller) {
-    bool paired(DiscoveredIpCamera c) => controller.savedCameras.any((s) {
-          String norm(String v) =>
-              v.replaceAll(RegExp(r'[\s_]+'), '').toLowerCase();
-          if (s.lastIp != null && s.lastIp == c.host) return true;
-          return s.name.isNotEmpty &&
-              c.name.isNotEmpty &&
-              norm(s.name) == norm(c.name);
-        });
+    bool paired(DiscoveredIpCamera c) =>
+        controller.savedCameras.any((s) => controller.isSameCamera(s, c));
     return controller.cameras.where((c) => !paired(c)).toList();
+  }
+
+  /// 已配对行的 IP:当前 mDNS 发现优先(同机换过 DHCP 地址/AP 覆盖过
+  /// lastIp 时,档案里的旧 IP 不能再用),否则回落档案 lastIp。
+  Widget? _pairedSubtitle(ConnectionController controller, CameraInfo saved) {
+    final ip = controller.liveCameraFor(saved)?.host ?? saved.lastIp;
+    return ip == null ? null : Text(ip);
+  }
+
+  /// 已配对行点按:有当前 mDNS 发现就连发现 host(成功沿会把 lastIp
+  /// 回写成新地址),否则走档案快连。
+  void _connectPaired(ConnectionController controller, CameraInfo saved) {
+    final live = controller.liveCameraFor(saved);
+    unawaited(live != null
+        ? controller.connectDiscovered(live)
+        : controller.connectSaved(saved));
   }
 
   @override
@@ -280,9 +290,7 @@ class _StaScanBodyState extends State<_StaScanBody> {
                                 ],
                               ],
                             ),
-                            subtitle: saved.lastIp == null
-                                ? null
-                                : Text(saved.lastIp!),
+                            subtitle: _pairedSubtitle(controller, saved),
                             trailing: IconButton(
                               icon: const Icon(Icons.delete_outline),
                               tooltip: context.t('conn.forgetCamera'),
@@ -294,8 +302,7 @@ class _StaScanBodyState extends State<_StaScanBody> {
                             ),
                             onTap: busy
                                 ? null
-                                : () =>
-                                    unawaited(controller.connectSaved(saved)),
+                                : () => _connectPaired(controller, saved),
                           ),
                     ],
                   ),

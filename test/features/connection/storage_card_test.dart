@@ -37,7 +37,7 @@ final class _StubConnection implements CameraConnection {
   bool get isWireless => false;
 
   @override
-  Future<void> connect({String? instanceName, String? ip}) async {}
+  Future<void> connect({String? instanceName, String? ip, bool rememberIp = true}) async {}
 
   @override
   Future<void> disconnect() async {}

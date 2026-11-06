@@ -424,6 +424,39 @@ class ConnectionController extends ChangeNotifier {
   List<DiscoveredIpCamera> get cameras =>
       _cameras.values.toList(growable: false);
 
+  static String _normCameraName(String v) =>
+      v.replaceAll(RegExp(r'[\s_]+'), '').toLowerCase();
+
+  /// 档案相机与 mDNS 发现是否同一台:host 命中 lastIp / 归一化实例名
+  /// 相等 / 实例名尾段 = 序列号 id(手填 IP 或展示名被改过时名字对
+  /// 不上,序列号后缀仍是强信号)。
+  bool isSameCamera(CameraInfo saved, DiscoveredIpCamera found) {
+    if (saved.lastIp != null && saved.lastIp == found.host) return true;
+    final savedName = _normCameraName(saved.name);
+    final foundName = _normCameraName(found.name);
+    if (savedName.isNotEmpty &&
+        foundName.isNotEmpty &&
+        savedName == foundName) {
+      return true;
+    }
+    if (RegExp(r'^\d{4,}$').hasMatch(saved.id) &&
+        foundName.isNotEmpty &&
+        foundName.endsWith(saved.id)) {
+      return true;
+    }
+    return false;
+  }
+
+  /// 同机当前 mDNS 发现:非空 = 用它的 host 做 STA 快连/展示,不要
+  /// 再用档案里可能过期的 lastIp(2026-11-06:AP 一次后 lastIp=.1,
+  /// STA 快连拨路由器)。
+  DiscoveredIpCamera? liveCameraFor(CameraInfo saved) {
+    for (final found in _cameras.values) {
+      if (isSameCamera(saved, found)) return found;
+    }
+    return null;
+  }
+
   /// 扫描进行中(未装配扫描器/平台未实现时永远 false)。
   bool scanning = false;
 
@@ -719,7 +752,9 @@ class ConnectionController extends ChangeNotifier {
     _lastAttempt = connectWireless;
     final ip = apCameraIp(discovered: cameras, gateway: apGateway);
     activeIp = ip;
-    await c.connect(ip: ip);
+    // AP 的 .1 是相机热点网关,不是可复用 STA 地址:不覆盖档案 lastIp
+    // (否则下次 STA 快连会拨路由器;2026-11-06 真机)。
+    await c.connect(ip: ip, rememberIp: false);
   }
 
   /// STA 手动 IP 连接(扫描不到时的兜底):**不回落默认地址** ——

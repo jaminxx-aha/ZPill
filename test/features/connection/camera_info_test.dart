@@ -73,7 +73,7 @@ final class _FakeConnection implements CameraConnection {
   @override
   String? get pairingCode => null;
   @override
-  Future<void> connect({String? ip, String? instanceName}) async {}
+  Future<void> connect({String? ip, String? instanceName, bool rememberIp = true}) async {}
   @override
   Future<void> confirmPairing() async {}
   @override
