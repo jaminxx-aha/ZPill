@@ -452,7 +452,6 @@ const Map<String, String> zhCatalog = {
   'param.xSync': 'X 同步',
   'param.bulb': 'B 门',
   'param.time': 'T 门',
-  'param.movieAperture': '视频光圈',
   'param.movieShutter': '视频快门',
   'param.movieIso': '视频 ISO',
   'param.isoWithActual': '{v}(实际 {a})',

@@ -41,14 +41,16 @@ int feedQuarterFromRotationRaw(int rotationRaw) => switch (rotationRaw) {
       _ => 0,
     };
 
-/// 取景适配模式(2026-10-12 用户定案「不留黑边」:竖拍画面两侧不留
-/// 黑边、横屏画面上下不留黑边):
-/// - [contain]:短板适配(旧默认)—— 内容比盒「极端」的那两侧出黑边;
-/// - [widthFill]:恒按宽适配 —— 画面恒满宽(竖屏取景),比盒更高的
-///   内容上下越出被裁,**两侧永无黑边**;
+/// 取景适配模式(2026-10-12「不留黑边」定案;2026-11-08 竖屏改回
+/// 整屏 contain + 底部控件下移):
+/// - [contain]:短板适配(当前竖屏取景)—— 整帧完整可见,内容比盒
+///   「极端」的那两侧出背景带;
+/// - [widthFill]:恒按宽适配 —— 画面恒满宽(旧「不留黑边」裁切模式),
+///   比盒更高的内容上下越出被裁;
 /// - [heightFill]:恒按高适配 —— 画面恒满高(横屏取景),比盒更宽的
-///   内容左右越出被裁,**上下永无黑边**。
-/// 三者的 displayRect 都居中;越出部分由取景区的 ClipRect 裁掉。
+///   内容左右越出被裁。
+/// 三者的 displayRect 默认居中;越出部分由取景区的 ClipRect 裁掉
+/// (底锚模式按 [FeedTransform.bottomAnchorInset] 落位,见该字段)。
 enum FeedFit { contain, widthFill, heightFill }
 
 /// 不可变取景变换(每帧/每手势重建;[boxSize] 来自 LayoutBuilder,
@@ -63,10 +65,12 @@ final class FeedTransform {
     this.zoom = 1.0,
     this.pan = Offset.zero,
     this.bottomContentInset = 0.0,
+    this.bottomAnchorInset,
     this.bottomAlign = false,
   })  : assert(quarter >= 0 && quarter < 4),
         assert(deSqueeze >= 1.0),
-        assert(bottomContentInset >= 0.0);
+        assert(bottomContentInset >= 0.0),
+        assert(bottomAnchorInset == null || bottomAnchorInset >= 0.0);
 
   /// 取景帧像素尺寸(SOF 嗅探;空/零尺寸 = 无画面,变换恒等)。
   final Size imageSize;
@@ -100,6 +104,13 @@ final class FeedTransform {
   /// 2026-10-30 用户定案:取景底边到曝光条的距离 = 曝光条到快门的距离。
   final bool bottomAlign;
 
+  /// 画面底边目标位置(距取景盒底)。非空时适配仍按整盒最大化(不压缩
+  /// 不变形),只改纵向落点:底边贴到 `boxSize.height - bottomAnchorInset`;
+  /// 目标位置放不下整帧时顶边钳 0(画面尽量上移,底部可越入控制区)。
+  /// 2026-11-08 用户定案:取景底边到光圈栏的距离 = 光圈栏到按钮的距离,
+  /// 空白不足则尽量上移。非空时优先于 [bottomContentInset]/[bottomAlign]。
+  final double? bottomAnchorInset;
+
   bool get hasImage =>
       imageSize.width > 0 && imageSize.height > 0 && !boxSize.isEmpty;
 
@@ -120,9 +131,13 @@ final class FeedTransform {
     final c = contentSize;
     if (c.isEmpty || boxSize.isEmpty) return 1.0;
     final availW = boxSize.width;
-    final availH = (boxSize.height - bottomContentInset)
-        .clamp(0.0, boxSize.height)
-        .toDouble();
+    // 有底锚时按整盒高最大化(不把控制区从适配里扣掉);否则沿用
+    // bottomContentInset 的可用高。
+    final availH = bottomAnchorInset != null
+        ? boxSize.height
+        : (boxSize.height - bottomContentInset)
+            .clamp(0.0, boxSize.height)
+            .toDouble();
     return switch (fit) {
       FeedFit.contain => math.min(availW / c.width, availH / c.height),
       FeedFit.widthFill => availW / c.width,
@@ -137,6 +152,13 @@ final class FeedTransform {
     if (c.isEmpty || boxSize.isEmpty) return Offset.zero & boxSize;
     final s = fitScale;
     final size = c * s;
+    if (bottomAnchorInset != null) {
+      final targetBottom = boxSize.height - bottomAnchorInset!;
+      // 放得下:底边贴目标;放不下:顶边钳 0,画面尽量上移。
+      final top = math.max(0.0, targetBottom - size.height);
+      return Rect.fromLTWH(
+          (boxSize.width - size.width) / 2, top, size.width, size.height);
+    }
     final availH = (boxSize.height - bottomContentInset)
         .clamp(0.0, boxSize.height)
         .toDouble();

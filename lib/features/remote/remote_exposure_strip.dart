@@ -21,12 +21,16 @@ class CaptureExposureStrip extends StatelessWidget {
     required this.height,
     required this.onTapParam,
     this.activeCode,
+    this.videoMode = false,
   });
 
   final RemoteController controller;
   final double height;
   final void Function(BuildContext context, ShootingParam param) onTapParam;
   final int? activeCode;
+
+  /// 视频档:光圈格改用视频光圈(0xD1A9),显示名仍是「光圈」。
+  final bool videoMode;
 
   static const _codes = <int>[
     PtpDevicePropCode.exposureProgramMode,
@@ -40,9 +44,15 @@ class CaptureExposureStrip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final live = LiveDesign.of(context);
+    final apertureCode =
+        videoMode ? PtpDevicePropCode.movieFnumber : PtpDevicePropCode.fNumber;
     final params = <ShootingParam>[
       for (final code in _codes)
-        if (shootingParamByCode[code] != null) shootingParamByCode[code]!,
+        if (shootingParamByCode[code] != null)
+          code == PtpDevicePropCode.fNumber
+              ? (shootingParamByCode[apertureCode] ??
+                  shootingParamByCode[code]!)
+              : shootingParamByCode[code]!,
     ];
     return ClipRRect(
       borderRadius: BorderRadius.circular(12),
@@ -110,7 +120,9 @@ class CaptureExposureStrip extends StatelessWidget {
                         fontSize: 9.5,
                         height: 1.1,
                         fontWeight: FontWeight.w500,
-                        color: live.muted,
+                        // 标题用主文字色(2026-11-08 用户:太浅看不清);
+                        // 选中仍用金。
+                        color: active ? live.accent : live.text,
                       ),
                     ),
                   ),

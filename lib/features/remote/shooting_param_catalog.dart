@@ -305,12 +305,15 @@ final kShootingParams = <ShootingParam>[
   // 光圈:f 值 ×100(ISO 15740 定点,Zf 实际布局待真机核对)。
   // dialOwned:指令拨盘拥有(A/M 档的主拨盘参数)—— 接管后可写
   //(2026-10-06 真机:ISO 写 0x200F 实证拨盘级参数需接管,光圈同类)。
+  // photoOnly:视频档由孪生码 0xD1A9(视频光圈)接管,照片光圈不显;
+  // 2026-11-08 用户定案视频模式只留一个「光圈」,值取视频光圈。
   ShootingParam(
       code: PtpDevicePropCode.fNumber,
       label: 'info.aperture',
       format: _formatFNumber,
       prominent: true,
-      dialOwned: true),
+      dialOwned: true,
+      photoOnly: true),
   // 快门:读写全走 0xD100(u32 分数打包 num<<16|den,哨兵 Bulb/X 同步/
   // Time)—— 标准码 0x500D 只读且单位存疑(名义 0.0001s 连 1/8000s
   // 都无法整表,OpenZCine 弃用),取值域 = 目录标准档打包表。dialOwned:
@@ -616,7 +619,9 @@ final kVideoShootingParams = <ShootingParam>[
   // 0x200F → tile 锁标机制接)。
   ShootingParam(
     code: PtpDevicePropCode.movieFnumber,
-    label: 'param.movieAperture',
+    // 视频档光圈位与照片光圈共用显示名「光圈」(2026-11-08 用户定案);
+    // 底层码仍是 0xD1A9,读写路由不动。
+    label: 'info.aperture',
     format: _formatFNumber,
     videoOnly: true,
   ),
