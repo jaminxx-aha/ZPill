@@ -85,6 +85,10 @@ final class BleDriver {
   bool _ptpWriteInFlight = false;
   bool _ptpWasReady = false;
 
+  /// PTP 保鲜重发:静止时定位流零回调,不重发会让相机「位置数据时间」
+  /// 停在最后一次定位采样时刻(BLE 路径同款 5s tick 保鲜)。
+  Timer? _ptpTick;
+
   /// 最近一个定位点:定位常先于 Wi-Fi 连接到达(连接后流静止不再发点),
   /// PTP 可用沿用它补写一次,免等用户移动。
   GeoFix? _lastFix;
@@ -271,7 +275,9 @@ final class BleDriver {
           unawaited(_session.disconnect());
         }
       }
-      if (_bleInjecting) _syncInjectLayer(); // PTP-only 注入层
+      // 注入层对齐:开 → PTP-only 起层;关(Wi-Fi 掉线/开关关)→ 流与
+      // 保鲜拍收口。幂等,两种沿都直调。
+      _syncInjectLayer();
       return;
     }
     if (!wasRunning) {
@@ -380,19 +386,40 @@ final class BleDriver {
       if (_session.state == BleSessionState.ready || _ptpReady) {
         unawaited(_startLocationStream());
       }
+      _syncPtpTick();
       _flushCachedPtpFix();
     } else if (_bleFixSub != null) {
       _teardownInjectLayer();
     }
   }
 
+  /// PTP 保鲜拍:静止时定位流零回调,仅靠 PTP 可用沿补写一次,相机
+  /// 「位置数据时间」会冻在最后采样时刻。30s 重发最近点(时间刷新,
+  /// 坐标不变),与 BLE 路径的 5s tick 保鲜同语义。
+  void _syncPtpTick() {
+    if (_bleInjecting && _ptpReady) {
+      _ptpTick ??= Timer.periodic(
+        _ptpGpsInterval,
+        (_) => _flushCachedPtpFix(force: true),
+      );
+    } else {
+      _stopPtpTick();
+    }
+  }
+
+  void _stopPtpTick() {
+    _ptpTick?.cancel();
+    _ptpTick = null;
+  }
+
   /// PTP 可用沿补写最近定位点(定位常早于 Wi-Fi 连接;流按 3m 位移
-  /// 触发,静止时不会再发,不补写就要等用户移动)。
-  void _flushCachedPtpFix() {
+  /// 触发,静止时不会再发,不补写就要等用户移动)。[force] = 保鲜拍
+  /// 到点:跳过 30s/5m 节流(但退避与在途仍生效)。
+  void _flushCachedPtpFix({bool force = false}) {
     final fix = _lastFix;
     if (fix == null || !_ptpReady) return;
     final now = DateTime.now().toUtc();
-    if (_ptpBackoffActive(now) || !_ptpGpsDue(fix, now)) return;
+    if (_ptpBackoffActive(now) || !_ptpGpsDue(fix, now, force: force)) return;
     unawaited(_writePtpGps(fix));
   }
 
@@ -423,24 +450,29 @@ final class BleDriver {
     return until != null && now.isBefore(until);
   }
 
-  bool _ptpGpsDue(GeoFix fix, DateTime now) {
+  bool _ptpGpsDue(GeoFix fix, DateTime now, {bool force = false}) {
     final last = _ptpLastOkFix;
     final at = _ptpLastOkAt;
     if (last == null || at == null) return true;
+    if (force) return true; // 保鲜拍:时间刷新与位移无关
     if (now.difference(at) >= _ptpGpsInterval) return true;
     return BleKeepalive.distanceM(last, fix) >= _ptpGpsDistanceM;
   }
 
-  /// 写一次 0x9523。失败(相机拒/USB 等)退避 60s 并立即回落 BLE;
-  /// 在途去重:一次 PTP 事务期间新定位点直接丢弃(下一拍再取)。
+  /// 写一次 0x9523。载荷时刻在**写前**刷新:定位回调的采样时刻可能
+  /// 早于连接/保鲜重发很久,直传原 fix 会让相机位置时间停在采样点
+  /// (BLE 会话保鲜重发同样用 withUtcTime 刷时刻)。失败(相机拒/USB
+  /// 等)退避 60s 并立即回落 BLE;在途去重:一次 PTP 事务期间新定位
+  /// 点直接丢弃(下一拍再取)。
   Future<void> _writePtpGps(GeoFix fix) async {
     final write = _ptpGpsWrite;
     if (write == null || _ptpWriteInFlight) return;
     _ptpWriteInFlight = true;
     try {
-      final ok = await write(fix);
+      final stamped = fix.withUtcTime(DateTime.now().toUtc());
+      final ok = await write(stamped);
       if (ok) {
-        _ptpLastOkFix = fix;
+        _ptpLastOkFix = stamped;
         _ptpLastOkAt = DateTime.now().toUtc();
         _ptpBackoffUntil = null;
         AppLog.i(AppLog.ble, 'GEO→0x9523 已写入');
@@ -473,10 +505,11 @@ final class BleDriver {
     if (!keepInject) _teardownInjectLayer();
   }
 
-  /// 注入层收口:定位流订阅 + 平台流停。
+  /// 注入层收口:定位流订阅 + 平台流停 + 保鲜拍收。
   void _teardownInjectLayer() {
     _locationStreamUp = false;
     _lastFix = null;
+    _stopPtpTick();
     unawaited(_bleFixSub?.cancel());
     _bleFixSub = null;
     unawaited(() async {

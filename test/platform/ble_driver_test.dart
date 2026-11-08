@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:z_pill/core/ble/ble_camera_session.dart';
 import 'package:z_pill/core/ble/geo_payload.dart';
@@ -204,13 +205,56 @@ void main() {
     await pumpEventQueue();
     expect(writes, hasLength(1));
 
-    // PTP 掉线:注入层收口,不再写 PTP
+    // PTP 掉线:注入层收口,定位流停、不再写 PTP
     ptpReady = false;
     d.refresh();
     await pumpEventQueue();
+    expect(loc.stopped, 1);
     loc.ctrl.add(const LocationSample(
         latitude: 35.5001, longitude: 139.7, altitude: 40));
     await pumpEventQueue();
     expect(writes, hasLength(1));
+  });
+
+  test('PTP 保鲜:静止 30s 重发最近点(相机位置时间不冻在最后采样)', () async {
+    final loc = _RecordingLocationStream();
+    final writes = <GeoFix>[];
+    var gpsOn = true;
+    final d = BleDriver(
+      session: session,
+      gpsInjectEnabled: () => gpsOn,
+      locationStream: loc,
+      background: background,
+      dataDir: () async => '',
+      ptpGpsAvailable: () => true,
+      ptpGpsWrite: (fix) async {
+        writes.add(fix);
+        return true;
+      },
+    );
+
+    fakeAsync((async) {
+      d.refresh();
+      async.flushMicrotasks();
+      expect(loc.started, 1);
+
+      loc.ctrl.add(
+          const LocationSample(latitude: 35.5, longitude: 139.7, altitude: 40));
+      async.flushMicrotasks();
+      expect(writes, hasLength(1));
+
+      // 静止期定位流零回调:保鲜拍按 30s 重发最近点,载荷时刻由驱动
+      // 在写前刷新(相机「位置数据时间」跟随)。
+      async.elapse(const Duration(seconds: 31));
+      expect(writes, hasLength(2), reason: '静止 30s 应保鲜重发一次');
+      expect(writes.last.latitude, 35.5);
+      expect(writes.last.longitude, 139.7);
+
+      gpsOn = false;
+      d.refresh();
+      async.flushMicrotasks();
+      expect(loc.stopped, 1);
+    });
+    await loc.ctrl.close();
   });
 }
