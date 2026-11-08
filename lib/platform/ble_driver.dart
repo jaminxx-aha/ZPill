@@ -15,6 +15,7 @@ import 'dart:async';
 import 'dart:io' show File, exit;
 
 import '../core/ble/ble_camera_session.dart';
+import '../core/ble/ble_keepalive.dart';
 import '../core/ble/geo_payload.dart';
 import '../core/log/app_log.dart';
 import 'background_transfer.dart';
@@ -47,11 +48,15 @@ final class BleDriver {
     required LocationStreamHost locationStream,
     required BackgroundTransferScheduler background,
     required Future<String> Function() dataDir,
+    bool Function()? ptpGpsAvailable,
+    Future<bool> Function(GeoFix fix)? ptpGpsWrite,
   })  : _session = session,
         _gpsInjectEnabled = gpsInjectEnabled,
         _locationStream = locationStream,
         _background = background,
-        _dataDir = dataDir;
+        _dataDir = dataDir,
+        _ptpGpsAvailable = ptpGpsAvailable,
+        _ptpGpsWrite = ptpGpsWrite;
 
   final BleCameraSession _session;
 
@@ -60,6 +65,40 @@ final class BleDriver {
   final LocationStreamHost _locationStream;
   final BackgroundTransferScheduler _background;
   final Future<String> Function() _dataDir;
+
+  /// Wi-Fi PTP 位置写入(0x9523)能力:非空 = 无线会话已连接。生产只在
+  /// Wi-Fi(非 USB)链路注入 —— Zf USB data-out STALL,真机 2026-11-08。
+  final bool Function()? _ptpGpsAvailable;
+
+  /// 0x9523 写入器(载荷由装配层用 GeoPayload 构建);返回 false =
+  /// 相机拒/链路异常,驱动回落 BLE 0x2007。
+  final Future<bool> Function(GeoFix fix)? _ptpGpsWrite;
+
+  /// PTP 注入节流:30s 或位移 ≥5m 才写(相机只保留最近位置,不必跟
+  /// 3s 定位流);失败后 60s 内不再试 PTP,直接走 BLE。
+  static const Duration _ptpGpsInterval = Duration(seconds: 30);
+  static const double _ptpGpsDistanceM = 5.0;
+  static const Duration _ptpGpsBackoff = Duration(seconds: 60);
+  GeoFix? _ptpLastOkFix;
+  DateTime? _ptpLastOkAt;
+  DateTime? _ptpBackoffUntil;
+  bool _ptpWriteInFlight = false;
+  bool _ptpWasReady = false;
+
+  /// PTP 保鲜重发:静止时定位流零回调,不重发会让相机「位置数据时间」
+  /// 停在最后一次定位采样时刻(BLE 路径同款 5s tick 保鲜)。
+  Timer? _ptpTick;
+
+  /// 最近一个定位点:定位常先于 Wi-Fi 连接到达(连接后流静止不再发点),
+  /// PTP 可用沿用它补写一次,免等用户移动。
+  GeoFix? _lastFix;
+
+  /// PTP-only 注入的独立 location 后台持有(防重复 ensure/stop)。
+  bool _gpsHold = false;
+
+  /// PTP 注入可用 = 链路谓词真且写入器已装配。
+  bool get _ptpReady =>
+      (_ptpGpsAvailable?.call() ?? false) && _ptpGpsWrite != null;
 
   Timer? _bleTick;
   Timer? _bleRetry;
@@ -109,6 +148,20 @@ final class BleDriver {
   /// location 挂着但 GPS 不采样,系统可能按「未使用」吊销整个长时
   /// 任务(HarmoNiLink 实证口径)。
   void syncBackgroundHold() {
+    // PTP-only 注入(BLE 未 ready / 无身份,但 Wi-Fi 会话在):用独立
+    // 'gps' 持有 location 模式,防系统按「location 未使用」吊销。
+    final ptpOnly = _bleInjecting &&
+        _session.state != BleSessionState.ready &&
+        _ptpReady;
+    if (ptpOnly) {
+      if (!_gpsHold) {
+        _gpsHold = true;
+        unawaited(_background.ensureRunning('gps', {BgMode.location}));
+      }
+    } else if (_gpsHold) {
+      _gpsHold = false;
+      unawaited(_background.stop('gps'));
+    }
     if (_session.state != BleSessionState.ready) {
       unawaited(_background.stop('ble'));
       return;
@@ -188,8 +241,16 @@ final class BleDriver {
     final wantLink = !_bleSuspended &&
         _session.identity != null &&
         !_bleManualOff;
-    final wantInject = wantLink && _gpsInjectEnabled();
-    if (wantLink == _bleRunning && wantInject == _bleInjecting) return;
+    // PTP(Wi-Fi)位置写入不依赖 BLE 身份/链路:只要设置开关开、无线
+    // 会话在,注入层就跑;USB 由 ptpGpsAvailable 排除。
+    final ptpReady = _ptpReady;
+    final wantInject = _gpsInjectEnabled() && (wantLink || ptpReady);
+    if (wantLink == _bleRunning &&
+        wantInject == _bleInjecting &&
+        ptpReady == _ptpWasReady) {
+      return;
+    }
+    _ptpWasReady = ptpReady;
     // 门判定落盘(运营必需:冷启链/挂起链断点全靠它定位)。**只在真翻面
     // 时记一行**:设置滑杆拖动会逐 tick 走 _update,旧写法放在幂等短路
     // 之前且用 error 级,一次拖动 = 上百行日志 + 上百次 error 尾巴落盘。
@@ -206,7 +267,7 @@ final class BleDriver {
     syncBackgroundHold();
     if (!wantLink) {
       if (wasRunning) {
-        _stopBleDriverLoop();
+        _stopBleDriverLoop(keepInject: _bleInjecting);
         // 解除配对沿(身份没了)连链路一起收;挂起沿保留 —— 真机
         // 2026-10-14:挂起沿 disconnect 把 ready 链路也拆了,连接页
         // 「配对管理」一点蓝牙就断。
@@ -214,6 +275,9 @@ final class BleDriver {
           unawaited(_session.disconnect());
         }
       }
+      // 注入层对齐:开 → PTP-only 起层;关(Wi-Fi 掉线/开关关)→ 流与
+      // 保鲜拍收口。幂等,两种沿都直调。
+      _syncInjectLayer();
       return;
     }
     if (!wasRunning) {
@@ -308,38 +372,129 @@ final class BleDriver {
   }
 
   /// 注入层对齐(幂等,翻面沿与 ready 沿均可直调):开关开 → 挂定位流
-  /// 订阅 + ready 时起平台流;关 → 订阅与平台流一起收。链路层不沾。
+  /// 订阅 + 链路可用时起平台流;关 → 订阅与平台流一起收。链路层不沾。
   void _syncInjectLayer() {
     _session.geoEnabled = _bleInjecting; // 开关投影:关断即停保鲜重发
     if (_bleInjecting) {
       _bleFixSub ??= _locationStream.stream().listen(
-            (s) => _session.onFix(GeoFix(
-              latitude: s.latitude,
-              longitude: s.longitude,
-              altitude: s.altitude,
-              // iOS 无卫星数 API。真机 2026-10-13:填 0 相机按「无定位」
-              // 处理 —— EXIF 只落 GPS 空壳(仅 VersionID)不写坐标,故
-              // 填常规可视卫星数(坐标本身是真实的,卫星数仅为修饰)。
-              satellites: 8,
-              utcTime: DateTime.now().toUtc(),
-            )),
+            _onLocation,
             onError: (Object e) => _session.lastError = (
               key: 'ble.locationStreamFail',
               args: {'e': e.toString()},
             ),
           );
-      if (_session.state == BleSessionState.ready) {
+      if (_session.state == BleSessionState.ready || _ptpReady) {
         unawaited(_startLocationStream());
       }
+      _syncPtpTick();
+      _flushCachedPtpFix();
     } else if (_bleFixSub != null) {
       _teardownInjectLayer();
     }
   }
 
+  /// PTP 保鲜拍:静止时定位流零回调,仅靠 PTP 可用沿补写一次,相机
+  /// 「位置数据时间」会冻在最后采样时刻。30s 重发最近点(时间刷新,
+  /// 坐标不变),与 BLE 路径的 5s tick 保鲜同语义。
+  void _syncPtpTick() {
+    if (_bleInjecting && _ptpReady) {
+      _ptpTick ??= Timer.periodic(
+        _ptpGpsInterval,
+        (_) => _flushCachedPtpFix(force: true),
+      );
+    } else {
+      _stopPtpTick();
+    }
+  }
+
+  void _stopPtpTick() {
+    _ptpTick?.cancel();
+    _ptpTick = null;
+  }
+
+  /// PTP 可用沿补写最近定位点(定位常早于 Wi-Fi 连接;流按 3m 位移
+  /// 触发,静止时不会再发,不补写就要等用户移动)。[force] = 保鲜拍
+  /// 到点:跳过 30s/5m 节流(但退避与在途仍生效)。
+  void _flushCachedPtpFix({bool force = false}) {
+    final fix = _lastFix;
+    if (fix == null || !_ptpReady) return;
+    final now = DateTime.now().toUtc();
+    if (_ptpBackoffActive(now) || !_ptpGpsDue(fix, now, force: force)) return;
+    unawaited(_writePtpGps(fix));
+  }
+
+  /// 定位到达:Wi-Fi PTP 在(且未退避)优先 0x9523,按 30s/5m 节流;
+  /// 否则走既有 BLE 0x2007(会话 ready 才落,未 ready 由会话缓存/丢弃)。
+  void _onLocation(LocationSample sample) {
+    final fix = GeoFix(
+      latitude: sample.latitude,
+      longitude: sample.longitude,
+      altitude: sample.altitude,
+      // iOS 无卫星数 API。真机 2026-10-13:填 0 相机按「无定位」
+      // 处理 —— EXIF 只落 GPS 空壳(仅 VersionID)不写坐标,故
+      // 填常规可视卫星数(坐标本身是真实的,卫星数仅为修饰)。
+      satellites: 8,
+      utcTime: DateTime.now().toUtc(),
+    );
+    _lastFix = fix;
+    final now = DateTime.now().toUtc();
+    if (_ptpReady && !_ptpBackoffActive(now)) {
+      if (_ptpGpsDue(fix, now)) unawaited(_writePtpGps(fix));
+      return; // PTP 已持有位置:不再写 BLE(同点位重复写无收益)
+    }
+    _session.onFix(fix);
+  }
+
+  bool _ptpBackoffActive(DateTime now) {
+    final until = _ptpBackoffUntil;
+    return until != null && now.isBefore(until);
+  }
+
+  bool _ptpGpsDue(GeoFix fix, DateTime now, {bool force = false}) {
+    final last = _ptpLastOkFix;
+    final at = _ptpLastOkAt;
+    if (last == null || at == null) return true;
+    if (force) return true; // 保鲜拍:时间刷新与位移无关
+    if (now.difference(at) >= _ptpGpsInterval) return true;
+    return BleKeepalive.distanceM(last, fix) >= _ptpGpsDistanceM;
+  }
+
+  /// 写一次 0x9523。载荷时刻在**写前**刷新:定位回调的采样时刻可能
+  /// 早于连接/保鲜重发很久,直传原 fix 会让相机位置时间停在采样点
+  /// (BLE 会话保鲜重发同样用 withUtcTime 刷时刻)。失败(相机拒/USB
+  /// 等)退避 60s 并立即回落 BLE;在途去重:一次 PTP 事务期间新定位
+  /// 点直接丢弃(下一拍再取)。
+  Future<void> _writePtpGps(GeoFix fix) async {
+    final write = _ptpGpsWrite;
+    if (write == null || _ptpWriteInFlight) return;
+    _ptpWriteInFlight = true;
+    try {
+      final stamped = fix.withUtcTime(DateTime.now().toUtc());
+      final ok = await write(stamped);
+      if (ok) {
+        _ptpLastOkFix = stamped;
+        _ptpLastOkAt = DateTime.now().toUtc();
+        _ptpBackoffUntil = null;
+        AppLog.i(AppLog.ble, 'GEO→0x9523 已写入');
+      } else {
+        _ptpBackoffUntil = DateTime.now().toUtc().add(_ptpGpsBackoff);
+        AppLog.w(AppLog.ble, 'GEO→0x9523 被拒,60s 内回落 BLE');
+        _session.onFix(fix);
+      }
+    } on Exception catch (e) {
+      _ptpBackoffUntil = DateTime.now().toUtc().add(_ptpGpsBackoff);
+      AppLog.w(AppLog.ble, 'GEO→0x9523 失败($e),60s 内回落 BLE');
+      _session.onFix(fix);
+    } finally {
+      _ptpWriteInFlight = false;
+    }
+  }
+
   /// 停驱动循环(tick/重试/订阅/注入层),保留 BLE 链路本身。恢复时
   /// [_startBleInjection] 按当前会话态续上(ready → 注入层;idle/
-  /// reconnecting → 重试循环)。
-  void _stopBleDriverLoop() {
+  /// reconnecting → 重试循环)。[keepInject] = true 时保留定位流订阅
+  /// (PTP-only 注入在 BLE 链路关闭后继续)。
+  void _stopBleDriverLoop({bool keepInject = false}) {
     _bleRetry?.cancel();
     _bleRetry = null;
     _bleTick?.cancel();
@@ -347,12 +502,14 @@ final class BleDriver {
     _instanceWatch?.stop(); // 看门狗随驱动停(无无线电即无战争面)
     unawaited(_bleStateSub?.cancel());
     _bleStateSub = null;
-    _teardownInjectLayer();
+    if (!keepInject) _teardownInjectLayer();
   }
 
-  /// 注入层收口:定位流订阅 + 平台流停。
+  /// 注入层收口:定位流订阅 + 平台流停 + 保鲜拍收。
   void _teardownInjectLayer() {
     _locationStreamUp = false;
+    _lastFix = null;
+    _stopPtpTick();
     unawaited(_bleFixSub?.cancel());
     _bleFixSub = null;
     unawaited(() async {
@@ -368,8 +525,10 @@ final class BleDriver {
     try {
       await _locationStream.startStream();
       _locationStreamUp = true;
-    } on Exception {
+      AppLog.i(AppLog.ble, 'GPS location stream started');
+    } on Exception catch (e) {
       // 定位源不可用(未授权/通道缺失):会话 TIME 心跳照常,零坐标注入
+      AppLog.w(AppLog.ble, 'GPS location stream start failed: $e');
     }
   }
 }

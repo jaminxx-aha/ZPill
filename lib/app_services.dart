@@ -17,6 +17,7 @@ import 'package:flutter/widgets.dart'
     show AppLifecycleListener, AppLifecycleState;
 
 import 'core/ble/ble_camera_session.dart';
+import 'core/ble/geo_payload.dart';
 import 'core/log/app_log.dart';
 import 'core/browser/camera_file_ops.dart';
 import 'core/browser/object_entry.dart';
@@ -436,8 +437,25 @@ final class AppServices {
       locationStream: PlatformServices.locationStream,
       background: PlatformServices.background,
       dataDir: () => PlatformServices.gallery.dataDir(),
+      // Wi-Fi PTP 位置写入(0x9523,gatt 布局):仅无线会话;USB 端
+      // Zf 会 STALL(2026-11-08 真机),不参与。
+      ptpGpsAvailable: () =>
+          connection.isWireless &&
+          connection.state == CameraLinkState.connected,
+      ptpGpsWrite: (fix) async {
+        try {
+          await session.updateLocation(GeoPayload().build(fix));
+          return true;
+        } on Exception catch (e) {
+          AppLog.w(AppLog.protocol, '0x9523 位置写入失败: $e');
+          return false;
+        }
+      },
     );
     settingsController.addListener(bleDriver.refresh);
+    // 无线链路状态沿也驱动注入层重判(USB→Wi-Fi 切换/断链时启停
+    // PTP 注入,不等设置或 BLE 状态沿)。
+    connection.states.listen((_) => bleDriver.refresh());
     unawaited(() async {
       final saved = await bleIdentityStore.load();
       if (saved != null) {

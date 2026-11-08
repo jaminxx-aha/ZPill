@@ -94,6 +94,10 @@ abstract final class NikonOperationCode {
   // 回 0x200F AccessDenied(OpenZCine:USB 握手在 OpenSession 后必发,
   // 无线 SnapBridge 方言握手同样内置;真机核对)。
   static const int changeApplicationMode = 0x9435;
+  // 手机位置写入机身(UpdateLocation,data-out 41B)。Zf 2026-11-08 真机:
+  // Wi-Fi 用 gatt/percent-minute 布局(0x2007 同构)坐标精确;USB 端
+  // data-out 被 STALL/无响应,不可用 —— 生产仅走无线 PTP 链路。
+  static const int updateLocation = 0x9523;
   // Gen-3 Ex 属性 ops(0x0001_xxxx 扩展属性码专用;2 字节码用标准 ops,
   // 混用会拒/断连 —— OpenZCine 实测口径):读描述/读值/写值。
   static const int getDevicePropDescEx = 0x943A;
