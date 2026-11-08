@@ -26,9 +26,10 @@ import 'shooting_param_catalog.dart';
 /// ([_CellGrid])、控件形态统一图标盒([_iconBoxTile],示波器/遮幅/
 /// 主体追踪原文字胶囊与图标盒混排)、选项组标签上行([_optionRow],
 /// 窄面板换行孤儿芯片)、段头 hairline 分隔。[maxHeight] 限高内滚
-/// (竖屏约 0.55 屏高,横屏顶栏与底条之间);点取景画面或再点设置钮
-/// 即收(见 RemotePage);状态随控制器 + [toggles](持久化设置桥接),
-/// 监听由外层 AnimatedBuilder 驱动。
+/// (竖屏 = 取景框高 - 上下各 8:面板四边贴取景框内缩,锚框由
+/// RemotePage._settingsPanelBox 算;横屏顶栏与底条之间);点取景画面
+/// 或再点设置钮即收(见 RemotePage);状态随控制器 + [toggles]
+/// (持久化设置桥接),监听由外层 AnimatedBuilder 驱动。
 class CaptureSettingsPanel extends StatelessWidget {
   const CaptureSettingsPanel({
     super.key,
@@ -116,7 +117,8 @@ class CaptureSettingsPanel extends StatelessWidget {
   /// 横屏两栏(参数 / 控制),竖屏单列。
   final bool landscape;
 
-  /// 点「点画面收起」/关闭入口(横屏全屏面板需要可关)。
+  /// 点「收起」/关闭入口(浮层贴取景框后画面基本被盖住,面板头常驻
+  /// 关闭入口;横屏全屏面板也需要可关)。
   final VoidCallback? onDismiss;
 
   /// 页签跳转锚点(父页面持有;点页签滚到对应段,内容始终全量构建)。

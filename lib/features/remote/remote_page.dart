@@ -62,6 +62,8 @@
 library;
 
 import 'dart:async';
+import 'dart:math' as math;
+
 import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 
@@ -89,6 +91,10 @@ import 'remote_mode_sheet.dart';
 import 'remote_param_sheet.dart';
 import 'remote_settings_panel.dart';
 import 'shooting_param_catalog.dart';
+
+/// 设置浮层跟随取景框的四边内缩(2026-11-08 用户定案:上下两边离框的
+/// 距离与左右一致 —— 左右原值本就是 8)。
+const double _kSettingsPanelInset = 8;
 
 class RemotePage extends StatefulWidget {
   const RemotePage({
@@ -628,6 +634,53 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     }
   }
 
+  /// 设置浮层锚框(屏幕坐标):跟随取景画面,四边同一
+  /// [_kSettingsPanelInset] 内缩(2026-11-08 用户定案「上下两边距离框
+  /// 的距离和现在距离左右两边的距离保持一致」—— 左右原本就让 8)。
+  ///
+  /// 画面矩形与取景区同一 [FeedTransform] 口径(contain + 底对齐 +
+  /// 底部控制区让位);竖屏显示旋转恒为奇数圈(横持补 90°、竖持转正,
+  /// 见 remote_feed_area 的 extraQuarter),画面矩形与 1/3 无关,这里
+  /// 按 1 算。状态带(刘海)会盖住画面顶,可见框顶取两者较高者。
+  /// 无画面尺寸(未起景/首帧未到)或框高退化时回落旧锚:顶
+  /// pad.top + 62、左右 8、限高 55% 屏高。
+  ({double top, double left, double right, double maxHeight, bool followFrame})
+      _settingsPanelBox(Size screen, EdgeInsets pad, double bottomInset) {
+    Rect? frame;
+    final fs = controller.frameSize.value;
+    if (fs != null && fs.width > 0 && fs.height > 0) {
+      frame = FeedTransform(
+        imageSize: Size(fs.width.toDouble(), fs.height.toDouble()),
+        boxSize: screen,
+        fit: FeedFit.contain,
+        quarter: 1,
+        deSqueeze: _settings.value.deSqueeze,
+        bottomContentInset: bottomInset,
+        bottomAlign: true,
+      ).displayRect;
+    }
+    if (frame != null) {
+      final top = math.max(frame.top, pad.top) + _kSettingsPanelInset;
+      final bottom = frame.bottom - _kSettingsPanelInset;
+      if (bottom > top) {
+        return (
+          top: top,
+          left: frame.left + _kSettingsPanelInset,
+          right: screen.width - frame.right + _kSettingsPanelInset,
+          maxHeight: bottom - top,
+          followFrame: true,
+        );
+      }
+    }
+    return (
+      top: pad.top + 62,
+      left: _kSettingsPanelInset,
+      right: _kSettingsPanelInset,
+      maxHeight: screen.height * 0.55,
+      followFrame: false,
+    );
+  }
+
   /// 竖屏 iPhone 相机式排版(2026-10-10 重排;九轮:四缘统一 20):
   /// 取景画面完整铺在页面内([FeedFit.contain] —— 整帧可见,留背景带),
   /// 信息胶囊(含 APP 接管钮)浮在画面顶部(顶距
@@ -639,13 +692,15 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   /// 旋转,参数读出行已删,参数入口 = 设置浮层);行内空白自吃
   /// (opaque 吸收层垫在按钮下,不落到画面手势;浮层关时纯吸收 ——
   /// 底区是控件区不是页面空白,锁住的钮落下的点按不能收 chrome)。
-  /// 设置为非模态浮层,
-  /// 底锚浮在底区两行上方。纯净监看隐去顶部浮层与底部两行(点取景
-  /// 画面空白隐藏/再点任意处恢复),监看叠层/横幅保留。
+  /// 设置为非模态浮层,四边贴取景框让 8(2026-11-08 用户定案:上下
+  /// 两边离框的距离与左右一致 —— 见 [_settingsPanelBox])。纯净监看
+  /// 隐去顶部浮层与底部两行(点取景画面空白隐藏/再点任意处恢复),
+  /// 监看叠层/横幅保留。
   ///
   /// 监听拆两层:feed 区 merge(controller+frame+status)
-  /// 逐帧刷;chrome 层只听 controller —— 帧到达只写 ValueNotifier 不
-  /// notifyListeners,胶囊/读出行/按钮不必逐帧重建。
+  /// 逐帧刷;chrome 层只听 controller + frameSize/变宽设置(设置浮层
+  /// 锚框随取景框,帧到达只写 ValueNotifier 不 notifyListeners)——
+  /// 胶囊/读出行/按钮不必逐帧重建。
   Widget _portraitBody(BuildContext context) {
     final size = MediaQuery.sizeOf(context);
     final pad = MediaQuery.paddingOf(context);
@@ -684,8 +739,6 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                 : 50.0;
     const gap = 12.0;
     final exposureBottom = bottomSafe + shutter + gap;
-    final panelTop = pad.top + 62;
-    final panelMax = size.height * 0.55;
     // 取景底边到曝光条顶 = 曝光条底到快门顶(gap):画面底对齐到
     // 曝光条上沿再让一个 gap。
     final feedBottom = exposureBottom + exposureH + gap;
@@ -731,87 +784,105 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
               opacity: _chromeHidden ? 0 : 1,
               duration: const Duration(milliseconds: 200),
               child: AnimatedBuilder(
-                animation: controller,
-                builder: (context, _) => Stack(
-                  children: [
-                    if (_settingsOpen)
-                      Positioned.fill(
-                        child: GestureDetector(
-                          behavior: HitTestBehavior.opaque,
-                          onTap: _dismissSettings,
+                // 设置浮层锚框随取景画面走:frameSize 是 ValueNotifier
+                // (帧到达不 notifyController),deSqueeze 在设置里改 ——
+                // 两条沿都并进来,浮层开着时画幅变了也不用等下一次
+                // 控制器广播。
+                animation: Listenable.merge(
+                    [controller, controller.frameSize, _settings]),
+                builder: (context, _) {
+                  final panelBox = _settingsPanelBox(size, pad, feedBottom);
+                  return Stack(
+                    children: [
+                      if (_settingsOpen)
+                        Positioned.fill(
+                          child: GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onTap: _dismissSettings,
+                          ),
                         ),
-                      ),
-                    if (_settingsOpen)
+                      if (_settingsOpen)
+                        Positioned(
+                          top: panelBox.top,
+                          left: panelBox.left,
+                          right: panelBox.right,
+                          // 跟随取景框时高度也贴满(框高 - 上下各 8)——
+                          // 只限高的话短内容会把底边留在框内任意处,
+                          // 上下离框距离就不等了。回落旧锚时仍是限高。
+                          child: SizedBox(
+                            height: panelBox.followFrame
+                                ? panelBox.maxHeight
+                                : null,
+                            child: CaptureSettingsPanel(
+                              controller: controller,
+                              toggles: _toggles,
+                              activeParam: _activeParam,
+                              onEditParam: _editParam,
+                              onTogglesChanged: _updateToggles,
+                              onLiveViewToggle: _setLiveView,
+                              onLiveViewQualityChanged: _updateLiveViewQuality,
+                              onSdramCaptureChanged: _updateSdramCapture,
+                              onBleGpsInjectChanged: _updateBleGpsInject,
+                              onVolumeKeyShutterChanged:
+                                  _updateVolumeKeyShutter,
+                              bleGpsInject: _settings.value.bleGpsInject,
+                              bleReady: _bleReady,
+                              volumeKeyShutter: _volumeKeyShutter,
+                              volumeKeyShutterAvailable: _volumeKeys != null,
+                              liveViewImageSize:
+                                  _settings.value.liveViewImageSize,
+                              liveViewImageCompression:
+                                  _settings.value.liveViewImageCompression,
+                              maxHeight: panelBox.maxHeight,
+                              mode: _effMode,
+                              onModeChanged: _onStripMode,
+                              modeEnabled: !controller.recording &&
+                                  !controller.switchingMode,
+                              switchableTo: _switchableTo,
+                              tab: _settingsTab,
+                              onTabChanged: _selectSettingsTab,
+                              sectionKeys: _settingsSectionKeys,
+                              onDismiss: _dismissSettings,
+                            ),
+                          ),
+                        ),
                       Positioned(
-                        top: panelTop,
-                        left: 8,
-                        right: 8,
-                        child: CaptureSettingsPanel(
+                        left: 12,
+                        right: 12,
+                        bottom: exposureBottom,
+                        height: exposureH,
+                        child: CaptureExposureStrip(
                           controller: controller,
-                          toggles: _toggles,
-                          activeParam: _activeParam,
-                          onEditParam: _editParam,
-                          onTogglesChanged: _updateToggles,
-                          onLiveViewToggle: _setLiveView,
-                          onLiveViewQualityChanged: _updateLiveViewQuality,
-                          onSdramCaptureChanged: _updateSdramCapture,
-                          onBleGpsInjectChanged: _updateBleGpsInject,
-                          onVolumeKeyShutterChanged: _updateVolumeKeyShutter,
-                          bleGpsInject: _settings.value.bleGpsInject,
-                          bleReady: _bleReady,
-                          volumeKeyShutter: _volumeKeyShutter,
-                          volumeKeyShutterAvailable: _volumeKeys != null,
-                          liveViewImageSize: _settings.value.liveViewImageSize,
-                          liveViewImageCompression:
-                              _settings.value.liveViewImageCompression,
-                          maxHeight: panelMax,
-                          mode: _effMode,
-                          onModeChanged: _onStripMode,
-                          modeEnabled: !controller.recording &&
-                              !controller.switchingMode,
-                          switchableTo: _switchableTo,
-                          tab: _settingsTab,
-                          onTabChanged: _selectSettingsTab,
-                          sectionKeys: _settingsSectionKeys,
-                          onDismiss: _dismissSettings,
+                          height: exposureH,
+                          activeCode: _activeParam,
+                          onTapParam: _editParam,
                         ),
                       ),
-                    Positioned(
-                      left: 12,
-                      right: 12,
-                      bottom: exposureBottom,
-                      height: exposureH,
-                      child: CaptureExposureStrip(
-                        controller: controller,
-                        height: exposureH,
-                        activeCode: _activeParam,
-                        onTapParam: _editParam,
-                      ),
-                    ),
-                    if (controller.recording)
+                      if (controller.recording)
+                        Positioned(
+                          left: 0,
+                          right: 0,
+                          bottom: feedBottom,
+                          child: Center(child: _recChip(context)),
+                        ),
                       Positioned(
                         left: 0,
                         right: 0,
-                        bottom: feedBottom,
-                        child: Center(child: _recChip(context)),
+                        bottom: bottomSafe,
+                        child: CapturePortraitKeys(
+                          controller: controller,
+                          mode: _effMode,
+                          sideSize: side,
+                          shutterSize: shutter,
+                          horizontalPadding: sideX,
+                          onAlbum: _openAlbum,
+                          onTakeoverRequest: _confirmTakeover,
+                          onSettings: _toggleSettings,
+                        ),
                       ),
-                    Positioned(
-                      left: 0,
-                      right: 0,
-                      bottom: bottomSafe,
-                      child: CapturePortraitKeys(
-                        controller: controller,
-                        mode: _effMode,
-                        sideSize: side,
-                        shutterSize: shutter,
-                        horizontalPadding: sideX,
-                        onAlbum: _openAlbum,
-                        onTakeoverRequest: _confirmTakeover,
-                        onSettings: _toggleSettings,
-                      ),
-                    ),
-                  ],
-                ),
+                    ],
+                  );
+                },
               ),
             ),
           ),

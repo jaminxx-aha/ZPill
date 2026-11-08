@@ -2349,11 +2349,13 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(CaptureSettingsPanel), findsNothing, reason: '再点锚钮即收');
 
-    // 再开 → 点空白即收:满铺手势层贪吃这一拍,只收浮层不触控对焦
+    // 再开 → 点取景画面空白(画面顶部信箱带)即收:满铺手势层贪吃这一
+    // 拍,只收浮层不触控对焦。2026-11-08 起浮层四边贴取景框(框内只剩
+    // 8px 让位带),画面中心已在浮层下,空白改取画面上方信箱带。
     await tester.tap(find.byIcon(Icons.tune));
     await tester.pumpAndSettle();
     expect(find.byType(CaptureSettingsPanel), findsOneWidget);
-    await tester.tap(find.byType(Image).first, warnIfMissed: false);
+    await tester.tapAt(const Offset(400, 600));
     await tester.pumpAndSettle();
     expect(find.byType(CaptureSettingsPanel), findsNothing, reason: '点空白收浮层');
     expect(
@@ -2370,6 +2372,44 @@ void main() {
             .where((r) => r.opcode == NikonOperationCode.changeAfArea),
         hasLength(1),
         reason: '收起后点画面照常触控对焦');
+  });
+
+  testWidgets('设置浮层跟随取景框:四边离框各 8,上下与左右同距(2026-11-08)',
+      (tester) async {
+    _portrait(tester);
+    final transport = _ScriptTransport();
+    final conn = FakeConnection();
+    final controller = _directRemoteController(transport, conn: conn);
+    addTearDown(controller.dispose);
+    final settings = ValueNotifier(const AppSettings());
+    addTearDown(settings.dispose);
+    transport
+      ..ok() // 0x9201(进页自动起景)
+      ..ok(data: _realJpeg()); // 首帧(32×24,SOF 尺寸即画幅)
+    await tester.pumpWidget(MaterialApp(
+        home:
+            RemotePage(controller: controller, settingsListenable: settings)));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
+
+    // 取景框 = 取景区同一变换口径(contain + 底对齐 + 底区让位)。
+    final feed = tester.widget<RemoteFeedArea>(find.byType(RemoteFeedArea));
+    final frame = FeedTransform(
+      imageSize: const Size(32, 24),
+      boxSize: const Size(800, 2400),
+      fit: FeedFit.contain,
+      quarter: 1, // 竖屏显示旋转恒奇数圈,矩形与 1/3 无关
+      deSqueeze: settings.value.deSqueeze,
+      bottomContentInset: feed.bottomInset,
+      bottomAlign: true,
+    ).displayRect;
+    final panel = tester.getRect(find.byType(CaptureSettingsPanel));
+    expect(panel.left, frame.left + 8);
+    expect(panel.right, frame.right - 8);
+    expect(panel.top, frame.top + 8);
+    expect(panel.bottom, frame.bottom - 8, reason: '上下离框距离 = 左右离框距离');
   });
 
   testWidgets(

@@ -290,7 +290,7 @@ const Map<String, String> enCatalog = {
   'takeover.enable': 'Enable',
   'remote.paramsGroup': 'Shooting Params',
   'remote.panelTitle': 'Capture Settings',
-  'remote.panelDismiss': 'Tap frame to close',
+  'remote.panelDismiss': 'Close',
   'remote.tabParams': 'Params',
   'remote.tabFocus': 'Focus',
   'remote.tabMonitor': 'Monitor',

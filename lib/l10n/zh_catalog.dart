@@ -245,7 +245,7 @@ const Map<String, String> zhCatalog = {
   'takeover.enable': '启用',
   'remote.paramsGroup': '拍摄参数',
   'remote.panelTitle': '拍摄设置',
-  'remote.panelDismiss': '点画面收起',
+  'remote.panelDismiss': '收起',
   'remote.tabParams': '参数',
   'remote.tabFocus': '对焦',
   'remote.tabMonitor': '监看',
