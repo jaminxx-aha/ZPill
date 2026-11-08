@@ -12,6 +12,25 @@ import 'ptp_session_harness.dart';
 
 void main() {
   group('遥控操作', () {
+    test('updateLocation:0x9523 原样发送 41B dataOut;非 OK 抛响应异常', () async {
+      final payload = Uint8List.fromList(List.generate(41, (i) => i));
+      final fake = FakePtpTransport()
+        ..reply(const PtpResult(responseCode: PtpResponseCode.ok));
+      final session = PtpSession(transport: fake);
+      await session.updateLocation(payload);
+      expect(fake.requests.single.opcode, NikonOperationCode.updateLocation);
+      expect(fake.requests.single.dataOut, payload);
+
+      final rejected = FakePtpTransport()
+        ..reply(const PtpResult(
+            responseCode: PtpResponseCode.operationNotSupported));
+      await expectLater(
+        PtpSession(transport: rejected).updateLocation(payload),
+        throwsA(isA<PtpResponseException>()),
+      );
+      expect(rejected.requests.single.opcode, NikonOperationCode.updateLocation);
+    });
+
     test('getDevicePropValue:fNumber 按 u16 解码,params=[propCode]', () async {
       final fake = FakePtpTransport()
         ..reply(PtpResult(

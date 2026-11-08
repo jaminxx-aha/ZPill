@@ -215,7 +215,7 @@ const Map<String, String> enCatalog = {
   'conn.pairedNotConnected': 'Paired, Not Connected',
   'conn.gpsInjection': 'GPS Injection',
   'conn.gpsInjectionHint':
-      'Automatically write the phone location into the camera while shooting; photos on the card get native coordinates',
+      'Automatically write the phone location into the camera while shooting. Wi-Fi connections use the wireless path; otherwise BLE is used. USB does not write location',
   'conn.gpsAuthFailed':
       'Location permission not granted (denied or restricted); GPS injection stays off',
   'conn.wakeCameraWifi': 'Remote Connect Camera',

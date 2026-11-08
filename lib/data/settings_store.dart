@@ -234,9 +234,9 @@ final class AppSettings {
   /// 0xC101 回传对象收进图库(不入卡);关 = 常规快门 0x2019/0x9207。
   final bool sdramCapture;
 
-  /// BLE GPS 注入(0x2007):开 = 与已配对相机保持 BLE 会话并持续注入
-  /// 定位(拍进卡的 NEF/JPG 原生带 EXIF 坐标);未配对时开关无效,
-  /// 配对入口在设置页。
+  /// GPS 注入:开 = 持续把手机定位写进相机(拍进卡的照片原生带 EXIF
+  /// 坐标)。Wi-Fi PTP 会话优先走 0x9523(仅无线;Zf USB 不支持),
+  /// 否则回落 BLE 0x2007(需已配对相机)。USB 连接由 BLE 通道承担。
   final bool bleGpsInject;
 
   /// 音量键快门:开 = 拍摄页存续期原生拦音量键转快门(上/下

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:z_pill/core/ble/ble_camera_session.dart';
+import 'package:z_pill/core/ble/geo_payload.dart';
 import 'package:z_pill/platform/ble_scanner.dart';
 import 'package:z_pill/platform/background_transfer.dart';
 import 'package:z_pill/platform/ble_driver.dart';
@@ -45,6 +46,27 @@ final class _StubLocationStream implements LocationStreamHost {
 
   @override
   Stream<LocationSample> stream() => const Stream<LocationSample>.empty();
+
+  @override
+  Future<void> stopStream() async => stopped++;
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      throw UnimplementedError('${invocation.memberName}');
+}
+
+/// 可注入定位点的记录流(PTP 注入用例)。只实现流/起停三面,授权面
+/// 保持未触。
+final class _RecordingLocationStream implements LocationStreamHost {
+  final ctrl = StreamController<LocationSample>.broadcast();
+  var started = 0;
+  var stopped = 0;
+
+  @override
+  Future<void> startStream() async => started++;
+
+  @override
+  Stream<LocationSample> stream() => ctrl.stream;
 
   @override
   Future<void> stopStream() async => stopped++;
@@ -139,5 +161,56 @@ void main() {
     driver.manualOff = false;
     await pumpEventQueue();
     expect(driver.running, isTrue); // 显式连接/重配对沿清除后守候恢复
+  });
+
+  test('PTP 注入:无 BLE 身份也起定位流,优先 0x9523 且 30s 内同点不重写',
+      () async {
+    final loc = _RecordingLocationStream();
+    final writes = <GeoFix>[];
+    var ptpReady = true;
+    var gpsOn = true;
+    final d = BleDriver(
+      session: session,
+      gpsInjectEnabled: () => gpsOn,
+      locationStream: loc,
+      background: background,
+      dataDir: () async => '',
+      ptpGpsAvailable: () => ptpReady,
+      ptpGpsWrite: (fix) async {
+        writes.add(fix);
+        return true;
+      },
+    );
+    addTearDown(() async {
+      gpsOn = false;
+      d.refresh();
+      await pumpEventQueue();
+      await loc.ctrl.close();
+    });
+
+    d.refresh();
+    await pumpEventQueue();
+    expect(loc.started, 1, reason: 'PTP-only 也要起平台定位流');
+
+    const sample =
+        LocationSample(latitude: 35.5, longitude: 139.7, altitude: 40);
+    loc.ctrl.add(sample);
+    await pumpEventQueue();
+    expect(writes, hasLength(1));
+    expect(writes.single.latitude, 35.5);
+    expect(writes.single.altitude, 40);
+
+    loc.ctrl.add(sample); // 同点、30s 内:不重写
+    await pumpEventQueue();
+    expect(writes, hasLength(1));
+
+    // PTP 掉线:注入层收口,不再写 PTP
+    ptpReady = false;
+    d.refresh();
+    await pumpEventQueue();
+    loc.ctrl.add(const LocationSample(
+        latitude: 35.5001, longitude: 139.7, altitude: 40));
+    await pumpEventQueue();
+    expect(writes, hasLength(1));
   });
 }

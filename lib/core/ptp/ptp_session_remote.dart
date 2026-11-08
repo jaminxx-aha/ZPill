@@ -10,6 +10,19 @@ const Duration kObjectsMetaDataTimeout = Duration(seconds: 45);
 
 /// 遥控域:曝光参数 / Live View / 快门释放 / 属性族(文件原分节注释)。
 mixin _RemoteOps on _SessionCore {
+  /// 0x9523 UpdateLocation:41B gatt GEO 载荷(data-out)。
+  ///
+  /// Zf 2026-11-08 真机:Wi-Fi PTP 接受 gatt/percent-minute 布局并写入
+  /// 后续照片 EXIF;USB 同码 data-out 被 STALL 且无响应 —— 调用方只在
+  /// 无线链路(PTP-IP)上直发,USB 不调。
+  Future<void> updateLocation(Uint8List payload) async {
+    final result = await _serialized(() => transport.execute(PtpRequest(
+          opcode: NikonOperationCode.updateLocation,
+          dataOut: payload,
+        )));
+    _ensureOk(result, NikonOperationCode.updateLocation);
+  }
+
   /// MfDrive 就绪轮询拍数/间隔(facade 注入,测试收窄归零免真钟等待)。
   int get mfReadyPolls;
   Duration get mfReadyPollInterval;

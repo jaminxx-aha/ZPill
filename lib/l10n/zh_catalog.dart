@@ -181,7 +181,8 @@ const Map<String, String> zhCatalog = {
       '不建立相机连接(不传图/不遥控),只用于:拍摄时注入 GPS 坐标(照片原生带 EXIF 定位)、远程连接相机。首次使用先配对相机。',
   'conn.pairedNotConnected': '已配对,未连接',
   'conn.gpsInjection': 'GPS 位置注入',
-  'conn.gpsInjectionHint': '拍摄时自动把手机定位写进相机,卡内照片原生带坐标',
+  'conn.gpsInjectionHint':
+      '拍摄时自动把手机定位写进相机。Wi-Fi 连接优先走无线写入,其余走蓝牙;USB 连接不写位置',
   'conn.gpsAuthFailed': '未获定位授权(拒授/受限),GPS 注入未开启',
   'conn.wakeCameraWifi': '远程连接相机',
   'conn.wifiAwakeCardTitle': '相机 Wi-Fi 已开启,请手动入网',
