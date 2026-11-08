@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:collection';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -1598,6 +1599,12 @@ void main() {
     expect(tester.widget<RemoteFeedArea>(find.byType(RemoteFeedArea)).fit,
         FeedFit.contain,
         reason: '竖屏整帧可见(contain),不裁两侧');
+    expect(
+        tester
+            .widget<RemoteFeedArea>(find.byType(RemoteFeedArea))
+            .fitBottomInset,
+        0,
+        reason: '取景按整屏最大化,不再为底部控件让位(2026-11-08)');
 
     final album = find.byKey(const ValueKey('capture-album'));
     final af = find.byKey(const ValueKey('capture-af'));
@@ -2394,7 +2401,7 @@ void main() {
     await tester.tap(find.byIcon(Icons.tune));
     await tester.pumpAndSettle();
 
-    // 取景框 = 取景区同一变换口径(contain + 底对齐 + 底区让位)。
+    // 取景框 = 取景区同一变换口径(contain + 整屏居中,不为底区让位)。
     final feed = tester.widget<RemoteFeedArea>(find.byType(RemoteFeedArea));
     final frame = FeedTransform(
       imageSize: const Size(32, 24),
@@ -2402,14 +2409,43 @@ void main() {
       fit: FeedFit.contain,
       quarter: 1, // 竖屏显示旋转恒奇数圈,矩形与 1/3 无关
       deSqueeze: settings.value.deSqueeze,
-      bottomContentInset: feed.bottomInset,
-      bottomAlign: true,
+      bottomContentInset: feed.fitBottomInset ?? feed.bottomInset,
+      bottomAnchorInset: feed.fitBottomInset == 0 ? feed.bottomInset : null,
+      bottomAlign: feed.fitBottomInset == null,
     ).displayRect;
     final panel = tester.getRect(find.byType(CaptureSettingsPanel));
     expect(panel.left, frame.left + 8);
     expect(panel.right, frame.right - 8);
     expect(panel.top, frame.top + 8);
     expect(panel.bottom, frame.bottom - 8, reason: '上下离框距离 = 左右离框距离');
+  });
+
+  testWidgets('设置浮层不压光圈栏与按钮:底边钳在底区上沿(2026-11-08)',
+      (tester) async {
+    tester.view
+      ..physicalSize = const Size(402, 874)
+      ..devicePixelRatio = 1.0
+      ..padding = const FakeViewPadding(bottom: 34);
+    addTearDown(tester.view.reset);
+    final transport = _ScriptTransport();
+    final conn = FakeConnection();
+    final controller = _directRemoteController(transport, conn: conn);
+    addTearDown(controller.dispose);
+    _scriptAutoStart(transport);
+    await tester
+        .pumpWidget(MaterialApp(home: RemotePage(controller: controller)));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pumpAndSettle();
+    final panel = tester.getRect(find.byType(CaptureSettingsPanel));
+    final exposure =
+        tester.getRect(find.byKey(const ValueKey('remote-exposure-strip')));
+    final shutter =
+        tester.getRect(find.byKey(const ValueKey('capture-shutter')));
+    expect(panel.bottom, lessThanOrEqualTo(exposure.top - 8 + 0.01),
+        reason: '浮层底边在光圈栏上方');
+    expect(panel.bottom, lessThan(shutter.top), reason: '浮层不压按钮');
   });
 
   testWidgets(
@@ -2432,10 +2468,14 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(CaptureSettingsPanel), findsOneWidget);
 
-    // 底区两行(六轮后:层锚物理屏缘 20,控制行 2238..2324 / 底行
-    // 2324..2380,总高 142)的空白:取景栈的垫层够不到,由垫在两行之后
-    // 的第二垫层收 —— 点控制行对焦钮与快门之间的空档(x 200,y 2291)。
-    await tester.tapAt(const Offset(200, 2291));
+    // 底区两行之间的空白:取景栈的垫层够不到,由垫在两行之后的第二
+    // 垫层收 —— 取曝光条与快门行之间的实际间隙,布局改动不用改坐标。
+    final exposureRect =
+        tester.getRect(find.byKey(const ValueKey('remote-exposure-strip')));
+    final shutterRect =
+        tester.getRect(find.byKey(const ValueKey('capture-shutter')));
+    await tester
+        .tapAt(Offset(200, (exposureRect.bottom + shutterRect.top) / 2));
     await tester.pumpAndSettle();
     expect(find.byType(CaptureSettingsPanel), findsNothing, reason: '底区空白也收浮层');
     expect(
@@ -2618,9 +2658,29 @@ void main() {
     await tester.pumpAndSettle();
     expect(controller.cameraMode, CaptureMode.video);
 
+    expect(
+        find.byKey(
+            const ValueKey('exposure-${PtpDevicePropCode.movieFnumber}')),
+        findsOneWidget,
+        reason: '视频档光圈格取视频光圈 0xD1A9');
+    expect(find.byKey(const ValueKey('exposure-${PtpDevicePropCode.fNumber}')),
+        findsNothing,
+        reason: '视频档不再显示照片光圈格');
+
     await tester.tap(find.byIcon(Icons.tune));
     await tester.pumpAndSettle();
-    expect(find.text('视频光圈'), findsOneWidget, reason: '视频档面板追加视频参数族');
+    expect(find.text('视频光圈'), findsNothing, reason: '视频档只留一个「光圈」');
+    expect(
+        find.descendant(
+            of: find.byType(CaptureSettingsPanel), matching: find.text('光圈')),
+        findsOneWidget,
+        reason: '视频档参数名统一「光圈」,值取视频光圈');
+    expect(
+        find.descendant(
+            of: find.byType(CaptureSettingsPanel),
+            matching: find.text('f/2.0')),
+        findsOneWidget,
+        reason: '视频光圈值 0xD1A9=200');
     expect(find.text('视频 ISO'), findsOneWidget);
     expect(find.text('N-Log'), findsOneWidget);
   });
@@ -2688,6 +2748,17 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('视频光圈'), findsNothing, reason: '照片档零视频噪声');
     expect(find.text('视频 ISO'), findsNothing);
+    expect(find.byKey(const ValueKey('exposure-${PtpDevicePropCode.fNumber}')),
+        findsOneWidget);
+    expect(
+        find.byKey(
+            const ValueKey('exposure-${PtpDevicePropCode.movieFnumber}')),
+        findsNothing);
+    expect(
+        find.descendant(
+            of: find.byType(CaptureSettingsPanel), matching: find.text('光圈')),
+        findsOneWidget,
+        reason: '照片档光圈仍是照片光圈');
   });
 
   testWidgets(
@@ -3062,8 +3133,8 @@ void main() {
 
     final shutter =
         tester.getRect(find.byKey(const ValueKey('capture-shutter')));
-    expect(shutter.bottom, closeTo(780 - 38, 0.01),
-        reason: '底插 30 + 8 > 设计 20,五键底距取 38');
+    expect(shutter.bottom, closeTo(780 - 30, 0.01),
+        reason: '底插 30 > 设计 20,五键底距直取 30(2026-11-08 整体下移,不再 +8)');
   });
   testWidgets('相机横持:直方图/水平仪/示波器跟随画面转 90°', (tester) async {
     final messenger =
@@ -3107,6 +3178,26 @@ void main() {
     expect(hist.dx, lessThan(400), reason: '内容右下转到屏幕左下(直方图)');
     expect(scope.dx, lessThan(400), reason: '内容左下转到屏幕左上(示波器)');
     expect(scope.dy, lessThan(hist.dy), reason: '示波器在直方图上方');
+    // 直方图/示波器必须始终落在取景框内,随取景框底锚/画幅变化。
+    final feed = tester.widget<RemoteFeedArea>(find.byType(RemoteFeedArea));
+    final frame = FeedTransform(
+      imageSize: const Size(32, 24),
+      boxSize: tester.getSize(find.byType(RemoteFeedArea)),
+      fit: FeedFit.contain,
+      quarter: 1,
+      deSqueeze: settings.value.deSqueeze,
+      bottomAnchorInset: feed.fitBottomInset == 0 ? feed.bottomInset : null,
+    ).displayRect;
+    for (final finder in [
+      find.byType(HistogramView),
+      find.byType(WaveformView),
+    ]) {
+      final r = tester.getRect(finder);
+      expect(frame.inflate(0.01).contains(r.topLeft), isTrue,
+          reason: '叠层左上角在取景框内');
+      expect(frame.inflate(0.01).contains(r.bottomRight), isTrue,
+          reason: '叠层右下角在取景框内');
+    }
     expect(
         tester
             .widgetList<RotatedBox>(find.byType(RotatedBox))
@@ -3173,6 +3264,78 @@ void main() {
         reason: '倒置 pitch 176.5° 折回 -3.5°');
     expect(level.rollRad * r2d, closeTo(-165.0, 1e-6),
         reason: 'roll 不随 pitch 折返改动');
+  });
+
+  testWidgets('直方图/示波器贴取景框边距一致(2026-11-08)', (tester) async {
+    tester.view
+      ..physicalSize = const Size(402, 874)
+      ..devicePixelRatio = 1.0
+      ..padding = const FakeViewPadding(top: 59, bottom: 34);
+    addTearDown(tester.view.reset);
+    final transport = _ScriptTransport();
+    final conn = FakeConnection();
+    final controller = _directRemoteController(transport, conn: conn);
+    addTearDown(controller.dispose);
+    _scriptAutoStart(transport);
+    final settings = ValueNotifier(AppSettings(
+        monitorHistogram: true,
+        monitorScope: ScopeKind.waveform.index));
+    addTearDown(settings.dispose);
+    await tester.pumpWidget(MaterialApp(
+        home:
+            RemotePage(controller: controller, settingsListenable: settings)));
+    await tester.pumpAndSettle();
+    controller.engine.header.value = parseLiveViewHeader(_headerObject());
+    await tester.pump();
+
+    final feed = tester.widget<RemoteFeedArea>(find.byType(RemoteFeedArea));
+    final frame = FeedTransform(
+      imageSize: const Size(32, 24),
+      boxSize: tester.getSize(find.byType(RemoteFeedArea)),
+      fit: FeedFit.contain,
+      quarter: 1,
+      deSqueeze: settings.value.deSqueeze,
+      bottomAnchorInset: feed.fitBottomInset == 0 ? feed.bottomInset : null,
+    ).displayRect;
+    final hist = tester.getRect(find.byType(HistogramView));
+    final scope = tester.getRect(find.byType(WaveformView));
+    // raw=0 → 内容横持:直方图在左下,示波器在左上;两者离框边都应是 8。
+    expect(scope.left, closeTo(frame.left + 8, 0.01),
+        reason: '示波器左边距; frame=$frame scope=$scope');
+    expect(scope.top, closeTo(frame.top + 8, 0.01),
+        reason: '示波器上边距; frame=$frame scope=$scope');
+    expect(hist.left, closeTo(frame.left + 8, 0.01),
+        reason: '直方图左边距; frame=$frame hist=$hist');
+    expect(hist.bottom, closeTo(frame.bottom - 8, 0.01),
+        reason: '直方图下边距; frame=$frame hist=$hist');
+
+    // 视频 16:9:取景框底边压入光圈栏,叠层改贴可见底边(光圈栏上沿)
+    // 内缩 8,与顶部示波器边距一致。
+    controller.frameSize.value = (width: 1024, height: 576);
+    await tester.pump();
+    final videoFrame = FeedTransform(
+      imageSize: const Size(1024, 576),
+      boxSize: tester.getSize(find.byType(RemoteFeedArea)),
+      fit: FeedFit.contain,
+      quarter: 1,
+      deSqueeze: settings.value.deSqueeze,
+      bottomAnchorInset: feed.bottomInset,
+    ).displayRect;
+    final videoHist = tester.getRect(find.byType(HistogramView));
+    final videoScope = tester.getRect(find.byType(WaveformView));
+    expect(videoScope.top, closeTo(math.max(videoFrame.top, 59) + 8, 0.01),
+        reason: '视频档示波器贴可见顶边(状态栏下); frame=$videoFrame scope=$videoScope');
+    expect(videoScope.left, closeTo(videoFrame.left + 8, 0.01),
+        reason: '视频档示波器左边距');
+    expect(videoHist.bottom, closeTo(videoFrame.bottom - 8, 0.01),
+        reason: '直方图贴取景框底边,不为光圈栏让位; frame=$videoFrame hist=$videoHist');
+
+    // 纯监看(无底栏)仍贴取景框底边,位置不变。
+    await tester.tapAt(const Offset(400, 20));
+    await tester.pumpAndSettle();
+    final hiddenHist = tester.getRect(find.byType(HistogramView));
+    expect(hiddenHist.bottom, closeTo(videoFrame.bottom - 8, 0.01),
+        reason: '纯监看直方图仍贴取景框底边; frame=$videoFrame hist=$hiddenHist');
   });
 
   _interactionGroups();

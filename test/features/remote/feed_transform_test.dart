@@ -137,6 +137,17 @@ void main() {
       expect(f.displayRect.height, closeTo(1066.67, 0.01));
     });
 
+    test('整屏 contain:9:16 视频满宽、上下留带(2026-11-08 取景最大化)', () {
+      // 402×874 整屏、9:16 视频:宽比 0.5625 > 屏宽比 0.46 → 宽限,
+      // 左右贴屏、上下各留 79.67 背景带;不压缩不裁切。
+      final t = FeedTransform(
+          imageSize: const Size(9, 16), boxSize: const Size(402, 874));
+      expect(t.displayRect.left, 0);
+      expect(t.displayRect.width, 402);
+      expect(t.displayRect.height, closeTo(714.67, 0.01));
+      expect(t.displayRect.top, closeTo(79.67, 0.01));
+    });
+
     test('heightFill:超宽内容在偏高盒恒满高,上下永无黑边', () {
       // 2:1 内容在 600×800 盒:contain 宽限 → 600×300 居中,上下各
       // 250 黑边 —— 横屏「取景上下黑边」场景。
@@ -200,6 +211,38 @@ void main() {
       expect(t.displayRect.top, 0);
       expect(t.displayRect.bottom, 240);
       expect(t.displayRect.height, 240);
+    });
+  });
+
+  group('取景底锚(2026-11-08:底边到光圈栏 = 光圈栏到按钮)', () {
+    test('放得下:整屏最大化,底边贴锚点,顶边留空', () {
+      final t = FeedTransform(
+          imageSize: const Size(4, 3),
+          boxSize: const Size(600, 800),
+          bottomAnchorInset: 100);
+      // 600×800 contain → 600×450;目标底 700;顶 250。
+      expect(t.displayRect, const Rect.fromLTWH(0, 250, 600, 450));
+    });
+
+    test('放不下:顶边钳 0,画面尽量上移(底边可越入控制区)', () {
+      final t = FeedTransform(
+          imageSize: const Size(1, 4),
+          boxSize: const Size(300, 300),
+          bottomAnchorInset: 250);
+      // 75×300;目标底 50 → 顶 -250 钳 0,底 300。
+      expect(t.displayRect, const Rect.fromLTWH(112.5, 0, 75, 300));
+    });
+
+    test('9:16 视频整屏最大化后底锚:左右满宽,放不下时上移', () {
+      final t = FeedTransform(
+          imageSize: const Size(9, 16),
+          boxSize: const Size(402, 874),
+          bottomAnchorInset: 198);
+      // 402×714.67;目标底 676 → 顶 -38.67 钳 0。
+      expect(t.displayRect.left, 0);
+      expect(t.displayRect.width, 402);
+      expect(t.displayRect.top, 0);
+      expect(t.displayRect.height, closeTo(714.67, 0.01));
     });
   });
 

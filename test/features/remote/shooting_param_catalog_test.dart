@@ -304,12 +304,13 @@ void main() {
           reason: '视频族按目录序追加在尾部');
     });
 
-    test('orderedCaptureParams:视频档收起 photoOnly 照片曝光块(ISO/快门)'
+    test('orderedCaptureParams:视频档收起 photoOnly 照片曝光块(ISO/快门/光圈)'
         ',照片档全量', () {
       final photo = orderedCaptureParams();
       expect(photo.where((p) => p.photoOnly).map((p) => p.code),
-          [PtpDevicePropCode.exposureIndex, PtpDevicePropCode.exposureTime],
-          reason: 'photoOnly 现役只标照片 ISO/快门(光圈双档共用未证不加)');
+          [PtpDevicePropCode.exposureIndex, PtpDevicePropCode.exposureTime,
+           PtpDevicePropCode.fNumber],
+          reason: 'photoOnly:照片 ISO/快门/光圈(视频档由孪生码接管)');
       final video = orderedCaptureParams(videoMode: true);
       expect(video.any((p) => p.photoOnly), isFalse,
           reason: '照片码在视频档空转(休眠静照管线),收起');
@@ -317,6 +318,14 @@ void main() {
           isTrue, reason: '视频 ISO 孪生码视频档可见');
       expect(video.any((p) => p.code == PtpDevicePropCode.movieShutterSpeed),
           isTrue, reason: '视频快门孪生码视频档可见');
+      final apertures = video
+          .where((p) =>
+              p.code == PtpDevicePropCode.fNumber ||
+              p.code == PtpDevicePropCode.movieFnumber)
+          .toList();
+      expect(apertures.map((p) => p.code), [PtpDevicePropCode.movieFnumber],
+          reason: '视频档只留一个光圈,位置由照片光圈位换成视频光圈');
+      expect(apertures.single.label, 'info.aperture', reason: '显示名统一「光圈」');
     });
 
     test('isoWithActualValue:设定/实际分叉并列,同值与缺值回 null', () {

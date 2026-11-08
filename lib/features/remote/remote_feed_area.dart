@@ -64,6 +64,7 @@ class RemoteFeedArea extends StatefulWidget {
     required this.onTapFocus,
     this.topInset = 0,
     this.bottomInset = 0,
+    this.fitBottomInset,
     this.rightInset = 0,
     this.fit = FeedFit.contain,
     this.settingsListenable,
@@ -77,6 +78,12 @@ class RemoteFeedArea extends StatefulWidget {
   final double topInset;
   final double bottomInset;
 
+  /// 取景适配用的底部让位:null = 与 [bottomInset] 同(旧行为,画面
+  /// 底边贴控制区上沿);0 = 整屏最大化,并按 [bottomInset] 做底锚
+  /// (底边离控制区 = 光圈栏到按钮的间距;放不下时尽量上移)。
+  /// 2026-11-08 用户定案。
+  final double? fitBottomInset;
+
   /// 贴右屏幕坐标叠层(录制读出/拉焦轮)的右让位(横屏快门柱 78)。
   final double rightInset;
 
@@ -84,10 +91,9 @@ class RemoteFeedArea extends StatefulWidget {
   /// 间隙 10)。
   double get bannerInset => bottomInset + (controller.intervalActive ? 42 : 0);
 
-  /// 适配模式(2026-10-12 用户定案「不留黑边」):竖屏传
-  /// [FeedFit.widthFill](画面恒满宽,两侧无黑边)、横屏传
-  /// [FeedFit.heightFill](恒满高,上下无黑边)—— 越出取景盒的内容居中
-  /// 裁掉(本件 ClipRect 收口);默认 contain 为旧短板适配。
+  /// 适配模式:当前竖屏用 [FeedFit.contain](整帧可见),配合
+  /// [fitBottomInset]=0 按整屏最大化;widthFill/heightFill 为旧
+  /// 「不留黑边」裁切模式,保留给其它取景盒。
   final FeedFit fit;
 
   /// 取景设置(画面自动旋转/变宽还原);null = AppServices 单例。
@@ -292,6 +298,11 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea>
       // 监看 LUT:选中即自动走高质量渲染管线(仅 shader 路径能查表;
       // 设备不支持时 ShaderFeed 自行回落,无 LUT 但画面照常)。
       final lut = monitorLutOf(settings);
+      // 取景适配让位与底部 chrome 让位分离:传 0 = 整屏最大化 + 以
+      // bottomInset 为底锚;不传 = 沿用 bottomInset 的旧底对齐行为。
+      final fitInset = widget.fitBottomInset ?? widget.bottomInset;
+      final anchorInset =
+          widget.fitBottomInset == 0 ? widget.bottomInset : null;
       final t = FeedTransform(
         imageSize: imageSize,
         boxSize: boxSize,
@@ -302,21 +313,24 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea>
         deSqueeze: settings.deSqueeze,
         zoom: _zoom,
         pan: _pan,
-        // 画面底边贴控制区上沿(2026-10-30 用户定案:取景底边到
-        // 曝光条的距离 = 曝光条到快门的距离),不再垂直居中。
-        bottomContentInset: widget.bottomInset,
-        bottomAlign: true,
+        // 默认画面底边贴控制区上沿(2026-10-30 定案);fitBottomInset=0
+        // 时改按整屏最大化 + 底锚(2026-11-08 定案)。
+        bottomContentInset: fitInset,
+        bottomAnchorInset: anchorInset,
+        bottomAlign: widget.fitBottomInset == null,
       );
       Widget placeOverlay(Alignment corner, Widget child) {
         final rect = t.displayRect;
+        // 顶部叠层按可见顶边落位:视频档取景框顶=0 时不能贴到状态栏/
+        // 刘海下面(2026-11-08 真机示波器被状态栏裁切)。
+        final safeTop = MediaQuery.paddingOf(context).top;
         return Positioned(
           left: corner.x < 0 ? rect.left + 8 : null,
           right: corner.x > 0 ? boxSize.width - rect.right + 8 : null,
-          top: corner.y < 0 ? rect.top + 8 : null,
-          bottom: corner.y > 0
-              ? math.max(
-                  widget.bottomInset + 8, boxSize.height - rect.bottom + 8)
-              : null,
+          top: corner.y < 0 ? math.max(rect.top, safeTop) + 8 : null,
+          // 直方图/示波器只跟取景框底边保持 8,不为光圈栏让位
+          // (2026-11-08 用户定案)。
+          bottom: corner.y > 0 ? boxSize.height - rect.bottom + 8 : null,
           child: child,
         );
       }
@@ -643,19 +657,24 @@ class _RemoteFeedAreaState extends State<RemoteFeedArea>
                     builder: (context, FrameAnalysis? analysis, _) {
                       final size =
                           (boxSize.width * 0.38).clamp(120.0, 160.0).toDouble();
-                      // 示波器盒与直方图同尺寸,内容按比例缩进盒内。
-                      return SizedBox(
-                        width: size,
-                        height: size / 2,
-                        child: FittedBox(
-                          fit: BoxFit.contain,
-                          child: ScopeView(
-                            kind: widget.toggles.scope,
-                            analysis: analysis,
-                            nLogScale: widget.toggles.scopeNLog,
-                            width: size,
-                          ),
-                        ),
+                      // 不再套 2:1 盒 + FittedBox:内容在盒内居中后随
+                      // RotatedBox 转到屏幕会多出一段偏移,叠层贴边不齐
+                      // (2026-11-08 真机)。按各示波器自身画幅取尺寸,
+                      // 让 RotatedBox 的盒 = 可见内容,8px 贴边才准。
+                      final scopeWidth = switch (widget.toggles.scope) {
+                        // 波形/Parade 16:9:高 = size/2,旋转后与直方图同宽。
+                        ScopeKind.waveform ||
+                        ScopeKind.parade =>
+                          size * 8 / 9,
+                        // 矢量方形:边长 = size/2。
+                        ScopeKind.vector => size / 2,
+                        _ => size,
+                      };
+                      return ScopeView(
+                        kind: widget.toggles.scope,
+                        analysis: analysis,
+                        nLogScale: widget.toggles.scopeNLog,
+                        width: scopeWidth,
                       );
                     },
                   ),

@@ -37,17 +37,34 @@ const _stripOrder = <int>[
 /// **并收起 [ShootingParam.photoOnly] 照片曝光块**(视频孪生码接管
 /// 曝光,照片码在休眠静照管线空转;2026-10-26 USB 矩阵,用户真机
 /// 「调了 ISO 没效果」根因)。
+/// 视频档的光圈位由视频孪生码 0xD1A9 占位(2026-11-08 用户定案:
+/// 只显示一个「光圈」,值取视频光圈),不再追加第二个 tile。
 /// 2026-10-12 竖屏读出行与横屏左参数栏先后删除,设置面板成为唯一
 /// 消费方。
-List<ShootingParam> orderedCaptureParams({bool videoMode = false}) => [
-      for (final code in _stripOrder)
-        if (shootingParamByCode[code] != null &&
-            !(videoMode && shootingParamByCode[code]!.photoOnly))
-          shootingParamByCode[code]!,
-      for (final p in kShootingParams)
-        if (!_stripOrder.contains(p.code) && !(videoMode && p.photoOnly)) p,
-      if (videoMode) ...kVideoShootingParams,
-    ];
+List<ShootingParam> orderedCaptureParams({bool videoMode = false}) {
+  final ordered = <ShootingParam>[];
+  final seen = <int>{};
+  void add(ShootingParam? p) {
+    if (p == null) return;
+    if (videoMode && p.photoOnly) return;
+    if (seen.add(p.code)) ordered.add(p);
+  }
+
+  for (final code in _stripOrder) {
+    add(shootingParamByCode[videoMode && code == PtpDevicePropCode.fNumber
+        ? PtpDevicePropCode.movieFnumber
+        : code]);
+  }
+  for (final p in kShootingParams) {
+    if (!_stripOrder.contains(p.code)) add(p);
+  }
+  if (videoMode) {
+    for (final p in kVideoShootingParams) {
+      add(p);
+    }
+  }
+  return ordered;
+}
 
 /// 设置面板 tile 共用的取值状态打包(值经
 /// 控制器路由:优化校准槽位真名 0x90CC 优先;值为键+参记录,渲染点
@@ -159,9 +176,11 @@ class CaptureParamTile extends StatelessWidget {
                         style: TextStyle(
                           fontSize: 10,
                           fontWeight: FontWeight.w600,
+                          // 标题用主文字色(2026-11-08 用户:太浅看不清);
+                          // 选中仍用金。
                           color: active
                               ? live.accent.withValues(alpha: 0.85)
-                              : live.faint,
+                              : live.text,
                         ),
                       ),
                     ),

@@ -514,7 +514,6 @@ const Map<String, String> enCatalog = {
   'param.xSync': 'X-sync',
   'param.bulb': 'Bulb',
   'param.time': 'Time',
-  'param.movieAperture': 'Movie Aperture',
   'param.movieShutter': 'Movie Shutter',
   'param.movieIso': 'Movie ISO',
   'param.isoWithActual': '{v} (actual {a})',

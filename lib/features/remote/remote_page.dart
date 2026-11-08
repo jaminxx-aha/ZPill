@@ -638,14 +638,16 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   /// [_kSettingsPanelInset] 内缩(2026-11-08 用户定案「上下两边距离框
   /// 的距离和现在距离左右两边的距离保持一致」—— 左右原本就让 8)。
   ///
-  /// 画面矩形与取景区同一 [FeedTransform] 口径(contain + 底对齐 +
-  /// 底部控制区让位);竖屏显示旋转恒为奇数圈(横持补 90°、竖持转正,
-  /// 见 remote_feed_area 的 extraQuarter),画面矩形与 1/3 无关,这里
-  /// 按 1 算。状态带(刘海)会盖住画面顶,可见框顶取两者较高者。
+  /// 画面矩形与取景区同一 [FeedTransform] 口径(contain 整屏最大化 +
+  /// 底锚,不再为底部控制区让位);竖屏显示旋转恒为奇数圈(横持补 90°、
+  /// 竖持转正,见 remote_feed_area 的 extraQuarter),画面矩形与 1/3
+  /// 无关,这里按 1 算。状态带(刘海)会盖住画面顶,可见框顶取两者
+  /// 较高者。底边再钳到 [bottomLimit](取景框底边目标 = 光圈栏上沿
+  /// 再上让 gap)之上,浮层不压光圈栏与按钮(2026-11-08 用户定案)。
   /// 无画面尺寸(未起景/首帧未到)或框高退化时回落旧锚:顶
   /// pad.top + 62、左右 8、限高 55% 屏高。
   ({double top, double left, double right, double maxHeight, bool followFrame})
-      _settingsPanelBox(Size screen, EdgeInsets pad, double bottomInset) {
+      _settingsPanelBox(Size screen, EdgeInsets pad, double bottomLimit) {
     Rect? frame;
     final fs = controller.frameSize.value;
     if (fs != null && fs.width > 0 && fs.height > 0) {
@@ -655,13 +657,18 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         fit: FeedFit.contain,
         quarter: 1,
         deSqueeze: _settings.value.deSqueeze,
-        bottomContentInset: bottomInset,
-        bottomAlign: true,
+        bottomContentInset: 0,
+        // 与取景区同一底锚:底边目标 = bottomLimit(光圈栏上沿上方 gap)。
+        bottomAnchorInset: screen.height - bottomLimit,
+        bottomAlign: false,
       ).displayRect;
     }
     if (frame != null) {
       final top = math.max(frame.top, pad.top) + _kSettingsPanelInset;
-      final bottom = frame.bottom - _kSettingsPanelInset;
+      final bottom = math.min(
+        frame.bottom - _kSettingsPanelInset,
+        bottomLimit - _kSettingsPanelInset,
+      );
       if (bottom > top) {
         return (
           top: top,
@@ -713,16 +720,15 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                 ? 88.0
                 : 94.0;
     final side = w <= 320 ? 44.0 : 48.0;
+    // 底部控件整体压到安全区下沿(2026-11-08 用户定案「按钮和光圈栏
+    // 整体往下移」):大屏不再额外留 8~12,只保系统底插;小屏保留
+    // 16/20 设计下限。
     final designBottom = w <= 320
         ? 16.0
         : w <= 360
             ? 20.0
-            : 46.0;
-    // 破安全区取物理屏缘,但不能压进手势条:320/360 档设计值(16/20)
-    // 小于 Android 手势条插入(常见 24) —— 以系统底插 +8 为下限,
-    // 393/430 档(46)本就在 34+8 之上,布局零变化。
-    final bottomSafe =
-        designBottom > pad.bottom + 8 ? designBottom : pad.bottom + 8;
+            : 0.0;
+    final bottomSafe = math.max(designBottom, pad.bottom);
     final sideX = w <= 320
         ? 16.0
         : w <= 360
@@ -739,8 +745,8 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                 : 50.0;
     const gap = 12.0;
     final exposureBottom = bottomSafe + shutter + gap;
-    // 取景底边到曝光条顶 = 曝光条底到快门顶(gap):画面底对齐到
-    // 曝光条上沿再让一个 gap。
+    // 底部控件组(曝光条 + 快门行)的上沿;取景不再按它让位,仅用于
+    // 贴底叠层/录制标签的让位。
     final feedBottom = exposureBottom + exposureH + gap;
     return Stack(
       fit: StackFit.expand,
@@ -756,8 +762,9 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
             onTapFocus: _handleFeedTap,
             topInset: pad.top + 56,
             bottomInset: feedBottom,
-            // 竖屏也按 contain 完整显示整帧(上下/左右留背景带),
-            // 不再满幅裁剪两侧。
+            // 取景按整屏最大化:不再为底部控件让位,contain 下能满宽
+            // 就满宽、能满高就满高,整帧不压缩不裁切。
+            fitBottomInset: 0,
             fit: FeedFit.contain,
             settingsListenable: _settings,
             hideChrome: _chromeHidden,
@@ -791,7 +798,8 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                 animation: Listenable.merge(
                     [controller, controller.frameSize, _settings]),
                 builder: (context, _) {
-                  final panelBox = _settingsPanelBox(size, pad, feedBottom);
+                  final panelBox =
+                      _settingsPanelBox(size, pad, size.height - feedBottom);
                   return Stack(
                     children: [
                       if (_settingsOpen)
@@ -855,6 +863,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                           controller: controller,
                           height: exposureH,
                           activeCode: _activeParam,
+                          videoMode: _effMode == CaptureMode.video,
                           onTapParam: _editParam,
                         ),
                       ),
